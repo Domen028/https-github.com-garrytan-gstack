@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.99.0] - 2026-10-11
+## [1.91.92.0] - 2026-10-11
 
 **Outside reviews honor `codex_reviews` at the send, not in skill prose. Codex reasoning effort is a setting, and the README says what leaves your machine.**
 
