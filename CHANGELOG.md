@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.97.0] - 2026-10-11
+## [1.91.89.0] - 2026-10-11
 
 **Windows installs stuck on the Git Bash hook false positive get a one-line recovery, the auto-updater stops trusting only its own checker, and setup can no longer delete the checkout it runs from.**
 
@@ -26,6 +26,7 @@ Thanks @dmfrede (#3101)
 Thanks @skleinbe-ny (#3088)
 Thanks @bkermen (#3100)
 Thanks @andrewkjankowski (#3084)
+
 ## [1.91.88.0] - 2026-10-11
 
 **Transcript ingest lands on gbrain 0.60, and `/retro global` counts every Claude Code session in its real repository.**
