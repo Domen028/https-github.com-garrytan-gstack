@@ -1,10 +1,41 @@
 # Changelog
 
-## [1.91.84.0] - 2026-10-11
+## [1.91.85.0] - 2026-10-11
 
 **A restarted `/ios-qa` daemon resumes the device session instead of relaunching the app.** The app's boot token works once, so a new daemon process used to have no way back in except `devicectl process launch --terminate-existing`, which wiped the app's QA state. The daemon now writes the rotated StateServer bearer to `$GSTACK_STATE_ROOT/ios-qa-session.json` (mode 0600, through a fresh temp file) after every successful bootstrap, bound to the device UDID, bundle ID and StateServer port, and a new daemon tries it once on its first device request. The bearer goes only to the tunnel address `devicectl` reports for the bound UDID, after `/healthz` names the same bundle; there is no mDNS or remembered-address fallback. The daemon bootstraps normally, without sending the bearer, when the target UDID, app or port differs, another device or app answers, `devicectl` reports no address, or the file is not private to you (the file is removed unused). A bearer the app rejects is cleared before the bootstrap and never presented again, and the boot token is never written to disk. `/ios-qa` Phase 0 now describes this file instead of a cache no code wrote. Draft until verified on a real iPhone.
 
 - Thanks @Bmathews721 (#1796) for the diagnosis, the hardware repro and the reuse scenarios the new tests carry.
+
+## [1.91.84.0] - 2026-10-11
+
+**A paid CSO baseline can be scored, and it measures what audits found. Three producer/scorer mismatches made gstack's own collect reject every real producer receipt from the first full baseline. Collect and score now accept real receipts of every kind, a test feeds them through, and findings count from every finished report, with completeness kept as its own measured rate.**
+
+The first full paid v2 baseline produced 64 receipts and 64 judge records, then scored `unmeasured` with `INVALID_PRODUCER_RECEIPT`. Run against that run's retained artifacts, collect failed on three separate mismatches in turn:
+
+1. **Artifact order.** The producer sorted its artifact inventory with `localeCompare`, so `package.json` came before `README.md`. Collect required strict code-unit order, and 62 of 64 receipts failed.
+2. **Per-platform catalog bytes.** Next came `UNMATCHED_PRODUCER_INSTALLATIONS`. Each platform's producer unit generated its own evaluation catalog, and `evaluation-candidate` stamps `qualifiedAt` with the current time. The two embedded catalogs differed only in that timestamp and the evidence digest over it.
+3. **Case-id namespace.** The last mismatch is in the private evaluator: judges named matched cases by their private id instead of the matrix's opaque id. The evaluator fixes it at its own boundary.
+
+### What this means for you
+
+- **Findings count from every finished report.** Before this, the scorer counted a cell's findings and runtime outcomes only when the helper report was `complete`, meaning no gap and every domain assessed. Real audits nearly always record some gap, such as no web advisory lookup or credential liveness left untested, so all 64 paid cells scored `partial` and the baseline found 0 of 32 seeded issues. `EvalResult` now carries a required `reportFinished` (helper status `finished`). Precision, recall, found seeded issues, runtime outcomes and tested repairs count from finished reports. A running or missing report still counts nothing, and neither does a report behind a failed producer receipt (a timeout, a failed post-run check, or output withheld for a credential), whatever the judge read there; that report also counts as not complete for the two gates below. Completeness is still measured on its own: each group reports `reports` (complete) and `finishedReports`, and the existing `mandatoryReports` and `matchedCompleteMatrix` gates still require complete reports. No threshold changed.
+- **Inventories are checked for unique paths, not order.** The order stays bound by the inventory's identity hash. New producers sort by code unit, so the identity no longer depends on locale.
+- **`evaluation-candidate --created-at <ISO time>`** pins every runtime's `qualifiedAt`. Builds given the same value write identical catalog bytes, so per-platform units embed the same catalog.
+- **`collectProducerReceipts(…, embeddedCatalogs)`** handles units that already embedded different catalogs. When the platforms' catalog hashes differ, it accepts them only if the supplied catalog bodies hash to each platform's `runtimeSha256`, validate, share revision and scanner identity, and are identical apart from `qualifiedAt` and the evidence digest. The batch then carries those bodies, and scoring re-checks them. Without bodies, or with any other difference, the result is still `UNMATCHED_PRODUCER_INSTALLATIONS`.
+
+### Itemized changes
+
+#### Changed
+- `scripts/cso-eval.ts`: `EvalResult.reportFinished` (required, implied by `reportComplete`, implies `reportPresent`) gates counted findings and outcomes. Groups add `finishedReports`. Collected scoring and `createEvalBaseline` count a failed receipt's result as neither finished nor complete.
+- `scripts/cso-eval-producer.ts`: artifact inventory sorted by code unit.
+- `scripts/cso-eval.ts`: `validateArtifactInventory` requires unique paths. `assertPlatformIdentities` accepts the catalog-equivalence proof. `ProducerBatch.embeddedCatalogs` is optional.
+- `scripts/cso-runtime-promotion.ts`: `evaluation-candidate` takes an optional `--created-at`. Documented in `docs/cso-release-qualification.md`.
+
+#### For contributors
+- `test/cso-eval.test.ts`: finished partial reports count findings while the completeness gates still fail. Running and missing reports count nothing. A baseline finds a seeded issue in a finished partial report and never in a running or missing one.
+- `test/cso-eval.test.ts`: in the real-receipt baseline, a seeded issue is found exactly where the vulnerable cell's receipt succeeded.
+- `test/cso-eval.test.ts`: real producer receipts, one per kind (succeeded, span-redacted, credential-withheld, timeout, post-run check failure), with mixed-case helper artifacts, go through collect, `createEvalBaseline` and `scoreCollectedEval`. Locale-ordered inventories are accepted and duplicate paths rejected. Catalog equivalence passes with the bodies and fails without them, with a body missing, duplicated, or with a moved image.
+- `test/cso-runtime-promotion.test.ts`: two `evaluation-candidate --created-at` builds write identical bytes.
 
 ## [1.91.83.0] - 2026-10-11
 
