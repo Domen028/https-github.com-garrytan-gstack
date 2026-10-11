@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.88.0] - 2026-10-11
+## [1.91.97.0] - 2026-10-11
 
 **Windows installs stuck on the Git Bash hook false positive get a one-line recovery, the auto-updater stops trusting only its own checker, and setup can no longer delete the checkout it runs from.**
 
