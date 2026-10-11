@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.90.0] - 2026-10-11
+## [1.91.98.0] - 2026-10-11
 
 **Review gates fail closed: a Codex reply that lists P1 findings is never `clean`, /autoplan survives a Claude Code auto-compaction, and a read-only /plan-eng-review finishes `DONE` instead of `BLOCKED` (Wave 9 lane B).**
 
