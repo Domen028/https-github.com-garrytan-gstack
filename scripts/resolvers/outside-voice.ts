@@ -65,7 +65,8 @@ export function outsideVoicePreflight(ctx: TemplateContext, opts: { disabledBeha
     ? 'command -v codex >/dev/null 2>&1'
     : `bun -e 'const {resolveClaudeCommand} = await import(process.argv[1]); process.exit(resolveClaudeCommand() ? 0 : 1)' "${bin}/../lib/claude-bin.ts"`;
   // The send binaries enforce codex_reviews (consent_missing); this read only spares a doomed call.
-  const config = `_OUTSIDE_CFG=$("${bin}/gstack-config" get --stored codex_reviews 2>/dev/null)`;
+  // An unreadable config exits 2 with its fix on stderr and reads as disabled.
+  const config = `if ! _OUTSIDE_CFG=$("${bin}/gstack-config" get --stored codex_reviews) || [ "$_OUTSIDE_CFG" = disabled ]; then`;
   const readiness = `elif ( ${outsideVoiceGuard(ctx)}
 ); then
   if ${probe}; then echo 'CODEX_MODE: ready'; else echo 'CODEX_MODE: not_installed'; fi
@@ -75,14 +76,13 @@ fi`;
   return `\`\`\`bash
 ${runtimeRootPrelude(ctx)}
 ${config}
-if [ "$_OUTSIDE_CFG" = disabled ] || [ "$_OUTSIDE_CFG" = unreadable ]; then
   echo 'CODEX_MODE: disabled'
 ${readiness}
 \`\`\`
 
 ${ctx.skillName === 'ship' && opts.disabledBehavior === 'opt-in' ? `Ship attempts this optional design check when frontend review applies and \`codex_reviews\` allows it.
 Unset means the default, enabled; the first send prints a one-time notice.
-\`CODEX_MODE\` names the provider here, **${v.label}**.` : `The historical \`CODEX_MODE\` variable describes **${v.label}** availability here.`} \`CODEX_MODE: disabled\` or a send's \`consent_missing\` line: \`codex_reviews\` is off or unreadable${opts.disabledBehavior === 'skip-all' ? '.' : '; do not ask; record \`outside_status: disabled\`.'} ${opts.role ? 'The invocation checks auth and the [policy](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md) plan-review model.' : 'Authentication and configured model validity are checked by the actual invocation, without overriding either.'} Missing/broken CLI: install or repair ${v.label}; authentication failure: run \`${v.id === 'codex' ? 'codex login' : 'claude auth login'}\`. ${opts.disabledBehavior === 'skip-all' ? 'Disabled ends this entire extra review step, including the native fallback; record outside_status: disabled and continue after the section. Disabled is not an unavailable provider and never triggers a replacement reviewer.' : opts.disabledBehavior === 'codex-only' ? 'Disabled skips only the outside CLI; retain the native pass.' : ctx.skillName === 'ship' ? '' : 'Otherwise honor this caller’s opt-in/skip choice.'} ${opts.disabledBehavior === 'skip-all' ? 'Provider failure is missing outside coverage; follow the caller’s existing fallback only when reviews are enabled.' : opts.disabledBehavior === 'codex-only' ? 'Non-ready means missing outside coverage. Keep the required native pass without duplicating it.' : 'Any non-ready outcome is missing outside coverage; follow the caller’s existing fallback.'} Never substitute another external provider.`;
+\`CODEX_MODE\` names the provider here, **${v.label}**.` : `The historical \`CODEX_MODE\` variable describes **${v.label}** availability here.`}${opts.disabledBehavior === 'opt-in' ? " `CODEX_MODE: disabled` or a send's `consent_missing` line: `codex_reviews` is off or unreadable; do not ask; record `outside_status: disabled`." : ''} ${opts.role ? 'The invocation checks auth and the [policy](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md) plan-review model.' : 'Authentication and configured model validity are checked by the actual invocation, without overriding either.'} Missing/broken CLI: install or repair ${v.label}; authentication failure: run \`${v.id === 'codex' ? 'codex login' : 'claude auth login'}\`. ${opts.disabledBehavior === 'skip-all' ? "Disabled ends this entire extra review step (so does a send's `consent_missing` line), including the native fallback; record outside_status: disabled and continue after the section. Disabled is not an unavailable provider and never triggers a replacement reviewer." : opts.disabledBehavior === 'codex-only' ? "Disabled skips only the outside CLI (so does a send's `consent_missing` line); retain the native pass." : ctx.skillName === 'ship' ? '' : 'Otherwise honor this caller’s opt-in/skip choice.'} ${opts.disabledBehavior === 'skip-all' ? 'Provider failure is missing outside coverage; follow the caller’s existing fallback only when reviews are enabled.' : opts.disabledBehavior === 'codex-only' ? 'Non-ready means missing outside coverage. Keep the required native pass without duplicating it.' : 'Any non-ready outcome is missing outside coverage; follow the caller’s existing fallback.'} Never substitute another external provider.`;
 }
 
 export interface OutsideCommandOptions {

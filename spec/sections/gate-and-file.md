@@ -129,8 +129,7 @@ dispatch. `spec-quality-gate-secret-sink.test.ts` enforces this.
 
 ```bash
 
-_OUTSIDE_CFG=$("$HOME/.claude/skills/gstack/bin/gstack-config" get --stored codex_reviews 2>/dev/null)
-if [ "$_OUTSIDE_CFG" = disabled ] || [ "$_OUTSIDE_CFG" = unreadable ]; then
+if ! _OUTSIDE_CFG=$("$HOME/.claude/skills/gstack/bin/gstack-config" get --stored codex_reviews) || [ "$_OUTSIDE_CFG" = disabled ]; then
   echo 'CODEX_MODE: disabled'
 elif ( # GSTACK_ACTIVE_HOST names the harness, never the model.
 if { [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_SANDBOX:-}" ] || [ "${GSTACK_ACTIVE_HOST:-}" = codex ]; }; then

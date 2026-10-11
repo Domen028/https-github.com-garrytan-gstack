@@ -14,7 +14,6 @@
   - session markers and the timeline, which stay local
 
   The telemetry prompt and the `gstack-config` header match it.
-- Parity caps raised by the measured amount: ship 1.6460, plan-ceo-review 1.0895, office-hours 1.1810.
 
 Thanks @Lockyer228 (#3098) for the `GSTACK_CODEX_EFFORT` precedence and its probe tests, and @lubosxyz (#2934) for the original env override.
 
