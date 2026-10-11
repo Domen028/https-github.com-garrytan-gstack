@@ -31,7 +31,7 @@ import { findAvailablePort } from './port-allocator';
 import { extractPtyCookie } from './pty-session-cookie';
 import { allowedExtensionOrigin } from './extension-id';
 import {
-  createPtyLifecycle, disposePtyProcess, ptyCompletionReason,
+  createPtyLifecycle, disposePtyProcess, ptyCompletionReason, PTY_SHUTDOWN_GRACE_MS,
   type PtyCompletion, type PtyLifecycle,
 } from './terminal-pty-lifecycle';
 
@@ -237,6 +237,10 @@ export function buildReplayPayload(session: PtySession): Buffer {
 }
 
 const sessions = new WeakMap<any, PtySession>(); // ws -> session
+// Strong ownership index for shutdown. sessions is intentionally weak and
+// sessionsById excludes legacy grants, so neither can enumerate every PTY
+// child when the terminal-agent is replaced or its owner disappears.
+const activeSessions = new Set<PtySession>();
 
 /** Find claude on PATH. */
 function findClaude(): string | null {
@@ -365,6 +369,8 @@ function spawnClaude(cols: number, rows: number, lifecycle: PtyLifecycle) {
 
 /** Cleanup a PTY session: SIGINT, then SIGKILL after 3s. */
 function disposeSession(session: PtySession): void {
+  if (session.disposed) return;
+  activeSessions.delete(session);
   // Suppress callbacks caused by explicit close, and cancel any drain deadline.
   session.disposed = true;
   session.lifecycle?.dispose();
@@ -748,6 +754,7 @@ function buildServer(port: number) {
           detached: false,
           detachTimer: null,
         };
+        activeSessions.add(session);
         session.pingInterval = setInterval(() => {
           try {
             ws.send(JSON.stringify({ type: 'ping', ts: Date.now() }));
@@ -782,6 +789,7 @@ function buildServer(port: number) {
             detached: false,
             detachTimer: null,
           };
+          activeSessions.add(session);
           sessions.set(ws, session);
           if (session.sessionId) sessionsById.set(session.sessionId, session);
         }
@@ -1070,9 +1078,18 @@ async function main() {
 
   // Cleanup port file + agent record on exit.
   let cleaningUp = false;
-  const cleanup = () => {
+  const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
+    // Capture each child wait before disposeSession clears session.proc.
+    // disposePtyProcess sends SIGINT and schedules a SIGKILL fallback after
+    // PTY_SHUTDOWN_GRACE_MS; keeping this async handler alive lets that
+    // fallback run instead of process.exit(0) abandoning every PTY child.
+    const childExits = [...activeSessions]
+      .map(session => session.proc?.exited)
+      .filter((exited): exited is Promise<number> => !!exited);
+    for (const session of [...activeSessions]) disposeSession(session);
+    sessionsById.clear();
     try {
       const releaseCleanup = acquireAgentStateLock(dir, 25);
       try {
@@ -1083,10 +1100,16 @@ async function main() {
         }
       } finally { releaseCleanup(); }
     } catch {}
+    if (childExits.length) {
+      await Promise.race([
+        Promise.allSettled(childExits),
+        Bun.sleep(PTY_SHUTDOWN_GRACE_MS + 250),
+      ]);
+    }
     process.exit(0);
   };
-  process.on('SIGTERM', cleanup);
-  process.on('SIGINT', cleanup);
+  process.on('SIGTERM', () => { void cleanup(); });
+  process.on('SIGINT', () => { void cleanup(); });
 
   // The terminal agent is intentionally detached so it survives the short-lived
   // CLI launcher, but its real owner is the persistent browse server. If that
@@ -1096,7 +1119,7 @@ async function main() {
   if (BROWSE_OWNER_PID > 0) {
     const ownerWatchdog = setInterval(() => {
       if (!BROWSE_OWNER_START_TIME || readAgentStartTime(BROWSE_OWNER_PID) !== BROWSE_OWNER_START_TIME
-        || readAgentRecord(dir)?.gen !== CURRENT_GEN) cleanup();
+        || readAgentRecord(dir)?.gen !== CURRENT_GEN) void cleanup();
     }, OWNER_WATCHDOG_MS);
     (ownerWatchdog as any)?.unref?.();
   }
