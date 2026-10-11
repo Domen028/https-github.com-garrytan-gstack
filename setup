@@ -1407,8 +1407,9 @@ if [ "$CLAUDE_MODEL_SET" -eq 1 ] && [ "$INSTALL_CLAUDE" -eq 0 ]; then
   exit 1
 fi
 # Before anything is written: refuse a host whose runtime root is, or
-# contains, this checkout (#3084). _activate_runtime_root checks again.
-for _rr in "$INSTALL_FACTORY factory $FACTORY_GSTACK" "$INSTALL_OPENCODE opencode $OPENCODE_GSTACK" \
+# contains, this checkout (#3084). _activate_runtime_root checks again; Kiro
+# writes into its root in place, so it is refused here too.
+for _rr in "$INSTALL_KIRO kiro $KIRO_SKILLS/gstack" "$INSTALL_FACTORY factory $FACTORY_GSTACK" "$INSTALL_OPENCODE opencode $OPENCODE_GSTACK" \
   "$INSTALL_CURSOR cursor $CURSOR_GSTACK" "$INSTALL_COPILOT copilot $COPILOT_GSTACK" "$INSTALL_AGY agy $AGY_GSTACK"; do
   [ "${_rr%% *}" -eq 1 ] || continue
   _rr=${_rr#* }

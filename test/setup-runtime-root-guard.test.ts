@@ -53,8 +53,8 @@ describe.skipIf(process.platform === 'win32')('setup never replaces a runtime ro
     expect(registryRows(f).filter(row => row[0] === 'cursor')).toEqual([]);
   }, 90_000);
 
-  test('a checkout nested inside a host runtime root is refused for every arm that swaps a root', () => {
-    for (const [host, root] of [['factory', '.factory/skills/gstack'], ['opencode', '.config/opencode/skills/gstack'],
+  test('a checkout nested inside a host runtime root is refused for every arm that writes a root', () => {
+    for (const [host, root] of [['kiro', '.kiro/skills/gstack'], ['factory', '.factory/skills/gstack'], ['opencode', '.config/opencode/skills/gstack'],
       ['copilot', '.copilot/skills/gstack'], ['agy', '.gemini/antigravity-cli/skills/gstack']] as const) {
       const f = makeFixture();
       const src = makeSource(f, join(f.home, root, 'checkout'));
@@ -85,6 +85,30 @@ describe.skipIf(process.platform === 'win32')('setup never replaces a runtime ro
     }
     expect(existsSync(join(src, 'setup'))).toBe(true);
     expect(registryRows(f).some(row => row[0] === 'claude')).toBe(true);
+  }, 120_000);
+
+  // @szsunyuan (#3128): only the link goes, so a symlinked root is replaced.
+  test('control: a runtime root that is a symlink to the checkout is replaced, and the checkout survives', () => {
+    const f = makeFixture();
+    const src = makeSource(f, join(f.dir, 'gstack'));
+    fixtureMkdirSync(join(f.home, '.cursor/skills'), { recursive: true });
+    symlinkSync(src, join(f.home, '.cursor/skills/gstack'), 'dir');
+    const r = runSetup(f, join(src, 'setup'), ['--host', 'cursor']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('refusing to replace');
+    expect(lstatSync(join(f.home, '.cursor/skills/gstack')).isSymbolicLink()).toBe(false);
+    expect(existsSync(join(f.home, '.cursor/skills/gstack/SKILL.md'))).toBe(true);
+    for (const file of ['setup', 'VERSION', 'bin/gstack-hook-check']) expect(existsSync(join(src, file))).toBe(true);
+  }, 120_000);
+
+  test('a Kiro checkout at ~/.kiro/skills/gstack is refused, not linked into itself', () => {
+    const f = makeFixture();
+    const src = makeSource(f, join(f.home, '.kiro/skills/gstack'));
+    const before = tree(src);
+    const r = runSetup(f, join(src, 'setup'), ['--host', 'kiro']);
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stderr).toContain(`refusing to replace ${realpathSync(src)} for kiro`);
+    expect(tree(src)).toEqual(before);
   }, 120_000);
 
   test('control: a Cursor install from a checkout elsewhere replaces its runtime root, twice', () => {

@@ -32,11 +32,12 @@
 # checkout) or contains it, `./setup --host HOST` would replace the checkout
 # (#3084): print the commands that move it out first and return 0. A symlinked
 # ~/.claude/skills/gstack that points at SRC becomes the checkout itself.
-# Claude and Kiro install in place, and a ROOT that is a symlink is replaced
-# as a link, so those return 1.
+# Kiro writes its runtime files into ROOT in place, which would link the
+# checkout into itself, so it counts too. Claude installs in place from the
+# checkout, and a ROOT that is a symlink is replaced as a link: those return 1.
 gstack_install_move_hint() {
   local src="$1" host="$2" root="$3" claude_link="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"
-  case "$host" in claude|kiro) return 1 ;; esac
+  [ "$host" = claude ] && return 1
   [ -L "$root" ] && return 1
   command -v gstack_path_within >/dev/null 2>&1 && gstack_path_within "$src" "$root" || return 1
   if [ -L "$claude_link" ] && gstack_path_same "$claude_link" "$src"; then

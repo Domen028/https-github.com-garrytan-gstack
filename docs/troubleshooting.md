@@ -822,8 +822,9 @@ says what is wrong (for example that Bun is missing).
 
 **Meaning.** Setup installs Codex, Factory, OpenCode, Cursor, Copilot and
 Antigravity by building a runtime root (such as `~/.cursor/skills/gstack`) and
-swapping it in for the old one. Your gstack checkout lives at that root or
-inside it, so the swap would delete the checkout (#3084). Setup refuses before
+swapping it in for the old one, and Kiro by writing into `~/.kiro/skills/gstack`.
+Your gstack checkout lives at that root or inside it, so the swap would delete
+the checkout (#3084), and Kiro would link the checkout into itself. Setup refuses before
 writing anything. `./setup --status` and `gstack-doctor` suggest the move for
 that host instead of `./setup --host <host>`.
 
