@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.91.81.0] - 2026-10-11
+
+**gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".
+
 ## [1.91.79.0] - 2026-10-11
 
 **`/eval-plan` preregisters paid evals for your product, coordination tools keep parallel lanes from colliding, and the autoplan owner sees a one-page brief instead of the full review (multi-agent wave PR E, plan items E1 tier 1, E2, E3).**
