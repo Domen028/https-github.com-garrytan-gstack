@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.95.0] - 2026-10-11
+## [1.91.90.0] - 2026-10-11
 
 **Windows checkouts stop breaking gstack's nested shell scripts on Linux, the timeline Stop hook repairs on Windows instead of timing out every turn, and the `/setup-gbrain` smoke test stops piping into `gbrain put`.**
 
