@@ -596,11 +596,12 @@ The three modes are MUTUALLY EXCLUSIVE — at most one runs per invocation. Once
 the mode is determined, read ONLY that mode's section (see the Section index
 above); never read the other two mode sections.
 
-**Reasoning effort override:** If the user's input contains `--xhigh` anywhere,
-note it and remove it from the prompt text before passing to Codex. When `--xhigh`
-is present, prefix the `run-with-timeout` dispatch with `GSTACK_CODEX_EFFORT=xhigh`,
-which outranks `codex_effort` and the per-mode default. Otherwise `--effort` applies
-`GSTACK_CODEX_EFFORT`, then `codex_effort`, then the per-mode defaults:
+**Reasoning effort override:** for `--effort <level>` or `--effort=<level>` anywhere in
+the input (`--xhigh` = `--effort xhigh`), remove it from the prompt text and prefix each
+`run-with-timeout` dispatch with `GSTACK_CODEX_EFFORT=<level>` (`GSTACK_CODEX_EFFORT=xhigh`).
+It outranks `codex_effort`; the probe rejects unknown levels before any Codex call. Missing
+value, not one lowercase word, or conflicting flags: stop and say so, never drop it silently.
+Otherwise `GSTACK_CODEX_EFFORT`, then `codex_effort`, then the per-mode defaults:
 - Review (2A): `high` — bounded diff input, needs thoroughness
 - Challenge (2B): `high` — adversarial but bounded by diff
 - Consult (2C): `medium` — large context, interactive, needs speed
@@ -797,9 +798,9 @@ nested skill run.
 set codex_effort <level>`, then the default; an invalid value stops before any Codex call.
 `--user-invoked` runs even with `codex_reviews` disabled: the user asked by name.
 
-`xhigh` uses ~23x more tokens than `high` and causes 50+ minute hangs on large context
-tasks (OpenAI issues #8545, #8402, #6931). Users can override with `--xhigh` flag
-(e.g., `/codex review --xhigh`) when they want maximum reasoning and are willing to wait.
+Override one run with `--effort <level>` (`/codex review --effort medium`). `xhigh`
+uses ~23x more tokens than `high` and causes 50+ minute hangs on large context tasks
+(OpenAI issues #8545, #8402, #6931).
 
 **Web search:** All codex commands pass `-c 'web_search="cached"'` so `codex exec`
 invocations can look up docs and APIs during review. This is OpenAI's cached index —
