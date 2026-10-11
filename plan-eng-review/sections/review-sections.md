@@ -37,10 +37,10 @@ path authorizes no other; implementation edits require explicit authority.
 
 | Artifact | Destination | If writing is forbidden |
 |---|---|---|
-| Working plan, ledger and complete review report | Selected report file | Ask for a permitted destination if the user can supply one; wait without completion telemetry. If none is permitted, follow **Read-only review** below, then use **Blocked outcome**. |
+| Working plan, ledger and complete review report | Selected report file | Ask for a permitted destination if the user can supply one; wait without completion telemetry. If none is permitted, use **Read-only review** below, then **Report-back outcome**. |
 | QA Test Plan and task JSONL | Discovery paths below | Present each completely as **not persisted** and continue. |
 | TODOS.md | The project's TODO file | Present accepted TODO content as **not persisted** and continue. |
-| Required Review Log | The helper's state location | Present its fields as **not persisted**; at Review Log, use **Blocked outcome** instead of publishing a saved review. The final gate cannot pass without this log. |
+| Required Review Log | The helper's state location | Present its fields as **not persisted**; at Review Log, use **Report-back outcome** instead of publishing a saved review. The final gate cannot pass without this log. |
 | Best-effort metadata/learning logs | Helper-defined locations | Skip forbidden writes; otherwise keep their best-effort behavior. |
 
 QA Test Plan/task JSONL keep discovery paths `$GSTACK_STATE_ROOT/projects/{slug}/`:
@@ -1108,10 +1108,11 @@ must pass steps 1–4 again.
    if later approved decisions changed its requirements. Do not recreate unchanged output.
 2. **Save and Read back.** Use Plan File Review Report to save the complete body
    and terminal `## GSTACK REVIEW REPORT`; pass its Read-back gate. Forbidden
-   persistence or an unrecovered save requires **Blocked outcome**, not logging.
+   persistence uses **Report-back outcome**; an unrecovered save requires
+   **Blocked outcome**, not logging.
 3. **Log the saved review.** Run Review Log with saved Completion summary values.
-   If the required log is forbidden, show fields as not persisted and take **Blocked outcome**;
-   failures use the write policy's recovery. Neither supplies completion or saved-dashboard credit.
+   If the required log is forbidden, show fields as not persisted and take **Report-back outcome**;
+   failures use the write policy's recovery.
 4. **Publish.** Display the Review Readiness Dashboard, then present the saved
    Completion summary to the user.
 5. **Choose navigation.** Use Next Steps — Review Chaining; wait for its answer.
@@ -1329,7 +1330,7 @@ DROP the current skill's row; emit the sentinel only when both are zero.
 
 ### Write to the report file
 
-If the report destination is absent or writing is forbidden, assemble the same complete working plan, review output and terminal report in chat, labeled not persisted. Do not run the file-writing steps below or claim their Read-back gate passed. Then follow **Blocked outcome** in the entrypoint. Otherwise save only accepted changes, keeping unresolved choices pending:
+If the report destination is absent or writing is forbidden, assemble the same complete working plan, review output and terminal report in chat, labeled not persisted. Do not run the file-writing steps below or claim their Read-back gate passed. Then use **Report-back outcome**. Otherwise save only accepted changes, keeping unresolved choices pending:
 
 The report must always be the LAST section of the report file — never mid-file.
 Use a single delete-then-append flow:
@@ -1401,9 +1402,8 @@ Historical source "claude" is a native subagent; "claude-code" is the external C
 Do not infer old providers or unknown models from today's harness. A native result
 does not fill missing, disabled or skipped outside coverage.
 
-**Source attribution:** Append a recorded `via` to the suffix, for example
-"CLEAR (PLAN via /autoplan)" or "CLEAR (DIFF via /ship)". Without `via`, keep
-"CLEAR (PLAN)" or "CLEAR (DIFF)". Below the dashboard, group `autoplan-voices`
+**Source attribution:** Append a recorded `via` to the suffix ("CLEAR (PLAN via
+/autoplan)"); without one, keep "CLEAR (PLAN)" or "CLEAR (DIFF)". Below the dashboard, group `autoplan-voices`
 and `design-outside-voices` by workflow run and phase. Show each phase's provider
 and outside_status; retain partial coverage. These details do not clear Eng Review.
 
@@ -1412,8 +1412,7 @@ and outside_status; retain partial coverage. These details do not clear Eng Revi
 - **Content-first rule:** For `review`, `adversarial-review`, `codex-review`,
   ship-stage reviews and `design-review-lite`, use `review_freshness.status`
   and show its `reason`. CURRENT means a completed clean review whose start and
-  end content fingerprints equal the current `---WTREE---` fingerprint. This
-  fingerprint covers working-tree content, not just the commit.
+  end content fingerprints equal the current `---WTREE---` fingerprint.
   STALE or UNVERIFIED cannot clear Eng Review. Missing `review_freshness`,
   including legacy log-only records, means UNVERIFIED. Never fall back to HEAD
   equality or commit distance for diff evidence, even at zero commits.
@@ -1422,12 +1421,11 @@ and outside_status; retain partial coverage. These details do not clear Eng Revi
 - **Plan records** (plan-ceo-review, plan-eng-review, plan-design-review and
   codex-plan-review) use the 7-day window, not the working-tree fingerprint.
   If `plan_sha256` is present, you may compare the plan file and report a mismatch.
-  For plan records only, compare the recorded commit with `---HEAD---`.
-  If different, run `git rev-list --count STORED_COMMIT..HEAD` and report
+  Compare the recorded commit with `---HEAD---`; if different, run
+  `git rev-list --count STORED_COMMIT..HEAD` and report
   "Note: {skill} review from {date} may be stale — {N} commits since review".
-  A failed command means UNKNOWN, treated as stale. Without commit tracking,
-  retain the note to consider re-running. Omit staleness notes when all reviews
-  are current.
+  A failed command means UNKNOWN, treated as stale; without commit tracking,
+  suggest a re-run. Omit notes when all reviews are current.
 
 **3. Choose the historical verdict.** CLEARED requires the selected Eng Review
 to be `clean`, within 7 days and fresh under step 2. Otherwise report NOT CLEARED

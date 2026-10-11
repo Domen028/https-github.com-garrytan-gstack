@@ -154,8 +154,13 @@ the readiness dashboard and the PR body, and never count it as a pass.
 <a id="outside-review-verdict"></a>
 ### How the verdict is read from a review
 
-- **Severity tags.** `[P0]`-`[P3]` (or Codex's native `P1:` labels). P0 and P1
-  block; P2 and P3 are advisory.
+- **Severity tags.** `[P0]`-`[P3]`, Codex's native `P1:` labels, and a P0-P3
+  label at the start of a line after an optional heading, bullet, number or
+  bold: `**P1 — x**`, `**P1** — x`, `1. P2 — x`, `P2 —`, `### P1`, or a table
+  cell `| P1 |`. P0 and P1 block; P2 and P3 are advisory. A P0-P3 token in that
+  label position that none of these forms reads (`## P1/P2 findings`) makes the
+  review [`unverified`](#outside-review-unparsed-severity), never `clean`. Code
+  fences and inline code are quotes, not labels.
 - **Severity words in label position.** `Severity: High`, `Priority: low`, a
   line that starts with `High:`, `High —`, `[High]` or `**High**` (after an
   optional heading, bullet or number), a bold `**High**` anywhere, or a table
@@ -163,9 +168,15 @@ the readiness dashboard and the PR body, and never count it as a pass.
   advisory like P2 and P3. Words inside prose do not count: "high-level",
   "low-risk", "a medium-term follow-up" and "no critical findings" are not
   findings.
+- **Every review gate.** These rules apply to every gate that summarises a
+  review, including the `execution` gate behind `/codex` consult and challenge.
+  A reply whose last `Verdict:` line says `not ready` but carries no readable
+  severity prints `FINDINGS: unspecified` and exits 3 like a blocking finding.
 - **No findings.** A review with no tag and no label is `clean` only when it
   says so explicitly (`NO_FINDINGS`, "no issues", "did not find any bugs").
-  Otherwise it is `unverified` (see below), never `clean`.
+  Otherwise it is `unverified` (see below), never `clean`. A `/codex` consult
+  answer with no severity labels at all is not a review summary and stays
+  `clean`.
 - **Design proposals** (the design-direction voices in /design-consultation
   and /office-hours) are read with the `proposal` gate: a completed proposal
   needs only its `Recommendation: ... because ...` line.
@@ -311,6 +322,33 @@ no explicit no-findings conclusion, so no pass or fail can be read from it
 
 **Fix.** Read the output above and decide. It is not a pass, and /ship and
 /review list it as missing coverage.
+
+<a id="outside-review-unparsed-severity"></a>
+### `... outside review: ran, verdict unverified (the review labels a finding with a P0-P3 severity in a form the parser cannot read (line N: "..."))` / `REASON: unparsed_severity`
+
+**Meaning.** The reply starts a line with a P0-P3 token, the place a finding's
+label goes, but in a form gstack does not read as one severity, for example
+`## P1/P2 findings` or `- P2/P3 nits`. gstack will not guess which severity
+applies, so the verdict is unverified instead of `clean`. The quoted line in
+parentheses (also printed as `UNPARSED:`) is the first such label. When the
+same reply also has a readable P0 or P1 finding, that finding blocks
+(`VERDICT: findings`, exit 3) and the unparsed line is still printed.
+
+**What is kept.** The full reply is shown above.
+
+**Fix.** Read the quoted line and the reply, and decide; it is not a pass.
+Re-run the review and ask the reviewer to label each finding `[P1] <title>` or
+`P1: <title>`. To re-check a saved or corrected reply, run from your gstack
+checkout:
+
+```bash
+bun lib/outside-review-result.ts --verdict execution reply.md
+```
+
+(use `review` or `structured` for those gates).
+
+**Expected result.** `VERDICT: findings` or `VERDICT: clean` with a P0-P3
+`FINDINGS:` value, and no `UNPARSED:` line.
 
 <a id="codex-model-unusable"></a>
 ### `CODEX_MODE: model_unusable` / `MODEL_UNUSABLE`
@@ -502,6 +540,32 @@ plan; the audit is `not run`.
 **Fix.** Add `Plan: docs/designs/<file>.md` to the PR body, or run /autoplan.
 
 **Expected result.** The next /ship or /review prints the audit against that plan.
+
+<a id="plan-eng-review-not-persisted"></a>
+### `PERSISTED: no` / `PERSIST: gstack-review-log '{...}'` / `no saved Eng Review: run the PERSIST: line ...`
+
+**Meaning.** /plan-eng-review ran where the caller forbids writes (for example
+a delegating agent keeps the reviewer read-only, so it cannot edit the plan it
+judges). The review completed: it ends `DONE` with `PERSISTED: no`, records
+telemetry `success`, and returns the full report and decision ledger in its
+reply. Nothing was saved, so /ship's readiness dashboard has no Eng Review
+record and reports NOT CLEARED with "no saved Eng Review". A real failure (a
+permitted save that failed, stale evidence) still ends `BLOCKED`.
+
+**What is kept.** The reply holds the complete report; its last line is the
+review-log command with this review's values.
+
+**Fix.** From the reviewed repository, run the reply's last line without the
+`PERSIST: ` prefix:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-eng-review",...}'
+```
+
+Or rerun /plan-eng-review where it may write its report and log.
+
+**Expected result.** `gstack-review-read` lists the `plan-eng-review` entry and
+/ship's dashboard shows the Eng Review row (CLEAR when its status is `clean`).
 
 <a id="learnings-bun-missing"></a>
 ### `gstack-learnings-search: bun not found on PATH, so learnings could not be read. Fix: ...`

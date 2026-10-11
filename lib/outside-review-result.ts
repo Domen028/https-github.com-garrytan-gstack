@@ -30,6 +30,8 @@ export interface OutsideReviewClassification {
   reason?: GateReason;
   detail?: string;
   score?: number;
+  /** A P0-P3 label the parser could not read, quoted; set beside parsed blocking findings too. */
+  unparsed?: string;
 }
 
 const REFUSAL = /\b(?:(?:I (?:cannot|can't|won't|will not|am unable to)|I'm unable to)\s+(?:review|analy[sz]e|evaluate|assess|inspect|access|complete|perform|provide|assist|help|proceed)|unable to (?:review|analy[sz]e)|I must (?:decline|refuse))\b/i;
@@ -141,10 +143,60 @@ function plainReview(text: string): string {
   return text.split(/\r?\n/).map(line => line.replace(/^[\t ]*(?:#{1,6}[\t ]+|[-+*][\t ]+)?/, '').replace(/[*_`]/g, '')).join('\n');
 }
 
+/**
+ * Code quotes text, so a severity inside a fence or an inline code span is not
+ * a label. An inline span holding only a severity token in label position
+ * (`- \`P1\`: x`, `Severity: \`High\``, a table cell) is formatting and stays.
+ */
+const CODE_LABEL_BEFORE = /^[\t ]*(?:>[\t ]*)?(?:#{1,6}[\t ]+|[-+*][\t ]+|\(?\d{1,3}[.)][\t ]+)?(?:\*\*|__)?$|\b(?:severity|priority)[\t ]*[:=][\t ]*(?:\*\*|__)?$|\|[\t ]*(?:\*\*)?$/i;
+function withoutCode(text: string): string {
+  let fence: string | undefined;
+  return text.split(/\r?\n/).map(line => {
+    const marker = /^[\t ]*(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence) {
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length) fence = undefined;
+      return '';
+    }
+    if (marker) { fence = marker; return ''; }
+    return line.replace(/`([^`]+)`/g, (span, inner: string, at: number) =>
+      /^\[?(?:P[0-3]|critical|high|medium|low)\]?$/i.test(inner.trim()) && CODE_LABEL_BEFORE.test(line.slice(0, at)) ? inner : ' ');
+  }).join('\n');
+}
+
+/**
+ * P0-P3 in label position: at a line start after an optional quote, heading,
+ * bullet, number or bold, as `[P1]`, `P1:`, `P1 —`, `**P1 — x**`, `**P1** — x`,
+ * `P1 (x)` or a bare `P1` ending the line; or a table cell `| P1 |`.
+ */
+const LABEL_START = '^[\\t ]*(?:>[\\t ]*)?(?:#{1,6}[\\t ]+|[-+*][\\t ]+|\\(?\\d{1,3}[.)][\\t ]+)?(?:\\*\\*|__)?';
+const LABELED_P = new RegExp(`${LABEL_START}(?:\\[(P[0-3])\\]|(P[0-3])(?:\\*\\*|__)?[\\t ]*(?::|\u2014|\u2013|-[\\t ]|\\(|$|(?:\\*\\*|__)[\\t ]*(?::|\u2014|\u2013|-[\\t ]|$)))`, 'gm');
+const TABLE_P = /\|[\t ]*(?:\*\*)?\[?(P[0-3])\]?(?:\*\*)?[\t ]*(?=\|)/g;
+const LABEL_P = new RegExp(`${LABEL_START}\\[?P[0-3]\\b`);
+
+function severityTokens(text: string): Severity[] {
+  return [...[...text.matchAll(LABELED_P)].map(m => (m[1] ?? m[2]) as Severity),
+    ...[...text.matchAll(TABLE_P)].map(m => m[1] as Severity)];
+}
+
+/** The first line with a P0-P3 token in label position that no severity form reads. */
+function firstUnparsed(text: string): string | undefined {
+  const lines = text.split('\n');
+  const at = lines.findIndex(line => LABEL_P.test(line) && !new RegExp(LABELED_P.source, 'm').test(line));
+  return at < 0 ? undefined : `line ${at + 1}: "${lines[at]!.trim().slice(0, 160)}"`;
+}
+
+/** The reply's last `Verdict:` line says it is not ready. */
+function verdictNotReady(plain: string): boolean {
+  const last = [...plain.matchAll(/^[\t ]*Verdict[\t ]*:[\t ]*([^\r\n]*)$/gim)].at(-1)?.[1];
+  return last !== undefined && /^not[\t ]+ready\b/i.test(last.trim());
+}
+
 export function classifyOutsideReview(input: OutsideReviewInput): OutsideReviewClassification {
   const plain = plainReview(input.text);
-  const levels = [...[...plain.matchAll(/\[(P[0-3])\]|^(P[0-3]):/gm)].map(m => (m[1] ?? m[2]) as Severity),
-    ...(input.gate === 'review' || input.gate === 'structured' ? severityWords(input.text) : [])];
+  const reviewed = input.gate !== 'proposal';
+  const code = withoutCode(input.text), plainCode = plainReview(code);
+  const levels = [...[...plainCode.matchAll(/\[(P[0-3])\]|^(P[0-3]):/gm)].map(m => (m[1] ?? m[2]) as Severity),
+    ...severityTokens(code), ...(reviewed ? severityWords(code) : [])];
   const findings = { highest: levels.length ? levels.sort()[0]! : null };
   const ran = execution(input);
   if (ran.state === 'unavailable') return { execution: ran, findings, verdict: 'unavailable', reason: ran.reason, detail: ran.detail };
@@ -161,10 +213,15 @@ export function classifyOutsideReview(input: OutsideReviewInput): OutsideReviewC
   if ((input.gate === 'review' || input.gate === 'proposal') && !/^Recommendation:[\t ]*[^\r\n]+\bbecause\b[\t ]*\S[^\r\n]+$/im.test(plain)) {
     return result('unavailable', 'missing_markers', 'missing review completion recommendation');
   }
+  if (!reviewed) return result(blocking ? 'findings' : 'clean');
+  const unparsed = firstUnparsed(code);
+  const notReady = !findings.highest && verdictNotReady(plainCode);
+  if (blocking || notReady) return { ...result('findings'), ...(unparsed ? { unparsed } : {}) };
+  if (unparsed) return { ...result('unverified', 'unparsed_severity', unparsed), unparsed };
   if ((input.gate === 'structured' || input.gate === 'review') && !findings.highest && !NO_FINDINGS.test(input.text)) {
     return result('unverified', 'untagged_review', 'missing severity or explicit no-findings conclusion');
   }
-  return result(blocking ? 'findings' : 'clean');
+  return result('clean');
 }
 
 const LEGACY_REASONS: Partial<Record<GateReason, string>> = {
@@ -224,11 +281,16 @@ if (import.meta.main) {
   }
   const checked = classifyOutsideReview({ text, gate: gate as OutsideGate, exit,
     stderr: await readOptional(flags['--stderr']), events: await readOptional(flags['--events']) });
+  const label = flags['--label'] ?? 'Outside review';
   console.log(`VERDICT: ${checked.verdict}`);
-  console.log(`FINDINGS: ${checked.findings.highest ?? 'none'}`);
+  console.log(`FINDINGS: ${checked.findings.highest ?? (checked.verdict === 'findings' ? 'unspecified' : 'none')}`);
+  if (checked.unparsed) console.log(`UNPARSED: ${checked.unparsed}`);
   if (checked.reason) {
     console.log(`REASON: ${checked.reason}`);
-    console.error(gateOutcomeLine(flags['--label'] ?? 'Outside review', checked.reason, checked.detail));
+    console.error(gateOutcomeLine(label, checked.reason, checked.detail));
+  } else if (checked.unparsed) {
+    const outcome = GATE_OUTCOMES.unparsed_severity;
+    console.error(`${label}: findings block this review; separately, ${outcome.summary} (${checked.unparsed}). Fix: ${outcome.fix}.`);
   }
   process.exit(VERDICT_EXIT[checked.verdict]);
 }

@@ -58,6 +58,11 @@ export const GATE_OUTCOMES = {
     summary: 'the review completed without severity tags or an explicit no-findings line',
     fix: 'read the output above and decide; it is not a pass',
   },
+  unparsed_severity: {
+    state: 'ran', anchor: 'outside-review-unparsed-severity',
+    summary: 'the review labels a finding with a P0-P3 severity in a form the parser cannot read',
+    fix: 'read the quoted line and the full reply above and decide; it is not a pass. Re-run the review asking for [P0]-[P3] or "P1:" labels, or re-check a corrected reply with bun lib/outside-review-result.ts --verdict <gate> <reply-file> from your gstack checkout (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-unparsed-severity)',
+  },
   model_unusable: {
     state: 'unavailable', anchor: 'codex-model-unusable',
     summary: 'Codex could not use the selected model',

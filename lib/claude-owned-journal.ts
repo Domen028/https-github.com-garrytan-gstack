@@ -12,6 +12,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
+import { isDeepStrictEqual } from 'node:util';
 import { object, recordEvents, recordMeta, ownedCausalOrder, nativePathSpelling, ownedNativePath, sameNativePath,
   type ClaudeParentPublicEvent, type OwnedTranscriptReason, type RecordMeta } from './claude-journal-records';
 import type { PlanCountTranscript } from './claude-public-transcript';
@@ -113,6 +114,8 @@ interface Entry extends RecordMeta {
   /** The message content is an array (the record can make a journal ready). */
   array: boolean;
   jsonResults?: string[];
+  /** Message records only: the parsed timestamp, which a post-compaction copy keeps with its type. */
+  stamp?: number;
 }
 
 interface Scanned {
@@ -148,6 +151,7 @@ function scan(fd: number, size: number, sessionId: string, prior: JournalPrefix 
         if (object(block) && block.type === 'tool_use' && typeof block.id === 'string') out.toolUseIds.push(block.id);
     }
     if (!entry.message) return;
+    entry.stamp = Date.parse(value.timestamp);
     const full = recordEvents(value, true, entry.timestampValid);
     entry.events = policy ? strip(full.events, policy) : full.events;
     entry.slots = full.slots;
@@ -199,6 +203,27 @@ function scan(fd: number, size: number, sessionId: string, prior: JournalPrefix 
   return out;
 }
 
+/**
+ * Claude Code's auto-compaction (2.1.293) writes the kept conversation again
+ * after its compact boundary: each copy has a new uuid, a relinked parentUuid
+ * and zeroed message.usage, and is otherwise identical. Read both records'
+ * bytes and compare them without those three fields.
+ */
+function compactionCopy(fd: number, original: Entry, copy: Entry): boolean {
+  const load = (entry: Entry): Record<string, any> | undefined => {
+    const bytes = Buffer.alloc(entry.length);
+    if (fs.readSync(fd, bytes, 0, entry.length, entry.offset) !== entry.length || !isUtf8(bytes)) return;
+    try {
+      const { uuid: _uuid, parentUuid: _parent, ...rest } = JSON.parse(bytes.toString('utf8'));
+      if (!object(rest.message)) return;
+      const { usage: _usage, ...message } = rest.message;
+      return { ...rest, message };
+    } catch { return; }
+  };
+  const before = load(original);
+  return before !== undefined && isDeepStrictEqual(before, load(copy));
+}
+
 /** Ownership on the index, for each accepted owner directory; the first ready owner wins. */
 function owned(scanned: Scanned, owners: readonly string[]) {
   const results = owners.map(cwd => {
@@ -245,10 +270,23 @@ export function readOwnedClaudePublicTranscript(file: string, owners: string | r
         events: [], diagnostic: { ...(scanned.claudeVersion ? { claudeVersion: scanned.claudeVersion } : {}), rootShape: ownership.shape,
           toolUseIds: scanned.toolUseIds, sha256: scanned.prefix.sha256, complete: scanned.complete } };
     const records: IndexedRecord[] = [];
-    let base = 0, claudeVersion: string | undefined;
+    let base = 0, claudeVersion: string | undefined, compactions = 0;
+    const boundary = (entry: Entry) => entry.type === 'system' && entry.subtype === 'compact_boundary' && entry.parentNull;
+    // Message records by copy identity, each with the number of owned compact boundaries before it.
+    const earlier = ownership.order!.some(i => boundary(scanned!.entries[i]!))
+      ? new Map<string, Array<{ entry: Entry; compactions: number }>>() : undefined;
     for (const i of ownership.order!) {
       const entry = scanned.entries[i]!;
+      if (boundary(entry)) compactions++;
       if (!entry.events) continue;
+      if (earlier) {
+        // Only a copy across a compact boundary adds no events; ancestry was already
+        // decided on the index, so records after a skipped copy stay owned.
+        const key = `${entry.type}\0${entry.stamp}`, prior = earlier.get(key) ?? [];
+        const copied = prior.some(p => p.compactions < compactions && compactionCopy(fd!, p.entry, entry));
+        prior.push({ entry, compactions }); earlier.set(key, prior);
+        if (copied) continue;
+      }
       claudeVersion = entry.version ?? claudeVersion;
       for (const e of entry.events) e.order += base;
       records.push({ offset: entry.offset, length: entry.length, uuid: entry.uuid, base, slots: entry.slots,
