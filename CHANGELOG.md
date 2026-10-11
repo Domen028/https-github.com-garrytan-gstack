@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.91.99.0] - 2026-10-11
+
+**Outside reviews honor `codex_reviews` at the send, not in skill prose. Codex reasoning effort is a setting, and the README says what leaves your machine.**
+
+- **Consent in the binaries (#3102).** `gstack-codex-probe run-with-timeout`, `gstack-claude-code`, `gstack-outside-voice run` and the unattended `/autoplan` runner read `codex_reviews` before anything starts. When it is `disabled`, or the config can't be read, or the value is unknown, they refuse with `not_run` / `consent_missing` (exit 3). The refusal prints the fix command and links the `outside-review-consent-missing` troubleshooting anchor. `/ship` design-lite and `/design-review` no longer hard-code consent, so `codex_reviews=disabled` now stops them too. `/codex` and `/claude-code` pass `--user-invoked` because you asked for those reviews by name. `gstack-config get --stored <key>` prints `enabled`, `disabled`, `unset` or `unreadable` (exit 2).
+- **Reasoning effort (D1-A, #3098, closes #2934).** `run-with-timeout --effort <default>` uses `GSTACK_CODEX_EFFORT` first, then `gstack-config set codex_effort <level>`, then the gate's own default, and appends `model_reasoning_effort`. An invalid level stops before any Codex call. `/codex ... --xhigh` sets the env for that dispatch. `/spec` keeps `medium` inside its 120 s budget. `gstack-models list` shows the effective effort.
+- **Privacy text (#1081, #1080, #1150).** The README's Privacy & Telemetry section now lists:
+  - the telemetry fields and what is never sent
+  - the local `skill-usage.jsonl` (repo and branch are stripped before upload)
+  - the update check, which goes to GitHub
+  - outside-review egress and its first-send notice
+  - session markers and the timeline, which stay local
+
+  The telemetry prompt and the `gstack-config` header match it.
+- Parity caps raised by the measured amount: ship 1.6460, plan-ceo-review 1.0895, office-hours 1.1810.
+
+Thanks @Lockyer228 (#3098) for the `GSTACK_CODEX_EFFORT` precedence and its probe tests, and @lubosxyz (#2934) for the original env override.
+
 ## [1.91.83.0] - 2026-10-11
 
 **gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".
