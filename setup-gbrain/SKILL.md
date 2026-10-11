@@ -835,8 +835,8 @@ rm -f "$SMOKE_PAGE"
 ```
 
 Confirms the round trip. The page goes in from a temp file, not a pipe: on
-Windows, gbrain failed to read a piped page (#1675). On failure, surface `gbrain doctor --json` output
-and STOP with a NEEDS_CONTEXT escalation.
+Windows, gbrain failed to read a piped page. On failure, surface
+`gbrain doctor --json` output and STOP with a NEEDS_CONTEXT escalation.
 
 ---
 
