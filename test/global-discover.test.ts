@@ -445,7 +445,7 @@ describe("gstack-global-discover", () => {
     // `continue`d silently, and the project disappeared from discovery.
     // The fix raised the cap to 64KB AND drops the trailing partial segment
     // before parsing.
-    let extractCwdFromJsonl: (filePath: string) => string | null;
+    let extractCwdFromJsonl: (filePath: string, stats?: { oversizedLines: number }) => string | null;
     let tmpDir: string;
 
     beforeEach(async () => {
