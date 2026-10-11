@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.91.84.0] - 2026-10-11
+
+**A restarted `/ios-qa` daemon resumes the device session instead of relaunching the app.** The app's boot token works once, so a new daemon process used to have no way back in except `devicectl process launch --terminate-existing`, which wiped the app's QA state. The daemon now writes the rotated StateServer bearer to `$GSTACK_STATE_ROOT/ios-qa-session.json` (mode 0600, through a fresh temp file) after every successful bootstrap, bound to the device UDID, bundle ID and StateServer port, and a new daemon tries it once on its first device request. The bearer goes only to the tunnel address `devicectl` reports for the bound UDID, after `/healthz` names the same bundle; there is no mDNS or remembered-address fallback. The daemon bootstraps normally, without sending the bearer, when the target UDID, app or port differs, another device or app answers, `devicectl` reports no address, or the file is not private to you (the file is removed unused). A bearer the app rejects is cleared before the bootstrap and never presented again, and the boot token is never written to disk. `/ios-qa` Phase 0 now describes this file instead of a cache no code wrote. Draft until verified on a real iPhone.
+
+- Thanks @Bmathews721 (#1796) for the diagnosis, the hardware repro and the reuse scenarios the new tests carry.
+
 ## [1.91.83.0] - 2026-10-11
 
 **gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".
