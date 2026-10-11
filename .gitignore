@@ -72,3 +72,4 @@ docs/throughput-*.json
 # test/ios-qa-swift-build.test.ts; regenerates on every run — never commit)
 ios-qa/scripts/gen-accessors-tool/.build/
 ios-qa/scripts/gen-accessors-tool/Package.resolved
+.gstack/

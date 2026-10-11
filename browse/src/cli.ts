@@ -2175,7 +2175,8 @@ Refs:           After 'snapshot', use @e1, @e2... as selectors:
 
   // `stop` wants no daemon, so it stops one started with other proxy/headed
   // settings instead of refusing (the #915 refusal offers `browse stop`).
-  let state = await ensureServer(command === 'stop' ? { ...globalFlags, configHash: '' } : globalFlags);
+  if (command === 'stop') globalFlags = { ...globalFlags, configHash: '' };
+  let state = await ensureServer(globalFlags);
 
   // ─── Pair-Agent (post-server, pre-dispatch) ──────────────
   if (command === 'pair-agent') {
