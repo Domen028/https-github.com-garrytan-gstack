@@ -321,7 +321,7 @@ export class BrowserManager {
   // at startup based on BROWSE_PROXY_URL. For SOCKS5 with auth, server.ts
   // points this at the local bridge (socks5://127.0.0.1:<bridgePort>); for
   // HTTP/HTTPS or unauth SOCKS5, it's the upstream URL directly.
-  private proxyConfig: { server: string; username?: string; password?: string } | null = null;
+  private proxyConfig: { server: string; bypass?: string; username?: string; password?: string } | null = null;
   private pages: Map<number, Page> = new Map();
   private tabSessions: Map<number, TabSession> = new Map();
   private activeTabId: number = 0;
@@ -562,7 +562,7 @@ export class BrowserManager {
    * launchHeaded(). Called by server.ts at startup once the (optional) SOCKS5
    * bridge is up.
    */
-  setProxyConfig(cfg: { server: string; username?: string; password?: string } | null): void {
+  setProxyConfig(cfg: { server: string; bypass?: string; username?: string; password?: string } | null): void {
     this.proxyConfig = cfg;
   }
 
