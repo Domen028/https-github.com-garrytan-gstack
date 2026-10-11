@@ -73,8 +73,8 @@ function release(fx: Fx, version: string, edit: () => void) {
   git(fx.seed, 'push', '-q', 'origin', 'main');
 }
 
-function runHook(fx: Fx) {
-  return spawnSync('bash', [SCRIPT], {
+function runHook(fx: Fx, script = SCRIPT) {
+  return spawnSync('bash', [script], {
     encoding: 'utf8',
     env: { PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, HOME: fx.home, GSTACK_DIR: fx.install, GSTACK_STATE_ROOT: fx.state, SETUP_CALLS: fx.calls, TMPDIR: fx.base },
     timeout: 20_000,
@@ -157,5 +157,118 @@ describe.skipIf(process.platform === 'win32')('gstack-session-update: incoming h
     expect(bun).toBeGreaterThan(-1);
     expect(hooks).toBeGreaterThan(bun);
     expect(ff).toBeGreaterThan(hooks);
+  });
+});
+
+// The incoming revision's own checker decides (#3088, #3100: an installed
+// checker with a false positive held every later release). The installed one
+// decides only when the incoming checker gives no verified, complete report.
+describe.skipIf(process.platform === 'win32')('gstack-session-update: the incoming revision\'s checker decides', () => {
+  const FALSE_POSITIVE = `if [ "$1" = --list ]; then echo ${HOOK}; exit 0; fi\necho "fail ${HOOK} $1/${HOOK}.ts:1: bun could not bundle the TypeScript entry"; exit 1`;
+  const PASSES = `if [ "$1" = --list ]; then echo ${HOOK}; exit 0; fi\necho "ok ${HOOK}"; exit 0`;
+  const CRASHES = `if [ "$1" = --list ]; then echo ${HOOK}; exit 0; fi\necho "ok ${HOOK}"; kill -SEGV $$`;
+
+  /** The updater installed beside a stub bin/gstack-hook-check. */
+  function installedUpdater(fx: Fx, checker: string): string {
+    const bin = path.join(fx.base, 'installed-bin');
+    fs.mkdirSync(bin, { recursive: true });
+    for (const f of ['gstack-session-update', 'gstack-state-root.sh', 'gstack-egress-lib.sh', 'gstack-egress-receipt', 'gstack-bun-version.sh', 'gstack-path-spelling.sh']) {
+      fs.copyFileSync(path.join(ROOT, 'bin', f), path.join(bin, f));
+    }
+    fs.writeFileSync(path.join(bin, 'gstack-hook-check'), `#!/usr/bin/env bash\n${checker}\n`, { mode: 0o755 });
+    return path.join(bin, 'gstack-session-update');
+  }
+
+  /** Ship the real checker (or a stub) in the incoming revision. */
+  function incomingChecker(fx: Fx, stub?: string) {
+    if (stub === undefined) fs.copyFileSync(path.join(ROOT, 'bin', 'gstack-hook-check'), path.join(fx.seed, 'bin', 'gstack-hook-check'));
+    else fs.writeFileSync(path.join(fx.seed, 'bin', 'gstack-hook-check'), `#!/usr/bin/env bash\n${stub}\n`, { mode: 0o755 });
+  }
+
+  async function expectHeld(fx: Fx, script: string, reason: RegExp) {
+    const oldHead = git(fx.install, 'rev-parse', 'HEAD');
+    runHook(fx, script);
+    const log = await waitFor(fx, /Z HELD /);
+    expect(log).toMatch(reason);
+    expect(git(fx.install, 'rev-parse', 'HEAD')).toBe(oldHead);
+    expect(fs.readFileSync(path.join(fx.install, 'VERSION'), 'utf8')).toBe('1.0.0\n');
+    expect(fs.existsSync(fx.calls)).toBe(false);
+    expect(fs.readdirSync(fx.base).filter(f => f.startsWith('gstack-session-hooks-'))).toEqual([]);
+    return log;
+  }
+
+  test('an installed checker that always fails no longer holds a release whose own checker passes', async () => {
+    const fx = makeFixture();
+    const script = installedUpdater(fx, FALSE_POSITIVE);
+    release(fx, '1.1.0', () => {
+      incomingChecker(fx);
+      fs.writeFileSync(path.join(fx.seed, path.dirname(HOOK), 'note.ts'), "export const note = 'new hook ran';\n");
+    });
+    runHook(fx, script);
+    const log = await waitFor(fx, /Z UPDATED from=1\.0\.0 to=1\.1\.0/);
+    expect(log).not.toContain('HELD');
+    expect(log).toContain(`HOOK_CHECK_DISAGREE incoming=pass installed=${HOOK}.ts:1: bun could not bundle the TypeScript entry`);
+    expect(fs.readFileSync(path.join(fx.install, 'VERSION'), 'utf8')).toBe('1.1.0\n');
+    expect(runRegisteredHook(fx).stdout).toContain('new hook ran');
+  });
+
+  test('an invalid incoming hook holds even when the installed checker would pass it', async () => {
+    const fx = makeFixture();
+    const script = installedUpdater(fx, PASSES);
+    release(fx, '1.1.0', () => {
+      incomingChecker(fx);
+      fs.writeFileSync(path.join(fx.seed, path.dirname(HOOK), 'note.ts'), 'export const note = ;\n');
+    });
+    await expectHeld(fx, script, new RegExp(`HELD hook-does-not-parse: ${path.dirname(HOOK)}/note.ts:1: `));
+    expect(runRegisteredHook(fx).stdout).toContain('old hook ran');
+  });
+
+  test('a crashing incoming checker falls back to the installed one, which holds', async () => {
+    const fx = makeFixture();
+    const script = installedUpdater(fx, FALSE_POSITIVE);
+    release(fx, '1.1.0', () => incomingChecker(fx, CRASHES));
+    const log = await expectHeld(fx, script, new RegExp(`HELD hook-does-not-parse: ${HOOK}.ts:1: bun could not bundle`));
+    expect(log).toMatch(/HOOK_CHECK_FALLBACK incoming checker gave no verified report \(exited 139/);
+  });
+
+  test('an incoming checker with empty output falls back to the installed one, which holds', async () => {
+    const fx = makeFixture();
+    const script = installedUpdater(fx, FALSE_POSITIVE);
+    release(fx, '1.1.0', () => incomingChecker(fx, 'exit 0'));
+    const log = await expectHeld(fx, script, /HELD hook-does-not-parse: /);
+    expect(log).toContain('HOOK_CHECK_FALLBACK incoming checker gave no verified report (empty hook list)');
+  });
+
+  // Git Bash: the checker may report the archive directory as /c/…/x or
+  // C:/…/x while mktemp named it /tmp/x. A uname and cygpath shim stands in
+  // for MSYS; the held reason never carries the archive path.
+  test('the held reason drops the archive prefix in its native spelling', async () => {
+    const fx = makeFixture();
+    const shim = path.join(fx.base, 'msys-shim');
+    fs.mkdirSync(shim);
+    fs.writeFileSync(path.join(shim, 'uname'), '#!/usr/bin/env bash\necho MINGW64_NT-10.0\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(shim, 'cygpath'), '#!/usr/bin/env bash\n[ "$1" = -am ] && { printf \'C:/msys64%s\\n\' "$2"; exit 0; }\nexit 1\n', { mode: 0o755 });
+    const script = installedUpdater(fx, PASSES);
+    release(fx, '1.1.0', () => incomingChecker(fx, `if [ "$1" = --list ]; then echo ${HOOK}; exit 0; fi\necho "fail ${HOOK} $(cygpath -am "$1")/${HOOK}.ts:3: Unexpected ;"; exit 1`));
+    const oldHead = git(fx.install, 'rev-parse', 'HEAD');
+    spawnSync('bash', [script], {
+      encoding: 'utf8',
+      env: { PATH: `${shim}:${path.dirname(process.execPath)}:${process.env.PATH}`, HOME: fx.home, GSTACK_DIR: fx.install, GSTACK_STATE_ROOT: fx.state, SETUP_CALLS: fx.calls, TMPDIR: fx.base },
+      timeout: 20_000,
+    });
+    const log = await waitFor(fx, /Z HELD /);
+    expect(log).toContain(`HELD hook-does-not-parse: ${HOOK}.ts:3: Unexpected ;`);
+    expect(git(fx.install, 'rev-parse', 'HEAD')).toBe(oldHead);
+  });
+
+  test('no verified report from either checker holds as hook-check-unavailable, with the recovery', async () => {
+    const fx = makeFixture();
+    const script = installedUpdater(fx, CRASHES);
+    release(fx, '1.1.0', () => incomingChecker(fx, `if [ "$1" = --list ]; then echo ${HOOK}; exit 0; fi\necho "all good"; exit 0`));
+    await expectHeld(fx, script, /HELD hook-check-unavailable: the installed bin\/gstack-hook-check gave no verified report either \(exited 139/);
+    const next = runHook(fx, script).stdout;
+    expect(next).toContain('gstack auto-update: update held (hook-check-unavailable: ');
+    expect(next).toContain(`Fix now: cd ${fx.install} && git pull --ff-only --autostash && ./setup`);
+    expect(next).toContain('https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#auto-update-hook-check-unavailable');
   });
 });

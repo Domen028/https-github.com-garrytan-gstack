@@ -11,9 +11,12 @@
 # changes (E1). Then it parse-checks every hook the incoming revision registers
 # (bin/gstack-hook-check on a `git archive` of that revision): Claude Code runs
 # hooks straight from this checkout, so an unparseable hook would block tool
-# calls the moment the checkout moved. A failure holds the update with reason
-# hook-does-not-parse and its file:line. Updaters older than a check cannot
-# protect their first pull.
+# calls the moment the checkout moved. The incoming revision's own checker
+# decides; the installed one decides only when that gives no verified report.
+# A failure holds the update with reason hook-does-not-parse and its
+# file:line; no verified report from either holds it as
+# hook-check-unavailable. Updaters older than a check cannot protect their
+# first pull.
 #
 # Stages (B11): pull, setup and migrations are tracked separately. The
 # "just upgraded" marker is written only when every stage succeeded. A failed
@@ -43,26 +46,94 @@ LOCK_DIR="$STATE_DIR/.setup-lock"
 LOG_FILE="$STATE_DIR/analytics/session-update.log"
 PENDING_FILE="$STATE_DIR/session-update-pending"
 HOOK_CHECK="$(cd "$(dirname "$0")" && pwd)/gstack-hook-check"
+# Path spelling (Git Bash /c/x vs native C:/x) for the held-reason prefix strip.
+. "$(cd "$(dirname "$0")" && pwd)/gstack-path-spelling.sh" 2>/dev/null || { gstack_path_shell() { printf '%s\n' "$1"; }; gstack_path_native() { printf '%s\n' "$1"; }; }
 THROTTLE_SECONDS=3600  # 1 hour
 
 log_entry() {
   mkdir -p "$(dirname "$LOG_FILE")"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $1" >> "$LOG_FILE" 2>/dev/null || true  # best-effort: logging never blocks a session
 }
-# hook_incoming_hold <rev> — parse-check the hooks of <rev> (extracted with
-# git archive) before the live checkout moves. Prints the held reason and
-# returns 0 when a hook does not parse; otherwise prints nothing and returns 1
-# (an archive or bun failure fails open, like every other error here).
-hook_incoming_hold() {
-  _hc_dir=$(mktemp -d "${TMPDIR:-/tmp}/gstack-session-hooks-XXXXXX" 2>/dev/null) || return 1
-  _hc_out=""
-  if git -C "$GSTACK_DIR" archive --format=tar "$1" 2>/dev/null | tar -xf - -C "$_hc_dir" 2>/dev/null; then
-    _hc_out=$("$HOOK_CHECK" "$_hc_dir" 2>/dev/null)
+# hook_report <checker> <tree> — sets _hr_out to the checker's report on
+# <tree> and returns 0 only when the report is verified and complete: exit 0
+# with no fail line or exit 1 with one, every line `ok|missing <hook>` or
+# `fail <hook> <where>: <why>`, and a line for each hook its own --list names. An empty list counts only from the
+# installed checker (a tree without hooks). A crash, empty output or an
+# unparseable report returns 1 with the reason in _hr_why. (No command
+# substitution around it: the variables must reach the caller.)
+hook_report() {
+  _hr_why="" _hr_rc=0
+  _hr_list=$(bash "$1" --list "$2" 2>/dev/null) || { _hr_why="--list exited $?"; return 1; }
+  if [ -z "$_hr_list" ] && [ "$1" != "$HOOK_CHECK" ]; then _hr_why="empty hook list"; return 1; fi
+  _hr_out=$(bash "$1" "$2" 2>"$_hc_dir.err") || _hr_rc=$?
+  case "$_hr_rc" in
+    0|1) ;;
+    *) _hr_why="exited $_hr_rc$(head -1 "$_hc_dir.err" 2>/dev/null | head -c 160 | sed 's/^/: /')"; rm -f "$_hc_dir.err"; return 1 ;;
+  esac
+  rm -f "$_hc_dir.err"
+  if ! printf '%s\n' "$_hr_out" | HR_LIST="$_hr_list" HR_RC="$_hr_rc" awk '
+    BEGIN { n = split(ENVIRON["HR_LIST"], h, "\n"); for (i = 1; i <= n; i++) if (h[i] != "") want[h[i]] = 1 }
+    $0 == "" { next }
+    /^fail [^ ]+ .+: / { if (!($2 in want)) bad = 1; failed[$2] = 1; any = 1; next }
+    /^(ok|missing) [^ ]+$/ { if (!($2 in want) || passed[$2]++) bad = 1; next }
+    { bad = 1 }
+    END {
+      for (k in want) if ((k in passed) == (k in failed)) bad = 1
+      if (bad || (ENVIRON["HR_RC"] == 1) != (any == 1)) exit 1
+    }'; then
+    _hr_why="unparseable or incomplete report"
+    return 1
   fi
-  rm -rf "$_hc_dir"
-  _hc_fail=$(printf '%s\n' "$_hc_out" | sed -n 's/^fail [^ ]* //p' | head -1)
+}
+# hook_incoming_hold <rev> — parse-check the hooks of <rev> (extracted with
+# git archive) before the live checkout moves. The incoming revision's own
+# bin/gstack-hook-check decides, so one checker bug in this install cannot hold
+# every later release; when it gives no verified report (crash, empty output,
+# unparseable), the installed checker decides. Prints the held reason and
+# returns 0 when a hook does not parse or neither checker gave a verified
+# report; otherwise prints nothing and returns 1. A pass from the incoming
+# checker that the installed one disputes is logged.
+hook_incoming_hold() {
+  _hc_dir=$(mktemp -d "${TMPDIR:-/tmp}/gstack-session-hooks-XXXXXX" 2>/dev/null) \
+    || { echo "hook-check-unavailable: cannot create a temp directory under ${TMPDIR:-/tmp}"; return 0; }
+  _hc_out="" _hc_why=""
+  if ! git -C "$GSTACK_DIR" archive --format=tar "$1" 2>/dev/null | tar -xf - -C "$_hc_dir" 2>/dev/null; then
+    _hc_why="git archive of the incoming revision failed"
+  elif [ -f "$_hc_dir/bin/gstack-hook-check" ] && hook_report "$_hc_dir/bin/gstack-hook-check" "$_hc_dir"; then
+    _hc_out=$_hr_out
+    if ! printf '%s\n' "$_hc_out" | grep -q '^fail '; then
+      if hook_report "$HOOK_CHECK" "$_hc_dir"; then
+        _hc_inst=$(printf '%s\n' "$_hr_out" | sed -n 's/^fail [^ ]* //p' | head -1)
+      else
+        _hc_inst="no verified report ($_hr_why)"
+      fi
+      [ -z "$_hc_inst" ] || log_entry "HOOK_CHECK_DISAGREE incoming=pass installed=$(hook_hold_path "$_hc_inst" | head -c 200) rev=$1"
+    fi
+  else
+    [ -f "$_hc_dir/bin/gstack-hook-check" ] && log_entry "HOOK_CHECK_FALLBACK incoming checker gave no verified report ($_hr_why); the installed checker decides rev=$1"
+    if hook_report "$HOOK_CHECK" "$_hc_dir"; then
+      _hc_out=$_hr_out
+    else
+      _hc_why="the installed bin/gstack-hook-check gave no verified report either ($_hr_why)"
+    fi
+  fi
+  _hc_fail=$(hook_hold_path "$(printf '%s\n' "$_hc_out" | sed -n 's/^fail [^ ]* //p' | head -1)")
+  rm -rf "$_hc_dir" "$_hc_dir.err"
+  if [ -n "$_hc_why" ]; then
+    printf 'hook-check-unavailable: %s\n' "$_hc_why" | head -c 300
+    return 0
+  fi
   [ -n "$_hc_fail" ] || return 1
-  printf 'hook-does-not-parse: %s\n' "${_hc_fail#"$_hc_dir"/}" | head -c 300
+  printf 'hook-does-not-parse: %s\n' "$_hc_fail" | head -c 300
+}
+# hook_hold_path <text> — <text> without the archive directory's prefix, in
+# each spelling a checker reports it (/tmp/x, /c/…/x or C:/…/x).
+hook_hold_path() {
+  _hp=$1
+  for _hp_dir in "$_hc_dir" "$(gstack_path_shell "$_hc_dir")" "$(gstack_path_native "$_hc_dir")"; do
+    _hp=${_hp#"$_hp_dir"/}
+  done
+  printf '%s\n' "$_hp"
 }
 pending_get() { sed -n "s/^$1=//p" "$PENDING_FILE" 2>/dev/null | head -1; }
 # pending_save — persist the P_* stage state; nothing pending removes the file.
@@ -97,6 +168,8 @@ if [ -f "$PENDING_FILE" ]; then
         echo "gstack auto-update: update held ($_P_PULL); nothing was installed or changed. Fix now: bun upgrade && cd $GSTACK_DIR && git pull --ff-only && ./setup" ;;
       hook-does-not-parse*)
         echo "gstack auto-update: update held ($_P_PULL); nothing was installed or changed, and your current hooks keep running. This is a gstack bug; report ${_P_PULL#hook-does-not-parse: } at https://github.com/garrytan/gstack/issues. gstack retries at the next check. https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#auto-update-hook-does-not-parse" ;;
+      hook-check-unavailable*)
+        echo "gstack auto-update: update held ($_P_PULL); nothing was installed or changed, and your current hooks keep running. gstack retries at the next check. Fix now: cd $GSTACK_DIR && git pull --ff-only --autostash && ./setup (setup checks every hook it registers). https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#auto-update-hook-check-unavailable" ;;
       *)
         echo "gstack auto-update: git pull did not finish ($_P_PULL); gstack is not updating. Fix now: cd $GSTACK_DIR && git pull --ff-only && ./setup" ;;
     esac
