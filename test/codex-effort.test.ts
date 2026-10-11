@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import { codexEffortSetting, modelsMain } from '../lib/model-policy-cli';
 import { outsideVoiceCommand } from '../scripts/resolvers/outside-voice';
 import { HOST_PATHS, type TemplateContext } from '../scripts/resolvers/types';
+import { between, expectMentions, expectTokens } from './helpers/prompt-structure';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-effort-'));
@@ -36,9 +37,12 @@ describe('manual /codex modes (#3098)', () => {
     }
   });
 
-  test('the skill body documents the precedence and the --xhigh override', () => {
+  test('the skill body documents the precedence and the --effort / --xhigh overrides', () => {
     const body = read('codex/SKILL.md.tmpl');
     for (const want of ['GSTACK_CODEX_EFFORT=xhigh', 'codex_effort', 'run-with-timeout --effort <default>']) expect(body).toContain(want);
+    const step1 = between(body, '**Reasoning effort override:**', '- Review (2A)');
+    expectTokens(step1, ['--effort <level>', '--effort=<level>', '--xhigh', 'GSTACK_CODEX_EFFORT=<level>'], 'codex Step 1');
+    expectMentions(step1, [['remove', 'prompt text'], ['missing', 'lowercase word', 'conflicting', 'stop'], ['never', 'silently']], 'codex Step 1');
   });
 });
 
@@ -95,6 +99,28 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"SCORE: 8"}
     expect(dispatchedArgs('review', undefined, 'low')).toContain('model_reasoning_effort="low"');
     expect(dispatchedArgs('review', 'max', 'low')).toContain('model_reasoning_effort="max"');
     expect(dispatchedArgs('review', 'banana', undefined)).toEqual([]);
+  });
+
+  test('the rendered /codex review dispatch runs at a per-run GSTACK_CODEX_EFFORT prefix, over codex_effort', () => {
+    const fence = read('codex/sections/review-mode.md').split('\n').find(line => /run-with-timeout --user-invoked --effort high 330 codex review /.test(line))!;
+    const state = path.join(TMP, 'state-codex-review-prefix');
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, 'config.yaml'), 'codex_effort: low\n');
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(CODEX_|GSTACK_CODEX_|OPENAI_)/.test(k)) env[k] = v;
+    Object.assign(env, { PATH: `${fakeBin}:${process.env.PATH}`, GSTACK_HOME: state, GSTACK_STATE_ROOT: '', CODEX_HOME: TMP, GSTACK_ACTIVE_HOST: 'claude', CLAUDECODE: '1' });
+    const run = (prefix: string) => {
+      fs.rmSync(capture, { force: true });
+      const script = [`_CODEX_PROBE=${JSON.stringify(path.join(ROOT, 'bin', 'gstack-codex-probe'))}`, '_CODEX_SANDBOX_MODE=read-only', '_CODEX_SEL=gpt-test',
+        `TMPOUT=${JSON.stringify(path.join(TMP, 'review-out'))}`, `TMPERR=${JSON.stringify(path.join(TMP, 'review-err'))}`,
+        prefix + fence.replace('<base>', 'HEAD')].join('\n');
+      spawnSync('bash', ['-c', script], { cwd: repo, env, encoding: 'utf8', timeout: 60_000 });
+      return fs.existsSync(capture) ? fs.readFileSync(capture, 'utf8').split('\n') : [];
+    };
+    expect(run('')).toContain('model_reasoning_effort="low"');
+    expect(run('GSTACK_CODEX_EFFORT=medium ')).toContain('model_reasoning_effort="medium"');
+    expect(run('GSTACK_CODEX_EFFORT=xhigh ')).toContain('model_reasoning_effort="xhigh"');
+    expect(run('GSTACK_CODEX_EFFORT=bogus ')).toEqual([]);
   });
 
   test('/spec keeps medium effort and its 120 s budget whatever env or config say', () => {
