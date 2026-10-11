@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.91.85.0] - 2026-10-11
+
+**Review gates fail closed: a Codex reply that lists P1 findings is never `clean`, /autoplan survives a Claude Code auto-compaction, and a read-only /plan-eng-review finishes `DONE` instead of `BLOCKED` (Wave 9 lane B).**
+
+- **Outside-review severities (#3105).** `lib/outside-review-result.ts` now reads P0-P3 labels in label position for every gate that summarises a review, the `execution` gate behind `/codex` consult and challenge included: `**P1 — x**`, `**P1** — x`, `1. P2 — x`, a bare `P2 —`, `### P1` and table cells `| P1 |`, plus the label-position severity words that only `review`/`structured` read before. A P0-P3 token in label position that none of these forms reads (`## P1/P2 findings`) is `VERDICT: unverified` with the new reason `unparsed_severity`, an `UNPARSED: line N: "..."` line and its own troubleshooting anchor; parsed P0/P1 findings still win (exit 3) and print the unparsed line too. A reply whose last `Verdict:` line says `not ready` with no readable severity prints `FINDINGS: unspecified` and exits 3. Code fences and inline code are quotes, not labels; an unlabeled consult answer stays `clean`.
+- **Post-compaction journals (#3107).** Claude Code 2.1.293 writes the kept conversation again after an auto-compaction boundary: new uuids, relinked parents, zeroed usage, identical otherwise. The owned journal reader (`lib/claude-owned-journal.ts`) now collapses such a copy into its pre-boundary original for every record kind, so the publication guard no longer denies every phase entry with `tool_identity`, a copied `/autoplan` prompt no longer trips `init_own`, and a copied end turn plus typed prompt no longer disarms the guard. A copy that differs in anything else, or a duplicate with no boundary between, still fails closed.
+- **Read-only /plan-eng-review (#3106).** When the caller forbids writing the report or the review log, the review now follows **Report-back outcome**: it returns the full report and ledger labeled not persisted, records telemetry `success`, ends `DONE` with `PERSISTED: no`, and its last line is `PERSIST: <gstack-review-log command>` for the caller to run. No new completion status; a failed permitted save is still `BLOCKED`. With no saved Eng Review, /ship's readiness dashboard now says to run that `PERSIST:` line or rerun the review.
+
+Thanks @kolla23 (#3105)
+Thanks @kolla23 (#3106)
+Thanks @Mr-B-1 (#3107)
+
 ## [1.91.84.0] - 2026-10-11
 
 **A paid CSO baseline can be scored, and it measures what audits found. Three producer/scorer mismatches made gstack's own collect reject every real producer receipt from the first full baseline. Collect and score now accept real receipts of every kind, a test feeds them through, and findings count from every finished report, with completeness kept as its own measured rate.**
