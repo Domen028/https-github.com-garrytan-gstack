@@ -565,7 +565,7 @@ describe("gstack-global-discover", () => {
     }
     /** One Claude Code session whose cwd appears on its third record, in a project dir named like Claude Code names it. */
     function session(cwd: string, id: string): void {
-      const dir = join(home, ".claude", "projects", cwd.replace(/[\\/.]/g, "-"));
+      const dir = join(home, ".claude", "projects", cwd.replace(/[\\/.:]/g, "-"));
       mkdirSync(dir, { recursive: true });
       const lines = [
         { type: "queue-operation", operation: "enqueue", content: "q".repeat(70 * 1024) },
@@ -578,7 +578,7 @@ describe("gstack-global-discover", () => {
       const r = spawnSync("bun", ["run", scriptPath, "--since", "1h", "--format", "json"], {
         encoding: "utf-8",
         timeout: 60_000,
-        env: { ...process.env, HOME: home, CODEX_SESSIONS_DIR: join(home, "no-codex"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, ".gitconfig") },
+        env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_SESSIONS_DIR: join(home, "no-codex"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, ".gitconfig") },
       });
       expect(r.status).toBe(0);
       return JSON.parse(r.stdout);
