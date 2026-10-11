@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path';
 import { readBoundedStable } from '../lib/cso/bounded-file';
 import { canonical } from '../lib/cso/contracts';
 import { validateRuntimeCatalog, type RuntimeCatalog } from '../lib/cso/runtime-catalog';
-import { executable } from '../lib/cso/process';
+import { EMPTY_GLOBAL_GIT_CONFIG, executable } from '../lib/cso/process';
 import { atomicWriteSync } from '../lib/fs-atomic';
 import { loadCorpusManifest, materializeCase, publicCorpus, STACKS, validateCorpusManifest, type CorpusManifest, type EvalCorpus, type EvalStack, type EvalVariant } from '../test/fixtures/cso-eval/materialize';
 import {
@@ -317,7 +317,7 @@ function initializeFixtureRepository(path: string): void {
   const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
   const env = {
     PATH: process.env.PATH ?? '', LANG: 'C', LC_ALL: 'C',
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullPath, GIT_ATTR_NOSYSTEM: '1',
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG, GIT_ATTR_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'CSO Eval', GIT_AUTHOR_EMAIL: 'cso-eval@invalid',
     GIT_COMMITTER_NAME: 'CSO Eval', GIT_COMMITTER_EMAIL: 'cso-eval@invalid',
   };
