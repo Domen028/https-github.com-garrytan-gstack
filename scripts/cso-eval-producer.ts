@@ -219,7 +219,7 @@ export function inventoryProducerArtifacts(helperHome: string): ProducerArtifact
   let totalBytes = 0, visited = 0;
   const visit = (directory: string, depth: number): void => {
     if (depth > 32 || ++visited > ARTIFACT_COUNT_LIMIT * 2) throw new Error('INVALID_PRODUCER_ARTIFACTS');
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const full = join(directory, entry.name);
       if (++visited > ARTIFACT_COUNT_LIMIT * 2) throw new Error('INVALID_PRODUCER_ARTIFACTS');
       if (entry.isSymbolicLink()) throw new Error('INVALID_PRODUCER_ARTIFACTS');
@@ -234,7 +234,7 @@ export function inventoryProducerArtifacts(helperHome: string): ProducerArtifact
     }
   };
   visit(artifactRoot, 0);
-  entries.sort((left, right) => left.path.localeCompare(right.path));
+  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const base = { schemaVersion: 1 as const, root: 'security/cso' as const, entries, totalBytes };
   return { ...base, identityHash: producerArtifactInventoryHash(base) };
 }

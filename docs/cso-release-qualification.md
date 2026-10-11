@@ -312,7 +312,10 @@ any gate is measured. It never edits the committed catalog. Instead,
 into an evaluation-only catalog. Its revision is `cso-eval-<runId>-<sha12>`, it
 carries an `evaluation` record instead of `promotion`, and every runtime is an
 `evaluation_candidate` whose qualification has `kind: "evaluation"` and no
-release-gate field. Then
+release-gate field. Each runtime's `qualifiedAt` is the current time unless
+`--created-at <ISO time>` names it. An evaluation that builds one unit per
+platform must pass the same `--created-at` to every build: the scorer requires
+both platforms' producers to embed identical catalog bytes. Then
 
 ```bash
 bun run build:cso -- --evaluation-candidate <catalog.json> --output <new-directory>
