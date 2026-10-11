@@ -11,9 +11,13 @@ import type { Family, ProviderAdapter, RunOpts, RunResult } from './helpers/prov
 import { CORPUS_VERSION, FAMILIES, STACKS, defineEvalCorpus, loadCorpusManifest, materializeCase, sourceFiles, sourceHash, validateCorpusManifest, type CorpusManifest, type EvalVariant } from './fixtures/cso-eval/materialize';
 import { judgeRepair, oracleFor, type PrivateEvidence } from './helpers/cso-eval-oracles';
 import { inspectPreparation } from '../lib/cso/preparation';
-import { assertRuntimeCompatible, RUNTIME_CATALOG } from '../lib/cso/runtime-catalog';
+import { assertRuntimeCompatible, CSO_HELPER_ABI, RUNTIME_CATALOG, type RuntimeCatalog } from '../lib/cso/runtime-catalog';
 import { canonicalStartPlan, canonicalTestPlan } from '../lib/cso/verification';
-import { CsoError } from '../lib/cso/contracts';
+import { canonical, CsoError } from '../lib/cso/contracts';
+import committedRuntimeCatalog from '../lib/cso/runtime-catalog.json';
+import buildInputs from '../lib/cso/images/build-inputs.json';
+import { imageBuildMatrix } from '../scripts/cso-image-matrix';
+import { evaluationCandidateCatalog } from '../scripts/cso-runtime-promotion';
 import { scan } from '../lib/redact-engine';
 import { redactProducerText, sourceCredentialValues } from '../scripts/cso-eval-output-redaction';
 import { geminiProducerPaths, geminiProducerSystemSettings } from './helpers/providers/gemini';
@@ -430,6 +434,52 @@ describe('CSO release profile on an injected corpus', () => {
     expect(() => collectProducerReceipts(release, syntheticSchedule(release), [syntheticReceipt(publicCell)], privateManifest)).toThrow('UNKNOWN_OR_DUPLICATE_PRODUCER_RECEIPT');
     expect(() => scoreCollectedEval(release, syntheticBatch(), results, qualification, privateManifest)).toThrow('INVALID_PRODUCER_BATCH');
     expect(() => scoreEval(release, [syntheticResult(publicCell)], qualification, privateManifest)).toThrow('UNKNOWN_OR_DUPLICATE_EVAL_RESULT');
+  });
+  test('artifact inventories need unique paths in the order their identity hash binds, including 1.91.75 locale order', () => {
+    const release = createEvalMatrix(releaseOptions, privateManifest), schedule = syntheticSchedule(release), cell = release.cells[0];
+    const withEntries = (paths: string[]) => {
+      const receipt = syntheticReceipt(cell), entries = paths.map(path => ({ path: `${'e'.repeat(24)}/1791702612575-${'a'.repeat(16)}/${path}`, sha256: sha256(path), bytes: 1 }));
+      const base = { schemaVersion: 1 as const, root: 'security/cso' as const, entries, totalBytes: entries.length };
+      receipt.artifacts = { ...base, identityHash: producerArtifactInventoryHash(base) };
+      return rehashReceipt(receipt);
+    };
+    for (const order of [['README.md', 'package.json', 'snapshot.json', 'snapshot/x'], ['package.json', 'README.md', 'snapshot.json', 'snapshot/x']]) {
+      expect(collectProducerReceipts(release, schedule, [withEntries(order)], privateManifest).summary.submitted).toBe(1);
+    }
+    expect(() => collectProducerReceipts(release, schedule, [withEntries(['README.md', 'package.json', 'README.md'])], privateManifest)).toThrow('INVALID_PRODUCER_RECEIPT');
+  });
+  test('platforms whose evaluation catalogs differ only in qualification time match when the embedded bodies prove it', () => {
+    const staged = imageBuildMatrix(buildInputs).include.map(row => ({
+      schemaVersion: 1, helperAbi: CSO_HELPER_ABI, state: 'staged', verifiedProvenance: true, buildRevision: row.inputRevision, runtimeId: row.runtimeId, stack: row.stack, platform: row.platform,
+      image: `ghcr.io/garrytan/gstack/cso-staging/${row.stack}-${row.arch}@sha256:${sha256(row.runtimeId)}`, versions: row.versions, sourceCommit: 'a'.repeat(40),
+      workflow: 'https://github.com/garrytan/gstack/actions/runs/123456', sbomDigest: `sha256:${sha256(`sbom:${row.runtimeId}`)}`, provenanceDigest: `sha256:${sha256(`provenance:${row.runtimeId}`)}`,
+      qualification: 'pending native and private release gates; no automatic promotion',
+    }));
+    const [amdCatalog, armCatalog] = ['2026-10-11T07:05:29.256Z', '2026-10-11T07:05:32.067Z'].map(at => evaluationCandidateCatalog(committedRuntimeCatalog, buildInputs, staged, at));
+    const release = createEvalMatrix(releaseOptions, privateManifest), schedule = syntheticSchedule(release);
+    const amd = release.cells.find(cell => cell.platform === 'linux/amd64')!, arm = release.cells.find(cell => cell.platform === 'linux/arm64')!;
+    const embedding = (cell: EvalCell, catalog: RuntimeCatalog) => {
+      const receipt = syntheticReceipt(cell), { identityHash: _hash, ...identity } = receipt.installationIdentity;
+      identity.embeddedCatalogs = { ...identity.embeddedCatalogs, runtimeRevision: catalog.revision, runtimeSha256: sha256(JSON.stringify(catalog)) };
+      receipt.installationIdentity = { ...identity, identityHash: producerInstallationIdentityHash(identity) };
+      return rehashReceipt(receipt);
+    };
+    const receipts = [embedding(amd, amdCatalog), embedding(arm, armCatalog)];
+    expect(() => collectProducerReceipts(release, schedule, receipts, privateManifest)).toThrow('UNMATCHED_PRODUCER_INSTALLATIONS');
+    const batch = collectProducerReceipts(release, schedule, receipts, privateManifest, [armCatalog, amdCatalog]);
+    expect(batch.embeddedCatalogs).toEqual([armCatalog, amdCatalog]);
+    expect(collectProducerReceipts(release, schedule, [embedding(amd, amdCatalog), embedding(arm, amdCatalog)], privateManifest).embeddedCatalogs).toBeUndefined();
+    const complete = collectProducerReceipts(release, schedule, release.cells.map(cell => embedding(cell, cell.platform === 'linux/amd64' ? amdCatalog : armCatalog)), privateManifest, [amdCatalog, armCatalog]);
+    const results = release.cells.map(cell => ({ ...syntheticResultFor(cell, privateManifest), producerReceiptHash: complete.receipts.find(receipt => receipt.cell.id === cell.id)!.receiptHash }));
+    expect(scoreCollectedEval(release, complete, results, qualification, privateManifest).groups.every(item => item.submitted === item.cells)).toBe(true);
+    const { batchHash: _batchHash, embeddedCatalogs: _catalogs, ...stripped } = complete;
+    expect(() => scoreCollectedEval(release, { ...stripped, batchHash: sha256(JSON.stringify(stripped)) }, results, qualification, privateManifest)).toThrow('UNMATCHED_PRODUCER_INSTALLATIONS');
+    const movedImage = structuredClone(armCatalog); movedImage.runtimes[0].image = movedImage.runtimes[0].image.replace(/@sha256:.{8}/, '@sha256:00000000');
+    movedImage.evaluation!.evidenceDigest = `sha256:${sha256(canonical(movedImage.runtimes))}`;
+    for (const bodies of [[amdCatalog], [amdCatalog, amdCatalog], [amdCatalog, movedImage]]) {
+      const tampered = bodies.includes(movedImage) ? [embedding(amd, amdCatalog), embedding(arm, movedImage)] : receipts;
+      expect(() => collectProducerReceipts(release, schedule, tampered, privateManifest, bodies)).toThrow('UNMATCHED_PRODUCER_INSTALLATIONS');
+    }
   });
   test('identity checks hold per platform and require shared catalogs and provider policy across platforms', () => {
     const release = createEvalMatrix(releaseOptions, privateManifest), schedule = syntheticSchedule(release);
@@ -948,6 +998,50 @@ describe('CSO matched producer orchestration', () => {
       expect(JSON.stringify(failed)).not.toContain(leak);
     }
   });
+
+  test('collects and scores real receipts of every kind: succeeded, span-redacted, credential-withheld, timeout and post-run check failure', async () => {
+    const platform = producerHostPlatform();
+    if (!platform) return;
+    const launcher = helperBundle(), runId = `${Date.now()}-${randomHex(8)}`, run = `${'e'.repeat(24)}/${runId}`;
+    const helperFiles = ['readable/.env', 'readable/README.md', 'report.json', 'report.md', `scanner-outcomes/gitleaks-${randomHex(8)}-${randomHex(8)}.json`, 'snapshot.json', 'snapshot/README.md', 'snapshot/package.json'];
+    const kinds: Array<[string, Partial<RunResult>, ((source: string) => void)?]> = [
+      ['succeeded', {}],
+      ['span-redacted', { output: `complete — run ${runId}; /health-hooks reaches 169.254.169.254:80` }],
+      ['credential-withheld', { output: `complete — quoted sk-ant-api03-${randomHex(40)}` }],
+      ['timeout', { output: 'last assistant text before the kill', error: { code: 'timeout', reason: 'exceeded 2100000ms' } }],
+      ['post-run-check-failed', {}, source => { const file = join(source, 'src', 'app.txt'); chmodSync(file, 0o644); writeFileSync(file, 'changed by producer\n'); chmodSync(file, 0o444); }],
+    ];
+    const produce = async (target: EvalMatrix, payloads: Partial<Record<'v2' | 'v3', string>>) => {
+      const prepared = join(root(), 'prepared'), schedule = prepareEvalJobs(target, payloads, prepared, undefined, privateCorpus);
+      const receipts: ProducerReceipt[] = [];
+      for (const [index, cell] of target.cells.entries()) {
+        const [, outcome, mutate] = kinds[index % kinds.length], isolated = isolate(prepared, cell);
+        const adapter = new FakeAdapter(opts => {
+          for (const file of helperFiles) { const path = join(process.env.GSTACK_HOME!, 'security', 'cso', run, file); mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, `${file}\n`); }
+          mutate?.(opts.csoProducer!.sourceDirectory);
+        }, 'gpt-5.4', 'gpt', outcome);
+        receipts.push(await runProducerCell(isolated.input, join(root(), `${cell.id}.json`), withHelper({ adapter, paidExecutionAuthorized: true }, launcher)));
+      }
+      return { schedule, receipts, results: target.cells.map(cell => ({ ...syntheticResultFor(cell, privateManifest), producerReceiptHash: receipts.find(receipt => receipt.cellRef === cell.id)!.receiptHash })) };
+    };
+    const platforms = Object.fromEntries(privateManifest.cases.map(fixture => [fixture.id, platform]));
+    const baselineMatrix = createEvalMatrix({ profile: 'baseline', model: 'exact-eval-model', host: 'codex', skillHashes: { v2: sha256(skills.v2) }, platforms: { comprehensive: platforms } }, privateManifest);
+    const baseline = await produce(baselineMatrix, { v2: skills.v2 });
+    expect(baseline.receipts.slice(0, kinds.length).map(receipt => [receipt.status, receipt.error?.code ?? null, receipt.artifacts.entries.length])).toEqual([
+      ['succeeded', null, 8], ['succeeded', null, 8], ['failed', 'unknown', 8], ['failed', 'timeout', 8], ['failed', 'INVALID_PRODUCER_SOURCE', 0],
+    ]);
+    expect(baseline.receipts[0].artifacts.entries.map(entry => entry.path)).toEqual(helperFiles.map(file => `${run}/${file}`));
+    expect(baseline.receipts[1].output).toBe(`complete — run ${runId}; /health-hooks reaches <REDACTED-pii.phone.e164>:80`);
+    expect(baseline.receipts[2]).toMatchObject({ output: '[sensitive producer output redacted]', error: { reason: 'Sensitive producer output or error withheld: credential-class rule anthropic.key×1' } });
+    const baselineBatch = collectProducerReceipts(baselineMatrix, baseline.schedule, baseline.receipts, privateManifest);
+    expect(baselineBatch.summary.groups).toMatchObject([{ version: 'v2', mode: 'comprehensive', scheduled: 16, submitted: 16, succeeded: 7, failed: 9 }]);
+    const recorded = createEvalBaseline(baselineMatrix, baselineBatch, baseline.results, privateManifest);
+    expect(recorded.baselineHash).toMatch(/^[a-f0-9]{64}$/);
+    const releaseMatrix = createEvalMatrix({ profile: 'release', model: 'exact-eval-model', host: 'codex', skillHashes: { v3: sha256(skills.v3) }, platforms: { daily: platform, comprehensive: platforms } }, privateManifest);
+    const release = await produce(releaseMatrix, { v3: skills.v3 });
+    const scored = scoreCollectedEval(releaseMatrix, collectProducerReceipts(releaseMatrix, release.schedule, release.receipts, privateManifest), release.results, { containment: {} }, privateManifest);
+    expect(scored.groups.map(item => [item.version, item.mode, item.submitted])).toEqual([['v3', 'daily', 16], ['v3', 'comprehensive', 16]]);
+  }, 120_000);
 
   const expectIntegrityReceipt = (receipt: ProducerReceipt, receiptPath: string, error: { code: string; reason: string }) => {
     expect(receipt).toMatchObject({ status: 'failed', error, output: '', outputHash: sha256(''), durationMs: 1234, toolCalls: 4, usage: { inputTokens: 120, outputTokens: 30, cachedTokens: 10, estimatedCostUSD: 0.0042 } });

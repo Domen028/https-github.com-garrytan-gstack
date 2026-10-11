@@ -1,5 +1,32 @@
 # Changelog
 
+## [1.91.84.0] - 2026-10-11
+
+**A paid CSO baseline can be scored. Three producer/scorer mismatches made gstack's own collect reject every real producer receipt from the first full baseline. Collect and score now accept real receipts of every kind, and a test feeds them through.**
+
+The first full paid v2 baseline produced 64 receipts and 64 judge records, then scored `unmeasured` with `INVALID_PRODUCER_RECEIPT`. Run against that run's retained artifacts, collect failed on three separate mismatches in turn:
+
+1. **Artifact order.** The producer sorted its artifact inventory with `localeCompare`, so `package.json` came before `README.md`. Collect required strict code-unit order, and 62 of 64 receipts failed.
+2. **Per-platform catalog bytes.** Next came `UNMATCHED_PRODUCER_INSTALLATIONS`. Each platform's producer unit generated its own evaluation catalog, and `evaluation-candidate` stamps `qualifiedAt` with the current time. The two embedded catalogs differed only in that timestamp and the evidence digest over it.
+3. **Case-id namespace.** The last mismatch is in the private evaluator: judges named matched cases by their private id instead of the matrix's opaque id. The evaluator fixes it at its own boundary.
+
+### What this means for you
+
+- **Inventories are checked for unique paths, not order.** The order stays bound by the inventory's identity hash. New producers sort by code unit, so the identity no longer depends on locale.
+- **`evaluation-candidate --created-at <ISO time>`** pins every runtime's `qualifiedAt`. Builds given the same value write identical catalog bytes, so per-platform units embed the same catalog.
+- **`collectProducerReceipts(…, embeddedCatalogs)`** handles units that already embedded different catalogs. When the platforms' catalog hashes differ, it accepts them only if the supplied catalog bodies hash to each platform's `runtimeSha256`, validate, share revision and scanner identity, and are identical apart from `qualifiedAt` and the evidence digest. The batch then carries those bodies, and scoring re-checks them. Without bodies, or with any other difference, the result is still `UNMATCHED_PRODUCER_INSTALLATIONS`.
+
+### Itemized changes
+
+#### Changed
+- `scripts/cso-eval-producer.ts`: artifact inventory sorted by code unit.
+- `scripts/cso-eval.ts`: `validateArtifactInventory` requires unique paths. `assertPlatformIdentities` accepts the catalog-equivalence proof. `ProducerBatch.embeddedCatalogs` is optional.
+- `scripts/cso-runtime-promotion.ts`: `evaluation-candidate` takes an optional `--created-at`. Documented in `docs/cso-release-qualification.md`.
+
+#### For contributors
+- `test/cso-eval.test.ts`: real producer receipts, one per kind (succeeded, span-redacted, credential-withheld, timeout, post-run check failure), with mixed-case helper artifacts, go through collect, `createEvalBaseline` and `scoreCollectedEval`. Locale-ordered inventories are accepted and duplicate paths rejected. Catalog equivalence passes with the bodies and fails without them, with a body missing, duplicated, or with a moved image.
+- `test/cso-runtime-promotion.test.ts`: two `evaluation-candidate --created-at` builds write identical bytes.
+
 ## [1.91.83.0] - 2026-10-11
 
 **gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".

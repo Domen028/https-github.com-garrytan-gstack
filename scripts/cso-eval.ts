@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { readBoundedStable } from '../lib/cso/bounded-file';
+import { canonical } from '../lib/cso/contracts';
+import { validateRuntimeCatalog, type RuntimeCatalog } from '../lib/cso/runtime-catalog';
 import { executable } from '../lib/cso/process';
 import { atomicWriteSync } from '../lib/fs-atomic';
 import { loadCorpusManifest, materializeCase, publicCorpus, STACKS, validateCorpusManifest, type CorpusManifest, type EvalCorpus, type EvalStack, type EvalVariant } from '../test/fixtures/cso-eval/materialize';
@@ -168,6 +170,8 @@ export interface ProducerBatch {
     groups: ProducerGroupSummary[];
     note: string;
   };
+  /** Present only when platforms embedded catalogs that differ in qualification time alone; see assertPlatformIdentities. */
+  embeddedCatalogs?: RuntimeCatalog[];
   batchHash: string;
 }
 export const REQUIRED_CONTAINMENT = [
@@ -410,14 +414,16 @@ function validateProviderIdentity(identity: ProducerProviderIdentity, family: 'c
   if (producerProviderIdentityHash(withoutHash) !== identityHash) throw new Error(error);
 }
 
+/** Paths are unique; their order is whatever the producer bound into identityHash (1.91.75 producers sorted by locale). */
 function validateArtifactInventory(inventory: ProducerArtifactInventory, error: string): void {
   if (!inventory || inventory.schemaVersion !== 1 || inventory.root !== 'security/cso' || !Array.isArray(inventory.entries) || inventory.entries.length > 4096 ||
       !Number.isSafeInteger(inventory.totalBytes) || inventory.totalBytes < 0 || inventory.totalBytes > 128 * 1024 * 1024 || !HEX.test(inventory.identityHash)) throw new Error(error);
-  let previous = '', total = 0;
+  const paths = new Set<string>();
+  let total = 0;
   for (const entry of inventory.entries) {
     if (!entry || typeof entry.path !== 'string' || entry.path.length > 1024 || !/^[A-Za-z0-9._/-]+$/.test(entry.path) || entry.path.split('/').some(part => !part || part === '.' || part === '..') ||
-        entry.path <= previous || !HEX.test(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.bytes > 32 * 1024 * 1024) throw new Error(error);
-    previous = entry.path; total += entry.bytes;
+        paths.has(entry.path) || !HEX.test(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.bytes > 32 * 1024 * 1024) throw new Error(error);
+    paths.add(entry.path); total += entry.bytes;
   }
   if (total !== inventory.totalBytes) throw new Error(error);
   const { identityHash, ...withoutHash } = inventory;
@@ -446,9 +452,12 @@ type IdentityBearing = Pick<ProducerReceiptIndex, 'cell' | 'installationIdentity
 /**
  * Each platform has exactly one producer installation and provider binary.
  * Platforms differ only in native binaries: the embedded catalogs and the
- * reviewed provider policy must be identical across them.
+ * reviewed provider policy must be identical across them. Evaluation units that
+ * generated their catalog once per platform embed copies differing only in each
+ * runtime's `qualifiedAt` and the evidence digest over it; `bodies`, the catalogs
+ * as embedded, prove that, each hashing to its platform's runtimeSha256.
  */
-function assertPlatformIdentities(receipts: IdentityBearing[]): void {
+function assertPlatformIdentities(receipts: IdentityBearing[], bodies: RuntimeCatalog[] = []): void {
   const byPlatform = new Map<string, IdentityBearing[]>();
   for (const receipt of receipts) {
     const key = receipt.cell.platform ?? 'unpinned', list = byPlatform.get(key) ?? [];
@@ -463,11 +472,23 @@ function assertPlatformIdentities(receipts: IdentityBearing[]): void {
   if (new Set(representatives.map(receipt => receipt.installationIdentity.identityHash)).size !== representatives.length) throw new Error('UNMATCHED_PRODUCER_PLATFORMS');
   const catalogs = (receipt: IdentityBearing) => JSON.stringify(receipt.installationIdentity.embeddedCatalogs);
   const policy = ({ providerIdentity: { family, policyRevision, version, argsPrefix } }: IdentityBearing) => JSON.stringify({ family, policyRevision, version, argsPrefix });
-  if (new Set(representatives.map(catalogs)).size !== 1) throw new Error('UNMATCHED_PRODUCER_INSTALLATIONS');
+  if (new Set(representatives.map(catalogs)).size !== 1 && !catalogsDifferOnlyInQualificationTime(representatives, bodies)) throw new Error('UNMATCHED_PRODUCER_INSTALLATIONS');
   if (new Set(representatives.map(policy)).size !== 1) throw new Error('UNMATCHED_PRODUCER_PROVIDERS');
 }
 
-export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEvalSchedule, receipts: ProducerReceipt[], corpus: EvalCorpusManifest = loadCorpusManifest()): ProducerBatch {
+function catalogsDifferOnlyInQualificationTime(representatives: IdentityBearing[], bodies: RuntimeCatalog[]): boolean {
+  if (!Array.isArray(bodies) || bodies.length !== representatives.length) return false;
+  const timeless = (body: RuntimeCatalog) => canonical({ ...body, evaluation: { ...body.evaluation, evidenceDigest: null }, runtimes: body.runtimes.map(({ qualifiedAt: _qualifiedAt, ...runtime }) => runtime) });
+  const shared = ({ runtimeSha256: _runtimeSha256, ...rest }: ProducerInstallationIdentity['embeddedCatalogs']) => JSON.stringify(rest);
+  const matched = representatives.map(receipt => bodies.find(body => sha256(JSON.stringify(body)) === receipt.installationIdentity.embeddedCatalogs.runtimeSha256));
+  if (matched.some(body => !body) || new Set(matched).size !== bodies.length) return false;
+  try { for (const body of bodies) validateRuntimeCatalog(body); } catch { return false; }
+  return new Set(representatives.map(receipt => shared(receipt.installationIdentity.embeddedCatalogs))).size === 1 && new Set(bodies.map(timeless)).size === 1 &&
+    bodies.every(body => body.revision === representatives[0].installationIdentity.embeddedCatalogs.runtimeRevision && body.evaluation);
+}
+
+/** `embeddedCatalogs`: the runtime catalog each platform's producer unit embedded, required only when those differ (see assertPlatformIdentities). */
+export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEvalSchedule, receipts: ProducerReceipt[], corpus: EvalCorpusManifest = loadCorpusManifest(), embeddedCatalogs: RuntimeCatalog[] = []): ProducerBatch {
   validateMatrix(matrix, corpus); validateSchedule(matrix, schedule);
   if (!Array.isArray(receipts)) throw new Error('INVALID_PRODUCER_RECEIPTS');
   const cells = new Map(matrix.cells.map(cell => [cell.id, cell]));
@@ -480,7 +501,8 @@ export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEv
   }
   // Receipts name only the opaque cellRef; the trusted matrix supplies the cell.
   const bound = receipts.map(receipt => ({ ...receipt, cell: cells.get(receipt.cellRef)! }));
-  assertPlatformIdentities(bound);
+  assertPlatformIdentities(bound, embeddedCatalogs);
+  const platformCatalogs = new Set(bound.map(receipt => receipt.installationIdentity.embeddedCatalogs.runtimeSha256)).size > 1 ? embeddedCatalogs : undefined;
   const pairs = new Map<string, Partial<Record<EvalVersion, (typeof bound)[number]>>>();
   if (profileOf(matrix) === 'full') for (const receipt of bound) {
     const key = matchedPairKey(receipt.cell as EvalCell);
@@ -508,7 +530,7 @@ export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEv
     scheduled: matrix.cells.length, prepared: schedule.preparedCells, submitted: bound.length, missing: matrix.cells.length - bound.length,
     matchedPairsExpected: expectedMatchedPairs(matrix), matchedPairsSubmitted: completePairs.length, modelMismatches, groups,
     note: 'Costs are pricing-table estimates. First-useful timing is unmeasured because the reused provider adapters return completed runs. Trusted findings and runtime outcomes require separate oracle adjudication.',
-  } };
+  }, ...(platformCatalogs ? { embeddedCatalogs: platformCatalogs } : {}) };
   return { ...base, batchHash: digest(JSON.stringify(base)) };
 }
 
@@ -792,7 +814,7 @@ function validateCollectedBatch(matrix: EvalMatrix, batch: ProducerBatch, observ
     if (!cell || receipts.has(cell.id)) throw new Error('INVALID_PRODUCER_BATCH');
     validateReceiptIndex(receipt, cell); receipts.set(cell.id, receipt);
   }
-  assertPlatformIdentities(batch.receipts);
+  assertPlatformIdentities(batch.receipts, batch.embeddedCatalogs);
   if (profileOf(matrix) === 'full') {
     const actualModels = new Map<string, Partial<Record<EvalVersion, string>>>();
     for (const receipt of batch.receipts) {
