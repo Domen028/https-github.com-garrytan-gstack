@@ -18,6 +18,74 @@
 
 Thanks @Lockyer228 (#3098) for the `GSTACK_CODEX_EFFORT` precedence and its probe tests, and @lubosxyz (#2934) for the original env override.
 
+## [1.91.86.0] - 2026-10-11
+
+**browse follows the proxy your shell already uses, writes PDFs on Windows machines whose temp dir is an 8.3 short path, and stops spawning `--config=NUL` children that crashed Bun 1.3.10 (Wave 9, lane E).**
+
+### What this means for you
+
+- **Proxy from the environment (#915).** Without `--proxy`, browse takes the proxy from `BROWSE_PROXY_URL`, then `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY` (upper case before lower case). `BROWSE_PROXY_URL=direct` opts out. `NO_PROXY` becomes Chromium's bypass list, and loopback is always bypassed. The proxy and the `NO_PROXY` rules are part of the daemon config, so a session with a different environment is refused with the variable named instead of silently reusing a daemon that routes differently. The refusal offers `browse stop`, which now stops any daemon whatever its proxy or headed settings. A standard variable that doesn't parse (curl-style `host:port`) prints a warning and browse connects directly; a bad `--proxy` or `BROWSE_PROXY_URL` still fails, so a typo never quietly exposes your IP. `socks5h://` works as `socks5://`. See BROWSER.md, "Proxy from environment".
+- **8.3 temp paths on Windows (#3104).** `make-pdf` and `browse pdf` failed with `Path must be within: C:\Users\BURCIN~1\...` because the safe directories and the target went through different realpath functions. Both sides now use one (`fs.realpathSync.native`), resolved paths compare exactly, and only a tail that doesn't exist yet is case-folded on Windows.
+- **No more Bun crash windows on Windows (#3085).** The terminal agent, the native-cookie supervisor and its worker passed `--config=NUL`, which panicked Bun 1.3.10 at flag parsing; the respawn loop turned that into a crash window every few seconds. All three now get an empty `bunfig.toml` created in a private directory and re-checked to be zero bytes before each spawn. POSIX keeps `/dev/null`.
+
+### Itemized changes
+
+#### Changed
+- `browse/src/proxy-config.ts`: `resolveProxy` (precedence, `direct`, cred policy for env URLs, warning fallback), `noProxyToChromiumRules`, `withLoopbackBypass`, `serverProxyEnv`; `socks5h` accepted as `socks5`; `computeConfigHash` takes the `NO_PROXY` rules (unchanged hash when there are none).
+- `browse/src/cli.ts`: resolved proxy source and bypass reach every server launch (start, crash restart, headed connect and its supervisor); the startup line names the source; `proxyMismatchLines` refusal; `browse stop` skips the config-mismatch check.
+- `browse/src/server.ts`, `browse/src/browser-manager.ts`: Chromium gets the bypass rules; the state file records the redacted proxy, its source and its bypass.
+- `browse/src/path-security.ts`: `resolveRealPath`, one realpath for safe directories and targets. `browse/src/write-commands.ts`: `cookie-import` uses `validateReadPath`.
+- `browse/src/bun-child-config.ts`: `emptyBunConfig()`; `bunChildFlags()` replaces `BUN_CHILD_FLAGS`.
+
+#### For contributors
+- `browse/test/proxy-env.test.ts`, `browse/test/proxy-env-daemon.test.ts` (a local proxy across launch, reuse, a NO_PROXY-only change, `direct` and restart), `browse/test/path-security-realpath.test.ts`, `browse/test/bun-child-config.test.ts`.
+
+Thanks @ningfeemic-dev (#916)
+Thanks @bkermen (#3104)
+Thanks @adammartin0087 (#3085)
+
+## [1.91.85.0] - 2026-10-11
+
+**`/cso` works on Windows Git 2.56 and gets Docker on macOS, `/test-audit` and `/ship` loop correctly under zsh, and the deploy skills stop at the honest point (Wave 9 Lane D).**
+
+- **`/cso` on Git for Windows 2.56.** Every CSO Git child, and the eval fixture and producer identity reads, now set `GIT_CONFIG_GLOBAL=/dev/null` on every platform. Git 2.56 rejects `NUL` there ("unable to access 'NUL'"), so `/cso` could not read any repository on Windows and `doctor` reported `static-snapshot: missing`. `GIT_CONFIG_NOSYSTEM=1` stays, POSIX is unchanged, and a new free test that also runs in the Windows CI shards proves `git config --global --list` is empty under the CSO environment. Thanks @Alfabit7 (#3082).
+- **`/cso` admits the local Docker socket on macOS.** Bun's `realpathSync` opens its target to resolve it, and a Unix socket throws `EOPNOTSUPP`, so every macOS run rejected Docker and fell back to static-only. On exactly that error the socket path is now resolved without opening it (canonical parent plus `lstat`/`readlink`); the endpoint must still be a local `unix://` socket pinned by device and inode, TCP and SSH endpoints are still rejected, and Linux takes the unchanged path. The registry-broker socket mount uses the same resolver. Thanks @nathanshox (#3094).
+- **zsh-safe file loops.** `/test-audit`'s near-duplicate seed and `/ship`'s base-control fixture copy looped with `for f in $VAR`, which zsh (the Bash tool's shell on macOS) runs once with the whole list. Both now split the list explicitly, and a static test rejects any generated bash block that loops over an unquoted variable. Thanks @vilano93 (#3109).
+- **`/setup-deploy` stops when nothing is live yet.** The deploy-trigger question separates "nothing is deployed yet" from "this project never deploys". The first stops and writes nothing, telling you to bring the site up with the platform's own tool and re-run `/setup-deploy`; the second still records the `none` configuration. Thanks @mikehasa (#3095).
+- **`/land-and-deploy` runs a recorded command trigger only with approval.** When Deploy Configuration records a command as the deploy trigger, Step 5 says production has not moved, names the command and asks you to run it, or runs it only with your explicit approval, before polling for a deployment tied to the merge; a zero exit is not revision proof. Thanks @mikehasa (#3096).
+- **TODOS.md** records the Wave 9 triage: the remaining open P2/P3 bugs by area with their root-cause files and sizes, the parked items (#2118, #2623, #3061, #3084's legacy Cursor folders, #1315's session wording, the `gbrain put` stdin pipe from #1675) and the 73 feature requests grouped into twelve themes with counted demand.
+
+## [1.91.84.0] - 2026-10-11
+
+**A paid CSO baseline can be scored, and it measures what audits found. Three producer/scorer mismatches made gstack's own collect reject every real producer receipt from the first full baseline. Collect and score now accept real receipts of every kind, a test feeds them through, and findings count from every finished report, with completeness kept as its own measured rate.**
+
+The first full paid v2 baseline produced 64 receipts and 64 judge records, then scored `unmeasured` with `INVALID_PRODUCER_RECEIPT`. Run against that run's retained artifacts, collect failed on three separate mismatches in turn:
+
+1. **Artifact order.** The producer sorted its artifact inventory with `localeCompare`, so `package.json` came before `README.md`. Collect required strict code-unit order, and 62 of 64 receipts failed.
+2. **Per-platform catalog bytes.** Next came `UNMATCHED_PRODUCER_INSTALLATIONS`. Each platform's producer unit generated its own evaluation catalog, and `evaluation-candidate` stamps `qualifiedAt` with the current time. The two embedded catalogs differed only in that timestamp and the evidence digest over it.
+3. **Case-id namespace.** The last mismatch is in the private evaluator: judges named matched cases by their private id instead of the matrix's opaque id. The evaluator fixes it at its own boundary.
+
+### What this means for you
+
+- **Findings count from every finished report.** Before this, the scorer counted a cell's findings and runtime outcomes only when the helper report was `complete`, meaning no gap and every domain assessed. Real audits nearly always record some gap, such as no web advisory lookup or credential liveness left untested, so all 64 paid cells scored `partial` and the baseline found 0 of 32 seeded issues. `EvalResult` now carries a required `reportFinished` (helper status `finished`). Precision, recall, found seeded issues, runtime outcomes and tested repairs count from finished reports. A running or missing report still counts nothing, and neither does a report behind a failed producer receipt (a timeout, a failed post-run check, or output withheld for a credential), whatever the judge read there; that report also counts as not complete for the two gates below. Completeness is still measured on its own: each group reports `reports` (complete) and `finishedReports`, and the existing `mandatoryReports` and `matchedCompleteMatrix` gates still require complete reports. No threshold changed.
+- **Inventories are checked for unique paths, not order.** The order stays bound by the inventory's identity hash. New producers sort by code unit, so the identity no longer depends on locale.
+- **`evaluation-candidate --created-at <ISO time>`** pins every runtime's `qualifiedAt`. Builds given the same value write identical catalog bytes, so per-platform units embed the same catalog.
+- **`collectProducerReceipts(…, embeddedCatalogs)`** handles units that already embedded different catalogs. When the platforms' catalog hashes differ, it accepts them only if the supplied catalog bodies hash to each platform's `runtimeSha256`, validate, share revision and scanner identity, and are identical apart from `qualifiedAt` and the evidence digest. The batch then carries those bodies, and scoring re-checks them. Without bodies, or with any other difference, the result is still `UNMATCHED_PRODUCER_INSTALLATIONS`.
+
+### Itemized changes
+
+#### Changed
+- `scripts/cso-eval.ts`: `EvalResult.reportFinished` (required, implied by `reportComplete`, implies `reportPresent`) gates counted findings and outcomes. Groups add `finishedReports`. Collected scoring and `createEvalBaseline` count a failed receipt's result as neither finished nor complete.
+- `scripts/cso-eval-producer.ts`: artifact inventory sorted by code unit.
+- `scripts/cso-eval.ts`: `validateArtifactInventory` requires unique paths. `assertPlatformIdentities` accepts the catalog-equivalence proof. `ProducerBatch.embeddedCatalogs` is optional.
+- `scripts/cso-runtime-promotion.ts`: `evaluation-candidate` takes an optional `--created-at`. Documented in `docs/cso-release-qualification.md`.
+
+#### For contributors
+- `test/cso-eval.test.ts`: finished partial reports count findings while the completeness gates still fail. Running and missing reports count nothing. A baseline finds a seeded issue in a finished partial report and never in a running or missing one.
+- `test/cso-eval.test.ts`: in the real-receipt baseline, a seeded issue is found exactly where the vulnerable cell's receipt succeeded.
+- `test/cso-eval.test.ts`: real producer receipts, one per kind (succeeded, span-redacted, credential-withheld, timeout, post-run check failure), with mixed-case helper artifacts, go through collect, `createEvalBaseline` and `scoreCollectedEval`. Locale-ordered inventories are accepted and duplicate paths rejected. Catalog equivalence passes with the bodies and fails without them, with a body missing, duplicated, or with a moved image.
+- `test/cso-runtime-promotion.test.ts`: two `evaluation-candidate --created-at` builds write identical bytes.
+
 ## [1.91.83.0] - 2026-10-11
 
 **gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".

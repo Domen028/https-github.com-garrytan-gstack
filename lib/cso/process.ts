@@ -62,6 +62,9 @@ export function executable(name: string): string {
   }
   throw new CsoError('TOOL_UNAVAILABLE', `${name} is not installed in a trusted system executable directory`);
 }
+// Git for Windows 2.56 rejects GIT_CONFIG_GLOBAL=NUL ("unable to access 'NUL'"); its MSYS
+// path layer maps /dev/null, so one spelling empties the global config on every platform.
+export const EMPTY_GLOBAL_GIT_CONFIG = '/dev/null';
 export function childEnvironment(home: string): Record<string, string> {
   return {
     PATH: TRUSTED_PATH,
@@ -70,7 +73,7 @@ export function childEnvironment(home: string): Record<string, string> {
     LC_ALL: 'C.UTF-8',
     TZ: 'UTC',
     GIT_CONFIG_NOSYSTEM: '1',
-    GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+    GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG,
     GIT_TERMINAL_PROMPT: '0',
     GIT_OPTIONAL_LOCKS: '0',
     GIT_ATTR_NOSYSTEM: '1',
