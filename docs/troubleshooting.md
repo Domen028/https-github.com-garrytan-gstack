@@ -1272,6 +1272,27 @@ and re-imports the ones missing from your brain. That check needs a local gbrain
 
 **Fix.** Fix permissions or free disk space under your gstack state root, then `/sync-gbrain`.
 
+<a id="memory-ingest-transcript-checkout"></a>
+### `[memory-ingest] kept N transcript page(s) for <repo> on this machine: gbrain source <id> ...`
+
+On a managed gbrain brain (0.60+), an import lands only in a source bound to a
+checkout this host owns, so gstack binds each transcript source to its own
+checkout, `<state root>/gbrain-transcript-sources/<id>/`, before importing.
+The partition stays on this machine, unstamped, and imports on a later run when:
+
+- **held by another owner**: the source is bound to another host or another
+  directory. gstack never takes it over. Inspect it with
+  `gbrain sources writer status --source <id> --json`; the owner releases it
+  (`gbrain sources writer transfer prepare <id>` on the owning host) or you
+  re-bind it here with `gbrain sources set-path <id> <checkout>`.
+- **the state root is ephemeral** (`GSTACK_EPHEMERAL=1`): a binding would point
+  at a directory that vanishes with the machine. Run with a durable root:
+  `GSTACK_STATE_ROOT=<durable directory> gstack-memory-ingest --bulk`.
+- **bound to gstack's checkout, but it is missing or not active**: restore the
+  checkout from a backup of the state root, or follow `gbrain doctor --json`.
+- **could not bind**: the message carries gbrain's refusal; inspect the source
+  with the writer status command above.
+
 <a id="gbrain-artifacts-not-indexed"></a>
 ### `curated artifacts pushed to git, but gbrain source <id> has 0 indexed pages. Fix: gbrain sync --source <id>, then re-run /sync-gbrain`
 

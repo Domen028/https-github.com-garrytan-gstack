@@ -10,8 +10,8 @@
  */
 
 import { existsSync, readdirSync, statSync, readFileSync, openSync, readSync, closeSync } from "fs";
-import { join, basename, dirname } from "path";
-import { execSync } from "child_process";
+import { join, basename, dirname, resolve } from "path";
+import { spawnSync } from "child_process";
 import { homedir } from "os";
 import { canonicalRemote } from "../lib/remote-identity";
 
@@ -153,31 +153,65 @@ export function normalizeRemoteUrl(url: string): string {
 
 // ── Git helpers ────────────────────────────────────────────────────────────
 
-function isGitRepo(dir: string): boolean {
-  return existsSync(join(dir, ".git"));
+interface GitProject {
+  /** Worktree root the session ran in (a linked worktree is its own root). */
+  root: string;
+  /** The repository's main worktree, shared by its linked worktrees. */
+  main: string;
 }
 
-function getGitRemote(cwd: string): string | null {
-  if (!existsSync(cwd) || !isGitRepo(cwd)) return null;
-  try {
-    const remote = execSync("git remote get-url origin", {
-      cwd,
+const PROJECT_MEMO = new Map<string, GitProject | null>();
+
+/**
+ * The git project a session's recorded cwd belongs to: its worktree root and
+ * the repository it shares with linked worktrees. A subdirectory resolves to
+ * the same root as the root itself; a cwd outside any work tree (a plain
+ * directory, or inside .git) has no project.
+ */
+function gitProject(cwd: string): GitProject | null {
+  const memo = PROJECT_MEMO.get(cwd);
+  if (memo !== undefined) return memo;
+  let project: GitProject | null = null;
+  if (existsSync(cwd)) {
+    const r = spawnSync("git", ["-C", cwd, "rev-parse", "--is-inside-work-tree", "--show-prefix", "--path-format=absolute", "--git-common-dir"], {
       encoding: "utf-8",
       timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
-    return remote || null;
-  } catch (err: any) {
-    // Expected: no remote configured, repo not found, git not installed
-    if (err?.status !== undefined) return null; // non-zero exit from git
-    if (err?.code === 'ENOENT') return null;    // git binary not found
-    throw err;
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    const [inside, prefix, common] = r.status === 0 ? r.stdout.replace(/\r?\n$/, "").split(/\r?\n/) : [];
+    if (inside === "true" && prefix !== undefined && common) {
+      // Strip the prefix from the recorded cwd instead of taking git's
+      // --show-toplevel, so the root keeps the session's own spelling
+      // (a symlinked home, a native Windows drive path).
+      const up = prefix.split("/").filter(Boolean).map(() => "..");
+      project = { root: resolve(cwd, ...up), main: basename(common) === ".git" ? dirname(common) : common };
+    }
   }
+  PROJECT_MEMO.set(cwd, project);
+  return project;
+}
+
+function getGitRemote(root: string): string | null {
+  const r = spawnSync("git", ["-C", root, "remote", "get-url", "origin"], {
+    encoding: "utf-8",
+    timeout: 5000,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
 }
 
 // ── Scanners ───────────────────────────────────────────────────────────────
 
-function scanClaudeCode(since: Date): Session[] {
+/** JSONL lines longer than this are skipped (and counted) while looking for a session's cwd. */
+const MAX_CWD_LINE_BYTES = 1024 * 1024;
+const MAX_CWD_LINES = 30;
+const MAX_CWD_SCAN_BYTES = 16 * 1024 * 1024;
+
+export interface CwdScanStats {
+  oversizedLines: number;
+}
+
+function scanClaudeCode(since: Date, stats: CwdScanStats): Session[] {
   const projectsDir = join(homedir(), ".claude", "projects");
   if (!existsSync(projectsDir)) return [];
 
@@ -193,115 +227,99 @@ function scanClaudeCode(since: Date): Session[] {
 
   for (const dirName of dirs) {
     const dirPath = join(projectsDir, dirName);
+    let recentFiles: string[];
     try {
-      const stat = statSync(dirPath);
-      if (!stat.isDirectory()) continue;
+      if (!statSync(dirPath).isDirectory()) continue;
+      recentFiles = readdirSync(dirPath).filter((f) => {
+        if (!f.endsWith(".jsonl")) return false;
+        try {
+          return statSync(join(dirPath, f)).mtime >= since;
+        } catch {
+          return false;
+        }
+      });
     } catch {
       continue;
     }
 
-    // Find JSONL files
-    let jsonlFiles: string[];
-    try {
-      jsonlFiles = readdirSync(dirPath).filter((f) => f.endsWith(".jsonl"));
-    } catch {
-      continue;
-    }
-    if (jsonlFiles.length === 0) continue;
-
-    // Coarse mtime pre-filter: check if any JSONL file is recent
-    const hasRecentFile = jsonlFiles.some((f) => {
-      try {
-        return statSync(join(dirPath, f)).mtime >= since;
-      } catch (err: any) {
-        if (err?.code === 'ENOENT' || err?.code === 'EACCES') return false;
-        throw err;
-      }
-    });
-    if (!hasRecentFile) continue;
-
-    // Resolve cwd
-    let cwd = resolveClaudeCodeCwd(dirPath, dirName, jsonlFiles);
-    if (!cwd) continue;
-
-    // Count only JSONL files modified within the window as sessions
-    const recentFiles = jsonlFiles.filter((f) => {
-      try {
-        return statSync(join(dirPath, f)).mtime >= since;
-      } catch (err: any) {
-        if (err?.code === 'ENOENT' || err?.code === 'EACCES') return false;
-        throw err;
-      }
-    });
-    for (let i = 0; i < recentFiles.length; i++) {
-      sessions.push({ tool: "claude_code", cwd });
+    // The project is the cwd each session recorded, never the directory name:
+    // Claude Code encodes "/" and "-" alike as "-", so the name cannot be
+    // decoded (#1315). A session that recorded no cwd in its first lines
+    // belongs to the same project as its siblings in this directory.
+    const cwds = recentFiles.map((f) => extractCwdFromJsonl(join(dirPath, f), stats));
+    const sibling = cwds.find((c): c is string => !!c);
+    for (const cwd of cwds) {
+      const resolved = cwd ?? sibling;
+      if (resolved) sessions.push({ tool: "claude_code", cwd: resolved });
     }
   }
 
   return sessions;
 }
 
-function resolveClaudeCodeCwd(
-  dirPath: string,
-  dirName: string,
-  jsonlFiles: string[]
-): string | null {
-  // Fast-path: decode directory name
-  // e.g., -Users-garrytan-git-repo → /Users/garrytan/git/repo
-  const decoded = dirName.replace(/^-/, "/").replace(/-/g, "/");
-  if (existsSync(decoded)) return decoded;
-
-  // Fallback: read cwd from first JSONL file
-  // Sort by mtime descending, pick most recent
-  const sorted = jsonlFiles
-    .map((f) => {
-      try {
-        return { name: f, mtime: statSync(join(dirPath, f)).mtime.getTime() };
-      } catch (err: any) {
-        if (err?.code === 'ENOENT' || err?.code === 'EACCES') return null;
-        throw err;
-      }
-    })
-    .filter(Boolean)
-    .sort((a, b) => b!.mtime - a!.mtime) as { name: string; mtime: number }[];
-
-  for (const file of sorted.slice(0, 3)) {
-    const cwd = extractCwdFromJsonl(join(dirPath, file.name));
-    if (cwd && existsSync(cwd)) return cwd;
-  }
-
-  return null;
-}
-
-export function extractCwdFromJsonl(filePath: string): string | null {
-  // Read a capped prefix so huge JSONL files don't blow up memory. 64KB
-  // comfortably fits the largest observed session headers; the old 8KB cap
-  // would sometimes fall inside a single long line and silently drop the
-  // project (JSON.parse failure on the truncated tail).
-  const MAX_BYTES = 64 * 1024;
-  const MAX_LINES = 30;
+/**
+ * The cwd recorded in the first lines of a session JSONL. Lines are read whole
+ * up to 1 MiB each (Claude Code can open with a queue-operation record far
+ * larger than a fixed prefix); a longer line is skipped and counted in
+ * `stats.oversizedLines`, and the scan moves on to the next line.
+ */
+export function extractCwdFromJsonl(filePath: string, stats: CwdScanStats = { oversizedLines: 0 }): string | null {
+  let fd: number;
   try {
-    const fd = openSync(filePath, "r");
-    const buf = Buffer.alloc(MAX_BYTES);
-    const bytesRead = readSync(fd, buf, 0, MAX_BYTES, 0);
-    closeSync(fd);
-    const text = buf.toString("utf-8", 0, bytesRead);
-    // Drop the final segment — it may be an incomplete line at the cap boundary.
-    const parts = text.split("\n");
-    const completeLines = parts.length > 1 ? parts.slice(0, -1) : parts;
-    for (const line of completeLines.slice(0, MAX_LINES)) {
-      if (!line.trim()) continue;
-      try {
-        const obj = JSON.parse(line);
-        if (obj.cwd) return obj.cwd;
-      } catch {
-        continue;
-      }
-    }
+    fd = openSync(filePath, "r");
   } catch {
-    // File read error
+    return null;
   }
-  return null;
+  try {
+    const chunk = Buffer.alloc(64 * 1024);
+    let pieces: Buffer[] = [];
+    let lineBytes = 0;
+    let lines = 0;
+    let position = 0;
+    const endLine = (): string | null => {
+      lines++;
+      const oversized = lineBytes > MAX_CWD_LINE_BYTES;
+      const text = oversized ? "" : Buffer.concat(pieces).toString("utf-8");
+      pieces = [];
+      lineBytes = 0;
+      if (oversized) {
+        stats.oversizedLines++;
+        return null;
+      }
+      if (!text.trim()) return null;
+      try {
+        const obj = JSON.parse(text);
+        return typeof obj?.cwd === "string" && obj.cwd ? obj.cwd : null;
+      } catch {
+        return null;
+      }
+    };
+    const keep = (part: Buffer) => {
+      lineBytes += part.length;
+      if (lineBytes <= MAX_CWD_LINE_BYTES) pieces.push(Buffer.from(part));
+      else pieces = [];
+    };
+    while (lines < MAX_CWD_LINES && position < MAX_CWD_SCAN_BYTES) {
+      const n = readSync(fd, chunk, 0, chunk.length, position);
+      if (n === 0) return lineBytes > 0 ? endLine() : null;
+      position += n;
+      const data = chunk.subarray(0, n);
+      let start = 0;
+      for (let nl = data.indexOf(10, start); nl !== -1; nl = data.indexOf(10, start)) {
+        keep(data.subarray(start, nl));
+        start = nl + 1;
+        const cwd = endLine();
+        if (cwd) return cwd;
+        if (lines >= MAX_CWD_LINES) return null;
+      }
+      keep(data.subarray(start));
+    }
+    return null;
+  } catch {
+    return null;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 // Separates interactive Codex CLI and Desktop work from codex exec runs and
@@ -491,50 +509,28 @@ function scanGemini(since: Date): Session[] {
 // ── Deduplication ──────────────────────────────────────────────────────────
 
 async function resolveAndDeduplicate(sessions: Session[]): Promise<Repo[]> {
-  // Group sessions by cwd
-  const byCwd = new Map<string, Session[]>();
+  // Group sessions by repository: the origin remote when there is one, else
+  // the main worktree, so linked worktrees and subdirectories of one
+  // repository count together and a nested repository counts as its own.
+  const byRemote = new Map<string, { main: string; paths: string[]; sessions: Session[] }>();
   for (const s of sessions) {
-    const existing = byCwd.get(s.cwd) || [];
-    existing.push(s);
-    byCwd.set(s.cwd, existing);
-  }
-
-  // Resolve git remotes for each cwd
-  const cwds = Array.from(byCwd.keys());
-  const remoteMap = new Map<string, string>(); // cwd → normalized remote
-
-  for (const cwd of cwds) {
-    const raw = getGitRemote(cwd);
-    if (raw) {
-      remoteMap.set(cwd, normalizeRemoteUrl(raw));
-    } else if (existsSync(cwd) && isGitRepo(cwd)) {
-      remoteMap.set(cwd, `local:${cwd}`);
-    }
-  }
-
-  // Group by normalized remote
-  const byRemote = new Map<string, { paths: string[]; sessions: Session[] }>();
-  for (const [cwd, cwdSessions] of byCwd) {
-    const remote = remoteMap.get(cwd);
-    if (!remote) continue;
-
-    const existing = byRemote.get(remote) || { paths: [], sessions: [] };
-    if (!existing.paths.includes(cwd)) existing.paths.push(cwd);
-    existing.sessions.push(...cwdSessions);
+    const project = gitProject(s.cwd);
+    if (!project) continue;
+    const raw = getGitRemote(project.root);
+    const remote = raw ? normalizeRemoteUrl(raw) : `local:${project.main}`;
+    const existing = byRemote.get(remote) || { main: project.main, paths: [], sessions: [] };
+    if (!existing.paths.includes(project.root)) existing.paths.push(project.root);
+    existing.sessions.push(s);
     byRemote.set(remote, existing);
   }
 
   // Build Repo objects
   const repos: Repo[] = [];
   for (const [remote, data] of byRemote) {
-    // Find first valid path
-    const validPath = data.paths.find((p) => existsSync(p) && isGitRepo(p));
-    if (!validPath) continue;
-
     // Derive name from remote URL
     let name: string;
     if (remote.startsWith("local:")) {
-      name = basename(remote.replace("local:", ""));
+      name = basename(data.main);
     } else {
       try {
         const url = new URL(remote);
@@ -576,7 +572,8 @@ async function main() {
   const startDate = sinceDate.toISOString().split("T")[0];
 
   // Run all scanners
-  const ccSessions = scanClaudeCode(sinceDate);
+  const cwdStats: CwdScanStats = { oversizedLines: 0 };
+  const ccSessions = scanClaudeCode(sinceDate, cwdStats);
   const codexSessions = scanCodex(sinceDate);
   const geminiSessions = scanGemini(sinceDate);
 
@@ -586,6 +583,13 @@ async function main() {
   console.error(
     `Discovered: ${ccSessions.length} CC sessions, ${codexSessions.length} Codex sessions, ${geminiSessions.length} Gemini sessions`
   );
+
+  if (cwdStats.oversizedLines > 0) {
+    console.error(
+      `Skipped ${cwdStats.oversizedLines} Claude Code JSONL line(s) over 1 MiB while reading session cwds; ` +
+        `a session whose cwd appears only after such lines counts with its project directory's other sessions.`,
+    );
+  }
 
   // Deduplicate
   const repos = await resolveAndDeduplicate(allSessions);
