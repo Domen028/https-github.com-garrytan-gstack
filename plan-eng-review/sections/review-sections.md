@@ -427,7 +427,7 @@ changes or write findings into the plan yet.
 row it prints (tier 1 always: premise-table, already-done, surface-check, binding-decisions, numbers, deferred-asks, pr-count; tier 2 by detected scope, `--scope <csv>`).
 Every row cites a file:line receipt; the premise table counts `unverified=<n>`. End with
 one line per row, `REALITY: <row> pass|finding|n/a <summary> <file:line>`, then run
-`~/.claude/skills/gstack/bin/gstack-plan-reality check --phase eng <review>`: a missing applicable row is `incomplete`
+`~/.claude/skills/gstack/bin/gstack-plan-reality check --phase eng <review-file|->` (it prints the `PLAN_REALITY:` line): a missing row is `incomplete`
 unattended; interactive runs repair twice, then warn at the gate.
 
 ### B. Resolve complexity selectors

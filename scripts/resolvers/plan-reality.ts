@@ -47,12 +47,12 @@ ${renderIncidentTable(REALITY_ROWS)}`;
   if (mode === 'summary') return `- Reality rows: ___/___ applicable rows emitted (\`PLAN_REALITY\` line), ___ unverified premises`;
   if (mode === 'pregate') {
     return `Reality rows: each phase's \`PLAN_REALITY: … verdict=complete\` from
-\`${BIN} check --phase <ceo|eng> <review>\`. A missing applicable row is \`incomplete\`
+\`${BIN} check --phase <ceo|eng> <review-file|->\`. A missing applicable row is \`incomplete\`
 in an unattended run, never a warning; interactive runs follow the repair rule above.`;
   }
   if (mode === 'autoplan') {
     return `Reality rows: the loaded skill's \`REALITY:\` lines, one per applicable row;
-   \`${BIN} check --phase ${args?.[1] ?? 'ceo'} <review>\` prints \`verdict=complete\` before the phase closes
+   \`${BIN} check --phase ${args?.[1] ?? 'ceo'} <review-file|->\` prints \`PLAN_REALITY: … verdict=complete\` before the phase closes
    (unattended: \`incomplete\` keeps it open).`;
   }
   const phase = phaseFor(ctx, mode);
@@ -60,6 +60,6 @@ in an unattended run, never a warning; interactive runs follow the repair rule a
 row it prints (tier 1 always: ${TIER1_ROW_IDS.join(', ')}; tier 2 by detected scope, \`--scope <csv>\`).
 Every row cites a file:line receipt; the premise table counts \`unverified=<n>\`. End with
 one line per row, \`${REALITY_LINE_SHAPE}\`, then run
-\`${BIN} check --phase ${phase} <review>\`: a missing applicable row is \`incomplete\`
+\`${BIN} check --phase ${phase} <review-file|->\` (it prints the \`PLAN_REALITY:\` line): a missing row is \`incomplete\`
 unattended; interactive runs repair twice, then warn at the gate.`;
 }

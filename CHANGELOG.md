@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.91.82.0] - 2026-10-11
+
+**Plan-review reality rows name their inputs.** The `{{PLAN_REALITY_ROWS}}` prose in plan-eng-review, plan-ceo-review and the autoplan CEO/Eng phases wrote `gstack-plan-reality check --phase <p> <review>` without saying what `<review>` is, and the completion summary cited a `PLAN_REALITY` line no step produced. The check now reads `<review-file|->` (the review you wrote, or stdin) and says it prints the `PLAN_REALITY:` line the summary cites. Found by the plan-eng-review workflow judge on an unrelated PR (clarity 3 / actionability 3 median, both citing these two references).
+
 ## [1.91.80.0] - 2026-10-11
 
 **`/eval-plan` prices its default arms out of the box.** `lib/pricing.ts` gains verified rows for `claude-opus-5-5` ($4 / $20 per MTok, cache reads $0.20; Anthropic list prices effective 2026-10-07) and `gpt-6.1-sol` ($2 / $10 per MTok, cached input $0.10; OpenAI model page, standard tier), the two models `gstack-models resolve --role eval-arms` returns under the default `smart` implementation tier. `gstack-eval-plan arms` previously exited `EVAL_PRICE_MISSING` for both; the fail-closed rule is unchanged, only the data was missing.
