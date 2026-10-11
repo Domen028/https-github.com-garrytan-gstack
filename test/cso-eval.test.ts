@@ -629,7 +629,7 @@ describe('CSO matched producer orchestration', () => {
 
   test('pins reviewed provider CLI versions and policy identities', () => {
     expect(PRODUCER_PROVIDER_POLICY).toEqual({
-      claude: { family: 'claude', policyRevision: 'claude-2.1.263-cso-v1', version: '2.1.263 (Claude Code)' },
+      claude: { family: 'claude', policyRevision: 'claude-2.1.263-cso-v2', version: '2.1.263 (Claude Code)' },
       codex: { family: 'gpt', policyRevision: 'codex-0.153.4-cso-v3-generation', version: 'codex-cli 0.153.4' },
       gemini: { family: 'gemini', policyRevision: 'gemini-0.59.0-cso-v1', version: '0.59.0' },
     });

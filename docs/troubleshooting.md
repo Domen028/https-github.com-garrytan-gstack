@@ -723,6 +723,10 @@ inside gstack's own checkout. A block ran without the path Step 2 printed, so it
 stopped instead of touching your project.
 
 **Fix.** Run Step 2 again and prefix the block with `INSTALL_DIR=<printed path>`.
+On Windows (Git Bash) with `INSTALL_DIR` set correctly, older /gstack-upgrade
+text compared two spellings of the same path and refused anyway; recover with
+`cd <install dir> && git pull --ff-only --autostash && ./setup` (see
+[the hook false positive](#setup-hook-does-not-parse)).
 
 <a id="skill-over-size-limit"></a>
 ### `<host>/<skill>/SKILL.md is <bytes> bytes, over the 160,000-byte limit. Fix: carve sections with usesLazySections() for this skill.`
@@ -785,23 +789,41 @@ Bun first.
 <a id="setup-hook-does-not-parse"></a>
 ### `gstack setup: refusing to register hooks that do not parse (Claude Code would block tool calls with them): <file>:<line>: <error>`
 
-**Meaning.** Claude Code runs gstack's hook shims through `/bin/sh`, and a hook
-that does not parse exits 2, which blocks the tool call it guards in every
-session. Setup parse-checks every hook it registers and every hook a skill's
-frontmatter runs (`/autoplan`, `/careful`, `/freeze`, `/guard`, `/investigate`
-and `/plan-ceo-review`): the shim, the gstack shell helpers it sources (such as
-`careful/bin/hook-extract.sh` and `bin/gstack-state-root.sh`), and the
-TypeScript it runs with its local imports. A merge conflict marker line in any
-of those files fails as `unresolved merge conflict marker`, even when the file
-still parses (markers inside a heredoc, a string or a template literal do).
-The TypeScript is bundled from the gstack checkout, so the `tsconfig.json` or
-`bunfig.toml` of the project you run it from is never read. It registers the
-hooks that parse, skips the ones listed, finishes the rest of the install, and
-exits non-zero. Claude Code runs hooks straight from `~/.claude/skills/gstack`,
-so a skipped hook that an earlier setup registered, or that a skill runs,
-keeps running the broken file until it is fixed. This is a gstack bug, or a
-half-applied edit or merge in your checkout: report the printed
-`<file>:<line>`.
+**On Windows (Git Bash), from 1.91.31: a false positive.** If every
+TypeScript hook fails with `bun could not bundle the TypeScript entry` (the
+question-log, question-preference, auq-error-fallback and timeline-stop hooks,
+`/autoplan`'s publication hook and `/plan-ceo-review`'s mode-handoff hook),
+your hooks are fine. Git Bash handed Bun its paths as `C:/…` while the checker
+looked them up as `/c/…` (#3088, #3100); the checker on main reads both
+spellings. The same Git Bash spelling made `/gstack-upgrade` stop with
+`ERROR: <dir> is not a gstack checkout; nothing was changed.` One recovery
+covers both: update by hand, then run setup from the update.
+
+```bash
+cd ~/.claude/skills/gstack && git pull --ff-only --autostash && ./setup
+```
+
+Use your install directory if it is not `~/.claude/skills/gstack` (`./setup
+--status` prints it). Expected result: setup finishes with exit 0 and no
+refusal line, and later auto-updates go through.
+
+**Meaning, everywhere else.** Claude Code runs gstack's hook shims through
+`/bin/sh`, and a hook that does not parse exits 2, which blocks the tool call
+it guards in every session. Setup parse-checks every hook it registers and
+every hook a skill's frontmatter runs (`/autoplan`, `/careful`, `/freeze`,
+`/guard`, `/investigate` and `/plan-ceo-review`): the shim, the gstack shell
+helpers it sources (such as `careful/bin/hook-extract.sh` and
+`bin/gstack-state-root.sh`), and the TypeScript it runs with its local imports.
+A merge conflict marker line in any of those files fails as `unresolved merge
+conflict marker`, even when the file still parses (markers inside a heredoc, a
+string or a template literal do). The TypeScript is bundled from the gstack
+checkout, so the `tsconfig.json` or `bunfig.toml` of the project you run it
+from is never read. It registers the hooks that parse, skips the ones listed,
+finishes the rest of the install, and exits non-zero. Claude Code runs hooks
+straight from `~/.claude/skills/gstack`, so a skipped hook that an earlier
+setup registered, or that a skill runs, keeps running the broken file until it
+is fixed. This is a gstack bug, or a half-applied edit or merge in your
+checkout: report the printed `<file>:<line>`.
 
 **Fix.**
 
@@ -816,16 +838,77 @@ cd ~/.claude/skills/gstack && ./setup
 <a id="auto-update-hook-does-not-parse"></a>
 ### `gstack auto-update: update held (hook-does-not-parse: <file>:<line>: <error>); nothing was installed or changed, and your current hooks keep running. ...`
 
-**Meaning.** Team-mode auto-update fetched a release with a hook that does not
-parse or still holds a merge conflict marker (the same check setup runs). It
-checked the incoming revision before moving your checkout, so your
-checkout, installed skills and registered hooks stay at the current revision.
-gstack checks again at the next update check and installs the first release
-whose hooks parse. This is a gstack bug: report the printed `<file>:<line>`.
+**On Windows (Git Bash), from 1.91.31: a false positive.** If the held
+reason is `<hook>.ts:1: bun could not bundle the TypeScript entry`, the
+release is fine: your installed checker misread Git Bash's `C:/…` paths
+(#3088, #3100), and the auto-updater checks every release with it, so it
+holds every release until you update once by hand. Recovery (this also clears
+`/gstack-upgrade`'s `is not a gstack checkout` refusal):
 
-**Fix.** Nothing to do locally. A manual `git pull` followed by `./setup`
+```bash
+cd ~/.claude/skills/gstack && git pull --ff-only --autostash && ./setup
+```
+
+Use your install directory if it is not `~/.claude/skills/gstack`. Expected
+result: setup finishes with exit 0, the next session start prints no held
+line, and later updates install on their own.
+
+**Meaning, everywhere else.** Team-mode auto-update fetched a release with a
+hook that does not parse or still holds a merge conflict marker (the same
+check setup runs). It checked the incoming revision before moving your
+checkout, so your checkout, installed skills and registered hooks stay at the
+current revision. The incoming release's own `bin/gstack-hook-check` decides,
+so a checker bug in your install cannot hold later releases; your installed
+checker decides only when the incoming one crashes, prints nothing or prints
+a report it cannot verify. gstack checks again at the next update check and
+installs the first release whose hooks parse. This is a gstack bug: report the
+printed `<file>:<line>`.
+
+**Fix.** Wait for the next release. A manual `git pull` followed by `./setup`
 cannot be checked before the pull; setup then refuses the broken hook (see the
 entry above).
+
+<a id="auto-update-hook-check-unavailable"></a>
+### `gstack auto-update: update held (hook-check-unavailable: <reason>); nothing was installed or changed, and your current hooks keep running. ... Fix now: cd <dir> && git pull --ff-only --autostash && ./setup ...`
+
+**Meaning.** Neither the incoming release's hook checker nor your installed
+one gave a verified report on the incoming hooks (a crash, no output, an
+unreadable report, or no Bun to bundle the TypeScript hooks), so the
+auto-updater cannot tell whether moving your checkout would break Claude Code
+tool calls. It left your checkout, skills and hooks at the current revision.
+The `<reason>` names what each checker did.
+
+**Fix.** Run the printed command. Setup checks every hook it registers and
+says what is wrong (for example that Bun is missing).
+
+<a id="setup-runtime-root-contains-checkout"></a>
+### `gstack setup: refusing to replace <root> for <host>: this runtime directory contains the source checkout setup runs from (<checkout>), so replacing it would delete the checkout. Nothing was changed.`
+
+**Meaning.** Setup installs Codex, Factory, OpenCode, Cursor, Copilot and
+Antigravity by building a runtime root (such as `~/.cursor/skills/gstack`) and
+swapping it in for the old one, and Kiro by writing into `~/.kiro/skills/gstack`.
+Your gstack checkout lives at that root or inside it, so the swap would delete
+the checkout (#3084), and Kiro would link the checkout into itself. Setup refuses before
+writing anything. `./setup --status` and `gstack-doctor` suggest the move for
+that host instead of `./setup --host <host>`.
+
+**Fix.** Move the checkout out, then run setup from its new place. Setup
+prints the exact commands. When `~/.claude/skills/gstack` is a symlink to the
+checkout, the checkout takes the symlink's place:
+
+```bash
+rm ~/.claude/skills/gstack && mv ~/.cursor/skills/gstack ~/.claude/skills/gstack
+cd ~/.claude/skills/gstack && ./setup --host claude && ./setup --host cursor
+```
+
+Otherwise move it anywhere outside the host's skills directory:
+
+```bash
+mv ~/.cursor/skills/gstack ~/gstack && cd ~/gstack && ./setup --host cursor
+```
+
+**Expected result.** Both setups finish with exit 0, and `./setup --status`
+lists each host as `current`.
 
 <a id="host-renders-pruned"></a>
 ### `pruned <dir> (<host> is not installed from this checkout): ...` / `kept <path>: not proven generated (...)` / `host-render backup: <dir> (...)`
@@ -1252,6 +1335,27 @@ and re-imports the ones missing from your brain. That check needs a local gbrain
 ### `[memory-ingest] ERR: could not save ingest state <path>: <error>.`
 
 **Fix.** Fix permissions or free disk space under your gstack state root, then `/sync-gbrain`.
+
+<a id="memory-ingest-transcript-checkout"></a>
+### `[memory-ingest] kept N transcript page(s) for <repo> on this machine: gbrain source <id> ...`
+
+On a managed gbrain brain (0.60+), an import lands only in a source bound to a
+checkout this host owns, so gstack binds each transcript source to its own
+checkout, `<state root>/gbrain-transcript-sources/<id>/`, before importing.
+The partition stays on this machine, unstamped, and imports on a later run when:
+
+- **held by another owner**: the source is bound to another host or another
+  directory. gstack never takes it over. Inspect it with
+  `gbrain sources writer status --source <id> --json`; the owner releases it
+  (`gbrain sources writer transfer prepare <id>` on the owning host) or you
+  re-bind it here with `gbrain sources set-path <id> <checkout>`.
+- **the state root is ephemeral** (`GSTACK_EPHEMERAL=1`): a binding would point
+  at a directory that vanishes with the machine. Run with a durable root:
+  `GSTACK_STATE_ROOT=<durable directory> gstack-memory-ingest --bulk`.
+- **bound to gstack's checkout, but it is missing or not active**: restore the
+  checkout from a backup of the state root, or follow `gbrain doctor --json`.
+- **could not bind**: the message carries gbrain's refusal; inspect the source
+  with the writer status command above.
 
 <a id="gbrain-artifacts-not-indexed"></a>
 ### `curated artifacts pushed to git, but gbrain source <id> has 0 indexed pages. Fix: gbrain sync --source <id>, then re-run /sync-gbrain`

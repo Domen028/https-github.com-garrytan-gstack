@@ -12,7 +12,11 @@ name: Windows Setup E2E
 # binary must answer the side-effect-free --version that setup's Smart App
 # Control probe runs (#2595). Last, two forced CSO failures: fatal under
 # GSTACK_STRICT_BUILD=1, and a completed setup with the failure reported
-# under GSTACK_STRICT_BUILD=0 (#3071).
+# under GSTACK_STRICT_BUILD=0 (#3071). Git Bash path spelling (#3088,
+# #3100): the hook check passes on this checkout, /gstack-upgrade's checkout
+# guard passes at its root, and an install stuck on a release whose checker
+# had the false positive recovers with the documented
+# `git pull --ff-only --autostash && ./setup`.
 #
 # Separate from windows-free-tests.yml because that one runs a curated
 # unit-test subset; this one exercises the install path itself.
@@ -40,6 +44,12 @@ on:
       - 'bin/gstack-paths'
       - 'bin/gstack-doctor'
       - 'bin/gstack-launch-probe.sh'
+      - 'bin/gstack-hook-check'
+      - 'bin/gstack-session-update'
+      - 'bin/gstack-path-spelling.sh'
+      - 'lib/path-spelling.ts'
+      - 'hosts/claude/hooks/**'
+      - 'gstack-upgrade/**'
       - '.github/workflows/windows-setup-e2e.yml'
   workflow_dispatch:
 
@@ -189,6 +199,68 @@ jobs:
           echo "$EMPTY_OUT"
           test "$EMPTY_CODE" -eq 1 || (echo "empty chain exited $EMPTY_CODE, expected 1" && exit 1)
           echo "$EMPTY_OUT" | grep -q 'no flow to run' || (echo "empty chain lacks the usage error" && exit 1)
+        shell: bash
+
+      - name: The hook check passes on this checkout under Git Bash (#3088, #3100)
+        run: |
+          set -uo pipefail
+          OUT=$(bash bin/gstack-hook-check "$PWD" 2>&1)
+          CODE=$?
+          echo "$OUT"
+          test "$CODE" -eq 0 || (echo "gstack-hook-check exited $CODE" && exit 1)
+          ! echo "$OUT" | grep -q '^fail ' || (echo "gstack-hook-check reported a fail line" && exit 1)
+          echo "$OUT" | grep -q '^ok hosts/claude/hooks/question-log-hook$' || (echo "the TypeScript hooks were not checked" && exit 1)
+        shell: bash
+
+      - name: /gstack-upgrade's checkout guard passes at the checkout root and refuses below it
+        run: |
+          set -euo pipefail
+          GUARD=$(grep -m1 -- '--show-prefix' gstack-upgrade/SKILL.md.tmpl)
+          echo "guard: $GUARD"
+          INSTALL_DIR="$PWD" bash -c "cd \"\$INSTALL_DIR\" && $GUARD && echo GUARD_OK" | grep -q GUARD_OK || (echo "the guard refused the checkout root" && exit 1)
+          if INSTALL_DIR="$PWD/bin" bash -c "cd \"\$INSTALL_DIR\" && $GUARD && echo GUARD_OK" 2>/dev/null | grep -q GUARD_OK; then
+            echo "the guard accepted a directory below the root" && exit 1
+          fi
+        shell: bash
+
+      - name: An install stuck on the false positive recovers with the documented command (#3088, #3100)
+        # A release whose bin/gstack-hook-check had the Git Bash false positive
+        # (v1.91.83.0's checker on this tree), then this revision on top. The
+        # recovery is the one docs/troubleshooting.md gives.
+        run: |
+          set -euo pipefail
+          OLD_RELEASE=5cb5e1cfc115e82388df07896664640a1224fe5d
+          T="$RUNNER_TEMP/recovery"
+          E2E_HOME="$T/home"
+          INSTALL="$E2E_HOME/.claude/skills/gstack"
+          mkdir -p "$E2E_HOME/.claude/skills" "$T"
+          git fetch -q --no-tags --depth=1 origin "$OLD_RELEASE"
+          git show "$OLD_RELEASE:bin/gstack-hook-check" > "$T/old-check"
+          git init -q --bare -b main "$T/origin.git"
+          git -C "$T/origin.git" config receive.shallowUpdate true
+          git clone -q --no-local "$PWD" "$T/work"
+          cp "$T/old-check" "$T/work/bin/gstack-hook-check"
+          git -C "$T/work" commit -qam "release with the false positive"
+          STUCK=$(git -C "$T/work" rev-parse HEAD)
+          git -C "$T/work" checkout -q HEAD~1 -- bin/gstack-hook-check
+          git -C "$T/work" commit -qm "this revision"
+          git -C "$T/work" push -q "$T/origin.git" HEAD:refs/heads/main
+          git clone -q "$T/origin.git" "$INSTALL"
+          git -C "$INSTALL" reset -q --hard "$STUCK"
+          set +e
+          BEFORE=$(bash "$INSTALL/bin/gstack-hook-check" "$INSTALL" 2>&1)
+          set -e
+          echo "$BEFORE"
+          echo "$BEFORE" | grep -q 'bun could not bundle the TypeScript entry' || (echo "the old release's checker did not show the false positive" && exit 1)
+          set +e
+          OUT=$(cd "$INSTALL" && git pull --ff-only --autostash && HOME="$E2E_HOME" USERPROFILE="$(cygpath -w "$E2E_HOME")" \
+            GSTACK_SKIP_PLAYWRIGHT=1 GSTACK_STRICT_BUILD=0 ./setup 2>&1)
+          CODE=$?
+          set -e
+          echo "$OUT" | tail -n 40
+          test "$CODE" -eq 0 || (echo "the documented recovery exited $CODE" && exit 1)
+          ! echo "$OUT" | grep -q 'refusing to register hooks' || (echo "setup still refused hooks after the recovery" && exit 1)
+          test "$(git -C "$INSTALL" rev-parse HEAD)" != "$STUCK" || (echo "the recovery did not move the checkout" && exit 1)
         shell: bash
 
       - name: A forced CSO failure is fatal under GSTACK_STRICT_BUILD=1 (#3071)

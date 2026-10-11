@@ -76,7 +76,7 @@ describe('CSO producer provider policies', () => {
       '-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', 'claude-test',
       '--restricted', '--safe-mode', '--no-session-persistence',
       '--permission-prompts', 'none', '--permission-mode', 'dontAsk',
-      '--tools', 'Bash,Write',
+      '--tools', 'Bash,Write,Agent',
       '--allowed-tools', `Bash(${helper}),Bash(${helper} *),Write`,
       '--add-dir', claudeProducerPaths(state).workdir,
       '--add-dir', join(state, 'cso-home'),
@@ -89,7 +89,7 @@ describe('CSO producer provider policies', () => {
     expect(claudeExecArgs(producer, 'claude-test').join(' ')).not.toMatch(/bypassPermissions|danger/);
   });
 
-  test('fails the Claude producer closed unless its sandbox exempts exactly the launcher', () => {
+  test('fails the Claude producer closed unless its sandbox exempts exactly the launcher and its tool policy is the one subagents inherit', () => {
     const work = join(tmpdir(), 'gstack-claude-sandbox-policy');
     const state = join(work, 'state');
     const helper = helperAt(join(work, 'installed'));
@@ -114,6 +114,14 @@ describe('CSO producer provider policies', () => {
       [withSettings(sandbox => { sandbox.dangerouslyDisableSandbox = true; }), env, 'keys differ'],
       [args.map(arg => arg.startsWith('Bash(') ? `${arg},Bash(cat *)` : arg), env, '--allowed-tools'],
       [args, { ...env, CLAUDE_CODE_SUBPROCESS_ENV_SCRUB: '1' }, 'CLAUDE_CODE_SUBPROCESS_ENV_SCRUB'],
+      [args.map(arg => arg === 'Bash,Write,Agent' ? 'Bash,Write' : arg), env, '--tools must be exactly Bash,Write,Agent'],
+      [args.map(arg => arg === 'Bash,Write,Agent' ? 'Bash,Write,Agent,Read' : arg), env, '--tools must be exactly Bash,Write,Agent'],
+      [args.map(arg => arg === 'dontAsk' ? 'acceptEdits' : arg), env, '--permission-mode must be dontAsk'],
+      [args.filter(arg => arg !== '--restricted'), env, 'expected exactly one --restricted'],
+      [args.filter(arg => arg !== '--strict-mcp-config'), env, 'expected exactly one --strict-mcp-config'],
+      [[...args, '--mcp-config', '{}'], env, '--mcp-config would change'],
+      [[...args, '--agents', '{}'], env, '--agents would change'],
+      [[...args, '--setting-sources=user'], env, '--setting-sources would change'],
     ] as Array<[string[], Record<string, string>, string]>) {
       expect(() => assertClaudeProducerSandboxPolicy(tampered, tamperedEnv, helper)).toThrow(`CLAUDE_PRODUCER_SANDBOX_POLICY_MISMATCH: `);
       expect(() => assertClaudeProducerSandboxPolicy(tampered, tamperedEnv, helper)).toThrow(detail);
