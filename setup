@@ -387,6 +387,59 @@ _persist_claude_model() {
 # ─── Quiet mode helper ────────────────────────────────────────
 log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }
 
+# _repair_crlf_checkout — #3110: a checkout made before an `eol=lf` rule
+# existed (Git for Windows sets core.autocrlf=true) keeps its CRLF copies,
+# because git never rewrites a stat-clean file; `add --renormalize`,
+# `checkout --` and `checkout-index -f` all leave one alone. One
+# `git ls-files --eol` pass finds tracked files whose rule says LF but whose
+# working copy has CRLF. Locally edited ones are named and left alone; the
+# rest are removed and checked out again in one batch. Runs under the install
+# registry lock, the one lock every setup takes, so two setups never race on
+# the same files.
+_repair_crlf_checkout() {
+  local dir="$SOURCE_GSTACK_DIR" line info p e rc=0
+  local stale=() edited=() repair=()
+  [ -e "$dir/.git" ] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+  while IFS= read -r -d '' line; do
+    info="${line%%	*}"
+    case "$info" in *eol=lf*) ;; *) continue ;; esac
+    case "$info" in *w/crlf*|*w/mixed*) stale+=("${line#*	}") ;; esac
+  done < <(git -C "$dir" ls-files --eol -z 2>/dev/null)
+  [ "${#stale[@]}" -gt 0 ] || return 0
+  if ! _gstack_registry_lock; then
+    echo "  warning: skipped the CRLF repair of ${#stale[@]} file(s) in $dir: another setup holds the install registry lock." >&2
+    echo "    Fix: re-run ./setup once the other setup finishes (cd $dir && ./setup). See docs/troubleshooting.md#setup-crlf-repair" >&2
+    return 0
+  fi
+  while IFS= read -r -d '' line; do
+    edited+=("${line:3}")
+  done < <(git -C "$dir" --literal-pathspecs status --porcelain=v1 -z --untracked-files=no --no-renames -- "${stale[@]}" 2>/dev/null)
+  for p in "${stale[@]}"; do
+    for e in ${edited[@]+"${edited[@]}"}; do [ "$e" = "$p" ] && continue 2; done
+    repair+=("$p")
+  done
+  if [ "${#repair[@]}" -gt 0 ]; then
+    for p in "${repair[@]}"; do rm -f "$dir/$p" || rc=1; done
+    [ "$rc" -ne 0 ] || printf '%s\0' "${repair[@]}" \
+      | git -C "$dir" --literal-pathspecs checkout --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1 || rc=1
+    if [ "$rc" -eq 0 ]; then
+      log "  Rewrote ${#repair[@]} file(s) checked out with CRLF line endings as LF (#3110)."
+    else
+      echo "  warning: the CRLF repair could not rewrite every file in $dir (rm or git checkout failed)." >&2
+      echo "    Fix: cd $dir && git checkout -- . && ./setup   See docs/troubleshooting.md#setup-crlf-repair" >&2
+    fi
+  fi
+  if [ "${#edited[@]}" -gt 0 ]; then
+    echo "  warning: left ${#edited[@]} locally edited file(s) with CRLF line endings that gstack pins to LF; a Linux bash cannot run them:" >&2
+    printf '    %s\n' "${edited[@]}" >&2
+    echo "    Why: setup rewrites only unmodified files, so your edits are kept." >&2
+    echo "    Fix (keeps your edits, rewrites them as LF): cd $dir && git stash && git stash pop   See docs/troubleshooting.md#setup-crlf-repair" >&2
+  fi
+  _gstack_registry_unlock
+}
+[ -n "${GSTACK_SETUP_REFRESH_CHILD:-}" ] || _repair_crlf_checkout
+
 # ─── --refresh-registered: refresh exactly the registered installs (#1925) ───
 # What /gstack-upgrade and the team-mode auto-update run. Each install this
 # checkout registered is refreshed by running setup for that one host, in its

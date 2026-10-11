@@ -2345,3 +2345,32 @@ owner decides` line whose decision id is still pending, so it was left as is.
 
 **Fix.** Answer the gate for that id, then rerun `gstack-owner-brief close`;
 only decided lines are rewritten, each to its chosen option and the date.
+
+<a id="setup-crlf-repair"></a>
+### `warning: left <n> locally edited file(s) with CRLF line endings that gstack pins to LF`
+
+**Meaning.** Git for Windows checks out with `core.autocrlf=true`, so gstack's
+nested shell scripts (skill `bin/` helpers, the Claude hook shims,
+`lib/cso/images/*`, `scripts/app/*`) were written with CRLF until
+`.gitattributes` pinned them to LF (#3110). Git Bash runs them anyway, but a
+Linux bash reading the same checkout (a synced tree, WSL, a bind mount) fails
+with `set: pipefail: invalid option name`, and a hook that fails that way
+blocks the tool call it guards. Pulling the new rule does not fix existing
+copies, because git never rewrites a file whose content did not change. Setup
+finds those files with one `git ls-files --eol` pass and checks them out again
+as LF. It leaves a file you edited locally alone and names it in this warning.
+The same section covers `skipped the CRLF repair` (another setup held the
+install registry lock) and `the CRLF repair could not rewrite every file`.
+
+**Fix.** For edited files, stash and restore them; git writes them back with LF
+and keeps your edits:
+
+```bash
+cd ~/.claude/skills/gstack && git stash && git stash pop
+```
+
+If the repair was skipped, re-run `./setup` once the other setup finishes. If
+it failed, `git checkout -- . && ./setup` in the checkout discards local edits
+and rewrites every file. Use your install directory if it is not
+`~/.claude/skills/gstack` (`./setup --status` prints it). Expected result: the
+next `./setup` prints no CRLF warning.
