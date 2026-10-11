@@ -875,7 +875,7 @@ Produce missing outputs before the gate; after at most 2 repair attempts, warn
 there with each incomplete item.
 
 Reality rows: each phase's `PLAN_REALITY: … verdict=complete` from
-`~/.claude/skills/gstack/bin/gstack-plan-reality check --phase <ceo|eng> <review>`. A missing applicable row is `incomplete`
+`~/.claude/skills/gstack/bin/gstack-plan-reality check --phase <ceo|eng> <review-file|->`. A missing applicable row is `incomplete`
 in an unattended run, never a warning; interactive runs follow the repair rule above.
 
 ---
