@@ -100,7 +100,7 @@ describe.skipIf(process.platform === 'win32')('#915 proxy from the environment, 
     expect(r.stderr).toContain(`daemon:  proxy ${proxyUrl}/ from HTTP_PROXY, bypassing localhost,127.0.0.1,[::1]`);
     expect(r.stderr).toContain(`session: proxy ${proxyUrl}/ from HTTP_PROXY, bypassing *.${PROXIED_HOST},${PROXIED_HOST},localhost,127.0.0.1,[::1]`);
     expect(r.stderr).toContain("run 'browse stop'");
-    expect(r.stderr).toContain('docs/troubleshooting.md#browse-proxy-from-environment');
+    expect(r.stderr).toContain('BROWSER.md#proxy-from-environment');
     expect(daemonPid()).toBe(firstPid);
   }, 120_000);
 

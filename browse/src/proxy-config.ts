@@ -170,7 +170,7 @@ function canonicalizeProxyUrl(input: string | null | undefined): string | null {
 
 export const STANDARD_PROXY_VARS = ['HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy'] as const;
 const LOOPBACK_HOSTS = ['localhost', '127.0.0.1', '[::1]'];
-export const PROXY_TROUBLESHOOTING = 'docs/troubleshooting.md#browse-proxy-from-environment';
+export const PROXY_TROUBLESHOOTING = 'https://github.com/garrytan/gstack/blob/main/BROWSER.md#proxy-from-environment';
 
 export interface ResolvedProxy {
   /** Proxy URL with resolved creds embedded, or null for a direct connection. */

@@ -70,7 +70,7 @@ describe('resolveProxy precedence', () => {
       expect(resolved).toMatchObject({ url: null, source: null, bypass: null });
       expect(resolved.warning).toStartWith('https_proxy is not a proxy URL browse can use (');
       expect(resolved.warning).toContain('fix: export https_proxy=http://host:port (or socks5://), or set BROWSE_PROXY_URL=direct');
-      expect(resolved.warning).toContain('docs/troubleshooting.md#browse-proxy-from-environment');
+      expect(resolved.warning).toContain('BROWSER.md#proxy-from-environment');
       expect(resolved.warning).not.toContain('secret');
     }
   });
@@ -145,7 +145,7 @@ describe('proxyMismatchLines', () => {
     expect(lines[1]).toBe('  daemon:  no proxy');
     expect(lines[2]).toBe('  session: proxy http://proxy.example:3128/ from HTTPS_PROXY, bypassing localhost,127.0.0.1,[::1]');
     expect(lines[3]).toBe("fix: run 'browse stop' to restart the daemon with this session's proxy settings, or set BROWSE_PROXY_URL=direct to use the running daemon without a proxy.");
-    expect(lines[4]).toBe('see docs/troubleshooting.md#browse-proxy-from-environment');
+    expect(lines[4]).toBe('see https://github.com/garrytan/gstack/blob/main/BROWSER.md#proxy-from-environment');
   });
 
   test('a direct session meeting an env-proxied daemon names the daemon variable', () => {
@@ -164,5 +164,16 @@ describe('proxyMismatchLines', () => {
   test('--proxy and headed differences keep the existing refusals', () => {
     expect(proxyMismatchLines(extractGlobalFlags(['--proxy', 'http://p:1', 'text'], {}), state(), {})).toBeNull();
     expect(proxyMismatchLines(extractGlobalFlags(['text'], { HTTPS_PROXY: 'http://p:1' }), state({ mode: 'headed' }), {})).toBeNull();
+  });
+});
+
+describe('BROWSER.md documents the proxy messages', () => {
+  test('the anchor every #915 message cites exists and covers the precedence and both messages', async () => {
+    const doc = await Bun.file(new URL('../../BROWSER.md', import.meta.url)).text();
+    const section = doc.slice(doc.indexOf('\n### Proxy from environment\n'));
+    expect(section.length).toBeLessThan(doc.length);
+    for (const needle of ['BROWSE_PROXY_URL=direct', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'is not a proxy URL browse can use', 'different proxy settings', 'browse stop']) {
+      expect(section).toContain(needle);
+    }
   });
 });
