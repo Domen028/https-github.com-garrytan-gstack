@@ -2,6 +2,72 @@
 
 ## NEXT PRIORITY
 
+### P2/P3: open bugs by area after the Wave 9 triage (filed 2026-10-11)
+
+The 158 older open issues were re-checked against main 5cb5e1c (v1.91.83.0). Of the 30 still-valid bugs, Wave 9 lanes take #915, #1080, #1081, #1150, #1315 and #1675 and park #2118 and #2623 (next section). The rest stay open here: issue, root-cause file, size. Bugs already tracked elsewhere in this file point there instead of repeating it.
+
+- **Plan reviews and planning artifacts**
+  - #280: plan-eng-review never reads the CEO plan. Its Step 0 discovery has no `ceo-plans/` lookup (only `design-html/SKILL.md.tmpl` and `bin/gstack-context-recovery` read it). Add a `gstack-ceo-plan-find` sibling of `bin/gstack-design-doc-find`; leave the per-branch review log alone. **Effort:** S. **Priority:** P3.
+  - #542: an office-hours design doc written in host plan mode lands in `~/.claude/plans/`, which `bin/gstack-design-doc-find` never reads, so the two copies drift. Pick one authority and warn on a stale copy. **Effort:** M. **Priority:** P2.
+  - #1048: "smallest clear diff" in `plan-eng-review/SKILL.md.tmpl` and `plan-ceo-review/SKILL.md.tmpl` has no schema-design carve-out, so it biases reviews toward JSON blobs. Add one tradeoff bullet, with a paid before/after case. **Effort:** S. **Priority:** P3.
+  - #1791: every plan-eng-review run writes a fresh `tasks-eng-review-<ts>.jsonl` with no branch in the name and no reconciliation (`scripts/resolvers/tasks-section.ts`). Put the branch in the name and supersede earlier sets. **Effort:** M. **Priority:** P3.
+  - #1957: /autoplan Phase 0 prints no matched-terms line for UI scope and keeps UI and DX terms in two places (`bin/gstack-autoplan-snapshot.ts`, `lib/autoplan-prompts.ts`). One shared terms module, and a `borderline` flag in the printed line. **Effort:** M. **Priority:** P3.
+- **Review**
+  - #356: `/review` has no repo-convention check, so a `.bat` added to a bash-and-Make repo passes. Add it to `review/specialists/maintainability.md`. **Effort:** S. **Priority:** P3.
+- **Office hours and design**
+  - #340: the approved sketch stays in a purgeable `mktemp` dir and no downstream design skill reads it (`scripts/resolvers/design.ts`). Copy it next to the design doc and have plan-design-review and design-review read it. **Effort:** S. **Priority:** P3.
+- **Questions**
+  - #1319: the AskUserQuestion format (`scripts/resolvers/preamble/generate-ask-user-format.ts`) has no layout or length rule, so long briefs render as a wall of text. Add block separation and per-block caps, with a free test that includes a CJK case. **Effort:** M. **Priority:** P2.
+- **Setup and upgrade**
+  - #954: vendored installs get absolute symlinks from `_link_or_copy` in `setup`. Use relative links when the source sits in the same skills dir. **Effort:** S. **Priority:** P3.
+  - #1022: a parent repo that tracks the install dir silently reverts VERSION after each upgrade. Detect it with `git ls-files --error-unmatch` in `setup` and `gstack-doctor`, and print the `git rm --cached` commands. **Effort:** S. **Priority:** P3.
+  - #2120: `bin/gstack-patch-names` and setup's per-skill link loops fork about four times per skill, which deadlocks x64-emulated Git Bash on Windows ARM64. Make the read path fork-free. Unverified without an ARM64 Windows host. **Effort:** M. **Priority:** P2.
+  - #2378: update-check compares VERSION while `/gstack-upgrade` installs HEAD. Tracked under the v1.67 fix-wave deferrals ("#2378 release-tag upgrade semantics"). **Priority:** P3.
+- **Build**
+  - #407: `bun build --compile` in `scripts/build.sh` writes straight to `dist/`, and Bun's rename fails on virtiofs devcontainer mounts. Compile to a local temp dir and move. Repro unconfirmed on current Bun. **Effort:** S. **Priority:** P2.
+- **Windows binaries**
+  - #2124, #2595: Smart App Control blocks the locally compiled browse.exe. Tracked under "Windows follow-ups from the October fix wave"; blocked on Garry's signing account. **Priority:** P2.
+- **Safety hooks**
+  - #1060: tracked as "Quote-aware masking in `check-careful.sh`" under the Oct 8 safety hooks follow-ups. **Priority:** P3.
+- **Sessions**
+  - #1651 part B: tracked under the office-hours and timeline follow-ups above. **Priority:** P3.
+- **/cso**
+  - #2993: tracked under the /cso capacity follow-ups above. **Priority:** P2.
+- **Dependency security ledgers** (not code defects; keep open until the trigger)
+  - #2753: `.osv-scanner.toml` ignores image-size (via html-to-docx) until 2026-11-30. Bump it once a fixed release exists, or re-justify at expiry. **Effort:** S. **Priority:** P3.
+  - #2754: `.osv-scanner.toml` ignores `@anthropic-ai/sdk` 0.81.0 under the pinned claude-agent-sdk until 2026-11-30. Drop it with the next harness bump. **Effort:** S. **Priority:** P3.
+- **Tests and CI**
+  - #2756: the periodic lane. Tracked under "Periodic-lane stabilization (#2756)". **Priority:** P2.
+  - #2967: `test/redact-prepush-scan-range.test.ts` (and its rebase twin) run fixture pushes with the inherited global config, so a developer's `core.hooksPath` pre-push runs inside the fixture. Set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` in the helper. **Effort:** S. **Priority:** P3.
+
+### P3: parked in Wave 9 (filed 2026-10-11)
+
+Each item was decided in the Wave 9 plan and parked with its reason. Credit the reporter or contributor when it is picked up.
+
+- **Fold `triggers:` into skill descriptions (#2118)** — `scripts/gen-skill-docs.ts` folds only `voice-triggers:`, and the trimmed description keeps one sentence, so natural-language triggers never reach the listing. Parked because it conflicts with the catalog-trim design and would regenerate every skill. Mechanism when picked up: a `when_to_use:` frontmatter key for the Claude host, built from `triggers:`, deduped, and kept inside the catalog byte budget (Claude Code's 1,536-character combined listing limit); hosts that allowlist name and description get a bounded "Use when…" sentence or nothing. **Effort:** M. **Priority:** P2.
+- **Plan-tune signals stuck at 0.5 (#2623)** — `hosts/claude/hooks/question-log-hook.ts` logs the UI label, while `scripts/psychographic-signals.ts` looks up stable option keys, so no row ever matches. The two-line key mapping is capture plumbing only and does not fix saturation. Acceptance criteria: labels map to stable option keys at log time; `profile.inferred` records contributing events per dimension; per-event and per-session accumulation is bounded so a dimension cannot pin at 1.0; `{skill}-{slug}` ids get a hinted fallback. Needs a design call on the key source. **Effort:** M. **Priority:** P2.
+- **Stateless, instruction-only host mode (#3061, @m-check1B)** — hosted multi-tenant runtimes have no install, state root or helper binaries, but skill bodies still read and write `$GSTACK_STATE_ROOT`, call `bin/gstack-*` and log telemetry. Deferred to the new-hosts theme below. Requirements kept on record: tenant-owned state (a `capabilities.state: 'none'` host renders host-provided hooks instead of shell steps), named artifact hooks (`ARTIFACT_SAVE`/`ARTIFACT_FIND` per kind, `WEB_RESEARCH`, `SECRET_SCAN`, `USER_PREF`) mapped the way the gbrain resolvers already are, a generator check that fails a stateless render containing `~/.gstack`, `$GSTACK_`, `bin/gstack-*` or `--event-type`, and the `claude` host's output byte-identical. The contributor offered an office-hours overlay plus the generator check as a first PR. **Effort:** L. **Priority:** P3.
+- **Legacy unprefixed Cursor skill folders (#3084)** — 1.31 Cursor installs created `~/.cursor/skills/<skill>/SKILL.md` links; 1.91 links `gstack-*` folders and `_prune_stale_generated` in `setup` only looks at `gstack-*` names, so Cursor can load two skills with the same name. `setup` already removes old unprefixed Claude entries; Cursor needs the same owned-link cleanup (remove only links that point into a gstack checkout). Split from #3084's data-loss fix, which Wave 9 Lane A0 ships. **Effort:** S. **Priority:** P3.
+- **`/retro global` says what a "session" is (#1315, third problem)** — `bin/gstack-global-discover.ts` counts transcript files and rollouts, so cron- or agent-driven repos show hundreds of "sessions" with no interactive work. Annotate the retro output that sessions are tool invocations or files, not distinct human working sessions. Problems 1 and 2 are fixed (v1.91.66.0 and Wave 9 Lane F). **Effort:** S. **Priority:** P3.
+- **`gbrain put` stdin pipe in `lib/code-intelligence/gbrain-adapter.ts` (#1675)** — `put` sends the document body on stdin (`#runInput(["put", slug], body)`), the same shape #1675 hit on Windows in setup-gbrain's smoke test, which Wave 9 Lane G changes to a temp file. Check gbrain's stdin handling on Windows at the pinned version first; if it is still broken, pass the body through a private temp file or the MCP `put_page` path. **Effort:** S. **Priority:** P3.
+
+### P3: feature themes from the Wave 9 triage (filed 2026-10-11)
+
+The 73 open feature requests, grouped by theme with counted demand (issues in the theme). Each issue closes with a link to its theme here; the three largest cross-cutting themes (new hosts, provider pluralism, install footprint) stay open as tracking issues. Pick a theme up as a whole and credit every linked reporter.
+
+- **New hosts (8 issues, plus #3061 above and 9 PRs parked on Oct 8)** — Kimi CLI (#1072), Gemini CLI (#1247), Pi Agent (#1288), Claude Desktop Cowork (#1345), Letta Code (#2117), team mode for non-Claude hosts (#890), `/retro global` discovery of Antigravity (#1977) and Kimi Code / OMP sessions (#2917). Waits for the host-config work; see "Parked contributor ideas (Oct 8 triage)" for the parked host PRs. **Priority:** P3.
+- **Provider pluralism (7 issues, plus #3122)** — Gemini CLI as an outside-voice backend (#619), non-OpenAI image providers in `design` (#990), Codex-native `image_gen` in the `design` binary's own generate, evolve and prototype calls (#2174; design-shotgun itself already uses `$imagegen` on Codex since #2175), GPT-6 Sol/Luna tiers in Codex call routing (#2943), a `/grok` review port (#2947), Codex review token usage (#2948), Codex refresh-token recovery docs (#1542), and a configurable PR review bot instead of hard-coded Greptile in /review, /ship and /retro (#3122, folded here by decision D4). One provider seam serves all of them. **Priority:** P3.
+- **Install footprint and layout (7 issues)** — skills.sh distribution (#113), `~/.gstack` as the global install path (#753), a repo-local install that keeps state in the project (#1235), five compiled binaries each bundling Bun (#1245), Windows junctions instead of copies (#1877), the 1.1 GB `~/.claude/skills` footprint (#2199), and a skill-only mode (#2528). Decision D6: setup keeps the staged copy on Windows, because it works today and links change what every cleanup deletes; #1943 (@JonasFocus, junctions) and #2129 (@TTmo123, symlinks with the privilege check) are closed with credit and their designs stay here as the starting point. See also "install footprint follow-ups from the October fix wave". **Priority:** P3.
+- **New skills (12 issues)** — GUI kanban for plan reviews (#247), journey maps (#729), UI-doc review (#851), assumption verification `/avl` (#1058), `/a11y-check` (#1104), `/env-check` (#1106), native plan writing (#1170), `/plan-experiment` and `/review-experiment` (#1195), `/plan-status` (#1343), language-specific reviewers (#1753), `/benchmark-mobile` (#1754), session start/end skills (#2088). **Priority:** P3.
+- **Ship, review and safety (9 issues)** — `/review` shadowing the native command (#422), a silent-deploy-failures checklist section (#2089), Conductor TODO proposals and a /ship block on unresolved ones (#2090), a light-ship mode (#2188), auditing an issue before filing it (#2642), maintainer-gated CI versus failures in landing-report (#2766), Flutter pubspec versions with build metadata (#2833), a deterministic fact-consistency check for document skills (#2887), a dual-engine /careful guard (#2888). **Priority:** P3.
+- **Planning reviews (8 issues)** — marketplace-aware skill recommendations (#419), founder-signal reasoning in the YC recommendation (#513), grounded verification of paths, math and flags in spec reviews (#973), a substrate-neutral existing-capability check (#1685), `/autoplan --tier` (#1955), autoplan workspace safeguards (#1959), splitting one-way architecture forks from two-way defects (#2490), an evidence ledger for "is demand real?" (#2350). **Priority:** P3.
+- **State root and project identity (6 issues)** — repo-local portable context artifacts (#1161), design-doc archive and prune (#1536), umbrella directories over several repos (#1923), reclaiming per-repo `.gstack` state (#2627), nested repos declaring themselves projects (#2649), references and disposition on decision events (#2678). **Priority:** P3.
+- **Browser and mobile QA (6 issues)** — a remote browser via `BROWSER_WS_ENDPOINT` (#974), per-session tab isolation (#1961), an opt-in User-Agent suffix and default headers (#2459), skipping the Aside probe on Linux and Windows (#2864), activity-ring copies on caught-up reads (#2973), touch input and mobile Safari (#3058). **Priority:** P3.
+- **Prompt cost and skill shape (4 issues)** — a response-header template (#1376), caching preamble output within a session (#1572), the Fable 5 prompting-guide audit (#1994), per-skill benefit in `gstack-context-bill` (#2889). **Priority:** P3.
+- **Customization and localization (3 issues)** — locale-aware skills (#481), a tutorial on new customization dimensions (#489), a `SKILL.local.md` overlay (#1759). **Priority:** P3.
+- **Retro (2 issues)** — a team-scoped multi-repo retro (#402), ADR and issue awareness in the narrative (#2284). **Priority:** P3.
+- **CI supply chain (1 issue)** — artifact attestations for the GHCR CI images (#2003). **Priority:** P3.
+
 ### P2/P3: office-hours and timeline follow-ups (filed 2026-10-08, v1.91.54.0)
 
 Left open by the office-hours tier fix (#2801, #879, #1049, #1958, #1723, #1651 part A).
