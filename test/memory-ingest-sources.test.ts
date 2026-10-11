@@ -232,7 +232,7 @@ describe("memory ingest: per-repository transcript sources (A4)", () => {
       expect(r.stderr).toContain(`gbrain source ${alpha} is held by another owner (host host-other, checkout (none on this host))`);
       expect(r.stderr).toContain(`gbrain sources writer status --source ${alpha} --json`);
       expect(r.stderr).toContain(`gbrain sources set-path ${alpha} ${checkout()}`);
-      expect(r.stderr).toContain("docs/troubleshooting.md#memory-and-gbrain");
+      expect(r.stderr).toContain("docs/troubleshooting.md#memory-ingest-transcript-checkout");
       expect(calls().some((c) => c[0] === "sources" && c[1] === "add")).toBe(false);
       expect(calls().some((c) => c[0] === "import")).toBe(false);
       expect(fakeBrain().sources[alpha].binding.owner_host_id).toBe("host-other");

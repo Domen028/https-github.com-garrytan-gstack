@@ -2439,7 +2439,7 @@ function planBatches(pages: PreparedPage[], state: IngestState): Array<{ sourceI
  * page plus one packed snapshot, never one copy per run).
  */
 const TRANSCRIPT_CHECKOUTS_DIR = join(GSTACK_HOME, "gbrain-transcript-sources");
-const TRANSCRIPT_TROUBLESHOOTING = "docs/troubleshooting.md#memory-and-gbrain";
+const TRANSCRIPT_TROUBLESHOOTING = "docs/troubleshooting.md#memory-ingest-transcript-checkout";
 
 export function transcriptCheckoutPath(id: string, root = TRANSCRIPT_CHECKOUTS_DIR): string {
   return join(root, id);
