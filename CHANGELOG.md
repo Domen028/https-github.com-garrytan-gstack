@@ -12,6 +12,27 @@ Thanks @kolla23 (#3105)
 Thanks @kolla23 (#3106)
 Thanks @Mr-B-1 (#3107)
 
+## [1.91.90.0] - 2026-10-11
+
+**Windows checkouts stop breaking gstack's nested shell scripts on Linux, the timeline Stop hook repairs on Windows instead of timing out every turn, and the `/setup-gbrain` smoke test stops piping into `gbrain put`.**
+
+### What this means for you
+
+- **Nested scripts are LF everywhere (#3110).** `.gitattributes` pinned only the top-level `bin/` to LF, so Git for Windows (`core.autocrlf=true`) wrote skill `bin/` helpers, the Claude hook shims, `lib/cso/images/*` and `scripts/app/*` with CRLF. A Linux bash reading that checkout (a synced tree, WSL, a bind mount) failed with `set: pipefail: invalid option name`, and `/autoplan`'s publication hook exited 2, blocking every phase entry. Every tracked `#!` file now resolves to `eol=lf`.
+- **`./setup` repairs existing CRLF copies.** Pulling the new rule does not rewrite a file whose content did not change, so setup finds tracked files whose rule says LF but whose copy has CRLF and checks them out again as LF. A file you edited is left alone and named, with the command that rewrites it and keeps your edit (`docs/troubleshooting.md#setup-crlf-repair`).
+- **The timeline Stop hook returns at once and repairs (#3103).** Through Git Bash, `gstack-slug` took 2.2-2.8 s against the hook's 2 s budget, so on Windows the hook spent about 2.5 s on every turn and repaired nothing. It now reads the slug from gstack-slug's cache in-process (`GSTACK_PROJECT_SLUG` still wins). On a miss a hidden background process resolves the slug and repairs, one at a time under a lock, and a directory it cannot resolve is retried after 5 minutes instead of every turn.
+- **The `/setup-gbrain` smoke test writes the page to a temp file (#1675)** and runs `gbrain put "$SLUG" < file`, the shape gstack's other `gbrain put` instructions already use.
+
+### For contributors
+
+- `test/gitattributes-eol.test.ts` checks `git check-attr eol` for every tracked `#!` file and that no file git stores as binary is marked text (`*.icns` is now `binary`, since `scripts/app/*` would otherwise cover the app icon).
+- `test/setup-crlf-repair.test.ts` builds the broken state with a real `core.autocrlf=true` clone, runs setup's repair under the install registry lock, checks the repaired bytes and runs the hook.
+- `test/timeline-stop-hook-slug.test.ts` runs a copy of the hook against a slow stub `gstack-slug` and is force-included in the Windows lane. Native Windows latency is measured only if that lane runs it.
+
+Thanks @Mr-B-1 (#3110)
+Thanks @Peaky8linders (#3103)
+Thanks @ElliotDrel (#1675)
+
 ## [1.91.89.0] - 2026-10-11
 
 **Windows installs stuck on the Git Bash hook false positive get a one-line recovery, the auto-updater stops trusting only its own checker, and setup can no longer delete the checkout it runs from.**

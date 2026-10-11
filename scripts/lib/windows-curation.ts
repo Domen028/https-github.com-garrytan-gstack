@@ -370,6 +370,16 @@ export const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
     // orphan leak it pins was reported on Windows (#2019).
     reason: 'spawns terminal-agent (no Playwright), not the browse server; owner-orphan leak is a Windows defect',
   },
+  {
+    file: 'test/timeline-stop-hook-slug.test.ts',
+    // Trips the "spawns bin/ shebang script" pattern via the fixture's
+    // path.join(tree, 'bin', 'gstack-slug') stub, but the hook runs through
+    // Bun argv and reaches the stub through runBin, which hands it to Git
+    // Bash on win32. #3103 is a Windows latency defect: this lane is the one
+    // place the hook's return-within-budget assertion meets real Windows
+    // process startup.
+    reason: '#3103: the hook runs through Bun argv and its gstack-slug stub through runBin (Git Bash on win32); the return-within-budget timing must run on windows-latest',
+  },
 ];
 
 /**
