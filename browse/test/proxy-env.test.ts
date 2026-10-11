@@ -3,7 +3,7 @@
  * mismatch refusal. The daemon round trip is in proxy-env-daemon.test.ts.
  */
 import { describe, expect, test } from 'bun:test';
-import { computeConfigHash, noProxyToChromiumRules, parseProxyConfig, resolveProxy, withLoopbackBypass } from '../src/proxy-config';
+import { computeConfigHash, noProxyToChromiumRules, parseProxyConfig, resolveProxy, serverProxyEnv, withLoopbackBypass } from '../src/proxy-config';
 import { buildHeadedServerEnv, buildRestartEnv, extractGlobalFlags, proxyMismatchLines, withLoopbackNoProxy } from '../src/cli';
 
 describe('resolveProxy precedence', () => {
@@ -132,6 +132,16 @@ describe('server env carries the proxy source and bypass', () => {
     expect(buildRestartEnv(flags, null)).toMatchObject(expected);
     expect(buildHeadedServerEnv(flags)).toMatchObject(expected);
     expect(buildRestartEnv(extractGlobalFlags(['text'], {}), null).BROWSE_PROXY_URL).toBeUndefined();
+  });
+});
+
+describe('serverProxyEnv (the daemon side)', () => {
+  test('direct means no proxy, and a launch without the CLI still keeps loopback and NO_PROXY', () => {
+    expect(serverProxyEnv({ BROWSE_PROXY_URL: 'direct' }).url).toBeUndefined();
+    expect(serverProxyEnv({ BROWSE_PROXY_URL: 'http://p:1', NO_PROXY: 'corp.internal' })).toEqual({
+      url: 'http://p:1', source: 'BROWSE_PROXY_URL', bypass: '*.corp.internal,corp.internal,localhost,127.0.0.1,[::1]',
+    });
+    expect(serverProxyEnv({ BROWSE_PROXY_URL: 'http://p:1', BROWSE_PROXY_SOURCE: 'ALL_PROXY', BROWSE_PROXY_BYPASS: 'x,localhost' })).toMatchObject({ source: 'ALL_PROXY', bypass: 'x,localhost' });
   });
 });
 

@@ -49,7 +49,7 @@ import { isProcessAlive } from './error-handling';
 import { allowedExtensionOrigin } from './extension-id';
 import { sanitizeBody, stripLoneSurrogates } from './sanitize';
 import { startSocksBridge, testUpstream, type BridgeHandle } from './socks-bridge';
-import { parseProxyConfig, toUpstreamConfig, ProxyConfigError, noProxyToChromiumRules, withLoopbackBypass } from './proxy-config';
+import { parseProxyConfig, toUpstreamConfig, ProxyConfigError, serverProxyEnv } from './proxy-config';
 import { writeReceipt } from '../../lib/egress-receipt';
 import { redactProxyUrl } from './proxy-redact';
 import { type XvfbHandle } from './xvfb';
@@ -1881,25 +1881,18 @@ export async function start() {
   LOCAL_LISTEN_PORT = port;
 
   // ─── Proxy config (D8 + codex F5) ──────────────────────────────
-  // BROWSE_PROXY_URL is set by the CLI from --proxy, BROWSE_PROXY_URL or the
-  // standard proxy variables (#915), with BROWSE_PROXY_BYPASS holding the
-  // NO_PROXY rules plus loopback (computed here when absent). For SOCKS5
-  // with auth, we run a local 127.0.0.1 bridge that relays to the
-  // authenticated upstream (Chromium can't do SOCKS5 auth itself). For
-  // HTTP/HTTPS or unauthenticated SOCKS5, we pass the URL directly to
-  // Chromium's proxy.server option.
+  // The CLI resolves the proxy (--proxy or env, #915). SOCKS5 with auth runs a
+  // local 127.0.0.1 bridge to the authenticated upstream (Chromium can't do
+  // SOCKS5 auth itself); HTTP/HTTPS or unauthenticated SOCKS5 pass through.
   let proxyBridge: BridgeHandle | null = null;
-  const proxyUrl = process.env.BROWSE_PROXY_URL === 'direct' ? undefined : process.env.BROWSE_PROXY_URL;
-  const proxyBypass = process.env.BROWSE_PROXY_BYPASS
-    || withLoopbackBypass(noProxyToChromiumRules(process.env.NO_PROXY || process.env.no_proxy));
+  const { url: proxyUrl, source: proxySource, bypass: proxyBypass } = serverProxyEnv(process.env);
   if (proxyUrl) {
     let parsed;
     try {
       parsed = parseProxyConfig({
         proxyUrl,
         envUser: process.env.BROWSE_PROXY_USER,
-        envPass: process.env.BROWSE_PROXY_PASS,
-        source: process.env.BROWSE_PROXY_SOURCE,
+        envPass: process.env.BROWSE_PROXY_PASS, source: proxySource,
       });
     } catch (err) {
       if (err instanceof ProxyConfigError) {
@@ -1934,12 +1927,11 @@ export async function start() {
     } else {
       // HTTP/HTTPS or unauth SOCKS5 — pass through to Chromium directly.
       browserManager.setProxyConfig({
-        server: `${parsed.scheme}://${parsed.host}:${parsed.port}`,
-        bypass: proxyBypass,
+        server: `${parsed.scheme}://${parsed.host}:${parsed.port}`, bypass: proxyBypass,
         ...(parsed.userId ? { username: parsed.userId } : {}),
         ...(parsed.password ? { password: parsed.password } : {}),
       });
-      console.log(`[browse] [proxy] using ${redactProxyUrl(proxyUrl)} from ${process.env.BROWSE_PROXY_SOURCE || 'BROWSE_PROXY_URL'} (pass-through to Chromium)`);
+      console.log(`[browse] [proxy] using ${redactProxyUrl(proxyUrl)} from ${proxySource} (pass-through to Chromium)`);
     }
 
     // Tear down bridge on shutdown.
@@ -2024,8 +2016,7 @@ export async function start() {
     // D2 daemon-mismatch detection: CLI computes the same hash from its
     // resolved flags and refuses if it differs from this stored value.
     ...(process.env.BROWSE_CONFIG_HASH ? { configHash: process.env.BROWSE_CONFIG_HASH } : {}),
-    // #915: so a mismatch refusal can name the variable and both settings.
-    ...(proxyUrl ? { proxy: redactProxyUrl(proxyUrl), proxySource: process.env.BROWSE_PROXY_SOURCE || 'BROWSE_PROXY_URL', proxyBypass } : {}),
+    ...(proxyUrl ? { proxy: redactProxyUrl(proxyUrl), proxySource, proxyBypass } : {}), // #915 refusal detail
     // Xvfb child PID + start-time + display so disconnect (or a future
     // daemon launch on this state file) can validate-then-cleanup orphans
     // without clobbering a recycled PID.

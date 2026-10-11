@@ -227,6 +227,19 @@ export function withLoopbackBypass(rules: string[]): string {
 }
 
 /**
+ * The daemon's view of the proxy the CLI resolved: BROWSE_PROXY_URL ('direct'
+ * means none), its source, and the bypass rules (computed from NO_PROXY when
+ * a caller other than the CLI set only BROWSE_PROXY_URL).
+ */
+export function serverProxyEnv(env: NodeJS.ProcessEnv): { url: string | undefined; source: string; bypass: string } {
+  return {
+    url: env.BROWSE_PROXY_URL === 'direct' ? undefined : env.BROWSE_PROXY_URL || undefined,
+    source: env.BROWSE_PROXY_SOURCE || 'BROWSE_PROXY_URL',
+    bypass: env.BROWSE_PROXY_BYPASS || withLoopbackBypass(noProxyToChromiumRules(env.NO_PROXY || env.no_proxy)),
+  };
+}
+
+/**
  * Resolve the proxy for this invocation (#915). Env URLs go through
  * parseProxyConfig, so the cred policy applies. A standard variable that does
  * not parse (curl-style `host:port`, an unsupported scheme) is ignored with a
