@@ -286,6 +286,25 @@ describe.skipIf(process.platform === 'win32')('host conformance kit', () => {
     expect(registryRows(f).find(r => r[0] === 'codex')![6]).toBe('1.91.12.0');
   }, 90_000);
 
+  // #3084: an older install can keep its checkout where a host's runtime root
+  // goes (~/.cursor/skills/gstack), and ./setup --status suggests running
+  // ./setup --host <host> from there. Claude's checkout is its standard install,
+  // Codex moves such a checkout to ~/.gstack/repos/gstack first, and Kiro builds
+  // its root in place instead of swapping it.
+  for (const host of installable.filter(h => !['claude', 'codex', 'kiro'].includes(h))) {
+    test(`${host}: a checkout kept at its runtime root is refused, never replaced (#3084)`, () => {
+      const f = makeFixture();
+      const src = makeSource(f, join(f.home, DISCOVERY[host], 'gstack'));
+      const entries = readdirSync(src);
+      const setupScript = readFileSync(join(src, 'setup'), 'utf8');
+      const r = runSetup(f, join(src, 'setup'), ['--host', host], { cwd: src });
+      expect(r.status, r.stdout + r.stderr).toBe(1);
+      expect(r.stderr).toContain(`refusing to replace ${src}`);
+      expect(readdirSync(src)).toEqual(expect.arrayContaining(entries));
+      expect(readFileSync(join(src, 'setup'), 'utf8')).toBe(setupScript);
+    }, 90_000);
+  }
+
   test('first run from the published instructions ends in a skill that starts', () => {
     const f = makeFixture();
     // README: git clone … ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup

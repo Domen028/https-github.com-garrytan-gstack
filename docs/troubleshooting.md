@@ -651,6 +651,17 @@ rewritten by every setup. Your hand edit was saved first.
 
 **Fix.** Fix permissions on `<state root>/backups`, then `./setup --host <host>`.
 
+<a id="setup-runtime-root-holds-checkout"></a>
+### `error: refusing to replace <root>: it holds the gstack checkout setup is running from (<source>). The checkout is unchanged; move it out of <root> and run setup from there.`
+
+**Meaning.** Your gstack checkout lives where a host's runtime root goes, such
+as `~/.cursor/skills/gstack` from an older Cursor install. Setup replaces that
+root on every run, so it stops instead of deleting the checkout.
+
+**Fix.** Move the checkout out of the host's skills directory (the README
+installs it at `~/.claude/skills/gstack`), then run `./setup --host <host>` from
+its new place for each host you use.
+
 <a id="upgrade-not-a-checkout"></a>
 ### `ERROR: <dir> is not a gstack checkout; nothing was changed. Re-run Step 2.` / `INSTALL_DIR is not set: re-run Step 2 ...`
 

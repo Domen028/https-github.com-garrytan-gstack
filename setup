@@ -2730,9 +2730,20 @@ create_agents_sidecar() {
 # when the build succeeded. A failed refresh leaves the previous runtime root,
 # and so the host's last working install, in place. The swap is two renames;
 # a run killed between them leaves "$ROOT.gstack-old.<pid>", which the next
-# run restores when ROOT is missing.
+# run restores when ROOT is missing. A ROOT that is, or contains, SOURCE (a
+# checkout kept in a host's skills directory) is refused before anything moves,
+# because the swap would delete the checkout (#3084); a symlinked ROOT only
+# loses the link.
 _activate_runtime_root() {
-  local fn="$1" src="$2" root="$3" new="$3.gstack-new.$$" old="$3.gstack-old.$$" rc leftover
+  local fn="$1" src="$2" root="$3" new="$3.gstack-new.$$" old="$3.gstack-old.$$" rc leftover real_root real_src
+  if [ -d "$root" ] && [ ! -L "$root" ] \
+    && real_root="$(cd "$root" 2>/dev/null && pwd -P)" && real_src="$(cd "$src" 2>/dev/null && pwd -P)"; then
+    case "$real_src/" in
+      "$real_root"/*)
+        echo "  error: refusing to replace $root: it holds the gstack checkout setup is running from ($src). The checkout is unchanged; move it out of $root and run setup from there." >&2
+        return 1 ;;
+    esac
+  fi
   for leftover in "$root".gstack-old.*; do
     [ -e "$leftover" ] || [ -L "$leftover" ] || continue
     if [ ! -e "$root" ] && [ ! -L "$root" ]; then mv "$leftover" "$root"; else rm -rf "$leftover"; fi

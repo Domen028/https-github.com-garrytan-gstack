@@ -95,3 +95,52 @@ describe.skipIf(process.platform === 'win32')('setup: real-file SKILL.md copies 
     }
   });
 });
+
+// #3084: activation moves the old runtime root aside and deletes it, so a root
+// that is, or contains, the checkout setup runs from is refused before anything
+// moves. A symlinked root only loses the link.
+describe.skipIf(process.platform === 'win32')('setup: a runtime root that holds the checkout (#3084)', () => {
+  /** A checkout's top-level entries, for "nothing changed" checks. */
+  function makeCheckout(dir: string) {
+    fs.mkdirSync(path.join(dir, '.git'), { recursive: true });
+    for (const name of ['setup', 'VERSION', 'router.md']) fs.writeFileSync(path.join(dir, name), `${name}\n`);
+    return () => Object.fromEntries(fs.readdirSync(dir).sort().map(n => {
+      const p = path.join(dir, n);
+      return [n, fs.statSync(p).isDirectory() ? 'dir' : fs.readFileSync(p, 'utf8')];
+    }));
+  }
+
+  test('a root that is, or contains, the checkout is refused and the checkout is unchanged', () => {
+    // [layout, checkout path under the root, bash that respells ROOT]
+    for (const [layout, under, respell] of [
+      ['root is the checkout', '', ''],
+      ['root contains the checkout', '/checkout', ''],
+      ['root is the checkout, named through a linked parent', '', 'ln -s "$T/home" "$T/alias"; ROOT="$T/alias/.cursor/skills/gstack"'],
+    ]) {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-skill-copies-'));
+      tmps.push(tmp);
+      const root = path.join(tmp, 'home/.cursor/skills/gstack');
+      const snapshot = makeCheckout(root + under);
+      const before = snapshot();
+      const r = run(tmp, `T="${tmp}"; SRC="${root}${under}"; ROOT="${root}"; ${respell}\n_activate_runtime_root build "$SRC" "$ROOT" || echo "rc=$?"`);
+      expect(r.stdout, layout).toContain('rc=1');
+      expect(r.stderr, layout).toContain('refusing to replace');
+      expect(snapshot(), layout).toEqual(before);
+    }
+  });
+
+  test('a symlinked root is replaced and the checkout it pointed at survives', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-skill-copies-'));
+    tmps.push(tmp);
+    const snapshot = makeCheckout(path.join(tmp, 'src'));
+    const before = snapshot();
+    const root = path.join(tmp, 'home/.cursor/skills/gstack');
+    fs.mkdirSync(path.dirname(root), { recursive: true });
+    fs.symlinkSync(path.join(tmp, 'src'), root);
+    const r = run(tmp, `ROOT="${root}"; _activate_runtime_root build "$SRC" "$ROOT"`);
+    expect(r.status, r.stderr).toBe(0);
+    expect(fs.lstatSync(root).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'SKILL.md'), 'utf8')).toBe('router.md\n');
+    expect(snapshot()).toEqual(before);
+  });
+});
