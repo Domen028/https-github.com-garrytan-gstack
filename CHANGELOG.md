@@ -2,7 +2,7 @@
 
 
 
-## [1.91.87.0] - 2026-10-11
+## [1.91.89.0] - 2026-10-11
 
 **The paid CSO producer gives `/cso` the Agent tool users have, so independent review and repair verification can run in the evaluation. The producer's receipt now counts subagent tokens.**
 
