@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+**`/codex review --effort medium` runs one review at the effort you name, without changing your saved setting.**
+
+`codex_effort` (1.91.92.0) sets Codex reasoning effort for every run, and `--xhigh` raised it for one. There was no per-run way to go lower, so a cheaper one-off review meant flipping the setting and flipping it back.
+
+### What this means for you
+
+- **`--effort <level>` on any `/codex` mode.** `/codex review --effort medium`, `/codex challenge --effort=low` and so on set `GSTACK_CODEX_EFFORT` for that dispatch only. It outranks `codex_effort` and the per-mode defaults, and the probe still rejects an unknown level before any Codex call. `--xhigh` keeps working as shorthand for `--effort xhigh`.
+- **No silent fallback.** A missing value, a value that isn't a single lowercase word, or conflicting effort flags stop the run with a message instead of quietly using a default.
+- **docs/skills.md** documents `codex_effort` and `--effort`, and no longer claims Challenge runs at `xhigh` (it runs at `high`).
+
+Contributed by @jnunemaker
+
 ## [1.91.93.0] - 2026-10-12
 
 **/cso release qualification gates on finished reports. Report completeness is still measured, but it no longer blocks a release.**
