@@ -26,6 +26,32 @@ Thanks @dmfrede (#3101)
 Thanks @skleinbe-ny (#3088)
 Thanks @bkermen (#3100)
 Thanks @andrewkjankowski (#3084)
+## [1.91.86.0] - 2026-10-11
+
+**browse follows the proxy your shell already uses, writes PDFs on Windows machines whose temp dir is an 8.3 short path, and stops spawning `--config=NUL` children that crashed Bun 1.3.10 (Wave 9, lane E).**
+
+### What this means for you
+
+- **Proxy from the environment (#915).** Without `--proxy`, browse takes the proxy from `BROWSE_PROXY_URL`, then `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY` (upper case before lower case). `BROWSE_PROXY_URL=direct` opts out. `NO_PROXY` becomes Chromium's bypass list, and loopback is always bypassed. The proxy and the `NO_PROXY` rules are part of the daemon config, so a session with a different environment is refused with the variable named instead of silently reusing a daemon that routes differently. The refusal offers `browse stop`, which now stops any daemon whatever its proxy or headed settings. A standard variable that doesn't parse (curl-style `host:port`) prints a warning and browse connects directly; a bad `--proxy` or `BROWSE_PROXY_URL` still fails, so a typo never quietly exposes your IP. `socks5h://` works as `socks5://`. See BROWSER.md, "Proxy from environment".
+- **8.3 temp paths on Windows (#3104).** `make-pdf` and `browse pdf` failed with `Path must be within: C:\Users\BURCIN~1\...` because the safe directories and the target went through different realpath functions. Both sides now use one (`fs.realpathSync.native`), resolved paths compare exactly, and only a tail that doesn't exist yet is case-folded on Windows.
+- **No more Bun crash windows on Windows (#3085).** The terminal agent, the native-cookie supervisor and its worker passed `--config=NUL`, which panicked Bun 1.3.10 at flag parsing; the respawn loop turned that into a crash window every few seconds. All three now get an empty `bunfig.toml` created in a private directory and re-checked to be zero bytes before each spawn. POSIX keeps `/dev/null`.
+
+### Itemized changes
+
+#### Changed
+- `browse/src/proxy-config.ts`: `resolveProxy` (precedence, `direct`, cred policy for env URLs, warning fallback), `noProxyToChromiumRules`, `withLoopbackBypass`, `serverProxyEnv`; `socks5h` accepted as `socks5`; `computeConfigHash` takes the `NO_PROXY` rules (unchanged hash when there are none).
+- `browse/src/cli.ts`: resolved proxy source and bypass reach every server launch (start, crash restart, headed connect and its supervisor); the startup line names the source; `proxyMismatchLines` refusal; `browse stop` skips the config-mismatch check.
+- `browse/src/server.ts`, `browse/src/browser-manager.ts`: Chromium gets the bypass rules; the state file records the redacted proxy, its source and its bypass.
+- `browse/src/path-security.ts`: `resolveRealPath`, one realpath for safe directories and targets. `browse/src/write-commands.ts`: `cookie-import` uses `validateReadPath`.
+- `browse/src/bun-child-config.ts`: `emptyBunConfig()`; `bunChildFlags()` replaces `BUN_CHILD_FLAGS`.
+
+#### For contributors
+- `browse/test/proxy-env.test.ts`, `browse/test/proxy-env-daemon.test.ts` (a local proxy across launch, reuse, a NO_PROXY-only change, `direct` and restart), `browse/test/path-security-realpath.test.ts`, `browse/test/bun-child-config.test.ts`.
+
+Thanks @ningfeemic-dev (#916)
+Thanks @bkermen (#3104)
+Thanks @adammartin0087 (#3085)
+
 ## [1.91.85.0] - 2026-10-11
 
 **`/cso` works on Windows Git 2.56 and gets Docker on macOS, `/test-audit` and `/ship` loop correctly under zsh, and the deploy skills stop at the honest point (Wave 9 Lane D).**
