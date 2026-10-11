@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { readBoundedStable } from '../lib/cso/bounded-file';
 import { CsoError } from '../lib/cso/contracts';
-import { executable, redact } from '../lib/cso/process';
+import { EMPTY_GLOBAL_GIT_CONFIG, executable, redact } from '../lib/cso/process';
 import { atomicWriteSync } from '../lib/fs-atomic';
 import { redactProducerText, sourceCredentialValues, type OutputRedaction } from './cso-eval-output-redaction';
 import { resolveClaudeCommand } from '../lib/claude-bin';
@@ -219,7 +219,7 @@ export function inventoryProducerArtifacts(helperHome: string): ProducerArtifact
   let totalBytes = 0, visited = 0;
   const visit = (directory: string, depth: number): void => {
     if (depth > 32 || ++visited > ARTIFACT_COUNT_LIMIT * 2) throw new Error('INVALID_PRODUCER_ARTIFACTS');
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const full = join(directory, entry.name);
       if (++visited > ARTIFACT_COUNT_LIMIT * 2) throw new Error('INVALID_PRODUCER_ARTIFACTS');
       if (entry.isSymbolicLink()) throw new Error('INVALID_PRODUCER_ARTIFACTS');
@@ -234,14 +234,14 @@ export function inventoryProducerArtifacts(helperHome: string): ProducerArtifact
     }
   };
   visit(artifactRoot, 0);
-  entries.sort((left, right) => left.path.localeCompare(right.path));
+  entries.sort((left, right) => left.path < right.path ? -1 : left.path > right.path ? 1 : 0);
   const base = { schemaVersion: 1 as const, root: 'security/cso' as const, entries, totalBytes };
   return { ...base, identityHash: producerArtifactInventoryHash(base) };
 }
 
 function repositoryIdentity(root: string): string {
   const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
-  const env = { PATH: process.env.PATH ?? '', LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullPath, GIT_ATTR_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' };
+  const env = { PATH: process.env.PATH ?? '', LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG, GIT_ATTR_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' };
   const git = executable('git');
   const config = readBoundedStable(join(root, '.git', 'config'), 1024 * 1024, 'Producer Git configuration').toString('utf8');
   if (/^\s*\[\s*include(?:if)?(?=[\s."\]])/im.test(config)) throw sourceError('.git/config', 'contains an include directive');
