@@ -82,43 +82,44 @@ repo with a release script, docs mentions and a mirror would set them.
 Who does what under `stamp-at-merge`, for the PR author and for the thread
 running the merge queue:
 
-1. **Open.** The branch leaves `VERSION`, `package.json` and the digest header
-   at the base's values and adds its CHANGELOG section as `## [Unreleased]`
-   directly under `# Changelog`. The PR title carries no version. The version
-   gate workflow only runs when those files change, so an unstamped PR never
-   collides with anyone; `gstack-next-version` claims are not consulted.
-2. **Register.** The queue records the PR and its intended order; nothing is
-   stamped.
-3. **Stamp when next.** With every check green on the unstamped head and
+1. **Open.** The branch carries a tentative stamp of the base's version plus
+   PATCH (`gstack-version-bump write --version <base+patch> --regen-digest`)
+   and its CHANGELOG section headed with that version directly under
+   `# Changelog`; `## [Unreleased]` is also accepted. Nothing is claimed and
+   `gstack-next-version` is not consulted; the tentative version is only the
+   guess that makes the common case free. CI runs on this head as usual.
+2. **Register.** The queue records the PR and its intended order.
+3. **Stamp when next.** With every check green on the current head and
    `origin/main` at the SHA the queue assumed, the PR owner (never the queue)
    runs on the branch:
    `gstack-restamp --next --base main --allow-repo-commands --pr <n> --expect-base <main-sha> --expect-order <pr,...>`.
-   It stamps base + PATCH, runs the release tool, re-heads the CHANGELOG from
-   `[Unreleased]`, prints `STAMP_VERSION: <X>` and `MERGE_CONDITION: sha=<head>`,
-   and refuses with `QUEUE_STALE` (nothing written) when the base or order
-   moved. The owner commits and pushes that stamp commit and reports
-   `READY #<n> <stamp-commit-sha> STAMP_VERSION=<X>`.
+   When the base has not moved past the tentative stamp it prints
+   `RESTAMP: X -> X (noop)` and `FILES: (none)`, and the green head is the
+   merge candidate with no further CI. When the base moved, it stamps base +
+   PATCH, re-heads the CHANGELOG above the base's top entry, reruns the
+   release tool, prints `STAMP_VERSION: <X>` and the stamp diff, and refuses
+   with `QUEUE_STALE` (nothing written) when the base or order moved after
+   `--expect-base` was read. The owner commits and pushes the stamp commit,
+   lets CI run on it, and reports `READY #<n> <sha> STAMP_VERSION=<X>`.
 4. **Merge.** The queue verifies on that exact SHA: `VERSION` equals
-   `STAMP_VERSION`, the CHANGELOG's top heading is `[<X>]` and the next heading
-   is the base's current version, the stamp commit's parent is the green
-   unstamped head, and the only files changed by the stamp commit are
-   `VERSION`, `package.json`, `CHANGELOG.md` and the release outputs
-   (`gstack-tree-receipt --gated <green-head> --current <stamp-sha>` prints the
-   verdict; stamp-sensitive lanes, `tests` for gstack, rerun on the stamp
-   commit through the normal PR CI). It then squash-merges with the merge
-   API's expected-head `sha` set to the stamp commit, so a late push is
-   rejected by the server. "VERSION above main" is no longer the check;
-   "VERSION equals the restamp's STAMP_VERSION on the SHA being merged" is.
-5. **Not next.** A PR waiting behind another may gate ahead with
-   `gstack-restamp --after <predecessor-pr>`; it does not push a stamp. When
-   the predecessor lands, the waiting PR merges `origin/main` in (never a
-   rebase), its `[Unreleased]` section stays where it is, and step 3 runs.
+   `STAMP_VERSION`, the CHANGELOG's top heading is `[<X>]` and the heading
+   below it is the base's current version, every check is green on that SHA,
+   and, when a stamp commit was pushed, it changed only `VERSION`,
+   `package.json`, `CHANGELOG.md` and the release outputs
+   (`gstack-tree-receipt --gated <green-head> --current <sha>` prints the
+   per-file verdict). It then squash-merges with the merge API's expected-head
+   `sha` set to that SHA, so a late push is rejected by the server. "VERSION
+   above main" is replaced by "VERSION equals the restamp's STAMP_VERSION on
+   the SHA being merged, and that version is base + PATCH at merge time".
+5. **Not next.** A PR waiting behind another may gate ahead locally with
+   `gstack-restamp --after <predecessor-pr>`; it pushes nothing. When the
+   predecessor lands, the waiting PR merges `origin/main` in (never a rebase),
+   keeping its own CHANGELOG section above the newly merged one, and step 3
+   runs.
 
-```bash
-gstack-ship-policy show-effective --base main     # resolved values with the source of each
-gstack-ship-policy validate                       # the working-tree file (what you are editing)
-gstack-ship-policy init --explain                 # key meanings and defaults
-```
+Until this policy is on `origin/main`, `gstack-restamp --next` reads the base's
+`bump: ask` and falls back to a MICRO bump; pass `--bump patch` on the first
+PR stamped after the flip if its base predates it.
 
 <a id="ship"></a>
 ## What `/ship` reads from it
