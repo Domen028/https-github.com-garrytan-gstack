@@ -43,6 +43,24 @@ describe('Claude producer stream accounting', () => {
     }
   });
 
+  // Shapes claude 2.1.263 printed in the mock-API replay when the producer's agent ran an Agent subagent in the background.
+  const subagent = (id: string, input: number) => ({ type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { id, model: 'claude-test', content: [{ type: 'text', text: 'subagent note' }], usage: { input_tokens: input, output_tokens: 1, cache_read_input_tokens: 7 } } });
+  const sessionUsage = { 'claude-test': { inputTokens: 153009, outputTokens: 15308, cacheReadInputTokens: 49, cacheCreationInputTokens: 0, costUSD: 2.3 } };
+
+  test('counts subagent usage: the session modelUsage, every result turn, and the main thread text', () => {
+    const state = claudeStreamState();
+    for (const line of lines(start('a', 1000), delta(100), stop, subagent('s1', 50000), subagent('s1', 50000), subagent('s2', 50001),
+      result({ result: 'MAIN ENDED TURN', modelUsage: sessionUsage }), start('b', 1002), delta(102), stop,
+      result({ num_turns: 1, result: 'REPORT', usage: { input_tokens: 1002, output_tokens: 102, cache_read_input_tokens: 7 }, modelUsage: sessionUsage }))) consumeClaudeStreamLine(state, line);
+    expect(resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5 })).toEqual({ output: 'REPORT', tokens: { input: 153009, output: 15308, cached: 49 }, durationMs: 5, toolCalls: 3, modelUsed: 'claude-test' });
+  });
+
+  test('a killed run counts each subagent message once and never reports subagent text as the producer output', () => {
+    const state = claudeStreamState();
+    for (const line of lines(start('a', 1000), text('a', 'main note'), delta(100), stop, subagent('s1', 50000), subagent('s1', 50000), subagent('s2', 50001))) consumeClaudeStreamLine(state, line);
+    expect(resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5, error: { code: 'timeout', reason: 'exceeded 5ms' } })).toMatchObject({ output: 'main note', tokens: { input: 101001, output: 102, cached: 21 }, toolCalls: 1 });
+  });
+
   test.skipIf(process.platform === 'win32')('a timed-out run returns the usage and last text it streamed before the kill', async () => {
     const { script, directory } = stub(`${printf([start('a', 1000), text('a', 'investigating'), delta(100), stop, start('b', 1001), delta(9)])}\nsleep 30`);
     const began = Date.now();

@@ -1,5 +1,33 @@
 # Changelog
 
+## [1.91.86.0] - 2026-10-11
+
+**The paid CSO producer gives `/cso` the Agent tool users have, so independent review and repair verification can run in the evaluation. The producer's receipt now counts subagent tokens.**
+
+The current-skill smoke reports (run 38090891646) said repair verification was "not performed": `record-review` refused the review with "Repair review must be explicitly independent". The producer started Claude with `--tools Bash,Write`, so the Agent tool was missing. `/cso` could start no independent reviewer, honestly declined to attest independence, and so every repair stayed `not_attempted`. Users' Claude Code has the Agent tool. The v2 skill's parallel finding verification uses it too, and fell back to self-verification in the v2 baseline for the same reason.
+
+### What this means for you
+
+- **The producer allows `Bash,Write,Agent`.** Subagents inherit the whole policy. Claude Code 2.1.263, replayed against a mock API through the real producer, shows this in practice:
+  - A subagent has only Agent, Bash and Write, and no MCP servers.
+  - Its launcher calls run unsandboxed and reach Docker. Its other Bash is denied, including chained, path-variant and `dangerouslyDisableSandbox` commands.
+  - `--restricted` keeps its Write calls inside the producer's work and helper directories.
+  - Read, WebFetch, ListMcpResourcesTool and `mcp__*` tools are unavailable to it.
+  - A subagent's `record-review` is accepted (`self_attested`), and `verify` then passes the review check.
+- **Policy revision `claude-2.1.263-cso-v2`.** The tool set changed, so the producer policy identity changed with it. A recorded v2 baseline bound to `cso-v1` no longer matches, and the baseline must be measured again under this policy.
+- **Subagent tokens are counted.** A `result` event's `usage` covers only the main thread's last turn. The receipt now takes the session total from `modelUsage` and sums turns across every `result`. A background subagent gives the main thread a second result. A killed run also counts the subagent messages it streamed.
+
+### Itemized changes
+
+#### Changed
+- `test/helpers/providers/claude.ts`: `--tools Bash,Write,Agent` (`CLAUDE_PRODUCER_BUILTIN_TOOLS`). `assertClaudeProducerSandboxPolicy` also pins `--tools`, `--permission-mode dontAsk` and exactly one each of `--restricted`, `--safe-mode` and `--strict-mcp-config`. It refuses `--mcp-config`, `--agents`, `--plugin-dir`, `--setting-sources`, `--disallowed-tools` and the permission-bypass flags.
+- `test/helpers/providers/claude-stream.ts`: tokens from `modelUsage`, turns summed over results, subagent messages counted once by message id, and only main-thread text kept as a killed run's output.
+- `scripts/cso-eval-producer.ts`: Claude policy revision `claude-2.1.263-cso-v2`.
+
+#### For contributors
+- `test/provider-model-defaults.test.ts`: the tool list and each new policy refusal.
+- `test/claude-producer-stream.test.ts`: subagent accounting with the event shapes Claude Code 2.1.263 printed in the replay, including a background subagent's second result and a killed run.
+
 ## [1.91.85.0] - 2026-10-11
 
 **`/cso` works on Windows Git 2.56 and gets Docker on macOS, `/test-audit` and `/ship` loop correctly under zsh, and the deploy skills stop at the honest point (Wave 9 Lane D).**
