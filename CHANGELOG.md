@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.87.0] - 2026-10-11
+## [1.91.96.0] - 2026-10-11
 
 **Transcript ingest lands on gbrain 0.60, and `/retro global` counts every Claude Code session in its real repository.**
 
