@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.86.0] - 2026-10-11
 
 **browse follows the proxy your shell already uses, writes PDFs on Windows machines whose temp dir is an 8.3 short path, and stops spawning `--config=NUL` children that crashed Bun 1.3.10 (Wave 9, lane E).**
 
