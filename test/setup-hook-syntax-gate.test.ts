@@ -293,17 +293,27 @@ describe('setup: registers the hooks that parse, refuses the rest, exits non-zer
       GSTACK_PLAN_TUNE_HOOKS: 'yes',
       TMPDIR: fx.base,
     };
-    const r = spawnSync('bash', ['-c', script], { encoding: 'utf8', env, timeout: 60_000 });
+    // A file, not `bash -c`: the script is longer than Windows' 32,767-character command line.
+    const file = path.join(fx.base, 'setup-hooks.sh');
+    fs.writeFileSync(file, script);
+    const r = spawnSync('bash', [file], { encoding: 'utf8', env, timeout: 60_000 });
     return { code: r.status, out: `${r.stdout}${r.stderr}` };
   }
 
   function registeredCommands(fx: Fx): string[] {
     const settings = JSON.parse(fs.readFileSync(fx.settings, 'utf8'));
-    return Object.values(settings.hooks ?? {}).flatMap((entries: any) =>
-      entries.flatMap((e: any) => (e.hooks ?? []).map((h: any) => String(h.command)))).sort();
+    const commands: string[] = Object.values(settings.hooks ?? {}).flatMap((entries: any) =>
+      entries.flatMap((e: any) => (e.hooks ?? []).map((h: any) => String(h.command))));
+    if (process.platform !== 'win32') return commands.sort();
+    // Git Bash may spell them /tmp/…, /d/… or D:/… (HOME through a mount, MSYS
+    // env conversion); cygpath -m gives every spelling one native form.
+    const r = spawnSync('bash', ['-c', 'for p; do cygpath -m "$p"; done', '_', ...commands], { encoding: 'utf8', timeout: 15_000 });
+    return r.stdout.trim().split('\n').sort();
   }
 
   const shim = (fx: Fx, rel: string) => path.join(fx.canonical, rel);
+  /** A shim in the native spelling registeredCommands() compares in. */
+  const registered = (fx: Fx, rel: string) => (process.platform === 'win32' ? posix(shim(fx, rel)) : shim(fx, rel));
   const ALL = ['bin/gstack-session-update', 'hosts/claude/hooks/question-log-hook', 'hosts/claude/hooks/question-preference-hook',
     'hosts/claude/hooks/auq-error-fallback-hook', 'hosts/claude/hooks/timeline-stop-hook'];
 
@@ -313,7 +323,7 @@ describe('setup: registers the hooks that parse, refuses the rest, exits non-zer
     expect(r.out).toContain('SETUP_HOOKS_DONE');
     expect(r.code).toBe(0);
     expect(r.out).not.toContain('refusing to register');
-    expect(registeredCommands(fx)).toEqual(ALL.map(rel => shellPath(shim(fx, rel))).sort());
+    expect(registeredCommands(fx)).toEqual(ALL.map(rel => registered(fx, rel)).sort());
   });
 
   test('fresh install: the unparseable hook is not registered, the rest are, and setup exits 1 with file:line', () => {
@@ -332,7 +342,7 @@ describe('setup: registers the hooks that parse, refuses the rest, exits non-zer
     expect(r.out).toContain('https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#setup-hook-does-not-parse');
     expect(r.out).not.toContain('previous install is still active');
     expect(r.out).not.toContain('no stable install');
-    expect(registeredCommands(fx)).toEqual(ALL.filter(rel => rel !== 'hosts/claude/hooks/question-log-hook').map(rel => shellPath(shim(fx, rel))).sort());
+    expect(registeredCommands(fx)).toEqual(ALL.filter(rel => rel !== 'hosts/claude/hooks/question-log-hook').map(rel => registered(fx, rel)).sort());
   });
 
   test('upgrade over live registrations: the others stay registered, the broken one is not re-registered, exit 1', () => {
