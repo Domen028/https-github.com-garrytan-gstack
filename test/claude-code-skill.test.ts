@@ -81,7 +81,7 @@ function shell(mode: Mode, extra: NodeJS.ProcessEnv = {}, options: {resume?: boo
     .replace("'<gstack-runtime-root>'", q(options.runtime ?? RUNTIME))
     .replace("'<base>'", q('main'))
     .replace("'<fresh-or-resume>'", q(options.resume ? 'resume' : 'fresh'))
-    .replaceAll('"$CLAUDE_RUNNER" --cwd', `"$CLAUDE_RUNNER"${options.planReview ? ' --role plan-review' : ''} --cwd`);
+    .replaceAll('"$CLAUDE_RUNNER" --user-invoked --cwd', `"$CLAUDE_RUNNER" --user-invoked${options.planReview ? ' --role plan-review' : ''} --cwd`);
   return spawnSync('bash', ['-c',script], {cwd:options.cwd ?? REPO, env:{...ENV,...extra}, encoding:'utf8',timeout:10000});
 }
 function captured() { return JSON.parse(fs.readFileSync(CAPTURE,'utf8')); }
