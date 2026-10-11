@@ -154,8 +154,13 @@ the readiness dashboard and the PR body, and never count it as a pass.
 <a id="outside-review-verdict"></a>
 ### How the verdict is read from a review
 
-- **Severity tags.** `[P0]`-`[P3]` (or Codex's native `P1:` labels). P0 and P1
-  block; P2 and P3 are advisory.
+- **Severity tags.** `[P0]`-`[P3]`, Codex's native `P1:` labels, and a P0-P3
+  label at the start of a line after an optional heading, bullet, number or
+  bold: `**P1 — x**`, `**P1** — x`, `1. P2 — x`, `P2 —`, `### P1`, or a table
+  cell `| P1 |`. P0 and P1 block; P2 and P3 are advisory. A P0-P3 token in that
+  label position that none of these forms reads (`## P1/P2 findings`) makes the
+  review [`unverified`](#outside-review-unparsed-severity), never `clean`. Code
+  fences and inline code are quotes, not labels.
 - **Severity words in label position.** `Severity: High`, `Priority: low`, a
   line that starts with `High:`, `High —`, `[High]` or `**High**` (after an
   optional heading, bullet or number), a bold `**High**` anywhere, or a table
@@ -163,9 +168,15 @@ the readiness dashboard and the PR body, and never count it as a pass.
   advisory like P2 and P3. Words inside prose do not count: "high-level",
   "low-risk", "a medium-term follow-up" and "no critical findings" are not
   findings.
+- **Every review gate.** These rules apply to every gate that summarises a
+  review, including the `execution` gate behind `/codex` consult and challenge.
+  A reply whose last `Verdict:` line says `not ready` but carries no readable
+  severity prints `FINDINGS: unspecified` and exits 3 like a blocking finding.
 - **No findings.** A review with no tag and no label is `clean` only when it
   says so explicitly (`NO_FINDINGS`, "no issues", "did not find any bugs").
-  Otherwise it is `unverified` (see below), never `clean`.
+  Otherwise it is `unverified` (see below), never `clean`. A `/codex` consult
+  answer with no severity labels at all is not a review summary and stays
+  `clean`.
 - **Design proposals** (the design-direction voices in /design-consultation
   and /office-hours) are read with the `proposal` gate: a completed proposal
   needs only its `Recommendation: ... because ...` line.
@@ -311,6 +322,33 @@ no explicit no-findings conclusion, so no pass or fail can be read from it
 
 **Fix.** Read the output above and decide. It is not a pass, and /ship and
 /review list it as missing coverage.
+
+<a id="outside-review-unparsed-severity"></a>
+### `... outside review: ran, verdict unverified (the review labels a finding with a P0-P3 severity in a form the parser cannot read (line N: "..."))` / `REASON: unparsed_severity`
+
+**Meaning.** The reply starts a line with a P0-P3 token, the place a finding's
+label goes, but in a form gstack does not read as one severity, for example
+`## P1/P2 findings` or `- P2/P3 nits`. gstack will not guess which severity
+applies, so the verdict is unverified instead of `clean`. The quoted line in
+parentheses (also printed as `UNPARSED:`) is the first such label. When the
+same reply also has a readable P0 or P1 finding, that finding blocks
+(`VERDICT: findings`, exit 3) and the unparsed line is still printed.
+
+**What is kept.** The full reply is shown above.
+
+**Fix.** Read the quoted line and the reply, and decide; it is not a pass.
+Re-run the review and ask the reviewer to label each finding `[P1] <title>` or
+`P1: <title>`. To re-check a saved or corrected reply, run from your gstack
+checkout:
+
+```bash
+bun lib/outside-review-result.ts --verdict execution reply.md
+```
+
+(use `review` or `structured` for those gates).
+
+**Expected result.** `VERDICT: findings` or `VERDICT: clean` with a P0-P3
+`FINDINGS:` value, and no `UNPARSED:` line.
 
 <a id="codex-model-unusable"></a>
 ### `CODEX_MODE: model_unusable` / `MODEL_UNUSABLE`
@@ -529,6 +567,32 @@ plan; the audit is `not run`.
 
 **Expected result.** The next /ship or /review prints the audit against that plan.
 
+<a id="plan-eng-review-not-persisted"></a>
+### `PERSISTED: no` / `PERSIST: gstack-review-log '{...}'` / `no saved Eng Review: run the PERSIST: line ...`
+
+**Meaning.** /plan-eng-review ran where the caller forbids writes (for example
+a delegating agent keeps the reviewer read-only, so it cannot edit the plan it
+judges). The review completed: it ends `DONE` with `PERSISTED: no`, records
+telemetry `success`, and returns the full report and decision ledger in its
+reply. Nothing was saved, so /ship's readiness dashboard has no Eng Review
+record and reports NOT CLEARED with "no saved Eng Review". A real failure (a
+permitted save that failed, stale evidence) still ends `BLOCKED`.
+
+**What is kept.** The reply holds the complete report; its last line is the
+review-log command with this review's values.
+
+**Fix.** From the reviewed repository, run the reply's last line without the
+`PERSIST: ` prefix:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-review-log '{"skill":"plan-eng-review",...}'
+```
+
+Or rerun /plan-eng-review where it may write its report and log.
+
+**Expected result.** `gstack-review-read` lists the `plan-eng-review` entry and
+/ship's dashboard shows the Eng Review row (CLEAR when its status is `clean`).
+
 <a id="learnings-bun-missing"></a>
 ### `gstack-learnings-search: bun not found on PATH, so learnings could not be read. Fix: ...`
 
@@ -685,6 +749,10 @@ inside gstack's own checkout. A block ran without the path Step 2 printed, so it
 stopped instead of touching your project.
 
 **Fix.** Run Step 2 again and prefix the block with `INSTALL_DIR=<printed path>`.
+On Windows (Git Bash) with `INSTALL_DIR` set correctly, older /gstack-upgrade
+text compared two spellings of the same path and refused anyway; recover with
+`cd <install dir> && git pull --ff-only --autostash && ./setup` (see
+[the hook false positive](#setup-hook-does-not-parse)).
 
 <a id="skill-over-size-limit"></a>
 ### `<host>/<skill>/SKILL.md is <bytes> bytes, over the 160,000-byte limit. Fix: carve sections with usesLazySections() for this skill.`
@@ -747,23 +815,41 @@ Bun first.
 <a id="setup-hook-does-not-parse"></a>
 ### `gstack setup: refusing to register hooks that do not parse (Claude Code would block tool calls with them): <file>:<line>: <error>`
 
-**Meaning.** Claude Code runs gstack's hook shims through `/bin/sh`, and a hook
-that does not parse exits 2, which blocks the tool call it guards in every
-session. Setup parse-checks every hook it registers and every hook a skill's
-frontmatter runs (`/autoplan`, `/careful`, `/freeze`, `/guard`, `/investigate`
-and `/plan-ceo-review`): the shim, the gstack shell helpers it sources (such as
-`careful/bin/hook-extract.sh` and `bin/gstack-state-root.sh`), and the
-TypeScript it runs with its local imports. A merge conflict marker line in any
-of those files fails as `unresolved merge conflict marker`, even when the file
-still parses (markers inside a heredoc, a string or a template literal do).
-The TypeScript is bundled from the gstack checkout, so the `tsconfig.json` or
-`bunfig.toml` of the project you run it from is never read. It registers the
-hooks that parse, skips the ones listed, finishes the rest of the install, and
-exits non-zero. Claude Code runs hooks straight from `~/.claude/skills/gstack`,
-so a skipped hook that an earlier setup registered, or that a skill runs,
-keeps running the broken file until it is fixed. This is a gstack bug, or a
-half-applied edit or merge in your checkout: report the printed
-`<file>:<line>`.
+**On Windows (Git Bash), from 1.91.31: a false positive.** If every
+TypeScript hook fails with `bun could not bundle the TypeScript entry` (the
+question-log, question-preference, auq-error-fallback and timeline-stop hooks,
+`/autoplan`'s publication hook and `/plan-ceo-review`'s mode-handoff hook),
+your hooks are fine. Git Bash handed Bun its paths as `C:/…` while the checker
+looked them up as `/c/…` (#3088, #3100); the checker on main reads both
+spellings. The same Git Bash spelling made `/gstack-upgrade` stop with
+`ERROR: <dir> is not a gstack checkout; nothing was changed.` One recovery
+covers both: update by hand, then run setup from the update.
+
+```bash
+cd ~/.claude/skills/gstack && git pull --ff-only --autostash && ./setup
+```
+
+Use your install directory if it is not `~/.claude/skills/gstack` (`./setup
+--status` prints it). Expected result: setup finishes with exit 0 and no
+refusal line, and later auto-updates go through.
+
+**Meaning, everywhere else.** Claude Code runs gstack's hook shims through
+`/bin/sh`, and a hook that does not parse exits 2, which blocks the tool call
+it guards in every session. Setup parse-checks every hook it registers and
+every hook a skill's frontmatter runs (`/autoplan`, `/careful`, `/freeze`,
+`/guard`, `/investigate` and `/plan-ceo-review`): the shim, the gstack shell
+helpers it sources (such as `careful/bin/hook-extract.sh` and
+`bin/gstack-state-root.sh`), and the TypeScript it runs with its local imports.
+A merge conflict marker line in any of those files fails as `unresolved merge
+conflict marker`, even when the file still parses (markers inside a heredoc, a
+string or a template literal do). The TypeScript is bundled from the gstack
+checkout, so the `tsconfig.json` or `bunfig.toml` of the project you run it
+from is never read. It registers the hooks that parse, skips the ones listed,
+finishes the rest of the install, and exits non-zero. Claude Code runs hooks
+straight from `~/.claude/skills/gstack`, so a skipped hook that an earlier
+setup registered, or that a skill runs, keeps running the broken file until it
+is fixed. This is a gstack bug, or a half-applied edit or merge in your
+checkout: report the printed `<file>:<line>`.
 
 **Fix.**
 
@@ -778,16 +864,77 @@ cd ~/.claude/skills/gstack && ./setup
 <a id="auto-update-hook-does-not-parse"></a>
 ### `gstack auto-update: update held (hook-does-not-parse: <file>:<line>: <error>); nothing was installed or changed, and your current hooks keep running. ...`
 
-**Meaning.** Team-mode auto-update fetched a release with a hook that does not
-parse or still holds a merge conflict marker (the same check setup runs). It
-checked the incoming revision before moving your checkout, so your
-checkout, installed skills and registered hooks stay at the current revision.
-gstack checks again at the next update check and installs the first release
-whose hooks parse. This is a gstack bug: report the printed `<file>:<line>`.
+**On Windows (Git Bash), from 1.91.31: a false positive.** If the held
+reason is `<hook>.ts:1: bun could not bundle the TypeScript entry`, the
+release is fine: your installed checker misread Git Bash's `C:/…` paths
+(#3088, #3100), and the auto-updater checks every release with it, so it
+holds every release until you update once by hand. Recovery (this also clears
+`/gstack-upgrade`'s `is not a gstack checkout` refusal):
 
-**Fix.** Nothing to do locally. A manual `git pull` followed by `./setup`
+```bash
+cd ~/.claude/skills/gstack && git pull --ff-only --autostash && ./setup
+```
+
+Use your install directory if it is not `~/.claude/skills/gstack`. Expected
+result: setup finishes with exit 0, the next session start prints no held
+line, and later updates install on their own.
+
+**Meaning, everywhere else.** Team-mode auto-update fetched a release with a
+hook that does not parse or still holds a merge conflict marker (the same
+check setup runs). It checked the incoming revision before moving your
+checkout, so your checkout, installed skills and registered hooks stay at the
+current revision. The incoming release's own `bin/gstack-hook-check` decides,
+so a checker bug in your install cannot hold later releases; your installed
+checker decides only when the incoming one crashes, prints nothing or prints
+a report it cannot verify. gstack checks again at the next update check and
+installs the first release whose hooks parse. This is a gstack bug: report the
+printed `<file>:<line>`.
+
+**Fix.** Wait for the next release. A manual `git pull` followed by `./setup`
 cannot be checked before the pull; setup then refuses the broken hook (see the
 entry above).
+
+<a id="auto-update-hook-check-unavailable"></a>
+### `gstack auto-update: update held (hook-check-unavailable: <reason>); nothing was installed or changed, and your current hooks keep running. ... Fix now: cd <dir> && git pull --ff-only --autostash && ./setup ...`
+
+**Meaning.** Neither the incoming release's hook checker nor your installed
+one gave a verified report on the incoming hooks (a crash, no output, an
+unreadable report, or no Bun to bundle the TypeScript hooks), so the
+auto-updater cannot tell whether moving your checkout would break Claude Code
+tool calls. It left your checkout, skills and hooks at the current revision.
+The `<reason>` names what each checker did.
+
+**Fix.** Run the printed command. Setup checks every hook it registers and
+says what is wrong (for example that Bun is missing).
+
+<a id="setup-runtime-root-contains-checkout"></a>
+### `gstack setup: refusing to replace <root> for <host>: this runtime directory contains the source checkout setup runs from (<checkout>), so replacing it would delete the checkout. Nothing was changed.`
+
+**Meaning.** Setup installs Codex, Factory, OpenCode, Cursor, Copilot and
+Antigravity by building a runtime root (such as `~/.cursor/skills/gstack`) and
+swapping it in for the old one, and Kiro by writing into `~/.kiro/skills/gstack`.
+Your gstack checkout lives at that root or inside it, so the swap would delete
+the checkout (#3084), and Kiro would link the checkout into itself. Setup refuses before
+writing anything. `./setup --status` and `gstack-doctor` suggest the move for
+that host instead of `./setup --host <host>`.
+
+**Fix.** Move the checkout out, then run setup from its new place. Setup
+prints the exact commands. When `~/.claude/skills/gstack` is a symlink to the
+checkout, the checkout takes the symlink's place:
+
+```bash
+rm ~/.claude/skills/gstack && mv ~/.cursor/skills/gstack ~/.claude/skills/gstack
+cd ~/.claude/skills/gstack && ./setup --host claude && ./setup --host cursor
+```
+
+Otherwise move it anywhere outside the host's skills directory:
+
+```bash
+mv ~/.cursor/skills/gstack ~/gstack && cd ~/gstack && ./setup --host cursor
+```
+
+**Expected result.** Both setups finish with exit 0, and `./setup --status`
+lists each host as `current`.
 
 <a id="host-renders-pruned"></a>
 ### `pruned <dir> (<host> is not installed from this checkout): ...` / `kept <path>: not proven generated (...)` / `host-render backup: <dir> (...)`
@@ -1214,6 +1361,27 @@ and re-imports the ones missing from your brain. That check needs a local gbrain
 ### `[memory-ingest] ERR: could not save ingest state <path>: <error>.`
 
 **Fix.** Fix permissions or free disk space under your gstack state root, then `/sync-gbrain`.
+
+<a id="memory-ingest-transcript-checkout"></a>
+### `[memory-ingest] kept N transcript page(s) for <repo> on this machine: gbrain source <id> ...`
+
+On a managed gbrain brain (0.60+), an import lands only in a source bound to a
+checkout this host owns, so gstack binds each transcript source to its own
+checkout, `<state root>/gbrain-transcript-sources/<id>/`, before importing.
+The partition stays on this machine, unstamped, and imports on a later run when:
+
+- **held by another owner**: the source is bound to another host or another
+  directory. gstack never takes it over. Inspect it with
+  `gbrain sources writer status --source <id> --json`; the owner releases it
+  (`gbrain sources writer transfer prepare <id>` on the owning host) or you
+  re-bind it here with `gbrain sources set-path <id> <checkout>`.
+- **the state root is ephemeral** (`GSTACK_EPHEMERAL=1`): a binding would point
+  at a directory that vanishes with the machine. Run with a durable root:
+  `GSTACK_STATE_ROOT=<durable directory> gstack-memory-ingest --bulk`.
+- **bound to gstack's checkout, but it is missing or not active**: restore the
+  checkout from a backup of the state root, or follow `gbrain doctor --json`.
+- **could not bind**: the message carries gbrain's refusal; inspect the source
+  with the writer status command above.
 
 <a id="gbrain-artifacts-not-indexed"></a>
 ### `curated artifacts pushed to git, but gbrain source <id> has 0 indexed pages. Fix: gbrain sync --source <id>, then re-run /sync-gbrain`
@@ -2267,3 +2435,32 @@ owner decides` line whose decision id is still pending, so it was left as is.
 
 **Fix.** Answer the gate for that id, then rerun `gstack-owner-brief close`;
 only decided lines are rewritten, each to its chosen option and the date.
+
+<a id="setup-crlf-repair"></a>
+### `warning: left <n> locally edited file(s) with CRLF line endings that gstack pins to LF`
+
+**Meaning.** Git for Windows checks out with `core.autocrlf=true`, so gstack's
+nested shell scripts (skill `bin/` helpers, the Claude hook shims,
+`lib/cso/images/*`, `scripts/app/*`) were written with CRLF until
+`.gitattributes` pinned them to LF (#3110). Git Bash runs them anyway, but a
+Linux bash reading the same checkout (a synced tree, WSL, a bind mount) fails
+with `set: pipefail: invalid option name`, and a hook that fails that way
+blocks the tool call it guards. Pulling the new rule does not fix existing
+copies, because git never rewrites a file whose content did not change. Setup
+finds those files with one `git ls-files --eol` pass and checks them out again
+as LF. It leaves a file you edited locally alone and names it in this warning.
+The same section covers `skipped the CRLF repair` (another setup held the
+install registry lock) and `the CRLF repair could not rewrite every file`.
+
+**Fix.** For edited files, stash and restore them; git writes them back with LF
+and keeps your edits:
+
+```bash
+cd ~/.claude/skills/gstack && git stash && git stash pop
+```
+
+If the repair was skipped, re-run `./setup` once the other setup finishes. If
+it failed, `git checkout -- . && ./setup` in the checkout discards local edits
+and rewrites every file. Use your install directory if it is not
+`~/.claude/skills/gstack` (`./setup --status` prints it). Expected result: the
+next `./setup` prints no CRLF warning.

@@ -50,7 +50,7 @@ describe.skipIf(process.platform === 'win32')('upgrade setup recovery (real shel
     try {
       const bin = join(root, 'bin');
       mkdirSync(bin);
-      writeFileSync(join(bin, 'git'), '#!/bin/sh\nif [ "$1 $2" = "rev-parse --show-toplevel" ]; then pwd -P; elif [ "$1" = rev-parse ]; then echo old-commit; fi\nexit 0\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'git'), '#!/bin/sh\nif [ "$1 $2" = "rev-parse --show-prefix" ]; then :; elif [ "$1 $2" = "rev-parse --is-inside-work-tree" ]; then echo true; elif [ "$1" = rev-parse ]; then echo old-commit; fi\nexit 0\n', { mode: 0o755 });
       writeFileSync(join(root, 'setup'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
       // C9: the git fence verifies it is inside gstack's own checkout first.
       writeFileSync(join(root, 'VERSION'), '1.0.0.0\n');

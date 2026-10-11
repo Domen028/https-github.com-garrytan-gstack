@@ -54,15 +54,13 @@ TMPIDX=$(mktemp "${TMPDIR:-/tmp}/gstack-wtree-XXXXXX" 2>/dev/null) || {
 trap 'rm -f "$TMPIDX"' EXIT
 trap 'exit 130' INT TERM
 export GIT_INDEX_FILE="$TMPIDX"
-# Resolve relative --git-path output against the repo root.
-case "$REAL_INDEX" in
-  ""|/*) ;;
-  *) REAL_INDEX="$TOP/$REAL_INDEX" ;;
-esac
-case "$REAL_OBJECTS" in
-  ""|/*) ;;
-  *) REAL_OBJECTS="$TOP/$REAL_OBJECTS" ;;
-esac
+# Resolve relative --git-path output against the repo root. Git for Windows
+# answers in drive-letter form (C:/…) wherever the path is absolute (a linked
+# worktree, a submodule, --separate-git-dir); that is absolute too (#3101).
+# shellcheck source=bin/gstack-path-spelling.sh
+. "$(cd "$(dirname "$0")" && pwd)/gstack-path-spelling.sh"
+if [ -n "$REAL_INDEX" ] && ! gstack_path_absolute "$REAL_INDEX"; then REAL_INDEX="$TOP/$REAL_INDEX"; fi
+if [ -n "$REAL_OBJECTS" ] && ! gstack_path_absolute "$REAL_OBJECTS"; then REAL_OBJECTS="$TOP/$REAL_OBJECTS"; fi
 if [ -n "$OBJ_DIR" ]; then
   export GIT_OBJECT_DIRECTORY="$OBJ_DIR"
   export GIT_ALTERNATE_OBJECT_DIRECTORIES="$REAL_OBJECTS${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}"

@@ -433,7 +433,7 @@ export function producerInstallationIdentity(binding: ProducerHelperBinding): Pr
 }
 
 export const PRODUCER_PROVIDER_POLICY: Record<ProducerHost, { family: ProducerProviderIdentity['family']; policyRevision: string; version: string }> = {
-  claude: { family: 'claude', policyRevision: 'claude-2.1.263-cso-v1', version: '2.1.263 (Claude Code)' },
+  claude: { family: 'claude', policyRevision: 'claude-2.1.263-cso-v2', version: '2.1.263 (Claude Code)' },
   codex: { family: 'gpt', policyRevision: 'codex-0.153.4-cso-v3-generation', version: 'codex-cli 0.153.4' },
   gemini: { family: 'gemini', policyRevision: 'gemini-0.59.0-cso-v1', version: '0.59.0' },
 };

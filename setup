@@ -86,12 +86,13 @@ done
 # `sections/...` pointer counts in a carved skill (sections/ installed, or a
 # **STOP.** line); prefixed ones ($GSTACK_ROOT, ~, absolute, ../) everywhere.
 _status_install_checks() {
-  local reg="$GSTACK_STATE_ROOT/installs.tsv" host scope project dest root src rest router md dir stop tok names n path checked broken first fix any_broken=0
+  local reg="$GSTACK_STATE_ROOT/installs.tsv" host scope project dest root src rest router md dir stop tok names n path checked broken first fix _move any_broken=0
   [ -f "$reg" ] || return 0
   echo "Install checks:"
   while IFS='	' read -r host scope project dest root src rest; do
     case "$host" in ''|'#'*) continue ;; esac
     fix="Fix: cd $src && ./setup --host $host"
+    _move="$(gstack_install_move_hint "$src" "$host" "$root")" && fix="Fix: the checkout lives in this host's runtime root, so move it first: $_move"
     router="$root/SKILL.md"
     if [ -L "$router" ]; then router="router is a symlink, which Codex skips. $fix"
     elif [ -f "$router" ]; then router="router is a real file"
@@ -331,10 +332,31 @@ SOURCE_GSTACK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 # One state root for everything setup writes (bin/gstack-state-root.sh, docs/state-root.md).
 . "$SOURCE_GSTACK_DIR/bin/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $SOURCE_GSTACK_DIR/bin/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
 gstack_state_root_select; GSTACK_STATE_ROOT="$_gstack_sr_root"
+. "$SOURCE_GSTACK_DIR/bin/gstack-path-spelling.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-path-spelling.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-install-registry.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-install-registry.sh is missing. fix: reinstall from a fresh clone (docs/ADDING_A_HOST.md)" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-render-claude.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-render-claude.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-host-renders.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-host-renders.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 SETUP_VERSION="$(cat "$SOURCE_GSTACK_DIR/VERSION" 2>/dev/null || echo unknown)"
+
+# _runtime_root_refused HOST ROOT — setup never replaces or removes a host
+# runtime root that is, or contains, the checkout it runs from (#3084: the
+# Cursor arm's swap deleted a checkout at ~/.cursor/skills/gstack). Prints the
+# refusal with the commands that move the checkout out, records it for the
+# install summary, and returns 0; returns 1 when ROOT is safe to replace (a
+# symlinked ROOT is: only the link goes).
+_SETUP_REFUSED=""
+_runtime_root_refused() {
+  local host="$1" root="$2" move
+  move="$(gstack_install_move_hint "$SOURCE_GSTACK_DIR" "$host" "$root")" || return 1
+  {
+    echo "gstack setup: refusing to replace $root for $host: this runtime directory contains the source checkout setup runs from ($SOURCE_GSTACK_DIR), so replacing it would delete the checkout. Nothing was changed."
+    echo "  Fix: move the checkout out of $host's skills directory (a symlinked ~/.claude/skills/gstack that points at it becomes the checkout), then run setup from its new place:"
+    echo "    $move"
+    echo "  https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#setup-runtime-root-contains-checkout"
+  } >&2
+  _SETUP_REFUSED="refused: $root is or contains this checkout, so setup did not replace it; nothing was changed. Move it first: $move"
+  return 0
+}
 
 # --claude-model is validated before anything is written, and persisted once
 # Claude is known to be selected (below, and in the --refresh-registered parent).
@@ -364,6 +386,59 @@ _persist_claude_model() {
 
 # ─── Quiet mode helper ────────────────────────────────────────
 log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }
+
+# _repair_crlf_checkout — #3110: a checkout made before an `eol=lf` rule
+# existed (Git for Windows sets core.autocrlf=true) keeps its CRLF copies,
+# because git never rewrites a stat-clean file; `add --renormalize`,
+# `checkout --` and `checkout-index -f` all leave one alone. One
+# `git ls-files --eol` pass finds tracked files whose rule says LF but whose
+# working copy has CRLF. Locally edited ones are named and left alone; the
+# rest are removed and checked out again in one batch. Runs under the install
+# registry lock, the one lock every setup takes, so two setups never race on
+# the same files.
+_repair_crlf_checkout() {
+  local dir="$SOURCE_GSTACK_DIR" line info p e rc=0
+  local stale=() edited=() repair=()
+  [ -e "$dir/.git" ] || return 0
+  command -v git >/dev/null 2>&1 || return 0
+  while IFS= read -r -d '' line; do
+    info="${line%%	*}"
+    case "$info" in *eol=lf*) ;; *) continue ;; esac
+    case "$info" in *w/crlf*|*w/mixed*) stale+=("${line#*	}") ;; esac
+  done < <(git -C "$dir" ls-files --eol -z 2>/dev/null)
+  [ "${#stale[@]}" -gt 0 ] || return 0
+  if ! _gstack_registry_lock; then
+    echo "  warning: skipped the CRLF repair of ${#stale[@]} file(s) in $dir: another setup holds the install registry lock." >&2
+    echo "    Fix: re-run ./setup once the other setup finishes (cd $dir && ./setup). See docs/troubleshooting.md#setup-crlf-repair" >&2
+    return 0
+  fi
+  while IFS= read -r -d '' line; do
+    edited+=("${line:3}")
+  done < <(git -C "$dir" --literal-pathspecs status --porcelain=v1 -z --untracked-files=no --no-renames -- "${stale[@]}" 2>/dev/null)
+  for p in "${stale[@]}"; do
+    for e in ${edited[@]+"${edited[@]}"}; do [ "$e" = "$p" ] && continue 2; done
+    repair+=("$p")
+  done
+  if [ "${#repair[@]}" -gt 0 ]; then
+    for p in "${repair[@]}"; do rm -f "$dir/$p" || rc=1; done
+    [ "$rc" -ne 0 ] || printf '%s\0' "${repair[@]}" \
+      | git -C "$dir" --literal-pathspecs checkout --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1 || rc=1
+    if [ "$rc" -eq 0 ]; then
+      log "  Rewrote ${#repair[@]} file(s) checked out with CRLF line endings as LF (#3110)."
+    else
+      echo "  warning: the CRLF repair could not rewrite every file in $dir (rm or git checkout failed)." >&2
+      echo "    Fix: cd $dir && git checkout -- . && ./setup   See docs/troubleshooting.md#setup-crlf-repair" >&2
+    fi
+  fi
+  if [ "${#edited[@]}" -gt 0 ]; then
+    echo "  warning: left ${#edited[@]} locally edited file(s) with CRLF line endings that gstack pins to LF; a Linux bash cannot run them:" >&2
+    printf '    %s\n' "${edited[@]}" >&2
+    echo "    Why: setup rewrites only unmodified files, so your edits are kept." >&2
+    echo "    Fix (keeps your edits, rewrites them as LF): cd $dir && git stash && git stash pop   See docs/troubleshooting.md#setup-crlf-repair" >&2
+  fi
+  _gstack_registry_unlock
+}
+[ -n "${GSTACK_SETUP_REFRESH_CHILD:-}" ] || _repair_crlf_checkout
 
 # ─── --refresh-registered: refresh exactly the registered installs (#1925) ───
 # What /gstack-upgrade and the team-mode auto-update run. Each install this
@@ -565,14 +640,12 @@ if [ "$CODEX_REPO_LOCAL" -eq 1 ]; then
   fi
 fi
 
+# A Codex runtime root that IS the checkout is a direct install, migrated
+# below (migrate_direct_codex_install); one that contains it is refused.
 if { [ "$CODEX_REPO_LOCAL" -eq 1 ] || [ "$HOST" = codex ] || { [ "$HOST" = auto ] && command -v codex >/dev/null 2>&1; }; } \
-  && [ -d "$CODEX_GSTACK" ] && [ ! -L "$CODEX_GSTACK" ]; then
-  _codex_runtime="$(cd "$CODEX_GSTACK" && pwd -P)"
-  case "$SOURCE_GSTACK_DIR" in
-    "$_codex_runtime"/*)
-      echo "Refusing: Codex runtime directory contains the source checkout: $CODEX_GSTACK -> $_codex_runtime (source: $SOURCE_GSTACK_DIR). Use a separate skills directory; setup will not relocate or replace it automatically." >&2
-      exit 1 ;;
-  esac
+  && [ -d "$CODEX_GSTACK" ] && ! gstack_path_same "$CODEX_GSTACK" "$SOURCE_GSTACK_DIR" \
+  && _runtime_root_refused codex "$CODEX_GSTACK"; then
+  exit 1
 fi
 
 IS_WINDOWS=0
@@ -1134,8 +1207,10 @@ _print_windows_copy_note_once() {
 # Rows publish to the registry only after a host arm finished activating
 # (bin/gstack-install-registry.sh). The summary uses the same renderer as
 # ./setup --status and /gstack-upgrade. A setup that dies inside a host arm
-# reports that host as failed (its previous install is left in place) with the
-# exact retry command, from the EXIT trap.
+# reports that host as failed from the EXIT trap: "previous install was left
+# in place" with the retry command only when the checkout, the skills
+# directory and the runtime root still exist; a refusal (#3084) with the move
+# commands; otherwise the fresh-clone reinstall.
 _SETUP_ROWS=""
 _SETUP_ARM=""
 _SETUP_SUMMARY_DONE=0
@@ -1146,7 +1221,7 @@ _setup_row() {
 _setup_retry_command() {
   printf 'cd %s && ./setup --host %s' "$SOURCE_GSTACK_DIR" "$1"
 }
-_setup_arm_begin() { _SETUP_ARM="$1	$2	$3"; }
+_setup_arm_begin() { _SETUP_ARM="$1	$2	$3"; _SETUP_ARM_ROOT=""; }
 _setup_arm_publish() {
   local host="$1" scope="$2" project="$3" dest="$4" root="$5" prefix="$6" render="${7:-committed}" old
   old="$(gstack_install_registry_rows | awk -F '\t' -v h="$host" -v d="$dest" '$1 == h && $4 == d { v = $7 } END { print v }')"
@@ -1189,7 +1264,14 @@ _setup_exit_summary() {
     IFS='	' read -r host scope dest <<EOF
 $_SETUP_ARM
 EOF
-    _setup_row "$host" "$scope" "$dest" - "$SETUP_VERSION" failed "setup stopped (exit $rc) while installing $host; its previous install was left in place. Retry: $(_setup_retry_command "$host")"
+    if [ -n "$_SETUP_REFUSED" ]; then
+      _setup_row "$host" "$scope" "$dest" - "$SETUP_VERSION" failed "$_SETUP_REFUSED"
+    elif [ -f "$SOURCE_GSTACK_DIR/setup" ] && [ -d "$dest" ] \
+      && { [ -z "${_SETUP_ARM_ROOT:-}" ] || [ -e "$_SETUP_ARM_ROOT" ] || [ -L "$_SETUP_ARM_ROOT" ]; }; then
+      _setup_row "$host" "$scope" "$dest" - "$SETUP_VERSION" failed "setup stopped (exit $rc) while installing $host; its previous install was left in place. Retry: $(_setup_retry_command "$host")"
+    else
+      _setup_row "$host" "$scope" "$dest" - "$SETUP_VERSION" failed "setup stopped (exit $rc) while installing $host, and its install could not be verified (checkout $SOURCE_GSTACK_DIR, runtime root ${_SETUP_ARM_ROOT:-unknown}). Reinstall from a fresh clone: git clone --depth 1 https://github.com/garrytan/gstack.git ~/gstack && cd ~/gstack && ./setup --host $host"
+    fi
   fi
   [ "$rc" -ne 0 ] || [ -n "$_SETUP_ROWS" ] || return 0
   _setup_print_summary >&2
@@ -1377,6 +1459,15 @@ if [ "$CLAUDE_MODEL_SET" -eq 1 ] && [ "$INSTALL_CLAUDE" -eq 0 ]; then
   echo "Error: --claude-model is supported only when Claude is selected (the default host, --host claude, or --host auto with Claude Code installed). Nothing was installed or changed." >&2
   exit 1
 fi
+# Before anything is written: refuse a host whose runtime root is, or
+# contains, this checkout (#3084). _activate_runtime_root checks again; Kiro
+# writes into its root in place, so it is refused here too.
+for _rr in "$INSTALL_KIRO kiro $KIRO_SKILLS/gstack" "$INSTALL_FACTORY factory $FACTORY_GSTACK" "$INSTALL_OPENCODE opencode $OPENCODE_GSTACK" \
+  "$INSTALL_CURSOR cursor $CURSOR_GSTACK" "$INSTALL_COPILOT copilot $COPILOT_GSTACK" "$INSTALL_AGY agy $AGY_GSTACK"; do
+  [ "${_rr%% *}" -eq 1 ] || continue
+  _rr=${_rr#* }
+  _runtime_root_refused "${_rr%% *}" "${_rr#* }" && exit 1
+done
 _persist_claude_model
 
 migrate_direct_codex_install() {
@@ -2730,9 +2821,12 @@ create_agents_sidecar() {
 # when the build succeeded. A failed refresh leaves the previous runtime root,
 # and so the host's last working install, in place. The swap is two renames;
 # a run killed between them leaves "$ROOT.gstack-old.<pid>", which the next
-# run restores when ROOT is missing.
+# run restores when ROOT is missing. A ROOT that is, or contains, the running
+# checkout is refused before anything moves (_runtime_root_refused, #3084).
 _activate_runtime_root() {
   local fn="$1" src="$2" root="$3" new="$3.gstack-new.$$" old="$3.gstack-old.$$" rc leftover
+  _SETUP_ARM_ROOT="$root"
+  _runtime_root_refused "${_SETUP_ARM%%	*}" "$root" && return 1
   for leftover in "$root".gstack-old.*; do
     [ -e "$leftover" ] || [ -L "$leftover" ] || continue
     if [ ! -e "$root" ] && [ ! -L "$root" ]; then mv "$leftover" "$root"; else rm -rf "$leftover"; fi

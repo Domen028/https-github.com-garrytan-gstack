@@ -191,6 +191,9 @@ export function claudeProducerTools(opts: RunOpts): string {
   return [`Bash(${launcher})`, `Bash(${launcher} *)`, 'Write'].join(',');
 }
 
+/** Built-in tools: users' /cso starts its independent reviewers with Agent; subagents inherit this whole policy. */
+export const CLAUDE_PRODUCER_BUILTIN_TOOLS = 'Bash,Write,Agent';
+
 /** Claude's sandbox wraps every Bash command except the trusted launcher, which must run where users run it. */
 export function claudeProducerSettings(launcher: string): { sandbox: Record<string, unknown> } {
   return {
@@ -211,7 +214,12 @@ export function assertClaudeProducerSandboxPolicy(args: readonly string[], env: 
     if (positions.length !== 1 || args[positions[0]] !== flag || positions[0] + 1 >= args.length) fail(`expected exactly one ${flag} <value>`);
     return args[positions[0] + 1];
   };
+  if (value('--tools') !== CLAUDE_PRODUCER_BUILTIN_TOOLS) fail(`--tools must be exactly ${CLAUDE_PRODUCER_BUILTIN_TOOLS}`);
   if (value('--allowed-tools') !== `Bash(${launcher}),Bash(${launcher} *),Write`) fail('--allowed-tools must name only the launcher and Write');
+  if (value('--permission-mode') !== 'dontAsk') fail('--permission-mode must be dontAsk');
+  for (const flag of ['--restricted', '--safe-mode', '--strict-mcp-config']) if (args.filter(arg => arg === flag).length !== 1) fail(`expected exactly one ${flag}`);
+  const widening = args.find(arg => /^--(mcp-config|agents?|plugin-dir|dangerously-skip-permissions|allow-dangerously-skip-permissions|disallowed-tools|disallowedTools|setting-sources)(=|$)/.test(arg));
+  if (widening) fail(`${widening.split('=')[0]} would change what the agent and its subagents may do`);
   const raw = value('--settings');
   let settings: unknown;
   try { settings = JSON.parse(raw); } catch { fail('--settings is not JSON'); }
@@ -240,7 +248,7 @@ export function claudeExecArgs(opts: RunOpts, model: string, argsPrefix: readonl
       '--no-session-persistence',
       '--permission-prompts', 'none',
       '--permission-mode', 'dontAsk',
-      '--tools', 'Bash,Write',
+      '--tools', CLAUDE_PRODUCER_BUILTIN_TOOLS,
       '--allowed-tools', tools,
       '--add-dir', claudeProducerPaths(stateDirectory).workdir,
       '--add-dir', helperHome,
