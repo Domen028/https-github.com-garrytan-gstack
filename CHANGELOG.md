@@ -1,32 +1,32 @@
 # Changelog
 
+
+
 ## [1.91.86.0] - 2026-10-11
 
-**The paid CSO producer gives `/cso` the Agent tool users have, so independent review and repair verification can run in the evaluation. The producer's receipt now counts subagent tokens.**
-
-The current-skill smoke reports (run 38090891646) said repair verification was "not performed": `record-review` refused the review with "Repair review must be explicitly independent". The producer started Claude with `--tools Bash,Write`, so the Agent tool was missing. `/cso` could start no independent reviewer, honestly declined to attest independence, and so every repair stayed `not_attempted`. Users' Claude Code has the Agent tool. The v2 skill's parallel finding verification uses it too, and fell back to self-verification in the v2 baseline for the same reason.
+**browse follows the proxy your shell already uses, writes PDFs on Windows machines whose temp dir is an 8.3 short path, and stops spawning `--config=NUL` children that crashed Bun 1.3.10 (Wave 9, lane E).**
 
 ### What this means for you
 
-- **The producer allows `Bash,Write,Agent`.** Subagents inherit the whole policy. Claude Code 2.1.263, replayed against a mock API through the real producer, shows this in practice:
-  - A subagent has only Agent, Bash and Write, and no MCP servers.
-  - Its launcher calls run unsandboxed and reach Docker. Its other Bash is denied, including chained, path-variant and `dangerouslyDisableSandbox` commands.
-  - `--restricted` keeps its Write calls inside the producer's work and helper directories.
-  - Read, WebFetch, ListMcpResourcesTool and `mcp__*` tools are unavailable to it.
-  - A subagent's `record-review` is accepted (`self_attested`), and `verify` then passes the review check.
-- **Policy revision `claude-2.1.263-cso-v2`.** The tool set changed, so the producer policy identity changed with it. A recorded v2 baseline bound to `cso-v1` no longer matches, and the baseline must be measured again under this policy.
-- **Subagent tokens are counted.** A `result` event's `usage` covers only the main thread's last turn. The receipt now takes the session total from `modelUsage` and sums turns across every `result`. A background subagent gives the main thread a second result. A killed run also counts the subagent messages it streamed.
+- **Proxy from the environment (#915).** Without `--proxy`, browse takes the proxy from `BROWSE_PROXY_URL`, then `HTTPS_PROXY`, `HTTP_PROXY` and `ALL_PROXY` (upper case before lower case). `BROWSE_PROXY_URL=direct` opts out. `NO_PROXY` becomes Chromium's bypass list, and loopback is always bypassed. The proxy and the `NO_PROXY` rules are part of the daemon config, so a session with a different environment is refused with the variable named instead of silently reusing a daemon that routes differently. The refusal offers `browse stop`, which now stops any daemon whatever its proxy or headed settings. A standard variable that doesn't parse (curl-style `host:port`) prints a warning and browse connects directly; a bad `--proxy` or `BROWSE_PROXY_URL` still fails, so a typo never quietly exposes your IP. `socks5h://` works as `socks5://`. See BROWSER.md, "Proxy from environment".
+- **8.3 temp paths on Windows (#3104).** `make-pdf` and `browse pdf` failed with `Path must be within: C:\Users\BURCIN~1\...` because the safe directories and the target went through different realpath functions. Both sides now use one (`fs.realpathSync.native`), resolved paths compare exactly, and only a tail that doesn't exist yet is case-folded on Windows.
+- **No more Bun crash windows on Windows (#3085).** The terminal agent, the native-cookie supervisor and its worker passed `--config=NUL`, which panicked Bun 1.3.10 at flag parsing; the respawn loop turned that into a crash window every few seconds. All three now get an empty `bunfig.toml` created in a private directory and re-checked to be zero bytes before each spawn. POSIX keeps `/dev/null`.
 
 ### Itemized changes
 
 #### Changed
-- `test/helpers/providers/claude.ts`: `--tools Bash,Write,Agent` (`CLAUDE_PRODUCER_BUILTIN_TOOLS`). `assertClaudeProducerSandboxPolicy` also pins `--tools`, `--permission-mode dontAsk` and exactly one each of `--restricted`, `--safe-mode` and `--strict-mcp-config`. It refuses `--mcp-config`, `--agents`, `--plugin-dir`, `--setting-sources`, `--disallowed-tools` and the permission-bypass flags.
-- `test/helpers/providers/claude-stream.ts`: tokens from `modelUsage`, turns summed over results, subagent messages counted once by message id, and only main-thread text kept as a killed run's output.
-- `scripts/cso-eval-producer.ts`: Claude policy revision `claude-2.1.263-cso-v2`.
+- `browse/src/proxy-config.ts`: `resolveProxy` (precedence, `direct`, cred policy for env URLs, warning fallback), `noProxyToChromiumRules`, `withLoopbackBypass`, `serverProxyEnv`; `socks5h` accepted as `socks5`; `computeConfigHash` takes the `NO_PROXY` rules (unchanged hash when there are none).
+- `browse/src/cli.ts`: resolved proxy source and bypass reach every server launch (start, crash restart, headed connect and its supervisor); the startup line names the source; `proxyMismatchLines` refusal; `browse stop` skips the config-mismatch check.
+- `browse/src/server.ts`, `browse/src/browser-manager.ts`: Chromium gets the bypass rules; the state file records the redacted proxy, its source and its bypass.
+- `browse/src/path-security.ts`: `resolveRealPath`, one realpath for safe directories and targets. `browse/src/write-commands.ts`: `cookie-import` uses `validateReadPath`.
+- `browse/src/bun-child-config.ts`: `emptyBunConfig()`; `bunChildFlags()` replaces `BUN_CHILD_FLAGS`.
 
 #### For contributors
-- `test/provider-model-defaults.test.ts`: the tool list and each new policy refusal.
-- `test/claude-producer-stream.test.ts`: subagent accounting with the event shapes Claude Code 2.1.263 printed in the replay, including a background subagent's second result and a killed run.
+- `browse/test/proxy-env.test.ts`, `browse/test/proxy-env-daemon.test.ts` (a local proxy across launch, reuse, a NO_PROXY-only change, `direct` and restart), `browse/test/path-security-realpath.test.ts`, `browse/test/bun-child-config.test.ts`.
+
+Thanks @ningfeemic-dev (#916)
+Thanks @bkermen (#3104)
+Thanks @adammartin0087 (#3085)
 
 ## [1.91.85.0] - 2026-10-11
 
