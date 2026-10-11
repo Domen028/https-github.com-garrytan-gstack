@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.85.0] - 2026-10-11
+## [Unreleased]
 
 **A restarted `/ios-qa` daemon resumes the device session instead of relaunching the app.** The app's boot token works once, so a new daemon process used to have no way back in except `devicectl process launch --terminate-existing`, which wiped the app's QA state. The daemon now writes the rotated StateServer bearer to `$GSTACK_STATE_ROOT/ios-qa-session.json` (mode 0600, through a fresh temp file) after every successful bootstrap, bound to the device UDID, bundle ID and StateServer port, and a new daemon tries it once on its first device request. The bearer goes only to the tunnel address `devicectl` reports for the bound UDID, after `/healthz` names the same bundle; there is no mDNS or remembered-address fallback. The daemon bootstraps normally, without sending the bearer, when the target UDID, app or port differs, another device or app answers, `devicectl` reports no address, or the file is not private to you (the file is removed unused). A bearer the app rejects is cleared before the bootstrap and never presented again, and the boot token is never written to disk. `/ios-qa` Phase 0 now describes this file instead of a cache no code wrote. Draft until verified on a real iPhone.
 
