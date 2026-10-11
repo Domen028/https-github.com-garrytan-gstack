@@ -607,7 +607,7 @@ describe('manual /codex entry: explicit role only, paid probe only for the dispa
       expect(template.match(/\{\{CODEX_SELECT/g)!.length).toBe(selections.length);
       for (const block of template.split(/\{\{CODEX_SELECT:/).slice(1)) {
         const [kind, budget] = block.split('}}')[0]!.split(':');
-        const wrappers = [...block.split('```')[0]!.matchAll(/run-with-timeout (\d+) codex/g)].map(m => m[1]);
+        const wrappers = [...block.split('```')[0]!.matchAll(/run-with-timeout (?:--user-invoked )?(?:--effort \w+ )?(\d+) codex/g)].map(m => m[1]);
         expect(wrappers.length).toBeGreaterThan(0);
         expect(new Set(wrappers)).toEqual(new Set([budget]));
         expect(kind).toMatch(/^(exec|review)$/);

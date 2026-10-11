@@ -123,7 +123,7 @@ for (const host of ['claude', 'codex'] as const) {
     test('redaction remains ahead of outside preflight and --no-gate only skips scoring', () => {
       const text = content(host);
       const scan = text.indexOf('#### Redaction scan — pre-codex');
-      const preflight = text.indexOf('_OUTSIDE_CFG=enabled', scan);
+      const preflight = text.indexOf('_OUTSIDE_CFG=$(', scan);
       expect(scan).toBeGreaterThan(-1);
       expect(preflight).toBeGreaterThan(scan);
       expect(text).toContain('`--no-gate` skips the outside score only; redaction always runs');

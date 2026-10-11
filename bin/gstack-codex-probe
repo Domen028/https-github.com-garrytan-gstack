@@ -6,6 +6,7 @@
 #
 # Subcommands (each wraps one function below):
 #   select-model <exec|review> [--model <id>]  CODEX_SEL:, CODEX_SEL_KIND:, CODEX_SANDBOX:
+#   check-effort <default-effort>              CODEX_EFFORT:; exit 0, or 1 on an invalid setting
 #   check-auth                                 exit 0 authed, 1 not
 #   show-sandbox                               CODEX_SANDBOX:
 #   check-sandbox                              exit 0, or 3 with the reason on stderr
@@ -16,7 +17,11 @@
 #                                              CODEX_PROBE_STATE:; exit 0, 1, 2, 3 or 4
 #   check-version                              warnings on stderr; exit 0
 #   show-first-use-notice                      notice on stderr; exit 0
-#   run-with-timeout <secs> <cmd...>           the command's exit code; 124 on timeout
+#   run-with-timeout [--user-invoked] [--effort <default>] <secs> <cmd...>
+#                                              the command's exit code; 124 on timeout;
+#                                              3 when codex_reviews refuses the send;
+#                                              --effort appends the resolved
+#                                              model_reasoning_effort to a codex command
 #   log-event <event> [detail]                 silent; exit 0
 #   log-hang <skill> <prompt-size>             silent; exit 0
 #   help                                       usage; an unknown subcommand exits 64
@@ -36,6 +41,7 @@
 #   _gstack_codex_sandbox_mode    — read-only, or full access only for GSTACK_CODEX_NO_SANDBOX=1
 #   _gstack_codex_sandbox_preflight — free `codex sandbox` check before paid calls (Linux)
 #   _gstack_codex_first_use_notice — once per machine: provider, account, how to turn off
+#   _gstack_codex_consent         — codex_reviews gate before run-with-timeout sends
 #   _gstack_codex_model_probe     — round-trip probe of the selected model (#2477);
 #                                   exit 4 = the account's Codex usage limit
 #   _gstack_codex_lock_acquire    — bounded mkdir lock with abandoned-owner recovery
@@ -270,6 +276,44 @@ _gstack_codex_first_use_notice() {
   echo "NOTICE: gstack outside reviews send the review prompt and code to Codex (provider: ${_provider:-openai}) using $_account. Reviews stay on; this notice shows once per machine. To turn them off: gstack-config set codex_reviews disabled" >&2
   mkdir -p "$_root" 2>/dev/null && : > "$_marker" 2>/dev/null
   return 0
+}
+
+# --- Send consent (#3102) ----------------------------------------------------
+
+_gstack_codex_consent() {
+  # The send itself honors codex_reviews, whatever the skill prose did: a
+  # disabled switch, an unreadable config or a gstack-config that cannot run
+  # refuses before any CLI starts (exit 3, not_run consent_missing). Unset is
+  # the default, enabled, and shows the one-time notice. $1=1 is a review the
+  # user asked for by name (/codex), which runs regardless. The line matches
+  # gateOutcomeLine('outside review', 'consent_missing', ...) in
+  # lib/gate-outcomes.ts (test/outside-consent.test.ts).
+  # Same read as `gstack-config get --stored codex_reviews`, in a subshell
+  # with the state-root helper's builtins only, so no caller state changes.
+  [ "${1:-0}" = 1 ] && return 0
+  local _out _detail
+  _out=$(
+    . "$_GSTACK_CODEX_BIN/gstack-state-root.sh" 2>/dev/null || { printf 'unreadable:the gstack state-root helper could not be loaded'; exit 0; }
+    gstack_state_root_select; gstack_legacy_root_select
+    for _r in "$_gstack_sr_root" "$_gstack_legacy_root"; do
+      [ -n "$_r" ] || continue
+      if [ -e "$_r/config.yaml" ] && { [ ! -f "$_r/config.yaml" ] || [ ! -r "$_r/config.yaml" ]; }; then
+        printf 'unreadable:cannot read %s/config.yaml' "$_r"; exit 0
+      fi
+    done
+    gstack_config_select codex_reviews || true
+    printf '%s' "${_gstack_cfg_value:-unset}"
+  )
+  case "$_out" in
+    enabled) return 0 ;;
+    unset) _gstack_codex_first_use_notice; return 0 ;;
+    disabled) _detail="codex_reviews=disabled" ;;
+    unreadable:*) _detail="${_out#unreadable:}" ;;
+    *) _detail="codex_reviews is '$_out', which is neither enabled nor disabled" ;;
+  esac
+  echo "outside review: not run (outside reviews are turned off (codex_reviews=disabled) or the gstack config could not be read, so no repository content was sent ($_detail)). Fix: gstack-config set codex_reviews enabled (or make config.yaml readable), then re-run; /codex and /claude-code still run when you ask for them (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-consent-missing)." >&2
+  echo "OUTSIDE_CONSENT: consent_missing" >&2
+  return 3
 }
 
 # --- Model round-trip probe (#2477) ------------------------------------------
@@ -801,12 +845,44 @@ _gstack_codex_log_hang() {
     >/dev/null 2>&1 || true
 }
 
+# --- Reasoning effort (#3098, #2934) ------------------------------------------
+
+_gstack_codex_effort_check() {
+  # One precedence, like the model: GSTACK_CODEX_EFFORT (per run), then
+  # codex_effort in config.yaml, then the gate's own default in $1. Codex only
+  # rejects an unknown model_reasoning_effort at request time, so an invalid
+  # setting stops here, before any paid call, naming the source to fix. The
+  # allowlist is the union of Codex's config levels and the API's minimal;
+  # levels are model-dependent. A default outside it is a usage error (64).
+  local _default="$1" _chosen _source _cfg
+  case "$_default" in minimal|low|medium|high|xhigh|max|ultra) ;; *) return 64 ;; esac
+  if [ -n "${GSTACK_CODEX_EFFORT:-}" ]; then
+    _chosen="$GSTACK_CODEX_EFFORT"; _source="env GSTACK_CODEX_EFFORT"
+  else
+    _cfg=$("$_GSTACK_CODEX_BIN/gstack-config" get codex_effort 2>/dev/null || true)
+    if [ -n "$_cfg" ]; then _chosen="$_cfg"; _source="config codex_effort"
+    else _chosen="$_default"; _source="gate default"; fi
+  fi
+  case "$_chosen" in
+    minimal|low|medium|high|xhigh|max|ultra) ;;
+    *)
+      echo "CODEX_EFFORT: invalid — '$_chosen' from $_source is not a Codex reasoning effort level. No Codex call was made." >&2
+      echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (export GSTACK_CODEX_EFFORT=<level> or gstack-config set codex_effort <level>), or unset it to keep each gate's own effort." >&2
+      return 1
+      ;;
+  esac
+  [ "$_source" = "gate default" ] || echo "CODEX_EFFORT: $_chosen (source: $_source)" >&2
+  printf 'CODEX_EFFORT: %s\n' "$_chosen"
+}
+
 # --- Executed subcommands ----------------------------------------------------
 
 _gstack_codex_usage() {
   printf '%s\n' \
     'Usage: gstack-codex-probe <subcommand> [args]' \
     '  select-model <exec|review> [--model <id>]  print CODEX_SEL:, CODEX_SEL_KIND: and CODEX_SANDBOX:; exit 0 or 1' \
+    '  check-effort <default-effort>              GSTACK_CODEX_EFFORT, else codex_effort, else the default; print' \
+    '                                             CODEX_EFFORT:; exit 0, 1 on an invalid setting' \
     '  check-auth                                 exit 0 when Codex credentials exist, 1 otherwise' \
     '  show-sandbox                               print CODEX_SANDBOX: read-only (or danger-full-access)' \
     '  check-sandbox                              free sandbox check; exit 0, or 3 with the reason on stderr' \
@@ -816,7 +892,12 @@ _gstack_codex_usage() {
     '                                             CODEX_SEL:, CODEX_SEL_KIND:, CODEX_SANDBOX:, CODEX_PROBE_STATE:' \
     '  check-version                              warn on stderr about known-bad Codex CLI versions; exit 0' \
     '  show-first-use-notice                      once per machine, say where reviews go; exit 0' \
-    '  run-with-timeout <secs> <cmd...>           run cmd under a deadline; its exit code, 124 on timeout' \
+    '  run-with-timeout [--user-invoked] [--effort <default>] <secs> <cmd...>' \
+    '                                             run cmd under a deadline once codex_reviews allows the send;' \
+    '                                             its exit code, 124 on timeout, 3 refused (consent_missing).' \
+    '                                             --user-invoked: the user asked for this review by name' \
+    '                                             --effort: append -c model_reasoning_effort=<level> to a codex' \
+    '                                             command, as check-effort resolves it; 1 on an invalid setting' \
     '  log-event <event> [detail]                 record a telemetry event when telemetry is on; exit 0' \
     '  log-hang <skill> <prompt-size>             record a timeout learning; exit 0' \
     '  help                                       this text'
@@ -866,6 +947,12 @@ _gstack_codex_main() {
       _gstack_codex_kind_args "$@" || { _gstack_codex_usage >&2; return 64; }
       _gstack_codex_select_model "$_GSTACK_CODEX_ARG_KIND" "$_GSTACK_CODEX_ARG_MODEL" || return 1
       printf 'CODEX_SEL: %s\nCODEX_SEL_KIND: %s\nCODEX_SANDBOX: %s\n' "$_GSTACK_CODEX_SEL" "$_GSTACK_CODEX_SEL_KIND" "$_GSTACK_CODEX_SANDBOX" ;;
+    check-effort)
+      [ "$#" -eq 1 ] || { _gstack_codex_usage >&2; return 64; }
+      _gstack_codex_effort_check "$1"
+      _rc=$?
+      [ "$_rc" -eq 64 ] && { _gstack_codex_usage >&2; return 64; }
+      return "$_rc" ;;
     check-auth) [ "$#" -eq 0 ] || { _gstack_codex_usage >&2; return 64; }; _gstack_codex_auth_probe ;;
     show-sandbox)
       [ "$#" -eq 0 ] || { _gstack_codex_usage >&2; return 64; }
@@ -899,8 +986,24 @@ _gstack_codex_main() {
     check-version) [ "$#" -eq 0 ] || { _gstack_codex_usage >&2; return 64; }; _gstack_codex_version_check >&2; return 0 ;;
     show-first-use-notice) [ "$#" -eq 0 ] || { _gstack_codex_usage >&2; return 64; }; _gstack_codex_first_use_notice; return 0 ;;
     run-with-timeout)
+      _GSTACK_CODEX_USER_INVOKED=0
+      _GSTACK_CODEX_EFFORT_DEFAULT=""
+      if [ "${1:-}" = "--user-invoked" ]; then _GSTACK_CODEX_USER_INVOKED=1; shift; fi
+      if [ "${1:-}" = "--effort" ]; then
+        { [ "$#" -ge 2 ] && [ -n "$2" ]; } || { _gstack_codex_usage >&2; return 64; }
+        _GSTACK_CODEX_EFFORT_DEFAULT="$2"; shift 2
+      fi
       case "${1:-}" in ''|*[!0-9.]*) _gstack_codex_usage >&2; return 64 ;; esac
       [ "$#" -ge 2 ] || { _gstack_codex_usage >&2; return 64; }
+      if [ -n "$_GSTACK_CODEX_EFFORT_DEFAULT" ] && [ "${2##*/}" != "codex" ]; then _gstack_codex_usage >&2; return 64; fi
+      _gstack_codex_consent "$_GSTACK_CODEX_USER_INVOKED" || return 3
+      if [ -n "$_GSTACK_CODEX_EFFORT_DEFAULT" ]; then
+        _rc=0
+        _GSTACK_CODEX_EFFORT_LINE=$(_gstack_codex_effort_check "$_GSTACK_CODEX_EFFORT_DEFAULT") || _rc=$?
+        [ "$_rc" -eq 64 ] && { _gstack_codex_usage >&2; return 64; }
+        [ "$_rc" -eq 0 ] || return "$_rc"
+        set -- "$@" -c "model_reasoning_effort=\"${_GSTACK_CODEX_EFFORT_LINE#CODEX_EFFORT: }\""
+      fi
       _gstack_codex_timeout_wrapper "$@" ;;
     log-event) [ "$#" -ge 1 ] && _gstack_codex_log_event "$@" >/dev/null 2>&1; return 0 ;;
     log-hang) _gstack_codex_log_hang "$@" >/dev/null 2>&1; return 0 ;;

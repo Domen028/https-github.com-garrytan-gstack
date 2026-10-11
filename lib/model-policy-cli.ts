@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { MODEL_CATALOG, MODEL_CATALOG_VERSION, MODEL_PROVIDERS, MODEL_TIERS, modelCatalogSha256, type ModelProvider } from './model-catalog';
+import { CODEX_EFFORT_LEVELS, MODEL_CATALOG, MODEL_CATALOG_VERSION, MODEL_PROVIDERS, MODEL_TIERS, modelCatalogSha256, type ModelProvider } from './model-catalog';
 import {
   CUSTOM_PROVIDER_UNSCANNED,
   describeSelection,
@@ -14,7 +14,7 @@ import {
   type ModelRole,
   type ModelSelection,
 } from './model-policy';
-import type { StateRootEnv } from './state-root';
+import { readConfigKey, type StateRootEnv } from './state-root';
 
 export interface ModelsCliResult {
   code: 0 | 1 | 2;
@@ -63,6 +63,12 @@ Settings (gstack-config set|unset <key>):
   implementation_tier    frontier | smart          (default smart)
   model_frontier_claude, model_frontier_openai,
   model_smart_claude, model_smart_openai           (default: shipped catalog ID)
+  codex_effort           ${CODEX_EFFORT_LEVELS.join(' | ')}
+                         (default: each gate's own effort)
+
+Codex reasoning effort: GSTACK_CODEX_EFFORT (per run), then codex_effort, then
+the gate's default (high for reviews, medium for /codex consult and design
+direction). /spec keeps medium inside its 120 s budget.
 
 A detected custom Anthropic or OpenAI endpoint (Bedrock, Vertex, Foundry, a base-URL
 override or a Codex model_provider) never receives a shipped public ID: set a
@@ -92,7 +98,15 @@ function parseProvider(value: string | undefined): ModelProvider | null {
   return value === 'anthropic' || value === 'openai' ? value : null;
 }
 
-function document(command: 'list' | 'resolve' | null, config: ModelPolicyConfig | null, selections: ModelSelection[], errors: CliError[]) {
+/** The effective Codex effort override, same precedence as gstack-codex-probe check-effort; null = each gate's default. */
+export function codexEffortSetting(env: StateRootEnv): { value: string | null; source: 'env' | 'config' | 'gate-default'; valid: boolean } {
+  const pick = (value: string, source: 'env' | 'config') => ({ value, source, valid: (CODEX_EFFORT_LEVELS as readonly string[]).includes(value) });
+  if (env.GSTACK_CODEX_EFFORT) return pick(env.GSTACK_CODEX_EFFORT, 'env');
+  const stored = readConfigKey('codex_effort', env);
+  return stored ? pick(stored, 'config') : { value: null, source: 'gate-default', valid: true };
+}
+
+function document(command: 'list' | 'resolve' | null, config: ModelPolicyConfig | null, selections: ModelSelection[], errors: CliError[], env: StateRootEnv = {}) {
   return {
     schemaVersion: 1,
     command,
@@ -103,6 +117,7 @@ function document(command: 'list' | 'resolve' | null, config: ModelPolicyConfig 
     catalog: { version: MODEL_CATALOG_VERSION, sha256: modelCatalogSha256(), entries: MODEL_CATALOG },
     settings: config ? settingsOf(config) : null,
     tiers: config ? tiersOf(config) : null,
+    codexEffort: config ? codexEffortSetting(env) : null,
     providerDetection: { scope: 'declared local settings files and environment only', unscanned: CUSTOM_PROVIDER_UNSCANNED },
     selections,
     errors,
@@ -164,7 +179,8 @@ function renderSelections(role: ModelRole, config: ModelPolicyConfig, selections
   return lines;
 }
 
-function renderList(config: ModelPolicyConfig, selections: ModelSelection[]): string {
+function renderList(config: ModelPolicyConfig, selections: ModelSelection[], env: StateRootEnv): string {
+  const effort = codexEffortSetting(env);
   const commands = modelPolicyCommands();
   const configCommand = `'${CONFIG_BIN.replaceAll('\\', '/').replaceAll("'", "'\\''")}'`;
   const lines = [
@@ -173,6 +189,8 @@ function renderList(config: ModelPolicyConfig, selections: ModelSelection[]): st
     '',
     ...renderSelections('plan-review', config, selections),
     ...renderSelections('implementation', config, selections),
+    '',
+    `codex effort: ${effort.value ?? 'each gate\'s default'} (${effort.source === 'env' ? 'GSTACK_CODEX_EFFORT' : effort.source === 'config' ? `codex_effort in ${config.path}` : 'default; set codex_effort'})${effort.valid ? '' : ` - invalid; Codex calls stop before sending. Use ${CODEX_EFFORT_LEVELS.join(', ')}`}; /spec keeps medium`,
     '',
     `catalog v${MODEL_CATALOG_VERSION} (sha256 ${modelCatalogSha256().slice(0, 12)})`,
   ];
@@ -264,7 +282,7 @@ export function modelsMain(args: string[], env: StateRootEnv = process.env, plat
   // eval-arms (plan E1): the implementation-tier resolution of each provider, one arm each.
   if (role === 'eval-arms') for (const s of selections) (s as { role: string }).role = 'eval-arms';
   const code = errors.length ? 1 : 0;
-  if (json) return { code, stdout: `${JSON.stringify(document(command, config, selections, errors), null, 2)}\n`, stderr: '' };
-  const stdout = command === 'list' ? renderList(config, selections) : role === 'eval-arms' ? renderEvalArms(config, selections) : renderResolve(role as ModelRole, config, selections);
+  if (json) return { code, stdout: `${JSON.stringify(document(command, config, selections, errors, env), null, 2)}\n`, stderr: '' };
+  const stdout = command === 'list' ? renderList(config, selections, env) : role === 'eval-arms' ? renderEvalArms(config, selections) : renderResolve(role as ModelRole, config, selections);
   return { code, stdout, stderr: errors.map(renderError).join('') };
 }

@@ -3,6 +3,11 @@
 #
 # Usage:
 #   gstack-config get <key>          — read a config value (falls back to DEFAULTS)
+#   gstack-config get --stored <key> — the stored value or "unset", never DEFAULTS;
+#                                      "unreadable" + exit 2 when config cannot be read
+#                                      or a privacy key holds an unknown value
+#                                      (the outside-review consent check reads
+#                                      codex_reviews this way)
 #   gstack-config has <key>          — exit 0 iff the key is literally present in the
 #                                      config file (get returns DEFAULTS for absent keys,
 #                                      so callers that need provenance use this instead)
@@ -60,6 +65,17 @@ CONFIG_HEADER='# gstack configuration — edit freely, changes take effect on ne
 #                           #   off       — no data sent, no local analytics (default)
 #                           #   anonymous — counter only, no device ID
 #                           #   community — usage data + stable device ID
+#                           # Opted in, each skill run is also logged locally to
+#                           # analytics/skill-usage.jsonl under this state root
+#                           # with the repo name and branch; those two fields are
+#                           # stripped before upload. Off logs nothing there.
+#
+# ─── Session markers (local functional state, not telemetry) ─────────
+# sessions/<pid>            # One empty file per live agent session, touched at
+#                           #   skill start and deleted after 120 minutes. The
+#                           #   count tells skills when several sessions share a
+#                           #   machine. Never sent anywhere; not gated on
+#                           #   telemetry.
 #
 # ─── Updates ─────────────────────────────────────────────────────────
 # auto_upgrade: false       # true = silently upgrade on session start
@@ -166,16 +182,25 @@ CONFIG_HEADER='# gstack configuration — edit freely, changes take effect on ne
 # model_smart_claude and model_smart_openai. Leave pins absent for catalog defaults;
 # empty pins are invalid. gstack-models list prints copyable set/unset commands.
 # Invalid writes are rejected and preserve the stored value.
+# codex_effort:             # Codex reasoning effort for outside reviews and /codex:
+#                           #   minimal | low | medium | high | xhigh | max | ultra.
+#                           #   Absent = every gate keeps its effort. GSTACK_CODEX_EFFORT
+#                           #   overrides it per run; /spec keeps medium (120 s budget).
 # Docs: docs/model-policy.md
 #
 # ─── Advanced ────────────────────────────────────────────────────────
-# codex_reviews: enabled    # Workflow outside review (Codex or Claude Code by harness).
-#                           #   enabled: /review, /ship, /document-release, plan reviews,
-#                           #   and /autoplan use their existing external + fallback rules.
-#                           #   disabled: /review, /ship, /autoplan keep native passes;
-#                           #   plan/document reviews skip the entire extra review step.
-#                           #   Office hours/design/spec/manual wrappers keep their own
-#                           #   opt-in/skip controls. Invalid values preserve the old value.
+# codex_reviews: enabled    # Outside review (Codex or Claude Code by harness): sends
+#                           #   the review prompt and repository content to that model.
+#                           #   enabled (default; the first send prints a notice once):
+#                           #   the outside voice of every workflow may run.
+#                           #   disabled: the send binaries refuse (not_run,
+#                           #   consent_missing) and start no CLI and make no API call;
+#                           #   /review, /ship, /autoplan keep native passes; plan and
+#                           #   document reviews skip the extra step. Covers design
+#                           #   review, /ship design-lite, office hours and /spec.
+#                           #   /codex and /claude-code still run when you ask by name.
+#                           #   An unreadable config counts as disabled.
+#                           #   Invalid values preserve the old value.
 # browse_extension_id:      # Forks and self-built extensions: the 32-letter (a-p)
 #                           #   Chrome extension ID the browse sidebar terminal accepts.
 #                           #   Empty = the gstack extension. "" clears it.
@@ -310,6 +335,7 @@ lookup_default() {
     plan_review_tier) echo "frontier" ;; # frontier | smart | host — lib/model-policy.ts reads it strictly
     implementation_tier) echo "smart" ;; # frontier | smart
     model_frontier_claude|model_frontier_openai|model_smart_claude|model_smart_openai) echo "" ;; # empty = shipped catalog ID (gstack-models list)
+    codex_effort) echo "" ;; # empty = each gate's own effort; GSTACK_CODEX_EFFORT wins (gstack-codex-probe run-with-timeout --effort)
     ship_greptile_early) echo "true" ;; # true | false — /ship's early Greptile PR
     # Unknown key: exit non-zero instead of printing "". The fallback pattern
     # the preambles use,
@@ -608,6 +634,41 @@ report_root_disagreement() {
 
 case "${1:-}" in
   get)
+    if [ "${2:-}" = "--stored" ]; then
+      KEY="${3:-}"
+      [ -n "$KEY" ] || { echo "Usage: gstack-config get --stored <key>" >&2; exit 1; }
+      if ! printf '%s' "$KEY" | LC_ALL=C grep -qE '^[a-zA-Z0-9_]+(@[a-zA-Z0-9]+)?$'; then
+        echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<endpoint-id> suffix" >&2
+        exit 1
+      fi
+      # Provenance without DEFAULTS: the stored value, or "unset". A config
+      # file that exists but cannot be read prints "unreadable" (exit 2), and
+      # a privacy key holding an unknown value is refused the same way, so a
+      # consent check never turns an unreadable file into the default.
+      _stored_roots="$STATE_DIR"
+      _gstack_config_rank "$KEY" x
+      if [ -n "$_gstack_cfg_rank" ]; then
+        gstack_legacy_root_select
+        [ -n "$_gstack_legacy_root" ] && _stored_roots="$_stored_roots
+$_gstack_legacy_root"
+      fi
+      while IFS= read -r _stored_root; do
+        if [ -e "$_stored_root/config.yaml" ] && { [ ! -f "$_stored_root/config.yaml" ] || [ ! -r "$_stored_root/config.yaml" ]; }; then
+          echo "gstack-config: cannot read $_stored_root/config.yaml, so $KEY is unknown. fix: make it a readable file, then re-run (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-consent-missing)" >&2
+          printf 'unreadable'; exit 2
+        fi
+      done <<< "$_stored_roots"
+      gstack_config_select "$KEY" || true
+      VALUE="$_gstack_cfg_value"
+      if [ -z "$VALUE" ]; then printf 'unset'; exit 0; fi
+      _gstack_config_rank "$KEY" "$VALUE"
+      if [ "$_gstack_cfg_rank" = "-1" ]; then
+        echo "gstack-config: $KEY is '$VALUE' in ${_gstack_cfg_root:+$_gstack_cfg_root/}config.yaml, which is not a recognized value. fix: gstack-config set $KEY <value> (or remove that line) (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-consent-missing)" >&2
+        printf 'unreadable'; exit 2
+      fi
+      printf '%s' "$VALUE"
+      exit 0
+    fi
     KEY="${2:?Usage: gstack-config get <key>}"
     # Validate key (alphanumeric + underscore + optional @<endpoint-id> suffix for
     # endpoint-namespaced keys introduced by the brain-aware planning layer).
@@ -714,6 +775,15 @@ case "${1:-}" in
     if [ "$KEY" = "codex_reviews" ] && [ "$VALUE" != "enabled" ] && [ "$VALUE" != "disabled" ]; then
       echo "Error: codex_reviews '$VALUE' not recognized. Valid values: enabled, disabled. Existing value left unchanged." >&2
       exit 1
+    fi
+    # codex_effort feeds model_reasoning_effort on paid Codex calls: reject a
+    # typo instead of coercing it (the probe refuses an invalid stored value too).
+    if [ "$KEY" = "codex_effort" ]; then
+      case "$VALUE" in
+        minimal|low|medium|high|xhigh|max|ultra) ;;
+        *) echo "Error: codex_effort '$VALUE' not recognized. Valid values: minimal, low, medium, high, xhigh, max, ultra. Existing value left unchanged. fix: gstack-config unset codex_effort restores each gate's own effort (https://github.com/garrytan/gstack/blob/main/docs/model-policy.md#reasoning-effort)" >&2
+           exit 1 ;;
+      esac
     fi
     case "$KEY" in
       plan_review_tier|implementation_tier|model_frontier_claude|model_frontier_openai|model_smart_claude|model_smart_openai)
@@ -947,7 +1017,7 @@ case "${1:-}" in
                ship_measure_judge_outputs ship_measure_ask_per_trial_usd ship_measure_budget_usd \
                ship_measure_max_rounds ship_measure_sweep_cases ship_measure_sweep_budget_usd ship_rerun_backend test_backend \
                plan_review_tier implementation_tier model_frontier_claude model_frontier_openai \
-               model_smart_claude model_smart_openai; do
+               model_smart_claude model_smart_openai codex_effort; do
       gstack_config_select "$KEY"
       VALUE="$_gstack_cfg_value"
       SOURCE="default"
@@ -972,7 +1042,7 @@ case "${1:-}" in
                ship_measure_judge_outputs ship_measure_ask_per_trial_usd ship_measure_budget_usd \
                ship_measure_max_rounds ship_measure_sweep_cases ship_measure_sweep_budget_usd ship_rerun_backend test_backend \
                plan_review_tier implementation_tier model_frontier_claude model_frontier_openai \
-               model_smart_claude model_smart_openai; do
+               model_smart_claude model_smart_openai codex_effort; do
       printf '  %-24s %s\n' "$KEY:" "$(lookup_default "$KEY")"
     done
     ;;

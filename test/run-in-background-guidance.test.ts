@@ -4,7 +4,7 @@ import * as path from 'path';
 import * as os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { generateCodexPlanReview } from '../scripts/resolvers/outside-voice-steps';
-import { CODEX_MODEL_CONFIG_FLAG } from '../scripts/resolvers/constants';
+import { CODEX_MODEL_CONFIG_FLAG, CODEX_WEB_SEARCH_FLAG } from '../scripts/resolvers/constants';
 import { HOST_PATHS, type TemplateContext } from '../scripts/resolvers/types';
 import { ALL_HOST_CONFIGS } from '../hosts';
 import { expectMentions, expectTokens } from './helpers/prompt-structure';
@@ -263,7 +263,8 @@ describe('outside-voice dispatch contract', () => {
     expect(answer).toBeGreaterThan(0);
     expect(apply).toBeGreaterThan(answer);
     // B1: the sandbox comes from the probe's select-model (read-only unless GSTACK_CODEX_NO_SANDBOX=1).
-    expect(rendered).toContain(`-s "\${_CODEX_SANDBOX_MODE:?}" ${CODEX_MODEL_CONFIG_FLAG} -c 'model_reasoning_effort="high"'`);
+    expect(rendered).toContain(`run-with-timeout --effort high `);
+    expect(rendered).toContain(`-s "\${_CODEX_SANDBOX_MODE:?}" ${CODEX_MODEL_CONFIG_FLAG} ${CODEX_WEB_SEARCH_FLAG}`);
   });
 
   test('the generated-carrier exception rejects missing wait, cancellation or result guards', () => {

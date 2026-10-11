@@ -93,6 +93,11 @@ export const GATE_OUTCOMES = {
     summary: 'outside reviews are turned off (codex_reviews=disabled)',
     fix: 'gstack-config set codex_reviews enabled',
   },
+  consent_missing: {
+    state: 'not_run', anchor: 'outside-review-consent-missing',
+    summary: 'outside reviews are turned off (codex_reviews=disabled) or the gstack config could not be read, so no repository content was sent',
+    fix: 'gstack-config set codex_reviews enabled (or make config.yaml readable), then re-run; /codex and /claude-code still run when you ask for them (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-consent-missing)',
+  },
   no_version_source: {
     state: 'not_run', anchor: 'ship-no-version-source',
     summary: 'no version source is configured, or release automation owns it',

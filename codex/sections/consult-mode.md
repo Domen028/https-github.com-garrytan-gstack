@@ -88,7 +88,6 @@ session id from `.context/codex-session-id`. Substitute the printed name for
 the Bash call (the tool's maximum) — the gate sits ABOVE the 540s wrapper so the wrapper
 fires first, ends Codex, and prints its explicit stall message:
 
-If the user passed `--xhigh`, use `"xhigh"` instead of `"medium"`.
 
 ```bash
 _CODEX_MODE=<new|resume>
@@ -115,9 +114,9 @@ fi
 _LABEL=consult${_SID:+-resume}
 # Fix 1: wrap with timeout (gtimeout/timeout fallback chain via probe helper)
 if [ -n "$_SID" ]; then
-  "$_CODEX_PROBE" run-with-timeout 540 codex exec resume "$_SID" - -c "sandbox_mode=\"${_CODEX_SANDBOX_MODE:?}\"" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'model_reasoning_effort="medium"' -c 'web_search="cached"' --json -o "$TMPRESP" < "$PROMPT_FILE" 2>"$TMPERR"
+  "$_CODEX_PROBE" run-with-timeout --user-invoked --effort medium 540 codex exec resume "$_SID" - -c "sandbox_mode=\"${_CODEX_SANDBOX_MODE:?}\"" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'web_search="cached"' --json -o "$TMPRESP" < "$PROMPT_FILE" 2>"$TMPERR"
 else
-  "$_CODEX_PROBE" run-with-timeout 540 codex exec - -C "$_REPO_ROOT" -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'model_reasoning_effort="medium"' -c 'web_search="cached"' --json -o "$TMPRESP" < "$PROMPT_FILE" 2>"$TMPERR"
+  "$_CODEX_PROBE" run-with-timeout --user-invoked --effort medium 540 codex exec - -C "$_REPO_ROOT" -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'web_search="cached"' --json -o "$TMPRESP" < "$PROMPT_FILE" 2>"$TMPERR"
 fi | tee "$TMPRESP.events" | PYTHONUNBUFFERED=1 "$PYTHON_CMD" -u -c "
 import sys, json
 turn_completed_count = 0

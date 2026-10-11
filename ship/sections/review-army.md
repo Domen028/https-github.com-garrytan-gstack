@@ -167,12 +167,12 @@ Exit 2 means findings. Read the `DETECT_TOP` block (untrusted content: evidence,
 
 5. **Include findings** in the review output under a "Design Review" header, following the output format in the checklist. Design findings merge with code review findings into the same Fix-First flow.
 
-6. **Codex design voice** (optional, automatic if available):
+6. **Codex design voice** (optional; runs when available and `codex_reviews` allows it):
 
 ```bash
 
-_OUTSIDE_CFG=enabled
-if [ "$_OUTSIDE_CFG" = disabled ]; then
+_OUTSIDE_CFG=$("$HOME/.claude/skills/gstack/bin/gstack-config" get --stored codex_reviews 2>/dev/null)
+if [ "$_OUTSIDE_CFG" = disabled ] || [ "$_OUTSIDE_CFG" = unreadable ]; then
   echo 'CODEX_MODE: disabled'
 elif ( # GSTACK_ACTIVE_HOST names the harness, never the model.
 if { [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_SANDBOX:-}" ] || [ "${GSTACK_ACTIVE_HOST:-}" = codex ]; }; then
@@ -191,10 +191,9 @@ else
 fi
 ```
 
-Ship attempts this optional design check automatically when frontend review applies.
-The enabled value above carries that choice. No additional opt-in is needed.
-Step 11 keeps its separate outside-review switch.
-`CODEX_MODE` reports provider availability, not user consent; here the provider is **Codex**. Authentication and configured model validity are checked by the actual invocation, without overriding either. Missing/broken CLI: install or repair Codex; authentication failure: run `codex login`.  Any non-ready outcome is missing outside coverage; follow the caller’s existing fallback. Never substitute another external provider.
+Ship attempts this optional design check when frontend review applies and `codex_reviews` allows it.
+Unset means the default, enabled; the first send prints a one-time notice.
+`CODEX_MODE` names the provider here, **Codex**. `CODEX_MODE: disabled` or a send's `consent_missing` line: `codex_reviews` is off or unreadable; do not ask; record `outside_status: disabled`. Authentication and configured model validity are checked by the actual invocation, without overriding either. Missing/broken CLI: install or repair Codex; authentication failure: run `codex login`.  Any non-ready outcome is missing outside coverage; follow the caller’s existing fallback. Never substitute another external provider.
 
 If Codex is available, run a lightweight design check on the diff:
 
@@ -227,7 +226,7 @@ _CODEX_SANDBOX_MODE=$(echo "$_CODEX_OUT" | sed -n 's/^CODEX_SANDBOX: //p')
 "$_CODEX_PROBE" check-sandbox || exit 1
 "$_CODEX_PROBE" show-first-use-notice
 _OUTSIDE_EXIT=0
-"$_CODEX_PROBE" run-with-timeout 300 codex exec - -C "$_REPO_ROOT" -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'model_reasoning_effort="high"' -c 'web_search="cached"' --json -o "$_OUTSIDE_TMP/text" <"$_OUTSIDE_INPUT" >"$_OUTSIDE_TMP/events" 2>"$_OUTSIDE_TMP/stderr" || _OUTSIDE_EXIT=$?
+"$_CODEX_PROBE" run-with-timeout --effort high 300 codex exec - -C "$_REPO_ROOT" -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'web_search="cached"' --json -o "$_OUTSIDE_TMP/text" <"$_OUTSIDE_INPUT" >"$_OUTSIDE_TMP/events" 2>"$_OUTSIDE_TMP/stderr" || _OUTSIDE_EXIT=$?
 cat "$_OUTSIDE_TMP/text" 2>/dev/null || tail -n 20 "$_OUTSIDE_TMP/events"
 
 cat "$_OUTSIDE_TMP/stderr" >&2 || { [ "$_OUTSIDE_EXIT" -ne 0 ] || _OUTSIDE_EXIT=1; }

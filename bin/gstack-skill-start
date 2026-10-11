@@ -122,6 +122,8 @@ if [ "$_NO_HUMAN" != "yes" ]; then
   [ -n "$_UPD" ] && printf '%s\n' "$_UPD" | _sanitize || true
 fi
 
+# Session markers: local functional state (live-session count), never sent and
+# not gated on telemetry (#1150). README "Privacy & Telemetry" describes them.
 mkdir -p "$_GH/sessions" 2>/dev/null || true
 touch "$_GH/sessions/$PARENT_PID" 2>/dev/null || true
 find "$_GH/sessions" -mmin +120 -type f -exec rm {} + 2>/dev/null || true
@@ -496,7 +498,7 @@ if [ "$_TEL_PROMPTED" = "no" ] && [ "$_LAKE_SEEN" = "yes" ]; then
   _emit_block telemetry-prompt <<EOI
 Ask telemetry once via AskUserQuestion:
 
-> Help gstack get better. Share usage data only: skill, duration, crashes, stable device ID. No code or file paths. Your repo name is recorded locally only and stripped before any upload.
+> Help gstack get better. Yes sends, per skill run: skill name, outcome, duration, gstack version, OS, a redacted error summary and a stable device ID. Never code, file paths, prompts, repo or branch names. Your repo and branch are also logged on this machine (analytics/skill-usage.jsonl) and stripped before upload; off logs nothing. Not covered by this answer: the update check asks GitHub for the latest version about hourly (\`gstack-config set update_check false\`), and outside reviews send code to Codex or Claude Code (\`gstack-config set codex_reviews disabled\`). Details: README "Privacy & Telemetry".
 
 Options:
 - A) Help gstack get better! (recommended)

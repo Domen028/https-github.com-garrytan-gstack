@@ -465,7 +465,8 @@ echo 'Recommendation: approve because the late answer arrived.'
         const rendered = outsideVoiceInvocation(ctx, { timeoutMs: requested });
         const gates = [...rendered.matchAll(/timeout: (\d+)/g)].map(m => Number(m[1]));
         expect(gates).toEqual([provider + 60000]);
-        expect(rendered).toContain(host === 'claude' ? `run-with-timeout ${provider / 1000} codex` : `--timeout-ms ${provider}`);
+        if (host === 'claude') expect(rendered).toMatch(new RegExp(`run-with-timeout (?:--effort \\w+ )?${provider / 1000} codex`));
+        else expect(rendered).toContain(`--timeout-ms ${provider}`);
       }
     }
   });

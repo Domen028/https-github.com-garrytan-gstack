@@ -410,6 +410,32 @@ never an outage.
 gstack-config set codex_reviews enabled
 ```
 
+<a id="outside-review-consent-missing"></a>
+### `outside review: not run (outside reviews are turned off ... ). Fix: gstack-config set codex_reviews enabled ...` / `OUTSIDE_STATUS: not_run reason=consent_missing`
+
+**Meaning.** The send itself refused. `gstack-codex-probe run-with-timeout`,
+`gstack-claude-code`, `gstack-outside-voice` and the unattended
+`gstack-autoplan` runner read `codex_reviews` before they send repository
+content to an outside model. When it is `disabled`, or when the config file
+exists but cannot be read (or holds a value other than `enabled` or
+`disabled`), they print this line, start no CLI and make no API request. An
+unset `codex_reviews` means the default, `enabled`, and the first send on a
+machine prints the [notice](#codex-review-notice) below. A review you ask for by
+name (`/codex`, `/claude-code`) passes `--user-invoked` and still runs. This is
+`not run`, never a pass and never an outage; `/autoplan` records it as the
+phase's outside outcome (`status: disabled`, `outcome: not_run`,
+`reason: consent_missing`).
+
+**Fix.** To allow outside reviews again:
+
+```bash
+gstack-config set codex_reviews enabled
+gstack-config get --stored codex_reviews   # enabled, disabled, unset, or unreadable (exit 2)
+```
+
+If the stored read exits 2, fix the permissions or the malformed
+`codex_reviews` line in the `config.yaml` it names, then re-run.
+
 <a id="codex-review-notice"></a>
 ### `NOTICE: gstack outside reviews send the review prompt and code to Codex (...) using ...`
 

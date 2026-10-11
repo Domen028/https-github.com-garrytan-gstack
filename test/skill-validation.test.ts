@@ -1609,7 +1609,7 @@ describe('Codex skill', () => {
     expectMentions(content, [['only', 'disabled', 'passes']], 'content');
     // Review log
     expect(content).toContain('adversarial-review');
-    expect(content).toContain('reasoning_effort="high"');
+    expect(content).toContain('run-with-timeout --effort high ');
     expect(content).toContain('ADVERSARIAL REVIEW SYNTHESIS');
     // Large diff structured review still gated
     expectMentions(content, [['only', 'structured', 'review']], 'content');
@@ -1620,7 +1620,7 @@ describe('Codex skill', () => {
     const content = readShipUnion();
     expect(content).toContain('Adversarial review (always-on)');
     expect(content).toContain('adversarial-review');
-    expect(content).toContain('reasoning_effort="high"');
+    expect(content).toContain('run-with-timeout --effort high ');
     expect(content).toContain('Investigate and fix');
     expect(content).toContain('Claude adversarial subagent (always runs)');
   });

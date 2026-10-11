@@ -42,17 +42,17 @@ test('adversarial outside failures retain the required native pass without dupli
   }
 });
 
-test('ship design availability is an existing automatic choice, not a new opt-in', () => {
+test('ship design-lite honors codex_reviews like every other opt-in caller (#3102)', () => {
   for (const host of ALL_HOST_CONFIGS) {
     const ctx: TemplateContext = { host: host.name, skillName: 'ship', tmplPath: 'ship/SKILL.md.tmpl', paths: HOST_PATHS[host.name] };
     const output = outsideVoicePreflight(ctx, { disabledBehavior: 'opt-in' });
-    expect(output).toContain('No additional opt-in is needed');
-    expect(output).toContain('`CODEX_MODE` reports provider availability, not user consent');
+    expect(output).not.toContain('No additional opt-in is needed');
+    expect(output).not.toContain('_OUTSIDE_CFG=enabled');
+    expect(output).toContain('get --stored codex_reviews');
+    expect(output).toContain("`CODEX_MODE: disabled` or a send's `consent_missing` line: `codex_reviews` is off or unreadable; do not ask; record `outside_status: disabled`.");
     const other = outsideVoicePreflight({ ...ctx, skillName: 'review' }, { disabledBehavior: 'opt-in' });
-    expect(other).not.toContain('No additional opt-in is needed');
-    expect(other).toContain('_OUTSIDE_CFG=enabled # This caller has its own opt-in/skip control.');
-    expect(output.match(/```bash\n([\s\S]*?)\n```/)![1]).toBe(other.match(/```bash\n([\s\S]*?)\n```/)![1].replace(
-      '_OUTSIDE_CFG=enabled # This caller has its own opt-in/skip control.', '_OUTSIDE_CFG=enabled'));
+    expect(other).not.toContain('_OUTSIDE_CFG=enabled');
+    expect(output.match(/```bash\n([\s\S]*?)\n```/)![1]).toBe(other.match(/```bash\n([\s\S]*?)\n```/)![1]);
   }
 });
 

@@ -48,6 +48,8 @@ const HELP = `gstack-autoplan — unattended /autoplan: next/submit loop, answer
 
 The first next needs --plan. The native voice is dispatched by the parent from the printed prompt file (a subagent on the
 parent's model); the outside voice runs through gstack-outside-voice or a cross-family subagent. Spend by host subagents is unknown.
+The first next reads codex_reviews: disabled (or an unreadable config) records every phase's outside voice as a terminal
+not_run consent_missing outcome and dispatches none. Enable: gstack-config set codex_reviews enabled.
 ${exitTableHelp()}`;
 
 function flag(args: string[], name: string): string | undefined {

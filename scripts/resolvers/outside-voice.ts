@@ -47,7 +47,7 @@ fi`;
 /** Caller-owned workflow role. Only enumerated plan-review generators pass it; everything else stays no-role. */
 export type OutsideRole = 'plan-review';
 
-export function outsideVoicePreflight(ctx: TemplateContext, opts: { disabledBehavior: 'skip-all' | 'codex-only' | 'opt-in'; acceptedOnly?: boolean; nativeReview?: boolean; role?: OutsideRole }): string {
+export function outsideVoicePreflight(ctx: TemplateContext, opts: { disabledBehavior: 'skip-all' | 'codex-only' | 'opt-in'; nativeReview?: boolean; role?: OutsideRole }): string {
   const v = outsideVoiceFor(ctx);
   if (v.id === 'codex' && (opts.disabledBehavior === 'codex-only' || (opts.disabledBehavior === 'skip-all' && !opts.role))) {
     let preflight = outsideVoiceLabels(ctx, codexPreflight({ disabledBehavior: opts.disabledBehavior, nativeReview: opts.nativeReview, role: !!opts.role }))
@@ -64,10 +64,9 @@ export function outsideVoicePreflight(ctx: TemplateContext, opts: { disabledBeha
   const probe = v.id === 'codex'
     ? 'command -v codex >/dev/null 2>&1'
     : `bun -e 'const {resolveClaudeCommand} = await import(process.argv[1]); process.exit(resolveClaudeCommand() ? 0 : 1)' "${bin}/../lib/claude-bin.ts"`;
-  const config = opts.disabledBehavior === 'opt-in'
-    ? (ctx.skillName === 'ship' ? '_OUTSIDE_CFG=enabled' : '_OUTSIDE_CFG=enabled # This caller has its own opt-in/skip control.')
-    : `_OUTSIDE_CFG=$("${bin}/gstack-config" get codex_reviews 2>/dev/null || echo enabled)`;
-  const readiness = `${opts.acceptedOnly ? 'if' : 'elif'} ( ${outsideVoiceGuard(ctx)}
+  // The send binaries enforce codex_reviews (consent_missing); this read only spares a doomed call.
+  const config = `_OUTSIDE_CFG=$("${bin}/gstack-config" get --stored codex_reviews 2>/dev/null)`;
+  const readiness = `elif ( ${outsideVoiceGuard(ctx)}
 ); then
   if ${probe}; then echo 'CODEX_MODE: ready'; else echo 'CODEX_MODE: not_installed'; fi
 else
@@ -75,16 +74,15 @@ else
 fi`;
   return `\`\`\`bash
 ${runtimeRootPrelude(ctx)}
-${opts.acceptedOnly ? '' : `${config}
-if [ "$_OUTSIDE_CFG" = disabled ]; then
+${config}
+if [ "$_OUTSIDE_CFG" = disabled ] || [ "$_OUTSIDE_CFG" = unreadable ]; then
   echo 'CODEX_MODE: disabled'
-`}${readiness}
+${readiness}
 \`\`\`
 
-${ctx.skillName === 'ship' && opts.disabledBehavior === 'opt-in' ? `Ship attempts this optional design check automatically when frontend review applies.
-The enabled value above carries that choice. No additional opt-in is needed.
-Step 11 keeps its separate outside-review switch.
-\`CODEX_MODE\` reports provider availability, not user consent; here the provider is **${v.label}**.` : `The historical \`CODEX_MODE\` variable describes **${v.label}** availability here.`} ${opts.role ? 'The invocation checks auth and the [policy](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md) plan-review model.' : 'Authentication and configured model validity are checked by the actual invocation, without overriding either.'} Missing/broken CLI: install or repair ${v.label}; authentication failure: run \`${v.id === 'codex' ? 'codex login' : 'claude auth login'}\`. ${opts.disabledBehavior === 'skip-all' ? 'Disabled ends this entire extra review step, including the native fallback; record outside_status: disabled and continue after the section. Disabled is not an unavailable provider and never triggers a replacement reviewer.' : opts.disabledBehavior === 'codex-only' ? 'Disabled skips only the outside CLI; retain the native pass.' : ctx.skillName === 'ship' ? '' : 'Honor this caller’s existing opt-in/skip choice.'} ${opts.disabledBehavior === 'skip-all' ? 'Provider failure is missing outside coverage; follow the caller’s existing fallback only when reviews are enabled.' : opts.disabledBehavior === 'codex-only' ? 'Non-ready means missing outside coverage. Keep the required native pass without duplicating it.' : 'Any non-ready outcome is missing outside coverage; follow the caller’s existing fallback.'} Never substitute another external provider.`;
+${ctx.skillName === 'ship' && opts.disabledBehavior === 'opt-in' ? `Ship attempts this optional design check when frontend review applies and \`codex_reviews\` allows it.
+Unset means the default, enabled; the first send prints a one-time notice.
+\`CODEX_MODE\` names the provider here, **${v.label}**.` : `The historical \`CODEX_MODE\` variable describes **${v.label}** availability here.`} \`CODEX_MODE: disabled\` or a send's \`consent_missing\` line: \`codex_reviews\` is off or unreadable${opts.disabledBehavior === 'skip-all' ? '.' : '; do not ask; record \`outside_status: disabled\`.'} ${opts.role ? 'The invocation checks auth and the [policy](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md) plan-review model.' : 'Authentication and configured model validity are checked by the actual invocation, without overriding either.'} Missing/broken CLI: install or repair ${v.label}; authentication failure: run \`${v.id === 'codex' ? 'codex login' : 'claude auth login'}\`. ${opts.disabledBehavior === 'skip-all' ? 'Disabled ends this entire extra review step, including the native fallback; record outside_status: disabled and continue after the section. Disabled is not an unavailable provider and never triggers a replacement reviewer.' : opts.disabledBehavior === 'codex-only' ? 'Disabled skips only the outside CLI; retain the native pass.' : ctx.skillName === 'ship' ? '' : 'Otherwise honor this caller’s opt-in/skip choice.'} ${opts.disabledBehavior === 'skip-all' ? 'Provider failure is missing outside coverage; follow the caller’s existing fallback only when reviews are enabled.' : opts.disabledBehavior === 'codex-only' ? 'Non-ready means missing outside coverage. Keep the required native pass without duplicating it.' : 'Any non-ready outcome is missing outside coverage; follow the caller’s existing fallback.'} Never substitute another external provider.`;
 }
 
 export interface OutsideCommandOptions {
@@ -110,9 +108,14 @@ export function outsideVoiceCommand(ctx: TemplateContext, opts: OutsideCommandOp
   const bin = toShellPath(ctx.paths.binDir);
   const root = toShellPath(ctx.paths.skillRoot);
   const prompt = sh(opts.promptFile ?? '<prepared-prompt-file>');
+  // /spec's 120 s gate keeps its effort: a raised effort would spend the budget it is timed for.
+  // Every other gate lets run-with-timeout resolve GSTACK_CODEX_EFFORT, then codex_effort, then this default.
+  const effort = opts.reasoningEffort ?? 'high';
+  const pinnedEffort = opts.gate === 'spec';
+  const effortFlag = pinnedEffort ? ` -c 'model_reasoning_effort="${effort}"'` : '';
   const codex = opts.structuredBase
-    ? `codex review --base ${sh(opts.structuredBase)} -c "sandbox_mode=\\"${CODEX_SANDBOX_REF}\\"" ${CODEX_REVIEW_MODEL_CONFIG_FLAG} -c 'model_reasoning_effort="${opts.reasoningEffort ?? 'high'}"' ${CODEX_WEB_SEARCH_FLAG} < /dev/null`
-    : `codex exec - -C "$_REPO_ROOT" -s "${CODEX_SANDBOX_REF}" ${CODEX_MODEL_CONFIG_FLAG} -c 'model_reasoning_effort="${opts.reasoningEffort ?? 'high'}"' ${CODEX_WEB_SEARCH_FLAG} --json -o "$_OUTSIDE_TMP/text" <"$_OUTSIDE_INPUT"`;
+    ? `codex review --base ${sh(opts.structuredBase)} -c "sandbox_mode=\\"${CODEX_SANDBOX_REF}\\"" ${CODEX_REVIEW_MODEL_CONFIG_FLAG}${effortFlag} ${CODEX_WEB_SEARCH_FLAG} < /dev/null`
+    : `codex exec - -C "$_REPO_ROOT" -s "${CODEX_SANDBOX_REF}" ${CODEX_MODEL_CONFIG_FLAG}${effortFlag} ${CODEX_WEB_SEARCH_FLAG} --json -o "$_OUTSIDE_TMP/text" <"$_OUTSIDE_INPUT"`;
   const kind = opts.structuredBase ? 'review' : 'exec';
   const invocation = v.id === 'codex'
     ? `${opts.role
@@ -121,7 +124,7 @@ export function outsideVoiceCommand(ctx: TemplateContext, opts: OutsideCommandOp
 "$_CODEX_PROBE" check-sandbox || exit 1`}
 "$_CODEX_PROBE" show-first-use-notice
 _OUTSIDE_EXIT=0
-"$_CODEX_PROBE" run-with-timeout ${Math.ceil(opts.timeoutMs / 1000)} ${codex} >"$_OUTSIDE_TMP/${opts.structuredBase ? 'text' : 'events'}" 2>"$_OUTSIDE_TMP/stderr" || _OUTSIDE_EXIT=$?
+"$_CODEX_PROBE" run-with-timeout ${pinnedEffort ? '' : `--effort ${effort} `}${Math.ceil(opts.timeoutMs / 1000)} ${codex} >"$_OUTSIDE_TMP/${opts.structuredBase ? 'text' : 'events'}" 2>"$_OUTSIDE_TMP/stderr" || _OUTSIDE_EXIT=$?
 ${opts.structuredBase ? 'cat "$_OUTSIDE_TMP/text"' : 'cat "$_OUTSIDE_TMP/text" 2>/dev/null || tail -n 20 "$_OUTSIDE_TMP/events"'}`
     : `_OUTSIDE_EXIT=0
 : >"$_OUTSIDE_TMP/stderr" || exit 1

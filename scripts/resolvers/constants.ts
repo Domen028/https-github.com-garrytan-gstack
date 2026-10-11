@@ -139,7 +139,8 @@ On any error: continue — ${feature} is informational, not a gate.`;
  *   5. sets ONE canonical mode var and echoes `CODEX_MODE: <mode>` so the agent
  *      gates later blocks on the echoed value.
  *
- * Mode values: `disabled` (config off) | `helper_unavailable` (the probe is
+ * Mode values: `disabled` (codex_reviews disabled or config unreadable; the
+ * send binaries refuse it as consent_missing whatever this block prints) | `helper_unavailable` (the probe is
  * missing or not executable) | `not_installed` | `not_authed` |
  * `broken_install` | `sandbox_unavailable` | `model_unusable` | `quota_exhausted` |
  * `unverified` (echoed as `unverified (rate_limited)` after a probe-time 429) | `ready`.
@@ -165,10 +166,10 @@ export function codexPreflight(opts: { modeVar?: string; disabledBehavior: 'skip
   return `\`\`\`bash
 # Codex preflight: the probe runs as a command, so any shell works.
 _CODEX_PROBE=${CODEX_PROBE_PATH}
-_CODEX_CFG=$(~/.claude/skills/gstack/bin/gstack-config get codex_reviews 2>/dev/null || echo enabled)
+_CODEX_CFG=$(~/.claude/skills/gstack/bin/gstack-config get --stored codex_reviews 2>/dev/null)
 _gstack_helper_error=""
 [ -x "$_CODEX_PROBE" ] || _gstack_helper_error="gstack: cannot load gstack-codex-probe; re-run ./setup. https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#sourced-helper-location"
-if [ "$_CODEX_CFG" = "disabled" ]; then
+if [ "$_CODEX_CFG" = "disabled" ] || [ "$_CODEX_CFG" = "unreadable" ]; then
   ${m}="disabled"
 elif { [ -n "\${CODEX_THREAD_ID:-}" ] || [ -n "\${CODEX_SANDBOX:-}" ] || [ "\${GSTACK_ACTIVE_HOST:-}" = codex ]; }; then
   ${m}="under_codex"
@@ -209,7 +210,7 @@ echo "CODEX_MODE: $${m}"
 \`\`\`
 
 Branch on the echoed \`CODEX_MODE\`:
-- **\`disabled\`** — the user turned Codex reviews off (\`codex_reviews=disabled\`). ${disabledLine}
+- **\`disabled\`** (or a send's \`consent_missing\` line) — \`codex_reviews\` is off or unreadable. ${disabledLine}
 - **\`helper_unavailable\`** — the probe is missing or not executable; relay the line above (cause and fix). ${nativeRoute}
 - **\`not_installed\`** — Codex CLI absent. Print: "Codex not installed; outside coverage unavailable. Install: \`npm install -g @openai/codex\`." ${nativeRoute}
 - **\`under_codex\`** — stale artifact selected its own harness. Print: "Codex outside review unavailable: harness mismatch; no outside process started. Missing coverage. Repair: setup --host codex." Skip the outside invocation and follow the workflow's native-review instructions below. Conflicting inherited harness markers are not grounds to guess another provider.

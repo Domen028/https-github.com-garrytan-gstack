@@ -6,6 +6,9 @@ export type ModelTier = 'frontier' | 'smart';
 export const MODEL_PROVIDERS: readonly ModelProvider[] = Object.freeze(['anthropic', 'openai'] as const);
 export const MODEL_TIERS: readonly ModelTier[] = Object.freeze(['frontier', 'smart'] as const);
 export const MODEL_CATALOG_VERSION = 1 as const;
+/** Codex model_reasoning_effort levels gstack accepts (union of Codex config levels and the API's minimal; model-dependent). bin/gstack-codex-probe (run-with-timeout --effort, check-effort) and gstack-config codex_effort hold the same list. */
+export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const);
+export type CodexEffort = typeof CODEX_EFFORT_LEVELS[number];
 
 export interface ModelCatalogEntry {
   readonly provider: ModelProvider;

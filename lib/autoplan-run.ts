@@ -23,6 +23,7 @@ import { PHASES, SNAPSHOT_TOOL, detectScope, extractHeading, phaseOrder, reviewS
 import { FILES, RunError, journal, now, readJournal, readState, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
 import type { RunStatus } from './headless-artifacts';
 import { sha256File } from './headless-artifacts';
+import { outsideConsent } from './outside-consent';
 import { familyConflict, modelFamily } from './outside-voice-runner';
 import { renderSpend, reserve, settle, summarize, readLedger } from './spend-ledger';
 
@@ -75,19 +76,23 @@ export function initRun(o: InitOptions): RunState {
   const scope = detectScope(active, o.cwd, o.scope ?? {});
   const order = phaseOrder(scope);
   const run = o.runId ?? `${path.basename(out)}-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
+  // codex_reviews gates the outside voice here, before any dispatch: a refusal is a terminal not_run outcome per phase.
+  const consent = (o.outsideEnabled ?? true) ? outsideConsent({ userInvoked: false }) : undefined;
+  const consentMissing = consent && !consent.allowed ? consent.lines[0] : undefined;
   const phases: Record<string, PhaseState> = {};
   for (const p of PHASES) if (!order.includes(p)) phases[p] = { skipped: p === 'design' ? 'no UI scope detected' : 'no developer-facing scope detected', native: { status: 'skipped' }, outside: { status: 'skipped' } };
   const state: RunState = {
     schema_version: 1, run, status: 'running', required_phases: order, phases, artifacts: {}, revision: 0, out,
     plan_source: init.sourcePlan, active_plan: init.activePlan, restore: init.restorePath, scope, phase_order: order,
-    outside_enabled: o.outsideEnabled ?? true, attempt_counter: 0, spend_cap_usd: o.spendCap ?? null,
+    outside_enabled: (o.outsideEnabled ?? true) && !consentMissing, attempt_counter: 0, spend_cap_usd: o.spendCap ?? null,
+    ...(consentMissing ? { outside_not_run: { reason: 'consent_missing', detail: consentMissing } } : {}),
     session_kind: o.sessionKind ?? process.env.GSTACK_SESSION_KIND ?? 'unattended', host: 'gstack-autoplan', history: [], created_at: now(), updated_at: now(),
     deviations: ['autoplan guard: not enforced by this host; publication order is unverified (GUARD_NOT_INSTALLED)'],
     ...(o.deadlineMin ? { deadline_at: new Date(Date.now() + o.deadlineMin * 60_000).toISOString() } : {}),
     ...(o.light ? { light: true } : {}),
   };
   fs.writeFileSync(path.join(out, 'timing.json'), JSON.stringify({ schema_version: 1, run, phases: [], started_at: now(), session_kind: state.session_kind }, null, 2) + '\n');
-  journal(out, { event: 'init', run, plan_source: source, scope, phase_order: order });
+  journal(out, { event: 'init', run, plan_source: source, scope, phase_order: order, ...(consentMissing ? { outside: 'not_run', reason: 'consent_missing' } : {}) });
   writeState(state);
   return state;
 }
@@ -126,7 +131,9 @@ function openPhase(state: RunState, phase: Phase, cwd: string): void {
   ps.snapshot = snap.sha256; ps.snapshot_dir = path.dirname(snap.snapshotPath); ps.snapshot_path = snap.snapshotPath; ps.methodology = methodology.methodologyPath; ps.opened_at = now();
   ps.sections = { loaded: sections.loaded, skipped: sections.skipped, checklist: !!sections.checklist };
   ps.native = { status: 'pending', attempts: [] };
-  ps.outside = state.outside_enabled ? { status: 'pending', attempts: [] } : { status: 'disabled' };
+  const notRun = state.outside_not_run as { reason: string; detail: string } | undefined;
+  ps.outside = state.outside_enabled ? { status: 'pending', attempts: [] }
+    : notRun ? { status: 'disabled', outcome: 'not_run', reason: notRun.reason, detail: notRun.detail } : { status: 'disabled' };
   ps.prompts = prompts;
   journal(state.out, { event: 'phase_opened', phase, snapshot: snap.sha256, prompts });
 }
@@ -143,6 +150,7 @@ export function nextStep(o: NextOptions): NextResult {
   const ps = state.phases[phase]!;
   result.phase = phase;
   lines.push(`PHASE: ${phase} snapshot=${ps.snapshot} order=${state.phase_order.join(',')}`);
+  if (ps.outside?.reason === 'consent_missing') lines.push(`OUTSIDE: ${phase} not_run reason=consent_missing`, String(ps.outside.detail));
   if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${state.scope.source}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
   const prompts = ps.prompts!;
   for (const voice of ['native', 'outside'] as const) {
