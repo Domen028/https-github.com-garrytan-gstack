@@ -6,7 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { readBoundedStable } from '../lib/cso/bounded-file';
 import { CsoError } from '../lib/cso/contracts';
-import { executable, redact } from '../lib/cso/process';
+import { EMPTY_GLOBAL_GIT_CONFIG, executable, redact } from '../lib/cso/process';
 import { atomicWriteSync } from '../lib/fs-atomic';
 import { redactProducerText, sourceCredentialValues, type OutputRedaction } from './cso-eval-output-redaction';
 import { resolveClaudeCommand } from '../lib/claude-bin';
@@ -241,7 +241,7 @@ export function inventoryProducerArtifacts(helperHome: string): ProducerArtifact
 
 function repositoryIdentity(root: string): string {
   const nullPath = process.platform === 'win32' ? 'NUL' : '/dev/null';
-  const env = { PATH: process.env.PATH ?? '', LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullPath, GIT_ATTR_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' };
+  const env = { PATH: process.env.PATH ?? '', LANG: 'C', LC_ALL: 'C', GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG, GIT_ATTR_NOSYSTEM: '1', GIT_OPTIONAL_LOCKS: '0' };
   const git = executable('git');
   const config = readBoundedStable(join(root, '.git', 'config'), 1024 * 1024, 'Producer Git configuration').toString('utf8');
   if (/^\s*\[\s*include(?:if)?(?=[\s."\]])/im.test(config)) throw sourceError('.git/config', 'contains an include directive');
