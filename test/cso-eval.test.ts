@@ -54,7 +54,7 @@ function syntheticResultFor(cell: EvalCell, manifest: CorpusManifest<string>): E
   const positive = cell.variant === 'vulnerable';
   const repairEvidenceHash = 'c'.repeat(64), recheckEvidenceHash = 'd'.repeat(64);
   return { cellId: cell.id, sourceHash: cell.sourceHash, skillHash: cell.skillHash, model: cell.model, host: cell.host, budgetSeconds: cell.budgetSeconds,
-    reportPresent: true, reportComplete: true,
+    reportPresent: true, reportFinished: true, reportComplete: true,
     findings: positive ? [{ id: 'finding-1', evidence: cell.version === 'v2' ? 'legacy_review' : 'supported', claimedTested: runtime && cell.version === 'v3', judgment: 'correct', matchedCaseId: cell.caseId,
       ...(runtime && cell.version === 'v3' ? { trustedVerification: { repair: 'passed' as const, repairEvidenceHash, recheck: 'passed' as const, recheckEvidenceHash } } : {}) }] : [],
     setup: runtime ? 'passed' : 'not_attempted', reproduction: runtime && positive ? 'passed' : 'not_attempted', repair: runtime && positive ? 'passed' : 'not_attempted', recheck: runtime && positive ? 'passed' : 'not_attempted',
@@ -206,14 +206,33 @@ describe('CSO matched evaluation accounting', () => {
     expect(group(score, 'v3', 'comprehensive').highCriticalRecall).toEqual({ numerator: 96, denominator: 96, value: 1 });
     expect(score.perStack.rails).toEqual({ correctHeldOutRepairs: 10, denominator: 10 });
   });
-  test('incomplete mandatory reports cannot contribute security evidence or qualify a complete matrix', () => {
+  test('finished partial reports count their findings and outcomes; completeness stays its own measured, gated rate', () => {
     const results = matrix.cells.map(syntheticResult);
     for (const result of results) result.reportComplete = false;
+    const score = scoreEval(matrix, results, qualification), daily = group(score, 'v3', 'daily'), comprehensive = group(score, 'v3', 'comprehensive');
+    expect(daily.reports).toEqual({ numerator: 0, denominator: 240, value: 0 });
+    expect(daily.finishedReports).toEqual({ numerator: 240, denominator: 240, value: 1 });
+    expect(daily.precision).toEqual({ numerator: 120, denominator: 120, value: 1 });
+    expect(comprehensive.highCriticalRecall).toEqual({ numerator: 96, denominator: 96, value: 1 });
+    expect(comprehensive.repair.numerator).toBe(comprehensive.repair.denominator);
+    expect(score.perStack.rails).toEqual({ correctHeldOutRepairs: 10, denominator: 10 });
+    expect(score.gates).toMatchObject({ comprehensiveHighCriticalRecall80: 'pass', dailyPrecision95: 'pass', mandatoryReports: 'fail', matchedCompleteMatrix: 'fail' });
+    expect(score.status).toBe('partial');
+  });
+  test('running or missing reports contribute no security evidence and cannot qualify a complete matrix', () => {
+    const results = matrix.cells.map(syntheticResult);
+    results.forEach((result, index) => {
+      result.reportComplete = false; result.reportFinished = false;
+      if (index % 2) { result.reportPresent = false; result.findings = []; }
+    });
+    expect(() => scoreEval(matrix, [{ ...syntheticResult(matrix.cells[0]), reportFinished: false }], qualification)).toThrow('MISSING_EVAL_REPORT');
+    expect(() => scoreEval(matrix, [{ ...syntheticResult(matrix.cells[0]), reportPresent: false, reportComplete: false, findings: [] }], qualification)).toThrow('MISSING_EVAL_REPORT');
     const score = scoreEval(matrix, results, qualification), daily = group(score, 'v3', 'daily'), comprehensive = group(score, 'v3', 'comprehensive');
     expect(score.status).toBe('partial');
     expect(score.gates.matchedCompleteMatrix).toBe('fail');
     expect(score.gates.mandatoryReports).toBe('fail');
     expect(daily.reports).toEqual({ numerator: 0, denominator: 240, value: 0 });
+    expect(daily.finishedReports).toEqual({ numerator: 0, denominator: 240, value: 0 });
     expect(daily.precision).toEqual({ numerator: 0, denominator: 0, value: null });
     expect(daily.recall.numerator).toBe(0);
     expect(comprehensive.setup.numerator).toBe(0);
@@ -517,6 +536,17 @@ describe('CSO release profile on an injected corpus', () => {
     }
     const regressed = scoreCollectedEval(release, batch, results, qualification, privateManifest, baseline);
     expect(regressed.gates.noHighCriticalRecallRegression).toBe('fail'); expect(regressed.baseline!.highCriticalRecall.value).toBe(1);
+  });
+  test('a baseline finds a seeded issue in a finished partial report, never in a running or missing one', () => {
+    const vulnerable: string[] = [];
+    const baseline = privateBaseline((results, cells) => {
+      const indexes = cells.flatMap((cell, index) => cell.variant === 'vulnerable' ? [index] : []).slice(0, 3);
+      vulnerable.push(...indexes.map(index => cells[index].caseId));
+      results[indexes[0]].reportComplete = false;
+      Object.assign(results[indexes[1]], { reportComplete: false, reportFinished: false });
+      Object.assign(results[indexes[2]], { reportComplete: false, reportFinished: false, reportPresent: false, findings: [] });
+    });
+    expect(vulnerable.map(caseId => baseline.cases.find(entry => entry.caseId === caseId)!.found)).toEqual([true, false, false]);
   });
   test('baseline records refuse incomplete or unadjudicated runs and baseline matrices never qualify', () => {
     expect(() => privateBaseline(results => { results.pop(); })).toThrow('INCOMPLETE_EVAL_BASELINE');
@@ -1037,6 +1067,10 @@ describe('CSO matched producer orchestration', () => {
     expect(baselineBatch.summary.groups).toMatchObject([{ version: 'v2', mode: 'comprehensive', scheduled: 16, submitted: 16, succeeded: 7, failed: 9 }]);
     const recorded = createEvalBaseline(baselineMatrix, baselineBatch, baseline.results, privateManifest);
     expect(recorded.baselineHash).toMatch(/^[a-f0-9]{64}$/);
+    const succeeded = new Set(baseline.receipts.filter(receipt => receipt.status === 'succeeded').map(receipt => receipt.cellRef));
+    const vulnerableCell = (caseId: string) => baselineMatrix.cells.find(cell => cell.caseId === caseId && cell.variant === 'vulnerable')!.id;
+    expect(recorded.cases.map(item => item.found)).toEqual(recorded.cases.map(item => succeeded.has(vulnerableCell(item.caseId))));
+    expect(recorded.cases.some(item => item.found) && recorded.cases.some(item => !item.found)).toBe(true);
     const releaseMatrix = createEvalMatrix({ profile: 'release', model: 'exact-eval-model', host: 'codex', skillHashes: { v3: sha256(skills.v3) }, platforms: { daily: platform, comprehensive: platforms } }, privateManifest);
     const release = await produce(releaseMatrix, { v3: skills.v3 });
     const scored = scoreCollectedEval(releaseMatrix, collectProducerReceipts(releaseMatrix, release.schedule, release.receipts, privateManifest), release.results, { containment: {} }, privateManifest);

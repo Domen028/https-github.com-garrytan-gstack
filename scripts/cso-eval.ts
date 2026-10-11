@@ -114,7 +114,11 @@ export interface EvalFinding {
 }
 export interface EvalResult {
   cellId: string; sourceHash: string; skillHash: string; model: string; host: string; budgetSeconds: number;
-  reportPresent: boolean; reportComplete: boolean; findings: EvalFinding[];
+  /**
+   * `reportFinished`: the helper report's status is `finished`; its findings and runtime outcomes count whatever its
+   * completeness. `reportComplete`: it is also `complete` (no gap, every domain assessed), measured as its own rate.
+   */
+  reportPresent: boolean; reportFinished: boolean; reportComplete: boolean; findings: EvalFinding[];
   setup: Outcome; reproduction: Outcome; repair: Outcome; recheck: Outcome;
   /** Hash of trusted private observations; never a producer's claimed verification status. */
   oracleEvidenceHash?: string;
@@ -623,9 +627,9 @@ export function validateMatrix(matrix: EvalMatrix, corpus: EvalCorpusManifest = 
 function validateResult(result: EvalResult, cell: EvalCell, corpus: EvalCorpusManifest): void {
   if (result.sourceHash !== cell.sourceHash || result.skillHash !== cell.skillHash || result.model !== cell.model || result.host !== cell.host || result.budgetSeconds !== cell.budgetSeconds) throw new Error('UNMATCHED_EVAL_RESULT');
   for (const field of ['setup', 'reproduction', 'repair', 'recheck'] as const) if (!['passed', 'failed', 'blocked', 'not_attempted'].includes(result[field])) throw new Error('INVALID_EVAL_OUTCOME');
-  for (const field of ['reportPresent', 'reportComplete', 'heldOutAssertionsPassed', 'freshRecheck'] as const) if (typeof result[field] !== 'boolean') throw new Error('INVALID_EVAL_RESULT');
+  for (const field of ['reportPresent', 'reportFinished', 'reportComplete', 'heldOutAssertionsPassed', 'freshRecheck'] as const) if (typeof result[field] !== 'boolean') throw new Error('INVALID_EVAL_RESULT');
   if (!Array.isArray(result.findings) || !validNumber(result.latencyMs) || (result.firstUsefulResultMs !== null && (!validNumber(result.firstUsefulResultMs) || result.firstUsefulResultMs > result.latencyMs))) throw new Error('INVALID_EVAL_RESULT');
-  if (result.reportComplete && !result.reportPresent) throw new Error('MISSING_EVAL_REPORT');
+  if ((result.reportComplete && !result.reportFinished) || (result.reportFinished && !result.reportPresent)) throw new Error('MISSING_EVAL_REPORT');
   if (!result.reportPresent && result.findings.length) throw new Error('FINDINGS_WITHOUT_REPORT');
   if (result.setup === 'blocked' && !result.prerequisite?.trim()) throw new Error('MISSING_SETUP_PREREQUISITE');
   if (result.oracleEvidenceHash !== undefined && (!HEX.test(result.oracleEvidenceHash) || result.oracleVersion !== corpus.version)) throw new Error('INVALID_ORACLE_PROVENANCE');
@@ -670,7 +674,7 @@ function quantile(values: number[], fraction: number): number | null {
 function measuredRate(cells: EvalCell[], results: Map<string, EvalResult>, field: 'setup' | 'reproduction' | 'repair' | 'recheck', corpus: EvalCorpusManifest): Rate {
   return rate(cells.filter(cell => {
     const result = results.get(cell.id);
-    if (!result?.reportPresent || !result.reportComplete || result[field] !== 'passed') return false;
+    if (!result?.reportFinished || result[field] !== 'passed') return false;
     if (field === 'setup') return true;
     if (!result.oracleEvidenceHash || result.oracleVersion !== corpus.version || result.setup !== 'passed') return false;
     if (field === 'reproduction') return true;
@@ -687,7 +691,7 @@ function measuredRate(cells: EvalCell[], results: Map<string, EvalResult>, field
 
 function trustedFindingVerification(cell: EvalCell, result: EvalResult, finding: EvalFinding, stage: 'repair' | 'recheck', corpus: EvalCorpusManifest): boolean {
   const verification = finding.trustedVerification;
-  if (!result.reportPresent || !result.reportComplete || cell.version !== 'v3' || cell.mode !== 'comprehensive' || cell.variant !== 'vulnerable' || finding.evidence !== 'supported' ||
+  if (!result.reportFinished || cell.version !== 'v3' || cell.mode !== 'comprehensive' || cell.variant !== 'vulnerable' || finding.evidence !== 'supported' ||
     finding.judgment !== 'correct' || finding.matchedCaseId !== cell.caseId || !finding.claimedTested || !verification ||
     result.setup !== 'passed' || result.reproduction !== 'passed' || result.repair !== 'passed' || !result.heldOutAssertionsPassed ||
     verification.repair !== 'passed' || verification.repairEvidenceHash !== result.oracleEvidenceHash || result.oracleVersion !== corpus.version)
@@ -710,7 +714,7 @@ function validatedResults(matrix: EvalMatrix, observations: EvalResult[], corpus
   return results;
 }
 const eligibleFinding = (cell: EvalCell, finding: EvalFinding) => finding.evidence === 'supported' || (cell.version === 'v2' && finding.evidence === 'legacy_review');
-const foundSeededIssue = (cell: EvalCell, result: EvalResult | undefined) => result?.reportPresent === true && result.reportComplete === true &&
+const foundSeededIssue = (cell: EvalCell, result: EvalResult | undefined) => result?.reportFinished === true &&
   result.findings.some(finding => eligibleFinding(cell, finding) && finding.judgment === 'correct');
 const isHighCritical = (corpus: EvalCorpusManifest, caseId: string) => ['critical', 'high'].includes(corpus.cases.find(fixture => fixture.id === caseId)!.severity);
 
@@ -738,7 +742,7 @@ export function scoreEval(matrix: EvalMatrix, observations: EvalResult[], qualif
     let correct = 0, reported = 0, unadjudicated = 0;
     for (const cell of selected) {
       const result = results.get(cell.id);
-      const findings = result?.reportPresent && result.reportComplete ? result.findings.filter(finding => finding.evidence !== 'hypothesis') : [];
+      const findings = result?.reportFinished ? result.findings.filter(finding => finding.evidence !== 'hypothesis') : [];
       reported += findings.length;
       unadjudicated += findings.filter(finding => finding.judgment === 'unadjudicated').length;
       correct += Number(findings.some(finding => eligibleFinding(cell, finding) && finding.judgment === 'correct')); // Duplicate reports do not increase true positives.
@@ -751,7 +755,7 @@ export function scoreEval(matrix: EvalMatrix, observations: EvalResult[], qualif
       return count + result.findings.filter(finding => finding.claimedTested && !trustedFindingVerification(cell, result, finding, 'repair', corpus)).length;
     }, 0);
     groups.push({ version, mode, cells: selected.length, submitted: completed.length, missing: selected.length - completed.length,
-      reports: rate(completed.filter(result => result.reportPresent && result.reportComplete).length, selected.length), precision: rate(correct, reported), recall: rate(expected.filter(found).length, expected.length), highCriticalRecall: rate(highCritical.filter(found).length, highCritical.length),
+      reports: rate(completed.filter(result => result.reportPresent && result.reportComplete).length, selected.length), finishedReports: rate(completed.filter(result => result.reportFinished).length, selected.length), precision: rate(correct, reported), recall: rate(expected.filter(found).length, expected.length), highCriticalRecall: rate(highCritical.filter(found).length, highCritical.length),
       unadjudicated, falseTested, setup: mode === 'comprehensive' ? measuredRate(selected, results, 'setup', corpus) : null,
       reproduction: mode === 'comprehensive' ? measuredRate(expected, results, 'reproduction', corpus) : null,
       repair: mode === 'comprehensive' ? measuredRate(expected, results, 'repair', corpus) : null,
@@ -801,7 +805,8 @@ export function scoreEval(matrix: EvalMatrix, observations: EvalResult[], qualif
 }
 
 /** Bind a complete collected batch and every trusted judgment to the matrix's producer receipts. */
-function validateCollectedBatch(matrix: EvalMatrix, batch: ProducerBatch, observations: EvalResult[]): Map<string, ProducerReceiptIndex> {
+/** Validate the batch against its judgments; a failed producer receipt's report counts nothing, whatever the judge read. */
+function validateCollectedBatch(matrix: EvalMatrix, batch: ProducerBatch, observations: EvalResult[]): EvalResult[] {
   if (!Array.isArray(observations)) throw new Error('INVALID_EVAL_RESULTS');
   if (!batch || batch.schemaVersion !== 1 || batch.matrixHash !== matrixHash(matrix) || !HEX.test(batch.scheduleHash) || !HEX.test(batch.batchHash)) throw new Error('INVALID_PRODUCER_BATCH');
   const { batchHash, ...withoutHash } = batch;
@@ -827,33 +832,32 @@ function validateCollectedBatch(matrix: EvalMatrix, batch: ProducerBatch, observ
     const receipt = receipts.get(result.cellId);
     if (!receipt || result.producerReceiptHash !== receipt.receiptHash) throw new Error('UNBOUND_EVAL_RESULT');
   }
-  return receipts;
+  return observations.map(result => receipts.get(result.cellId)!.status === 'failed' ? { ...result, reportFinished: false, reportComplete: false } : result);
 }
 
 /** Release scoring path: every trusted judgment must bind to a collected producer receipt. */
 export function scoreCollectedEval(matrix: EvalMatrix, batch: ProducerBatch, observations: EvalResult[], qualification: ReleaseQualification = { containment: {} }, corpus: EvalCorpusManifest = loadCorpusManifest(), baseline?: EvalBaseline) {
   validateMatrix(matrix, corpus);
   if (profileOf(matrix) === 'baseline') throw new Error('BASELINE_PROFILE_NOT_QUALIFIABLE: use createEvalBaseline');
-  validateCollectedBatch(matrix, batch, observations);
+  const counted = validateCollectedBatch(matrix, batch, observations);
   if (baseline !== undefined) {
     const { modelUsed, providerIdentity: { family, policyRevision, version } } = batch.receipts[0];
     if (baseline?.modelUsed !== modelUsed || JSON.stringify(baseline?.provider) !== JSON.stringify({ family, policyRevision, version })) throw new Error('UNBOUND_EVAL_BASELINE');
   }
-  const score = scoreEval(matrix, observations, qualification, corpus, baseline);
+  const score = scoreEval(matrix, counted, qualification, corpus, baseline);
   return { ...score, producerBatchHash: batch.batchHash };
 }
 
 /**
  * Turn a complete, fully adjudicated v2 baseline run into a reusable record.
- * Missing reports count as misses; an incomplete or unadjudicated run is refused.
+ * Missing reports, and reports behind a failed producer receipt, count as misses; an incomplete or unadjudicated run is refused.
  */
 export function createEvalBaseline(matrix: BaselineEvalMatrix, batch: ProducerBatch, observations: EvalResult[], corpus: EvalCorpusManifest = loadCorpusManifest()): EvalBaseline {
   if (matrix?.profile !== 'baseline') throw new Error('INVALID_EVAL_BASELINE_MATRIX');
   validateMatrix(matrix, corpus);
-  validateCollectedBatch(matrix, batch, observations);
-  const results = validatedResults(matrix, observations, corpus);
+  const results = validatedResults(matrix, validateCollectedBatch(matrix, batch, observations), corpus);
   if (results.size !== matrix.cells.length) throw new Error('INCOMPLETE_EVAL_BASELINE');
-  if ([...results.values()].some(result => result.reportPresent && result.reportComplete && result.findings.some(finding => finding.evidence !== 'hypothesis' && finding.judgment === 'unadjudicated'))) throw new Error('UNADJUDICATED_EVAL_BASELINE');
+  if ([...results.values()].some(result => result.reportFinished && result.findings.some(finding => finding.evidence !== 'hypothesis' && finding.judgment === 'unadjudicated'))) throw new Error('UNADJUDICATED_EVAL_BASELINE');
   const vulnerable = new Map(matrix.cells.filter(cell => cell.variant === 'vulnerable').map(cell => [cell.caseId, cell]));
   const { modelUsed, providerIdentity: { family, policyRevision, version } } = batch.receipts[0];
   const record: Omit<EvalBaseline, 'baselineHash'> = {
