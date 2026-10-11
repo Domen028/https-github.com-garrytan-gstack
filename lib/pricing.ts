@@ -43,6 +43,8 @@ export const PRICING: Record<string, ModelPricing> = {
   // Claude (Anthropic)
   // https://platform.claude.com/docs/en/models/fable-5-1/overview#pricing
   'claude-fable-5-1':  { input_per_mtok: 10.00, output_per_mtok: 50.00, cached_input_per_mtok: 0.25, as_of: '2026-09' },
+  // https://platform.claude.com/docs/en/models/opus-5-5/overview#pricing (list prices effective 2026-10-07)
+  'claude-opus-5-5':    { input_per_mtok: 4.00,  output_per_mtok: 20.00, cached_input_per_mtok: 0.20, as_of: '2026-10' },
   'claude-opus-4-7':    { input_per_mtok: 15.00, output_per_mtok: 75.00, as_of: '2026-04' },
   'claude-sonnet-4-6':  { input_per_mtok: 3.00,  output_per_mtok: 15.00, as_of: '2026-04' },
   'claude-haiku-4-5':   { input_per_mtok: 1.00,  output_per_mtok: 5.00,  as_of: '2026-04' },
@@ -50,6 +52,8 @@ export const PRICING: Record<string, ModelPricing> = {
   // OpenAI (GPT + o-series)
   // https://developers.openai.com/api/docs/models/gpt-6-astra
   'gpt-6-astra':        { input_per_mtok: 10.00, output_per_mtok: 50.00, cached_input_per_mtok: 1.00, as_of: '2026-09' },
+  // https://developers.openai.com/api/docs/models/gpt-6.1-sol (standard tier, up to 272K input)
+  'gpt-6.1-sol':        { input_per_mtok: 2.00,  output_per_mtok: 10.00, cached_input_per_mtok: 0.10, as_of: '2026-10' },
   'gpt-5.4':            { input_per_mtok: 2.50,  output_per_mtok: 10.00, as_of: '2026-04' },
   'gpt-5.4-mini':       { input_per_mtok: 0.60,  output_per_mtok: 2.40,  as_of: '2026-04' },
   'o3':                 { input_per_mtok: 15.00, output_per_mtok: 60.00, as_of: '2026-04' },

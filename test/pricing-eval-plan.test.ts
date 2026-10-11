@@ -34,6 +34,10 @@ describe('lib/pricing', () => {
     expect(estimateCostUsd({ input: 1_000_000, output: 0, cached: 1_000_000 }, 'claude-fable-5-1')).toBe(10.25);
     expect(estimateCostUsd({ input: 10, output: 10 }, 'nobody/made-this-up')).toBe(0);
   });
+
+  test('the default eval-arms tier (smart) is priced out of the box', () => {
+    for (const model of ['claude-opus-5-5', 'gpt-6.1-sol']) expect(hasPricing(model)).toBe(true);
+  });
 });
 
 describe('preregistration', () => {

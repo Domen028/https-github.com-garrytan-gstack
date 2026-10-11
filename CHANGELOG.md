@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.91.80.0] - 2026-10-11
+
+**`/eval-plan` prices its default arms out of the box.** `lib/pricing.ts` gains verified rows for `claude-opus-5-5` ($4 / $20 per MTok, cache reads $0.20; Anthropic list prices effective 2026-10-07) and `gpt-6.1-sol` ($2 / $10 per MTok, cached input $0.10; OpenAI model page, standard tier), the two models `gstack-models resolve --role eval-arms` returns under the default `smart` implementation tier. `gstack-eval-plan arms` previously exited `EVAL_PRICE_MISSING` for both; the fail-closed rule is unchanged, only the data was missing.
+
 ## [1.91.79.0] - 2026-10-11
 
 **`/eval-plan` preregisters paid evals for your product, coordination tools keep parallel lanes from colliding, and the autoplan owner sees a one-page brief instead of the full review (multi-agent wave PR E, plan items E1 tier 1, E2, E3).**
