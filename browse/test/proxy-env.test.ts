@@ -54,9 +54,9 @@ describe('resolveProxy precedence', () => {
   });
 
   test('env URLs keep the cred policy, and the hint names the variable', () => {
-    expect(resolveProxy(null, { HTTPS_PROXY: 'http://proxy.example:3128', BROWSE_PROXY_USER: 'u', BROWSE_PROXY_PASS: 'p' }).url).toBe('http://u:p@proxy.example:3128/');
+    expect(resolveProxy(null, { HTTPS_PROXY: 'http://proxy.example:3128', BROWSE_PROXY_USER: 'USER', BROWSE_PROXY_PASS: 'PASSWORD' }).url).toBe('http://USER:PASSWORD@proxy.example:3128/');
     try {
-      resolveProxy(null, { HTTPS_PROXY: 'http://a:b@proxy.example:3128', BROWSE_PROXY_USER: 'u' });
+      resolveProxy(null, { HTTPS_PROXY: 'http://USER:PASSWORD@proxy.example:3128', BROWSE_PROXY_USER: 'u' });
       throw new Error('expected the cred policy to refuse');
     } catch (err: any) {
       expect(err.message).toMatch(/pick one source/);
@@ -156,8 +156,8 @@ describe('proxyMismatchLines', () => {
   });
 
   test('a credentialed proxy is redacted on both sides', () => {
-    const lines = proxyMismatchLines(extractGlobalFlags(['text'], { HTTPS_PROXY: 'http://user:secret@proxy.example:3128' }), state(), {})!;
-    expect(lines.join('\n')).not.toContain('secret');
+    const lines = proxyMismatchLines(extractGlobalFlags(['text'], { HTTPS_PROXY: 'http://USER:PASSWORD@proxy.example:3128' }), state(), {})!;
+    expect(lines.join('\n')).not.toContain('PASSWORD');
     expect(lines[2]).toContain('http://***:***@proxy.example:3128/');
   });
 
