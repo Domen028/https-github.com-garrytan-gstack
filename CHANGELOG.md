@@ -15,7 +15,7 @@
 
 ### For contributors
 
-- `gstack-codex-probe check-effort <default> --request <level>` and `run-with-timeout --effort <default> --request-effort <level>` take the request level (empty means none) and name `/codex --effort` as its source. The five `/codex` dispatch fences pass it as the allowlisted `'<effort-level>'` placeholder (grammar `^[a-z]*$`), so the level reaches the shell only through the placeholder lint, never through prose. Test parsers of the `run-with-timeout` line accept the new argument.
+- `gstack-codex-probe check-effort <default> --request <level>` and `run-with-timeout --effort <default> --request-effort <level>` take the request level (empty means none) and name `/codex --effort` as its source. The five `/codex` dispatch fences pass it as the allowlisted `'<effort-level>'` placeholder (grammar `^[a-z]*$`), so the level reaches the shell only as that quoted, allowlisted placeholder (never through prose), and the probe accepts only the seven levels. Test parsers of the `run-with-timeout` line accept the new argument.
 - `test/codex-effort.test.ts` runs all five rendered dispatches against a fake `codex`, and the bogus-level case asserts the rejection and zero calls. `test/model-role-invocation.test.ts` adds a zero-call case for an invalid level in Step 0.5.
 
 Contributed by @jnunemaker

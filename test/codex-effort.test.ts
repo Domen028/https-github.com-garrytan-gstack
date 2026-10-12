@@ -43,7 +43,7 @@ describe('manual /codex modes (#3098)', () => {
     const flags = between(body, '**Effort flags, read before the mode:**', '```bash');
     expectTokens(flags, ['--effort <level>', '--effort=<level>', '--xhigh', '--effort xhigh', '<effort-level>'], 'codex effort flags');
     expectMentions(flags, [['directly after', 'mode word', 'leading flags', '--model', '--role', 'before any prompt text'], ['later', 'prompt text'], ['remove', 'before Step 1'],
-      ['missing', 'lowercase word', 'differing levels', 'stop'], ['later', 'say so']], 'codex effort flags');
+      ['missing', 'lowercase word', 'differing levels', 'stop'], ['later', 'level', 'say so']], 'codex effort flags');
     const step1 = between(body, '## Step 1: Detect mode', '- Review (2A)');
     expectMentions(step1, [['effort flags removed'], ['--request-effort', 'outranks']], 'codex Step 1');
   });
@@ -149,6 +149,9 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"SCORE: 8"}
       expect(run(line, 'medium').args, mode).toContain('model_reasoning_effort="medium"');
       expect(run(line, 'xhigh').args, mode).toContain('model_reasoning_effort="xhigh"');
       expect(run(line, 'medium', 'max').args, mode).toContain('model_reasoning_effort="medium"');
+      const unfilled = run(line, '<effort-level>');
+      expect(unfilled.args, mode).toEqual([]);
+      expect(unfilled.stderr, mode).toContain('placeholder was left unfilled');
       const bogus = run(line, 'bogus');
       expect(bogus.args, mode).toEqual([]);
       expect(bogus.status, mode).toBe(1);

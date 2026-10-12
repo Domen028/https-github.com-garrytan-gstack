@@ -1195,7 +1195,7 @@ A severity-gate PASS is separate from [review freshness](#review-readiness-dashb
 
 **Challenge** — adversarial mode. Codex actively tries to break your code. It looks for edge cases, race conditions, security holes, and assumptions that would fail under load. Think of it as a penetration test for your logic.
 
-**Reasoning effort** — Review and Challenge run at `high`, Consult at `medium`. `gstack-config set codex_effort <level>` changes that for every run; `--effort <level>` right after the mode changes it for one (`/codex review --effort medium` for a faster, cheaper review). `--xhigh` is shorthand for `--effort xhigh`. An unknown level stops before Codex runs. See [model policy](model-policy.md#reasoning-effort) for levels and precedence.
+**Reasoning effort** — Review and Challenge run at `high`, Consult at `medium`. `gstack-config set codex_effort <level>` changes that for every run; `--effort <level>` right after `/codex` or its mode word, among the leading flags (`-m`, `--model`, `--role`), changes it for one (`/codex review --effort medium` for a faster, cheaper review). `--xhigh` is shorthand for `--effort xhigh`. An unknown level stops before Codex runs. See [model policy](model-policy.md#reasoning-effort) for levels and precedence.
 
 **Consult** — open conversation with session continuity. Ask Codex anything about the codebase. Follow-up questions reuse the same session, so context carries over. Great for "am I thinking about this correctly?" moments.
 

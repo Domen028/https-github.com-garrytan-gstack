@@ -586,6 +586,14 @@ describe('manual /codex entry: explicit role only, paid probe only for the dispa
     expect(role.stderr).not.toContain('NOTICE: gstack plan reviews');
   });
 
+  test('a valid /codex --effort level passes Step 0.5, shows its source once and probes once', () => {
+    const r = shell(home(), withEffort(preflight, 'medium'));
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain('CODEX_EFFORT');
+    expect(r.stderr).toContain('CODEX_EFFORT: medium (source: /codex --effort)');
+    expect(r.calls.map(codexModel)).toEqual(['model="gpt-5.6-terra"']);
+  });
+
   test('an invalid /codex --effort level stops Step 0.5 before the paid model probe', () => {
     const r = shell(home(), withEffort(preflight, 'turbo'));
     expect(r.status).toBe(1);
