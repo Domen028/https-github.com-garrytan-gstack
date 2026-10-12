@@ -3786,6 +3786,12 @@ if [ "$INSTALL_CURSOR" -eq 1 ]; then
   # would make link_cursor_skill_dirs' "[ ! -d generated ]" gen fallback a no-op.
   _prune_stale_generated "$SOURCE_GSTACK_DIR" "$SOURCE_GSTACK_DIR/.cursor/skills" "$CURSOR_SKILLS"
   link_cursor_skill_dirs "$SOURCE_GSTACK_DIR" "$CURSOR_SKILLS"
+  # 1.31 left unprefixed <skill>/ folders here whose SKILL.md links into the
+  # checkout, so Cursor loaded every skill twice (#3133). Cursor installs only
+  # gstack-* names, so the Claude flat-name cleanup applies as is: it removes
+  # only entries proven to link into gstack (#2119). After linking, so a run
+  # that fails before the new links exist keeps the old folders.
+  cleanup_old_claude_symlinks "$SOURCE_GSTACK_DIR" "$CURSOR_SKILLS"
   create_cursor_sidecar "$SOURCE_GSTACK_DIR"
   _setup_arm_publish cursor global - "$CURSOR_SKILLS" "$CURSOR_GSTACK" -
   echo "gstack ready (cursor)."
