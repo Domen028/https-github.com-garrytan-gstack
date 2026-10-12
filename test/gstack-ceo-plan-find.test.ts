@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { between } from './helpers/prompt-structure';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const BIN = path.join(ROOT, 'bin/gstack-ceo-plan-find');
@@ -82,5 +83,37 @@ describe('gstack-ceo-plan-find', () => {
       try { f.find({}, args); } catch (err) { status = (err as { status: number | null }).status; }
       expect(status).toBe(2);
     }
+  });
+});
+
+describe('rendered plan-eng-review Design Doc Check (#280)', () => {
+  const rendered = fs.readFileSync(path.join(ROOT, 'plan-eng-review/SKILL.md'), 'utf8');
+  const check = between(rendered, '### Design Doc Check', '### Step 0');
+  const at = check.indexOf('CEO_PLAN=$(~/.claude/skills/gstack/bin/gstack-ceo-plan-find');
+  const block = check.slice(Math.max(at, 0)).split('\n').slice(0, 2).join('\n');
+
+  test('the check renders one CEO-plan helper invocation before Step 0', () => {
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(block).toContain('gstack-ceo-plan-find "$SLUG" "$BRANCH"');
+    expect(block).toContain('echo "CEO plan found: $CEO_PLAN"');
+    expect(block).toContain('echo "No CEO plan found"');
+  });
+
+  test('finds the plan for this branch under a custom GSTACK_HOME and reports none elsewhere', () => {
+    expect(at).toBeGreaterThanOrEqual(0);
+    const f = fixture();
+    const installed = path.join(f.home, '.claude/skills/gstack/bin');
+    fs.mkdirSync(installed, { recursive: true });
+    for (const bin of ['gstack-ceo-plan-find', 'gstack-paths', 'gstack-state-root.sh']) {
+      fs.copyFileSync(path.join(ROOT, 'bin', bin), path.join(installed, bin));
+      fs.chmodSync(path.join(installed, bin), 0o755);
+    }
+    const run = (env: Record<string, string>) => execFileSync('bash', ['-c', `SLUG=proj; BRANCH=feat-x; ${block}`],
+      { cwd: f.dir, env: { PATH: process.env.PATH!, HOME: f.home, ...env }, encoding: 'utf8', timeout: 10_000 }).trim();
+    const custom = path.join(f.dir, 'custom-state');
+    const mine = f.write(path.join(custom, 'projects/proj/ceo-plans/2026-10-01-mine.md'), 'feat/x', 500);
+    f.write(path.join(custom, 'projects/proj/ceo-plans/2026-10-03-other.md'), 'main', 10);
+    expect(run({ GSTACK_HOME: custom })).toBe(`CEO plan found: ${mine}`);
+    expect(run({})).toBe('No CEO plan found');
   });
 });
