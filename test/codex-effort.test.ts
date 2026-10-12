@@ -42,7 +42,7 @@ describe('manual /codex modes (#3098)', () => {
     for (const want of ['GSTACK_CODEX_EFFORT', 'codex_effort', 'run-with-timeout --effort <default>', '--request-effort']) expect(body).toContain(want);
     const flags = between(body, '**Effort flags, read before the mode:**', '```bash');
     expectTokens(flags, ['--effort <level>', '--effort=<level>', '--xhigh', '--effort xhigh', '<effort-level>'], 'codex effort flags');
-    expectMentions(flags, [['directly after', 'mode word', 'before any prompt text'], ['later', 'prompt text'], ['remove', 'before Step 1'],
+    expectMentions(flags, [['directly after', 'mode word', 'leading flags', '--model', '--role', 'before any prompt text'], ['later', 'prompt text'], ['remove', 'before Step 1'],
       ['missing', 'lowercase word', 'conflicting', 'stop']], 'codex effort flags');
     const step1 = between(body, '## Step 1: Detect mode', '- Review (2A)');
     expectMentions(step1, [['effort flags removed'], ['--request-effort', 'outranks']], 'codex Step 1');
@@ -173,6 +173,10 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"SCORE: 8"}
     expect(bad.stdout).toBe('');
     expect(bad.stderr).toContain("'turbo' from /codex --effort");
     expect(bad.stderr).not.toContain('export GSTACK_CODEX_EFFORT');
+    const unfilled = check(['high', '--request', '<effort-level>']);
+    expect(unfilled.status).toBe(1);
+    expect(unfilled.stderr).toContain("'<effort-level>' placeholder was left unfilled");
+    expect(unfilled.stderr).not.toContain('from /codex --effort');
     expect(check(['high', '--request']).status).toBe(64);
     expect(check(['high', '--bogus', 'low']).status).toBe(64);
   });

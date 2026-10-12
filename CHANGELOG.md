@@ -9,7 +9,7 @@
 ### What this means for you
 
 - **`--effort <level>` on any `/codex` mode.** `/codex review --effort medium`, `/codex challenge --effort=low` and so on set the effort for that request only. It outranks an exported `GSTACK_CODEX_EFFORT`, `codex_effort` and the per-mode defaults. `--xhigh` keeps working as shorthand for `--effort xhigh`.
-- **Flags only where flags go.** The flag counts directly after `/codex` or its mode word, before your prompt. `/codex what does --effort do?` sends that question to Codex instead of eating `--effort` as a setting, and `/codex review --effort medium` stays on native review.
+- **Flags only where flags go.** The flag counts directly after `/codex` or its mode word, alongside `-m`/`--model`/`--role`, before your prompt. `/codex what does --effort do?` sends that question to Codex instead of eating `--effort` as a setting, and `/codex review --effort medium` stays on native review. This also applies to `--xhigh`, which used to count anywhere in the input: `/codex review fix the parser --xhigh` now sends `--xhigh` as part of the instructions, so put it first (`/codex review --xhigh fix the parser`).
 - **A typo costs nothing and says what to fix.** `--effort turbo` stops before any Codex call, including the model probe on a cold cache, with `'turbo' from /codex --effort is not a Codex reasoning effort level` and the list of levels. A missing value or conflicting effort flags stop with a message too.
 - **docs:** `docs/model-policy.md` documents the per-request flag, and `docs/skills.md` documents `codex_effort` and `--effort` and no longer claims Challenge runs at `xhigh` (it runs at `high`).
 

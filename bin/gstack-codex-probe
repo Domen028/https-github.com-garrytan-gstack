@@ -859,6 +859,10 @@ _gstack_codex_effort_check() {
   # levels are model-dependent. A default outside it is a usage error (64).
   local _default="$1" _request="${2:-}" _chosen _source _cfg
   case "$_default" in minimal|low|medium|high|xhigh|max|ultra) ;; *) return 64 ;; esac
+  if [ "$_request" = "<effort-level>" ]; then
+    echo "CODEX_EFFORT: invalid — the '<effort-level>' placeholder was left unfilled. Pass '' when the request has no --effort. No Codex call was made." >&2
+    return 1
+  fi
   if [ -n "$_request" ]; then
     _chosen="$_request"; _source="/codex --effort"
   elif [ -n "${GSTACK_CODEX_EFFORT:-}" ]; then

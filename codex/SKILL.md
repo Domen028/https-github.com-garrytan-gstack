@@ -484,9 +484,10 @@ set `_CODEX_ROLE='plan-review'` below and in the mode block; the mode block then
 probes and dispatches the policy model within its own timeout. [Policy setup](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md).
 
 **Effort flags, read before the mode:** `--effort <level>`, `--effort=<level>` or `--xhigh`
-(= `--effort xhigh`) directly after `/codex` or its mode word, before any prompt text, set
-`<effort-level>` (else empty); remove them before Step 1. A later `--effort` is prompt text.
-Missing value, not one lowercase word, or conflicting flags: stop and say so.
+(= `--effort xhigh`) directly after `/codex` or its mode word, among its leading flags
+(`-m`, `--model`, `--role`) and before any prompt text, set `<effort-level>` (else `''`);
+remove them before Step 1. A later `--effort` is prompt text. Missing value, not one
+lowercase word, or conflicting flags: stop and say so.
 
 ```bash
 _CODEX_PROBE=~/.claude/skills/gstack/bin/gstack-codex-probe
