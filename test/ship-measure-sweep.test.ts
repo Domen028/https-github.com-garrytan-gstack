@@ -166,9 +166,12 @@ describe('ship-measure sweep CLI ($0)', () => {
     fs.writeFileSync(path.join(dir, 'trial-outcomes.jsonl'), `${history().map(r => JSON.stringify(r)).join('\n')}\n`);
     return dir;
   };
-  const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/ship-measure.ts'), 'sweep', ...args], {
-    cwd, encoding: 'utf8', timeout: 120_000, env: { ...process.env, GSTACK_STATE_ROOT: tmp('sweep-cli-state-'), GITHUB_STEP_SUMMARY: '' },
-  });
+  const cli = (cwd: string, ...args: string[]) => {
+    const state = tmp('sweep-cli-state-');
+    return spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/ship-measure.ts'), 'sweep', ...args], {
+      cwd, encoding: 'utf8', timeout: 120_000, env: { ...process.env, HOME: state, USERPROFILE: state, GSTACK_STATE_ROOT: state, GITHUB_STEP_SUMMARY: '' },
+    });
+  };
 
   test('--dry-run reads local history, prints the plan and the before probability, and spends nothing', () => {
     const cwd = tmp('sweep-cli-');
