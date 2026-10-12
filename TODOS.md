@@ -2,6 +2,13 @@
 
 ## NEXT PRIORITY
 
+### P3: `/codex --effort` follow-ups (filed 2026-10-11, from the #3146 autoplan review)
+
+- **Show the effort that ran.** The probe's `CODEX_EFFORT: <level> (source: ...)` line stays in `$TMPERR`, so a user cannot see that `--effort` took effect. Add an `Effort:` line to the review, challenge and consult result footers. Blocked on skeleton bytes in `codex/SKILL.md` (cap 60,200). **Effort:** S. **Priority:** P3.
+- **Timeouts at high effort.** `xhigh`, `max` and `ultra` can exceed the fixed 330 s / 540 s wrappers, and the timeout copy blames prompt size or API speed. Name the effort in the timeout message and suggest a lower `--effort`; consider effort-scaled budgets. **Effort:** S. **Priority:** P3.
+- **Per-run effort for gate voices (#2934).** `/review`, `/ship` and plan-review outside voices take `GSTACK_CODEX_EFFORT` and `codex_effort` but have no per-request flag; the Claude Code runner takes no effort at all. Needs its own precedence and consent review. **Effort:** M. **Priority:** P3.
+- **`minimal` with web search.** Every `/codex` dispatch passes `web_search="cached"`, and Codex reportedly rejects that with `reasoning.effort: minimal` (openai/codex#3559, #5002). Unverified here (no Codex CLI on the release machine); the same path already ships through `codex_effort minimal`. Verify on the pinned CLI and drop web search for `minimal` if it fails. **Effort:** S. **Priority:** P3.
+
 ### P2/P3: open bugs by area after the Wave 9 triage (filed 2026-10-11)
 
 The 158 older open issues were re-checked against main 5cb5e1c (v1.91.83.0). Of the 30 still-valid bugs, Wave 9 lanes take #915, #1080, #1081, #1150, #1315 and #1675 and park #2118 and #2623 (next section). The rest stay open here: issue, root-cause file, size. Bugs already tracked elsewhere in this file point there instead of repeating it.

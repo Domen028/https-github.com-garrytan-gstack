@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.93.0] - 2026-10-11
 
 **`/codex review --effort medium` runs one review at the effort you name, without changing your saved setting.**
 
@@ -8,9 +8,15 @@
 
 ### What this means for you
 
-- **`--effort <level>` on any `/codex` mode.** `/codex review --effort medium`, `/codex challenge --effort=low` and so on set `GSTACK_CODEX_EFFORT` for that dispatch only. It outranks `codex_effort` and the per-mode defaults, and the probe still rejects an unknown level before any Codex call. `--xhigh` keeps working as shorthand for `--effort xhigh`.
-- **No silent fallback.** A missing value, a value that isn't a single lowercase word, or conflicting effort flags stop the run with a message instead of quietly using a default.
-- **docs/skills.md** documents `codex_effort` and `--effort`, and no longer claims Challenge runs at `xhigh` (it runs at `high`).
+- **`--effort <level>` on any `/codex` mode.** `/codex review --effort medium`, `/codex challenge --effort=low` and so on set the effort for that request only. It outranks an exported `GSTACK_CODEX_EFFORT`, `codex_effort` and the per-mode defaults. `--xhigh` keeps working as shorthand for `--effort xhigh`.
+- **Flags only where flags go.** The flag counts directly after `/codex` or its mode word, before your prompt. `/codex what does --effort do?` sends that question to Codex instead of eating `--effort` as a setting, and `/codex review --effort medium` stays on native review.
+- **A typo costs nothing and says what to fix.** `--effort turbo` stops before any Codex call, including the model probe on a cold cache, with `'turbo' from /codex --effort is not a Codex reasoning effort level` and the list of levels. A missing value or conflicting effort flags stop with a message too.
+- **docs:** `docs/model-policy.md` documents the per-request flag, and `docs/skills.md` documents `codex_effort` and `--effort` and no longer claims Challenge runs at `xhigh` (it runs at `high`).
+
+### For contributors
+
+- `gstack-codex-probe check-effort <default> --request <level>` and `run-with-timeout --effort <default> --request-effort <level>` take the request level (empty means none) and name `/codex --effort` as its source. The five `/codex` dispatch fences pass it as the allowlisted `'<effort-level>'` placeholder (grammar `^[a-z]*$`), so the level reaches the shell only through the placeholder lint, never through prose. Test parsers of the `run-with-timeout` line accept the new argument.
+- `test/codex-effort.test.ts` runs all five rendered dispatches against a fake `codex`, and the bogus-level case asserts the rejection and zero calls. `test/model-role-invocation.test.ts` adds a zero-call case for an invalid level in Step 0.5.
 
 Contributed by @jnunemaker
 

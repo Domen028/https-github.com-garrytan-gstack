@@ -138,9 +138,14 @@ through the usual model error. An invalid value never reaches Codex:
 `gstack-config set` rejects it, and `gstack-codex-probe run-with-timeout --effort
 <default>` (which resolves the order above and appends the flag) stops the call
 before anything is sent, naming the source to fix. `gstack-codex-probe
-check-effort <default>` prints the same resolution without a call. `/codex ...
---xhigh` outranks all three for that request (it sets `GSTACK_CODEX_EFFORT=xhigh`
-on the dispatch).
+check-effort <default>` prints the same resolution without a call.
+
+For one request, `/codex review --effort medium` (or `--effort=<level>`; `--xhigh` is
+shorthand for `--effort xhigh`) outranks all three, including an exported
+`GSTACK_CODEX_EFFORT`, and changes nothing that persists. The flag counts only
+directly after `/codex` or its mode word, before the prompt text; a later `--effort`
+is part of the prompt. `/codex` passes the level to the probe as `--request-effort`,
+so an unknown level stops before any Codex call, naming the flag.
 
 `/spec`'s quality gate keeps `medium` inside its 120-second budget whatever you
 set, because a higher effort would spend the time the gate is sized for.
