@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.99.0] - 2026-10-11
+## [1.91.93.0] - 2026-10-12
 
 **/cso release qualification gates on finished reports. Report completeness is still measured, but it no longer blocks a release.**
 
