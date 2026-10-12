@@ -206,7 +206,7 @@ describe('CSO matched evaluation accounting', () => {
     expect(group(score, 'v3', 'comprehensive').highCriticalRecall).toEqual({ numerator: 96, denominator: 96, value: 1 });
     expect(score.perStack.rails).toEqual({ correctHeldOutRepairs: 10, denominator: 10 });
   });
-  test('finished partial reports count their findings and outcomes; completeness stays its own measured, gated rate', () => {
+  test('finished partial reports count their findings and outcomes and satisfy the report gates; completeness stays its own measured rate', () => {
     const results = matrix.cells.map(syntheticResult);
     for (const result of results) result.reportComplete = false;
     const score = scoreEval(matrix, results, qualification), daily = group(score, 'v3', 'daily'), comprehensive = group(score, 'v3', 'comprehensive');
@@ -216,7 +216,14 @@ describe('CSO matched evaluation accounting', () => {
     expect(comprehensive.highCriticalRecall).toEqual({ numerator: 96, denominator: 96, value: 1 });
     expect(comprehensive.repair.numerator).toBe(comprehensive.repair.denominator);
     expect(score.perStack.rails).toEqual({ correctHeldOutRepairs: 10, denominator: 10 });
-    expect(score.gates).toMatchObject({ comprehensiveHighCriticalRecall80: 'pass', dailyPrecision95: 'pass', mandatoryReports: 'fail', matchedCompleteMatrix: 'fail' });
+    expect(score.gates).toMatchObject({ comprehensiveHighCriticalRecall80: 'pass', dailyPrecision95: 'pass', mandatoryReports: 'pass', matchedCompleteMatrix: 'pass' });
+    expect(score.status).toBe('qualified');
+  });
+  test('one unfinished report fails both report gates even when every other report is finished', () => {
+    const results = matrix.cells.map(syntheticResult);
+    Object.assign(results[0], { reportComplete: false, reportFinished: false });
+    const score = scoreEval(matrix, results, qualification);
+    expect(score.gates).toMatchObject({ mandatoryReports: 'fail', matchedCompleteMatrix: 'fail' });
     expect(score.status).toBe('partial');
   });
   test('running or missing reports contribute no security evidence and cannot qualify a complete matrix', () => {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.91.99.0] - 2026-10-11
+
+**/cso release qualification gates on finished reports. Report completeness is still measured, but it no longer blocks a release.**
+
+- **Gate edit: `matchedCompleteMatrix` and `mandatoryReports` (scripts/cso-eval.ts).** Both gates used to require every report's helper completeness to be `complete`: no gap, and every domain assessed. The private corpus fixtures carry gaps by design. They have no workflow files for zizmor, their planted credentials are never tested live, `.env` is kept out of the sealed source, and gitleaks has no history to read. So no report could ever be `complete`, and no release could ever qualify. Both gates now require every report to be `finished`, on a complete, fully adjudicated matrix. A running, missing or failed report still fails them. Completeness stays its own measured rate: `reports` per group, and the evaluator's `completenessRates`. Garry approved this rule on 2026-10-11, choosing option (a). No threshold changed.
+
 ## [1.91.92.0] - 2026-10-11
 
 **Outside reviews honor `codex_reviews` at the send, not in skill prose. Codex reasoning effort is a setting, and the README says what leaves your machine.**
