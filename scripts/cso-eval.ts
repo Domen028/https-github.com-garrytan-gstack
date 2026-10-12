@@ -116,7 +116,8 @@ export interface EvalResult {
   cellId: string; sourceHash: string; skillHash: string; model: string; host: string; budgetSeconds: number;
   /**
    * `reportFinished`: the helper report's status is `finished`; its findings and runtime outcomes count whatever its
-   * completeness. `reportComplete`: it is also `complete` (no gap, every domain assessed), measured as its own rate.
+   * completeness, and the report gates require it. `reportComplete`: it is also `complete` (no gap, every domain
+   * assessed), measured as its own ungated rate because the corpus fixtures carry gaps by design.
    */
   reportPresent: boolean; reportFinished: boolean; reportComplete: boolean; findings: EvalFinding[];
   setup: Outcome; reproduction: Outcome; repair: Outcome; recheck: Outcome;
@@ -781,13 +782,13 @@ export function scoreEval(matrix: EvalMatrix, observations: EvalResult[], qualif
     }).map(cell => cell.caseId));
     return [stack, { correctHeldOutRepairs: successful.size, denominator: new Set(eligible.map(cell => cell.caseId)).size }];
   }));
-  const assessedAll = observations.length === matrix.cells.length && observations.every(result => result.reportPresent && result.reportComplete) && groups.every(group => !group.unadjudicated);
+  const assessedAll = observations.length === matrix.cells.length && observations.every(result => result.reportFinished) && groups.every(group => !group.unadjudicated);
   const gate = (condition: boolean | null, hasData: boolean): 'pass' | 'fail' | 'unmeasured' => !hasData || condition === null ? 'unmeasured' : condition ? 'pass' : 'fail';
   const containmentValues = REQUIRED_CONTAINMENT.map(name => qualification.containment?.[name]);
   if (containmentValues.some(value => value !== undefined && !['passed', 'failed', 'not_run'].includes(value))) throw new Error('INVALID_CONTAINMENT_RESULT');
   const gates = {
     matchedCompleteMatrix: gate(assessedAll, observations.length > 0),
-    mandatoryReports: gate(groups.every(group => group.reports.numerator === group.reports.denominator), observations.length === matrix.cells.length),
+    mandatoryReports: gate(groups.every(group => group.finishedReports.numerator === group.finishedReports.denominator), observations.length === matrix.cells.length),
     dailyPrecision95: gate(daily.precision.value === null ? null : daily.precision.value >= 0.95, daily.submitted === daily.cells && !daily.unadjudicated),
     comprehensiveHighCriticalRecall80: gate(comprehensive.highCriticalRecall.value >= 0.8, comprehensive.submitted === comprehensive.cells && !comprehensive.unadjudicated),
     noHighCriticalRecallRegression: profile === 'full'

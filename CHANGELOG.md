@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.93.0] - 2026-10-11
+## [1.91.94.0] - 2026-10-12
 
 **`/codex review --effort medium` runs one review at the effort you name, without changing your saved setting.**
 
@@ -19,6 +19,12 @@
 - `test/codex-effort.test.ts` runs all five rendered dispatches against a fake `codex`, and the bogus-level case asserts the rejection and zero calls. `test/model-role-invocation.test.ts` adds a zero-call case for an invalid level in Step 0.5.
 
 Contributed by @jnunemaker
+
+## [1.91.93.0] - 2026-10-12
+
+**/cso release qualification gates on finished reports. Report completeness is still measured, but it no longer blocks a release.**
+
+- **Gate edit: `matchedCompleteMatrix` and `mandatoryReports` (scripts/cso-eval.ts).** Both gates used to require every report's helper completeness to be `complete`: no gap, and every domain assessed. The private corpus fixtures carry gaps by design. They have no workflow files for zizmor, their planted credentials are never tested live, `.env` is kept out of the sealed source, and gitleaks has no history to read. So no report could ever be `complete`, and no release could ever qualify. Both gates now require every report to be `finished`, on a complete, fully adjudicated matrix. A running, missing or failed report still fails them. Completeness stays its own measured rate: `reports` per group, and the evaluator's `completenessRates`. Garry approved this rule on 2026-10-11, choosing option (a). No threshold changed.
 
 ## [1.91.92.0] - 2026-10-11
 
