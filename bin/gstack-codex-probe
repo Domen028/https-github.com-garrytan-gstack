@@ -6,7 +6,8 @@
 #
 # Subcommands (each wraps one function below):
 #   select-model <exec|review> [--model <id>]  CODEX_SEL:, CODEX_SEL_KIND:, CODEX_SANDBOX:
-#   check-effort <default-effort>              CODEX_EFFORT:; exit 0, or 1 on an invalid setting
+#   check-effort <default-effort> [--request <level>]
+#                                              CODEX_EFFORT:; exit 0, or 1 on an invalid setting
 #   check-auth                                 exit 0 authed, 1 not
 #   show-sandbox                               CODEX_SANDBOX:
 #   check-sandbox                              exit 0, or 3 with the reason on stderr
@@ -17,11 +18,12 @@
 #                                              CODEX_PROBE_STATE:; exit 0, 1, 2, 3 or 4
 #   check-version                              warnings on stderr; exit 0
 #   show-first-use-notice                      notice on stderr; exit 0
-#   run-with-timeout [--user-invoked] [--effort <default>] <secs> <cmd...>
+#   run-with-timeout [--user-invoked] [--effort <default> [--request-effort <level>]] <secs> <cmd...>
 #                                              the command's exit code; 124 on timeout;
 #                                              3 when codex_reviews refuses the send;
 #                                              --effort appends the resolved
-#                                              model_reasoning_effort to a codex command
+#                                              model_reasoning_effort to a codex command;
+#                                              --request-effort is /codex --effort (empty: none)
 #   log-event <event> [detail]                 silent; exit 0
 #   log-hang <skill> <prompt-size>             silent; exit 0
 #   help                                       usage; an unknown subcommand exits 64
@@ -848,15 +850,18 @@ _gstack_codex_log_hang() {
 # --- Reasoning effort (#3098, #2934) ------------------------------------------
 
 _gstack_codex_effort_check() {
-  # One precedence, like the model: GSTACK_CODEX_EFFORT (per run), then
-  # codex_effort in config.yaml, then the gate's own default in $1. Codex only
+  # One precedence, like the model: the request's /codex --effort in $2, then
+  # GSTACK_CODEX_EFFORT (per run), then codex_effort in config.yaml, then the
+  # gate's own default in $1. Codex only
   # rejects an unknown model_reasoning_effort at request time, so an invalid
   # setting stops here, before any paid call, naming the source to fix. The
   # allowlist is the union of Codex's config levels and the API's minimal;
   # levels are model-dependent. A default outside it is a usage error (64).
-  local _default="$1" _chosen _source _cfg
+  local _default="$1" _request="${2:-}" _chosen _source _cfg
   case "$_default" in minimal|low|medium|high|xhigh|max|ultra) ;; *) return 64 ;; esac
-  if [ -n "${GSTACK_CODEX_EFFORT:-}" ]; then
+  if [ -n "$_request" ]; then
+    _chosen="$_request"; _source="/codex --effort"
+  elif [ -n "${GSTACK_CODEX_EFFORT:-}" ]; then
     _chosen="$GSTACK_CODEX_EFFORT"; _source="env GSTACK_CODEX_EFFORT"
   else
     _cfg=$("$_GSTACK_CODEX_BIN/gstack-config" get codex_effort 2>/dev/null || true)
@@ -867,7 +872,11 @@ _gstack_codex_effort_check() {
     minimal|low|medium|high|xhigh|max|ultra) ;;
     *)
       echo "CODEX_EFFORT: invalid — '$_chosen' from $_source is not a Codex reasoning effort level. No Codex call was made." >&2
-      echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (export GSTACK_CODEX_EFFORT=<level> or gstack-config set codex_effort <level>), or unset it to keep each gate's own effort." >&2
+      if [ -n "$_request" ]; then
+        echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (e.g. /codex review --effort medium), or drop --effort to keep the configured effort." >&2
+      else
+        echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (export GSTACK_CODEX_EFFORT=<level> or gstack-config set codex_effort <level>), or unset it to keep each gate's own effort." >&2
+      fi
       return 1
       ;;
   esac
@@ -881,8 +890,9 @@ _gstack_codex_usage() {
   printf '%s\n' \
     'Usage: gstack-codex-probe <subcommand> [args]' \
     '  select-model <exec|review> [--model <id>]  print CODEX_SEL:, CODEX_SEL_KIND: and CODEX_SANDBOX:; exit 0 or 1' \
-    '  check-effort <default-effort>              GSTACK_CODEX_EFFORT, else codex_effort, else the default; print' \
-    '                                             CODEX_EFFORT:; exit 0, 1 on an invalid setting' \
+    '  check-effort <default-effort> [--request <level>]' \
+    '                                             the request level, else GSTACK_CODEX_EFFORT, else codex_effort,' \
+    '                                             else the default; print CODEX_EFFORT:; exit 0, 1 on an invalid setting' \
     '  check-auth                                 exit 0 when Codex credentials exist, 1 otherwise' \
     '  show-sandbox                               print CODEX_SANDBOX: read-only (or danger-full-access)' \
     '  check-sandbox                              free sandbox check; exit 0, or 3 with the reason on stderr' \
@@ -892,12 +902,13 @@ _gstack_codex_usage() {
     '                                             CODEX_SEL:, CODEX_SEL_KIND:, CODEX_SANDBOX:, CODEX_PROBE_STATE:' \
     '  check-version                              warn on stderr about known-bad Codex CLI versions; exit 0' \
     '  show-first-use-notice                      once per machine, say where reviews go; exit 0' \
-    '  run-with-timeout [--user-invoked] [--effort <default>] <secs> <cmd...>' \
+    '  run-with-timeout [--user-invoked] [--effort <default> [--request-effort <level>]] <secs> <cmd...>' \
     '                                             run cmd under a deadline once codex_reviews allows the send;' \
     '                                             its exit code, 124 on timeout, 3 refused (consent_missing).' \
     '                                             --user-invoked: the user asked for this review by name' \
     '                                             --effort: append -c model_reasoning_effort=<level> to a codex' \
     '                                             command, as check-effort resolves it; 1 on an invalid setting' \
+    '                                             --request-effort: /codex --effort, outranking the rest (empty: none)' \
     '  log-event <event> [detail]                 record a telemetry event when telemetry is on; exit 0' \
     '  log-hang <skill> <prompt-size>             record a timeout learning; exit 0' \
     '  help                                       this text'
@@ -948,8 +959,8 @@ _gstack_codex_main() {
       _gstack_codex_select_model "$_GSTACK_CODEX_ARG_KIND" "$_GSTACK_CODEX_ARG_MODEL" || return 1
       printf 'CODEX_SEL: %s\nCODEX_SEL_KIND: %s\nCODEX_SANDBOX: %s\n' "$_GSTACK_CODEX_SEL" "$_GSTACK_CODEX_SEL_KIND" "$_GSTACK_CODEX_SANDBOX" ;;
     check-effort)
-      [ "$#" -eq 1 ] || { _gstack_codex_usage >&2; return 64; }
-      _gstack_codex_effort_check "$1"
+      { [ "$#" -eq 1 ] || { [ "$#" -eq 3 ] && [ "$2" = "--request" ]; }; } || { _gstack_codex_usage >&2; return 64; }
+      _gstack_codex_effort_check "$1" "${3:-}"
       _rc=$?
       [ "$_rc" -eq 64 ] && { _gstack_codex_usage >&2; return 64; }
       return "$_rc" ;;
@@ -988,10 +999,15 @@ _gstack_codex_main() {
     run-with-timeout)
       _GSTACK_CODEX_USER_INVOKED=0
       _GSTACK_CODEX_EFFORT_DEFAULT=""
+      _GSTACK_CODEX_EFFORT_REQUEST=""
       if [ "${1:-}" = "--user-invoked" ]; then _GSTACK_CODEX_USER_INVOKED=1; shift; fi
       if [ "${1:-}" = "--effort" ]; then
         { [ "$#" -ge 2 ] && [ -n "$2" ]; } || { _gstack_codex_usage >&2; return 64; }
         _GSTACK_CODEX_EFFORT_DEFAULT="$2"; shift 2
+        if [ "${1:-}" = "--request-effort" ]; then
+          [ "$#" -ge 2 ] || { _gstack_codex_usage >&2; return 64; }
+          _GSTACK_CODEX_EFFORT_REQUEST="$2"; shift 2
+        fi
       fi
       case "${1:-}" in ''|*[!0-9.]*) _gstack_codex_usage >&2; return 64 ;; esac
       [ "$#" -ge 2 ] || { _gstack_codex_usage >&2; return 64; }
@@ -999,7 +1015,7 @@ _gstack_codex_main() {
       _gstack_codex_consent "$_GSTACK_CODEX_USER_INVOKED" || return 3
       if [ -n "$_GSTACK_CODEX_EFFORT_DEFAULT" ]; then
         _rc=0
-        _GSTACK_CODEX_EFFORT_LINE=$(_gstack_codex_effort_check "$_GSTACK_CODEX_EFFORT_DEFAULT") || _rc=$?
+        _GSTACK_CODEX_EFFORT_LINE=$(_gstack_codex_effort_check "$_GSTACK_CODEX_EFFORT_DEFAULT" "$_GSTACK_CODEX_EFFORT_REQUEST") || _rc=$?
         [ "$_rc" -eq 64 ] && { _gstack_codex_usage >&2; return 64; }
         [ "$_rc" -eq 0 ] || return "$_rc"
         set -- "$@" -c "model_reasoning_effort=\"${_GSTACK_CODEX_EFFORT_LINE#CODEX_EFFORT: }\""

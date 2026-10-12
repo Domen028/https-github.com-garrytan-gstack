@@ -17,7 +17,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'outside-send-boundary-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 const POSITION = String.raw`(?:^|[;&|]\s*|\$\(\s*|\b(?:then|do|else|if|!)\s+)`;
-const CODEX = new RegExp(`${POSITION}(?:g?timeout\\s+\\S+\\s+)?((?:"\\$_CODEX_PROBE"\\s+run-with-timeout\\s+(?:--user-invoked\\s+)?(?:--effort\\s+\\w+\\s+)?\\d+\\s+)?)codex\\s+(?:exec|review)\\b`);
+const CODEX = new RegExp(`${POSITION}(?:g?timeout\\s+\\S+\\s+)?((?:"\\$_CODEX_PROBE"\\s+run-with-timeout\\s+(?:--user-invoked\\s+)?(?:--effort\\s+\\w+\\s+(?:--request-effort\\s+'[^']*'\\s+)?)?\\d+\\s+)?)codex\\s+(?:exec|review)\\b`);
 /** A headless Claude prompt run (`claude -p`, `--print`, or a prompt on stdin), or the resolved CLAUDE_BIN; `claude mcp|auth|config` manage the CLI and send no repository content. */
 const CLAUDE = new RegExp(`${POSITION}(?:command\\s+)?(?:"\\$\\{?CLAUDE_BIN\\}?"|claude(?=\\s)(?![^|;&]*\\s(?:mcp|auth|config|update|doctor)\\b)[^|;&]*(?:\\s(?:-p|--print)\\b|\\s<\\s*\\S))`);
 
@@ -59,7 +59,7 @@ describe('generated skills start outside CLIs only through the consent-enforcing
       expect(files.length).toBeGreaterThan(20);
       const bad = files.flatMap(f => directLaunches(fs.readFileSync(f, 'utf8')).map(l => `${path.relative(TMP, f)}: ${l}`));
       expect(bad).toEqual([]);
-      const wrapped = files.filter(f => /run-with-timeout (?:--user-invoked )?(?:--effort \w+ )?\d+ codex|gstack-claude-code/.test(fs.readFileSync(f, 'utf8')));
+      const wrapped = files.filter(f => /run-with-timeout (?:--user-invoked )?(?:--effort \w+ (?:--request-effort '[^']*' )?)?\d+ codex|gstack-claude-code/.test(fs.readFileSync(f, 'utf8')));
       expect(wrapped.length).toBeGreaterThan(5);
     });
   }

@@ -27,10 +27,10 @@ describe('manual /codex modes (#3098)', () => {
   test('every mode dispatches through run-with-timeout --effort with its own default', () => {
     for (const [mode, def] of MODES) {
       const tmpl = read(`codex/sections/${mode}.md.tmpl`);
-      const dispatches = tmpl.split('\n').filter(line => /run-with-timeout --user-invoked --effort \w+ \d+ codex (exec|review)\b/.test(line));
+      const dispatches = tmpl.split('\n').filter(line => /run-with-timeout --user-invoked --effort \w+ (--request-effort '<effort-level>' )?\d+ codex (exec|review)\b/.test(line));
       expect(dispatches.length, mode).toBeGreaterThan(0);
       for (const line of dispatches) {
-        expect(line, mode).toContain(`--effort ${def} `);
+        expect(line, mode).toContain(`--effort ${def} --request-effort '<effort-level>' `);
         expect(line, mode).not.toContain('model_reasoning_effort');
       }
       expect(tmpl, mode).not.toContain('check-effort');
@@ -39,10 +39,29 @@ describe('manual /codex modes (#3098)', () => {
 
   test('the skill body documents the precedence and the --effort / --xhigh overrides', () => {
     const body = read('codex/SKILL.md.tmpl');
-    for (const want of ['GSTACK_CODEX_EFFORT=xhigh', 'codex_effort', 'run-with-timeout --effort <default>']) expect(body).toContain(want);
-    const step1 = between(body, '**Reasoning effort override:**', '- Review (2A)');
-    expectTokens(step1, ['--effort <level>', '--effort=<level>', '--xhigh', 'GSTACK_CODEX_EFFORT=<level>'], 'codex Step 1');
-    expectMentions(step1, [['remove', 'prompt text'], ['missing', 'lowercase word', 'conflicting', 'stop'], ['never', 'silently']], 'codex Step 1');
+    for (const want of ['GSTACK_CODEX_EFFORT', 'codex_effort', 'run-with-timeout --effort <default>', '--request-effort']) expect(body).toContain(want);
+    const flags = between(body, '**Effort flags, read before the mode:**', '```bash');
+    expectTokens(flags, ['--effort <level>', '--effort=<level>', '--xhigh', '--effort xhigh', '<effort-level>'], 'codex effort flags');
+    expectMentions(flags, [['directly after', 'mode word', 'before any prompt text'], ['later', 'prompt text'], ['remove', 'before Step 1'],
+      ['missing', 'lowercase word', 'conflicting', 'stop']], 'codex effort flags');
+    const step1 = between(body, '## Step 1: Detect mode', '- Review (2A)');
+    expectMentions(step1, [['effort flags removed'], ['--request-effort', 'outranks']], 'codex Step 1');
+  });
+
+  test('effort flags are read and validated before mode detection and before the paid model probe', () => {
+    const body = read('codex/SKILL.md.tmpl');
+    const at = (s: string) => { const i = body.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i; };
+    const check = at(`"$_CODEX_PROBE" check-effort high --request '<effort-level>' >/dev/null || exit 1`);
+    expect(at('**Effort flags, read before the mode:**')).toBeLessThan(check);
+    expect(check).toBeLessThan(at('"$_CODEX_PROBE" probe-model exec'));
+    expect(check).toBeLessThan(at('## Step 1: Detect mode'));
+    expect(body).not.toMatch(/prefix each\s+`run-with-timeout` dispatch with `GSTACK_CODEX_EFFORT/);
+  });
+
+  test('docs/model-policy.md documents the per-request --effort flag in its Reasoning effort section', () => {
+    const doc = between(read('docs/model-policy.md'), '## Reasoning effort', '## Which workflows use the tiers?');
+    expectTokens(doc, ['/codex review --effort medium', '--effort=<level>', '--xhigh', '--request-effort', 'GSTACK_CODEX_EFFORT'], 'model-policy effort');
+    expectMentions(doc, [['outranks', 'exported'], ['directly after', 'mode word', 'prompt'], ['unknown level', 'before any Codex call']], 'model-policy effort');
   });
 });
 
@@ -101,26 +120,61 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"SCORE: 8"}
     expect(dispatchedArgs('review', 'banana', undefined)).toEqual([]);
   });
 
-  test('the rendered /codex review dispatch runs at a per-run GSTACK_CODEX_EFFORT prefix, over codex_effort', () => {
-    const fence = read('codex/sections/review-mode.md').split('\n').find(line => /run-with-timeout --user-invoked --effort high 330 codex review /.test(line))!;
-    const state = path.join(TMP, 'state-codex-review-prefix');
+  const FENCES = (['review-mode', 'challenge-mode', 'consult-mode'] as const).flatMap(mode =>
+    read(`codex/sections/${mode}.md`).split('\n').filter(line => /run-with-timeout --user-invoked --effort \w+ --request-effort '<effort-level>' \d+ codex /.test(line))
+      .map(line => ({ mode, line: line.trim().split(' | tee ')[0] })));
+
+  test('all five rendered /codex dispatches carry the request level to the probe, over env and codex_effort', () => {
+    expect(FENCES.length).toBe(5);
+    const state = path.join(TMP, 'state-codex-request-effort');
     fs.mkdirSync(state, { recursive: true });
     fs.writeFileSync(path.join(state, 'config.yaml'), 'codex_effort: low\n');
     const env: Record<string, string> = {};
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(CODEX_|GSTACK_CODEX_|OPENAI_)/.test(k)) env[k] = v;
     Object.assign(env, { PATH: `${fakeBin}:${process.env.PATH}`, GSTACK_HOME: state, GSTACK_STATE_ROOT: '', CODEX_HOME: TMP, GSTACK_ACTIVE_HOST: 'claude', CLAUDECODE: '1' });
-    const run = (prefix: string) => {
+    const err = path.join(TMP, 'dispatch-err');
+    const run = (line: string, level: string, exported?: string) => {
       fs.rmSync(capture, { force: true });
+      fs.rmSync(err, { force: true });
       const script = [`_CODEX_PROBE=${JSON.stringify(path.join(ROOT, 'bin', 'gstack-codex-probe'))}`, '_CODEX_SANDBOX_MODE=read-only', '_CODEX_SEL=gpt-test',
-        `TMPOUT=${JSON.stringify(path.join(TMP, 'review-out'))}`, `TMPERR=${JSON.stringify(path.join(TMP, 'review-err'))}`,
-        prefix + fence.replace('<base>', 'HEAD')].join('\n');
-      spawnSync('bash', ['-c', script], { cwd: repo, env, encoding: 'utf8', timeout: 60_000 });
-      return fs.existsSync(capture) ? fs.readFileSync(capture, 'utf8').split('\n') : [];
+        `_REPO_ROOT=${JSON.stringify(repo)}`, `PROMPT_FILE=${JSON.stringify(prompt)}`, `_PROMPT_FILE=${JSON.stringify(prompt)}`, '_SID=sid-test',
+        `TMPOUT=${JSON.stringify(path.join(TMP, 'dispatch-out'))}`, `TMPRESP=${JSON.stringify(path.join(TMP, 'dispatch-resp'))}`, `TMPERR=${JSON.stringify(err)}`,
+        line.replace('<base>', 'HEAD').replace(`'<effort-level>'`, `'${level}'`)].join('\n');
+      const r = spawnSync('bash', ['-c', script], { cwd: repo, env: exported ? { ...env, GSTACK_CODEX_EFFORT: exported } : env, encoding: 'utf8', timeout: 60_000 });
+      return { status: r.status, args: fs.existsSync(capture) ? fs.readFileSync(capture, 'utf8').split('\n') : [], stderr: fs.existsSync(err) ? fs.readFileSync(err, 'utf8') : '' };
     };
-    expect(run('')).toContain('model_reasoning_effort="low"');
-    expect(run('GSTACK_CODEX_EFFORT=medium ')).toContain('model_reasoning_effort="medium"');
-    expect(run('GSTACK_CODEX_EFFORT=xhigh ')).toContain('model_reasoning_effort="xhigh"');
-    expect(run('GSTACK_CODEX_EFFORT=bogus ')).toEqual([]);
+    for (const { mode, line } of FENCES) {
+      expect(run(line, '').args, mode).toContain('model_reasoning_effort="low"');
+      expect(run(line, 'medium').args, mode).toContain('model_reasoning_effort="medium"');
+      expect(run(line, 'xhigh').args, mode).toContain('model_reasoning_effort="xhigh"');
+      expect(run(line, 'medium', 'max').args, mode).toContain('model_reasoning_effort="medium"');
+      const bogus = run(line, 'bogus');
+      expect(bogus.args, mode).toEqual([]);
+      expect(bogus.status, mode).toBe(1);
+      expect(bogus.stderr, mode).toContain("CODEX_EFFORT: invalid — 'bogus' from /codex --effort");
+      expect(bogus.stderr, mode).toContain('--effort medium');
+    }
+  });
+
+  test('check-effort --request outranks env and config, and names the flag when the level is invalid', () => {
+    const probe = path.join(ROOT, 'bin', 'gstack-codex-probe');
+    const state = path.join(TMP, 'state-check-effort-request');
+    fs.mkdirSync(state, { recursive: true });
+    fs.writeFileSync(path.join(state, 'config.yaml'), 'codex_effort: low\n');
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !/^(CODEX_|GSTACK_CODEX_|OPENAI_)/.test(k)) env[k] = v;
+    Object.assign(env, { GSTACK_HOME: state, GSTACK_STATE_ROOT: '' });
+    const check = (args: string[], exported?: string) => spawnSync(probe, ['check-effort', ...args], { env: exported ? { ...env, GSTACK_CODEX_EFFORT: exported } : env, encoding: 'utf8', timeout: 30_000 });
+    expect(check(['high', '--request', 'medium'], 'max').stdout).toBe('CODEX_EFFORT: medium\n');
+    expect(check(['high', '--request', '']).stdout).toBe('CODEX_EFFORT: low\n');
+    expect(check(['high', '--request', ''], 'max').stdout).toBe('CODEX_EFFORT: max\n');
+    const bad = check(['high', '--request', 'turbo']);
+    expect(bad.status).toBe(1);
+    expect(bad.stdout).toBe('');
+    expect(bad.stderr).toContain("'turbo' from /codex --effort");
+    expect(bad.stderr).not.toContain('export GSTACK_CODEX_EFFORT');
+    expect(check(['high', '--request']).status).toBe(64);
+    expect(check(['high', '--bogus', 'low']).status).toBe(64);
   });
 
   test('/spec keeps medium effort and its 120 s budget whatever env or config say', () => {

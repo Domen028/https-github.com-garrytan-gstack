@@ -41,6 +41,7 @@ export const IDENTIFIER_PLACEHOLDERS: Record<string, IdentifierGrammar> = {
   '<clean|flagged>': { grammar: oneOf('clean', 'flagged'), what: 'semantic review outcome' },
   '<N|null>': { grammar: /^(?:[0-9]+(?:\.[0-9]+)?|null)$/, what: 'health score or null' },
   '<platform>': { grammar: oneOf('github', 'gitlab', 'unknown'), what: 'detected git platform' },
+  '<effort-level>': { grammar: /^[a-z]*$/, what: "the request's /codex --effort level, or empty for none (the probe validates the level)", quoted: true },
 
   // Ids, keys and numbers.
   '<id>': { grammar: ID, what: 'question or record id (kebab-case)' },
