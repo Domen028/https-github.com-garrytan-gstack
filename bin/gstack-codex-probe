@@ -877,7 +877,7 @@ _gstack_codex_effort_check() {
     *)
       echo "CODEX_EFFORT: invalid — '$_chosen' from $_source is not a Codex reasoning effort level. No Codex call was made." >&2
       if [ -n "$_request" ]; then
-        echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (e.g. /codex review --effort medium), or drop --effort to keep the configured effort." >&2
+        echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (e.g. /codex review --effort medium), or drop --effort to keep the configured effort. See docs/model-policy.md#reasoning-effort." >&2
       else
         echo "HINT: use one of minimal, low, medium, high, xhigh, max or ultra (export GSTACK_CODEX_EFFORT=<level> or gstack-config set codex_effort <level>), or unset it to keep each gate's own effort." >&2
       fi

@@ -185,7 +185,8 @@ CONFIG_HEADER='# gstack configuration — edit freely, changes take effect on ne
 # codex_effort:             # Codex reasoning effort for outside reviews and /codex:
 #                           #   minimal | low | medium | high | xhigh | max | ultra.
 #                           #   Absent = every gate keeps its effort. GSTACK_CODEX_EFFORT
-#                           #   overrides it per run; /spec keeps medium (120 s budget).
+#                           #   overrides it per run, /codex --effort per request;
+#                           #   /spec keeps medium (120 s budget).
 # Docs: docs/model-policy.md
 #
 # ─── Advanced ────────────────────────────────────────────────────────
@@ -335,7 +336,7 @@ lookup_default() {
     plan_review_tier) echo "frontier" ;; # frontier | smart | host — lib/model-policy.ts reads it strictly
     implementation_tier) echo "smart" ;; # frontier | smart
     model_frontier_claude|model_frontier_openai|model_smart_claude|model_smart_openai) echo "" ;; # empty = shipped catalog ID (gstack-models list)
-    codex_effort) echo "" ;; # empty = each gate's own effort; GSTACK_CODEX_EFFORT wins (gstack-codex-probe run-with-timeout --effort)
+    codex_effort) echo "" ;; # empty = each gate's own effort; /codex --effort, then GSTACK_CODEX_EFFORT, win (gstack-codex-probe run-with-timeout --effort)
     ship_greptile_early) echo "true" ;; # true | false — /ship's early Greptile PR
     # Unknown key: exit non-zero instead of printing "". The fallback pattern
     # the preambles use,

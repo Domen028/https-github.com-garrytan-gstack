@@ -80,8 +80,8 @@ probes and dispatches the policy model within its own timeout. [Policy setup](ht
 **Effort flags, read before the mode:** `--effort <level>`, `--effort=<level>` or `--xhigh`
 (= `--effort xhigh`) directly after `/codex` or its mode word, among its leading flags
 (`-m`, `--model`, `--role`) and before any prompt text, set `<effort-level>` (else `''`);
-remove them before Step 1. A later `--effort` is prompt text. Missing value, not one
-lowercase word, or conflicting flags: stop and say so.
+remove them before Step 1. A later `--effort` is prompt text; say so in one line. Missing
+value, not one lowercase word, or differing levels: stop, name the levels; nothing is sent.
 
 ```bash
 _CODEX_PROBE=~/.claude/skills/gstack/bin/gstack-codex-probe

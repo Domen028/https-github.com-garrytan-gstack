@@ -43,7 +43,7 @@ describe('manual /codex modes (#3098)', () => {
     const flags = between(body, '**Effort flags, read before the mode:**', '```bash');
     expectTokens(flags, ['--effort <level>', '--effort=<level>', '--xhigh', '--effort xhigh', '<effort-level>'], 'codex effort flags');
     expectMentions(flags, [['directly after', 'mode word', 'leading flags', '--model', '--role', 'before any prompt text'], ['later', 'prompt text'], ['remove', 'before Step 1'],
-      ['missing', 'lowercase word', 'conflicting', 'stop']], 'codex effort flags');
+      ['missing', 'lowercase word', 'differing levels', 'stop'], ['later', 'say so']], 'codex effort flags');
     const step1 = between(body, '## Step 1: Detect mode', '- Review (2A)');
     expectMentions(step1, [['effort flags removed'], ['--request-effort', 'outranks']], 'codex Step 1');
   });
@@ -61,7 +61,8 @@ describe('manual /codex modes (#3098)', () => {
   test('docs/model-policy.md documents the per-request --effort flag in its Reasoning effort section', () => {
     const doc = between(read('docs/model-policy.md'), '## Reasoning effort', '## Which workflows use the tiers?');
     expectTokens(doc, ['/codex review --effort medium', '--effort=<level>', '--xhigh', '--request-effort', 'GSTACK_CODEX_EFFORT'], 'model-policy effort');
-    expectMentions(doc, [['outranks', 'exported'], ['directly after', 'mode word', 'prompt'], ['unknown level', 'before any Codex call']], 'model-policy effort');
+    expectMentions(doc, [['outranks', 'exported'], ['directly after', 'mode word', 'leading flags', 'prompt'], ['unknown level', 'before any Codex call']], 'model-policy effort');
+    expect(doc).toContain('| 0 | `/codex ... --effort <level>`');
   });
 });
 
@@ -173,6 +174,7 @@ echo '{"type":"item.completed","item":{"type":"agent_message","text":"SCORE: 8"}
     expect(bad.stdout).toBe('');
     expect(bad.stderr).toContain("'turbo' from /codex --effort");
     expect(bad.stderr).not.toContain('export GSTACK_CODEX_EFFORT');
+    expect(bad.stderr).toContain('docs/model-policy.md#reasoning-effort');
     const unfilled = check(['high', '--request', '<effort-level>']);
     expect(unfilled.status).toBe(1);
     expect(unfilled.stderr).toContain("'<effort-level>' placeholder was left unfilled");

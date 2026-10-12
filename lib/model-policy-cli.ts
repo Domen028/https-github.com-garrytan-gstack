@@ -66,9 +66,10 @@ Settings (gstack-config set|unset <key>):
   codex_effort           ${CODEX_EFFORT_LEVELS.join(' | ')}
                          (default: each gate's own effort)
 
-Codex reasoning effort: GSTACK_CODEX_EFFORT (per run), then codex_effort, then
-the gate's default (high for reviews, medium for /codex consult and design
-direction). /spec keeps medium inside its 120 s budget.
+Codex reasoning effort: /codex --effort <level> (one request), then
+GSTACK_CODEX_EFFORT (per run), then codex_effort, then the gate's default (high
+for reviews, medium for /codex consult and design direction). /spec keeps medium
+inside its 120 s budget.
 
 A detected custom Anthropic or OpenAI endpoint (Bedrock, Vertex, Foundry, a base-URL
 override or a Codex model_provider) never receives a shipped public ID: set a

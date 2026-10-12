@@ -123,11 +123,12 @@ explicit implementation model rather than delegating to a hidden native choice.
 ## Reasoning effort
 
 Codex calls carry a `model_reasoning_effort`. It follows the same shape as the
-model: a per-run environment override, then a stored setting, then the default
-each gate ships with.
+model: a per-request flag on `/codex`, a per-run environment override, then a
+stored setting, then the default each gate ships with.
 
 | Order | Source | Set it with |
 | --- | --- | --- |
+| 0 | `/codex ... --effort <level>` (this request only; `/codex` alone) | `/codex review --effort medium` |
 | 1 | `GSTACK_CODEX_EFFORT` (this shell, this run) | `export GSTACK_CODEX_EFFORT=max` |
 | 2 | `codex_effort` in config.yaml | `gstack-config set codex_effort low` (`unset` restores the defaults) |
 | 3 | the gate's default | nothing: `high` for reviews, plan reviews and `/codex` review and challenge; `medium` for `/codex` consult and design direction |
@@ -141,10 +142,11 @@ before anything is sent, naming the source to fix. `gstack-codex-probe
 check-effort <default>` prints the same resolution without a call.
 
 For one request, `/codex review --effort medium` (or `--effort=<level>`; `--xhigh` is
-shorthand for `--effort xhigh`) outranks all three, including an exported
+shorthand for `--effort xhigh`) outranks the other three, including an exported
 `GSTACK_CODEX_EFFORT`, and changes nothing that persists. The flag counts only
-directly after `/codex` or its mode word, before the prompt text; a later `--effort`
-is part of the prompt. `/codex` passes the level to the probe as `--request-effort`,
+directly after `/codex` or its mode word, among the leading flags (`-m`/`--model`,
+`--role`, in any order) and before the prompt text; a later `--effort` is part of the
+prompt, and `/codex` says so. A Consult follow-up resolves its effort afresh. `/codex` passes the level to the probe as `--request-effort`,
 so an unknown level stops before any Codex call, naming the flag.
 
 `/spec`'s quality gate keeps `medium` inside its 120-second budget whatever you
