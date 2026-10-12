@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { PHASES } from './autoplan-prompts';
 import type { ConsensusRecord } from './autoplan-reconcile';
+import { decisionId } from './gate-list';
 import { readDecisions, voiceRows, type RunState } from './autoplan-state';
 import type { FindingRow, TaskRow } from './headless-artifacts';
 import { renderUrgentBlock, sha256File } from './headless-artifacts';
@@ -29,7 +30,7 @@ export function buildTasks(state: RunState, findings: FindingRow[]): TaskRow[] {
     const ids = twin ? [f.id, twin] : [f.id];
     ids.forEach(id => covered.add(id));
     tasks.push({ schema_version: 2, run: state.run, id: `${state.run}-T${++n}`, title: f.title, status: 'blocked_on_decision', depends_on: [], findings: ids,
-      blocked_by: [`${state.run}-p1`], acceptance: f.resolution ? f.resolution : `reviewer re-verifies: ${f.title}`, priority: f.severity, ...(f.file ? { files: [f.file] } : {}), item: f.phase });
+      blocked_by: [decisionId(state.run, state.gate_rev ?? 1, 'p1')], acceptance: f.resolution ? f.resolution : `reviewer re-verifies: ${f.title}`, priority: f.severity, ...(f.file ? { files: [f.file] } : {}), item: f.phase });
   }
   return tasks;
 }

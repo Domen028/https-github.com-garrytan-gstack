@@ -12,7 +12,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { PAGE_SIZE, renderGate, type GateList } from './gate-list';
+import { decisionId, PAGE_SIZE, renderGate, type GateList } from './gate-list';
 import { readJsonl, renderUrgentBlock, type DecisionRow } from './headless-artifacts';
 import type { ResultCodeName } from './result-codes';
 
@@ -37,7 +37,7 @@ export function loadBriefInputs(outDir: string): { inputs: BriefInputs } | { err
 
 /** The decision row for a gate item, at the gate's revision (the label is the item id in upper case). */
 function rowFor(inputs: BriefInputs, id: string): DecisionRow | undefined {
-  return inputs.decisions.filter(d => d.gate_rev === inputs.gate.gate_rev).find(d => (d.label ?? '').toLowerCase() === id || d.id === `${inputs.gate.run}-${id}`);
+  return inputs.decisions.filter(d => d.gate_rev === inputs.gate.gate_rev).find(d => (d.label ?? '').toLowerCase() === id || d.id === decisionId(inputs.gate.run, inputs.gate.gate_rev, id));
 }
 
 /** Plain words, counted from the artifacts; `summary` (a file the run or the parent wrote) replaces the generated sentence. */

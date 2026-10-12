@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.91.95.0] - 2026-10-12
+
+**A reopened `/autoplan` gate now exports a run that validates.**
+
+Answering a gate with an override reopens phases, and the next gate starts its item labels over (`d1`, `p1`, ...). Every decision row was minted as `<run>-<label>`, so the second gate's rows reused the first gate's ids, and `gstack-artifact validate` failed the exported run with `ARTIFACT_DUPLICATE_ID`.
+
+### What this means for you
+
+- **Rows from a later gate get their own ids.** Gate revision 1 keeps `<run>-<label>`. Revisions after a reopen use `<run>-r<rev>-<label>` (for example `run-…-r2-d1`). Reply grammar and labels are unchanged: you still answer `d1b` or `all`.
+- **Tasks point at the approval that is open now.** `tasks.jsonl` rows are blocked on the current gate's plan approval (`<run>-r2-p1` after one reopen), not the first gate's answered one.
+- **docs/unattended.md** documents the id shape.
+
+### For contributors
+
+- `decisionId(run, gateRev, itemId)` in `lib/gate-list.ts` is the one place that mints these ids. `decisionRows`, the export's task builder and the owner brief's lookup all use it.
+- `test/autoplan-answer-invalidation.test.ts` drives a run through a reopen to a second gate, approves it, exports it and requires `ARTIFACT_VALID`. `test/gate-list.test.ts` checks unique ids across two revisions.
+
 ## [1.91.94.0] - 2026-10-12
 
 **`/codex review --effort medium` runs one review at the effort you name, without changing your saved setting.**

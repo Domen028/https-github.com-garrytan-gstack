@@ -163,6 +163,21 @@ describe('decisions.jsonl rows', () => {
     const stale = applyReply(rows, parseReply('all', list, 2), '2026-10-10T21:30:00Z');
     expect(stale.every(r => r.status === 'pending')).toBe(true);
   });
+
+  test('a later gate revision mints its own ids, so rows from every revision stay unique in one file', () => {
+    const rev2: GateList = { ...list, gate_rev: 2 };
+    const answered = applyReply(decisionRows(list), parseReply('all', list, 1), '2026-10-10T21:30:00Z');
+    const later = decisionRows(rev2);
+    expect(later.map(r => r.id)).toEqual(['maw-20261010-r2-uc1', 'maw-20261010-r2-d1', 'maw-20261010-r2-d2', 'maw-20261010-r2-d3']);
+    expect(later[1]).toMatchObject({ label: 'D1', gate_rev: 2 });
+    const all = [...answered, ...applyReply(later, parseReply('d1b', rev2, 2), '2026-10-11T09:00:00Z')];
+    expect(new Set(all.map(r => r.id)).size).toBe(all.length);
+    expect(all.find(r => r.id === 'maw-20261010-r2-d1')).toMatchObject({ status: 'overridden', chosen: 'b' });
+    expect(all.find(r => r.id === 'maw-20261010-d1')).toMatchObject({ status: 'approved', chosen: 'a', reply: 'all' });
+    const f = path.join(tmp, 'decisions-two-revs.jsonl');
+    fs.writeFileSync(f, all.map(r => JSON.stringify(r)).join('\n') + '\n');
+    expect(validateFile(f, 'decisions', 'maw-20261010')).toEqual([]);
+  });
 });
 
 describe('bin/gstack-gate', () => {

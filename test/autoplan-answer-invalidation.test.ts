@@ -9,10 +9,11 @@
  * ends incomplete. Pins decisions rows, journal events and status tokens.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { attemptsOf, autoplan, journal, readRun, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
+import { attemptsOf, autoplan, journal, readRun, review, ROOT, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-answer-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -120,6 +121,20 @@ describe('answer', () => {
     expect(rows.filter((x: any) => x.gate_rev === 2 && x.status === 'pending').length).toBeGreaterThan(0);
     const staleAgain = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all']);
     expect(staleAgain.status).toBe(3);
+    // closing gate_rev 2 exports a run that validates: rev-2 rows get their own ids beside rev 1's
+    const approve = autoplan(['answer', '--out', out, '--gate-rev', '2', '--reply', 'all']);
+    expect(approve.stdout).toContain('GSTACK_RESULT: skill=autoplan status=complete run=' + out);
+    expect(autoplan(['export', '--out', out]).status).toBe(0);
+    const ids = decisions(out).map((x: any) => x.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(decisions(out).filter((x: any) => x.gate_rev === 2).every((x: any) => x.id.startsWith(`${readRun(out).run}-r2-`))).toBe(true);
+    expect(decisions(out).find((x: any) => x.gate_rev === 1 && x.label === 'D1')!.id).toBe(`${readRun(out).run}-d1`);
+    const tasks = fs.readFileSync(path.join(out, 'tasks.jsonl'), 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l));
+    expect(tasks.length).toBeGreaterThan(0);
+    for (const t of tasks) expect(t.blocked_by).toEqual([`${readRun(out).run}-r2-p1`]);
+    const valid = spawnSync('bun', [path.join(ROOT, 'bin', 'gstack-artifact'), 'validate', path.join(out, 'run.json')], { cwd: ROOT, encoding: 'utf8', timeout: 60_000 });
+    expect(valid.stdout + valid.stderr).toContain('ARTIFACT_VALID: run=');
+    expect(valid.status).toBe(0);
   });
 
   test('an eng-only override reopens eng alone; p1d reopens every phase; p1c keeps the gate; p1e ends incomplete', () => {

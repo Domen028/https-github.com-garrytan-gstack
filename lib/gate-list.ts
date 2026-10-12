@@ -142,10 +142,15 @@ export function parseReply(reply: string, list: GateList, gateRev?: number): Par
   return { ...base, valid: true, choices, pending };
 }
 
+/** The decisions.jsonl id for a gate item. Item ids restart at every gate revision, so revisions after the first carry `r<rev>-`. */
+export function decisionId(run: string, gateRev: number, itemId: string): string {
+  return gateRev > 1 ? `${run}-r${gateRev}-${itemId}` : `${run}-${itemId}`;
+}
+
 /** decisions.jsonl rows for a gate list (status pending; `applyReply` fills chosen/status). */
 export function decisionRows(list: GateList, extra: Partial<DecisionRow> = {}): DecisionRow[] {
   return list.items.map(item => ({
-    schema_version: 1, run: list.run, id: `${list.run}-${item.id}`, label: item.id.toUpperCase(), title: item.title,
+    schema_version: 1, run: list.run, id: decisionId(list.run, list.gate_rev, item.id), label: item.id.toUpperCase(), title: item.title,
     options: item.options.map(o => o.key), recommended: item.recommended, kind: item.kind, status: 'pending',
     default_if_unanswered: item.kind === 'auto' ? item.recommended : null, gate_rev: list.gate_rev,
     ...(item.phase ? { phase: item.phase } : {}), ...(item.cost ? { cost: item.cost } : {}), ...extra,
@@ -156,7 +161,7 @@ export function applyReply(rows: DecisionRow[], parsed: ParsedReply, answeredAt:
   if (!parsed.valid) return rows;
   const byId = new Map(parsed.choices.map(c => [c.id, c]));
   return rows.map(row => {
-    const choice = byId.get(row.label?.toLowerCase() ?? '') ?? byId.get(row.id.slice(row.run.length + 1));
+    const choice = byId.get(row.label?.toLowerCase() ?? '') ?? byId.get(row.id.slice(row.run.length + 1).replace(/^r\d+-/, ''));
     if (!choice || row.gate_rev !== parsed.gate_rev) return row;
     return {
       ...row, chosen: choice.chosen, answered_at: answeredAt, reply: parsed.reply,
