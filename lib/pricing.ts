@@ -21,7 +21,7 @@
  *   - Anthropic: https://www.anthropic.com/pricing#api
  *   - OpenAI: https://openai.com/api/pricing/
  *   - Google AI: https://ai.google.dev/gemini-api/docs/pricing
- *   - Voyage AI (embeddings): https://docs.voyageai.com/docs/pricing
+ *   - Voyage AI (embeddings, rerankers): https://docs.voyageai.com/docs/pricing
  */
 
 export interface ModelPricing {
@@ -59,6 +59,9 @@ export const PRICING: Record<string, ModelPricing> = {
   // https://developers.openai.com/api/docs/models/gpt-6.1-sol (standard tier, up to 272K input)
   'gpt-6.1-sol':        { input_per_mtok: 2.00,  output_per_mtok: 10.00, cached_input_per_mtok: 0.10, as_of: '2026-10' },
   'gpt-5.4':            { input_per_mtok: 2.50,  output_per_mtok: 10.00, as_of: '2026-04' },
+  // https://developers.openai.com/api/docs/models/gpt-4o (fetched 2026-10-13; gbrain's LongMemEval judge, the official scorer's model;
+  // the alias only: the gpt-4o-2024-05-13 snapshot has its own price)
+  'gpt-4o':             { input_per_mtok: 2.50,  output_per_mtok: 10.00, cached_input_per_mtok: 1.25, as_of: '2026-10' },
   'gpt-5.4-mini':       { input_per_mtok: 0.60,  output_per_mtok: 2.40,  as_of: '2026-04' },
   'o3':                 { input_per_mtok: 15.00, output_per_mtok: 60.00, as_of: '2026-04' },
   'o4-mini':            { input_per_mtok: 1.10,  output_per_mtok: 4.40,  as_of: '2026-04' },
@@ -89,6 +92,9 @@ export const EMBEDDING_PRICING: Record<string, ModelPricing> = {
   'voyage-code-3':        { input_per_mtok: 0.18, output_per_mtok: 0, as_of: '2026-10' },
   'voyage-3-large':       { input_per_mtok: 0.18, output_per_mtok: 0, as_of: '2026-10' },
   'voyage-multimodal-3':  { input_per_mtok: 0.12, output_per_mtok: 0, as_of: '2026-10' }, // text tokens; pixels excluded
+  // https://docs.voyageai.com/docs/pricing (fetched 2026-10-13; rerankers bill query tokens x documents plus document tokens)
+  'rerank-2.5':           { input_per_mtok: 0.05, output_per_mtok: 0, as_of: '2026-10' },
+  'rerank-2.5-lite':      { input_per_mtok: 0.02, output_per_mtok: 0, as_of: '2026-10' },
   // https://developers.openai.com/api/docs/pricing (fetched 2026-10-12)
   'text-embedding-3-large': { input_per_mtok: 0.13, output_per_mtok: 0, as_of: '2026-10' },
   'text-embedding-3-small': { input_per_mtok: 0.02, output_per_mtok: 0, as_of: '2026-10' },
@@ -98,12 +104,16 @@ export const EMBEDDING_PRICING: Record<string, ModelPricing> = {
 
 /**
  * A provider-prefixed id (`openai/gpt-6-astra`, `anthropic/claude-fable-5-1`,
- * or gbrain's `voyage:voyage-4`) resolves to its table row.
+ * or gbrain's `voyage:voyage-4`) resolves to its table row, and so does a
+ * dated Claude snapshot (`claude-haiku-4-5-20251001`, Anthropic's `-YYYYMMDD`
+ * form), which bills at its alias's price. Dated OpenAI snapshots are not
+ * folded: some are priced differently from their alias.
  */
 export function pricingRow(model: string | undefined): ModelPricing | undefined {
   if (!model) return undefined;
   const bare = model.replace(/^[a-z-]+[/:]/, '');
-  return PRICING[model] ?? PRICING[bare] ?? EMBEDDING_PRICING[model] ?? EMBEDDING_PRICING[bare];
+  const undated = /^claude-/.test(bare) ? bare.replace(/-\d{8}$/, '') : bare;
+  return PRICING[model] ?? PRICING[bare] ?? PRICING[undated] ?? EMBEDDING_PRICING[model] ?? EMBEDDING_PRICING[bare];
 }
 
 export function hasPricing(model: string | undefined): boolean {
