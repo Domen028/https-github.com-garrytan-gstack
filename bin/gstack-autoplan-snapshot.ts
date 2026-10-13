@@ -20,13 +20,13 @@ function dxTermsFor(content: string) {
   return { threshold: 2, matches, matchCount, dxRequiredByTerms: matchCount >= 2 };
 }
 
-/** Byte-bound scope evidence; semantic product/user triggers can only enable DX. */
+/** Byte-bound scope evidence; semantic product/user triggers can only enable DX. UI evidence (lib/autoplan-scope.ts) loads only here, so every other command still runs from a lone copy of this file. */
 export function detectDxScope(activePlan: string, developerTool = false, agentPrimary = false) {
   const source = realpathSync(activePlan);
   const content = extractImplementationPlan(readFileSync(source, 'utf8'));
   const terms = dxTermsFor(content);
   return { activePlan: source, sha256: sha256(content), ...terms, developerTool, agentPrimary,
-    dxRequired: terms.dxRequiredByTerms || developerTool || agentPrimary };
+    dxRequired: terms.dxRequiredByTerms || developerTool || agentPrimary, ...(require('../lib/autoplan-scope') as typeof import('../lib/autoplan-scope')).detectUiScope(content) };
 }
 
 // The native dispatch payload is assembled from the same immutable bytes as

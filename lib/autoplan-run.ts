@@ -19,7 +19,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { canonicalRows, parseReviewResult } from './autoplan-reconcile';
 import { closePhase, finishGate } from './autoplan-gate';
-import { PHASES, SNAPSHOT_TOOL, detectScope, extractHeading, phaseOrder, reviewSkillFile, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
+import { PHASES, SNAPSHOT_TOOL, detectScope, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
 import { FILES, RunError, journal, now, readJournal, readState, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
 import type { RunStatus } from './headless-artifacts';
 import { sha256File } from './headless-artifacts';
@@ -73,7 +73,7 @@ export function initRun(o: InitOptions): RunState {
   const active = path.join(out, FILES.active);
   const restore = path.join(out, FILES.restore);
   const init = snapshotTool(['init', source, active, restore], o.cwd);
-  const scope = detectScope(active, o.cwd, o.scope ?? {});
+  const scope = detectScope(active, o.cwd, o.scope ?? {}, path.resolve(o.plan));
   const order = phaseOrder(scope);
   const run = o.runId ?? `${path.basename(out)}-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
   // codex_reviews gates the outside voice here, before any dispatch: a refusal is a terminal not_run outcome per phase.
@@ -146,12 +146,14 @@ export function nextStep(o: NextOptions): NextResult {
   if (state.deadline_at && Date.parse(state.deadline_at) < Date.now()) { state.status = 'interrupted'; writeState(state); lines.push(`DEADLINE: passed at ${state.deadline_at}`); return result; }
   const phase = currentPhase(state);
   if (!phase) { finishGate(state); writeState(state); return result; }
+  const first = !state.phase_order.some(p => state.phases[p]?.snapshot);
   openPhase(state, phase, o.cwd);
   const ps = state.phases[phase]!;
   result.phase = phase;
   lines.push(`PHASE: ${phase} snapshot=${ps.snapshot} order=${state.phase_order.join(',')}`);
+  if (first) lines.push(...scopeLines(state.scope));
   if (ps.outside?.reason === 'consent_missing') lines.push(`OUTSIDE: ${phase} not_run reason=consent_missing`, String(ps.outside.detail));
-  if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${state.scope.source}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
+  if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${scopeSourceLabel(state.scope)}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
   const prompts = ps.prompts!;
   for (const voice of ['native', 'outside'] as const) {
     const v = voiceState(state, phase, voice);

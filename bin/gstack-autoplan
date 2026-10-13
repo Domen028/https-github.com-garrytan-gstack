@@ -33,7 +33,7 @@ import { COORDINATOR_CONTRACT } from '../lib/coordinator-contract';
 
 const HELP = `gstack-autoplan — unattended /autoplan: next/submit loop, answer, resume (docs/unattended.md)
 
-  next    --out <dir> [--plan <file>] [--plan-heading <text>] [--ui|--no-ui] [--developer-tool] [--agent-primary]
+  next    --out <dir> [--plan <file>] [--plan-heading <text>] [--ui|--no-ui] [--developer-tool] [--agent-primary] [--no-dx]
           [--no-outside] [--light] [--spend-cap <usd>] [--estimate-usd <n>] [--deadline <min>] [--redispatch <attempt>] [--json]
           --light loads each phase's checklist plus the sections its scope needs (the unattended default); interactive kinds load everything
           prepare the current phase; one ATTEMPT: line per voice; ends awaiting_result
@@ -81,7 +81,7 @@ function doNext(out: string, rest: string[], json: boolean): number {
     if (!plan) throw new RunError('RUN_NOT_INITIALIZED', `${out} has no run.json; pass --plan <file> on the first next`, 3);
     const ui = rest.includes('--ui') ? true : rest.includes('--no-ui') ? false : undefined;
     initRun({ plan, out, cwd, planHeading: flag(rest, '--plan-heading'), outsideEnabled: !rest.includes('--no-outside'), spendCap: num(rest, '--spend-cap') ?? null,
-      deadlineMin: num(rest, '--deadline'), light: rest.includes('--light'), scope: { ui, developerTool: rest.includes('--developer-tool'), agentPrimary: rest.includes('--agent-primary') } });
+      deadlineMin: num(rest, '--deadline'), light: rest.includes('--light'), scope: { ui, developerTool: rest.includes('--developer-tool'), agentPrimary: rest.includes('--agent-primary'), dx: rest.includes('--no-dx') ? false : undefined } });
   }
   const redispatch = rest.flatMap((a, i) => (a === '--redispatch' && rest[i + 1] ? [rest[i + 1]!] : []));
   const r = nextStep({ out, cwd, estimateUsd: num(rest, '--estimate-usd'), redispatch });
