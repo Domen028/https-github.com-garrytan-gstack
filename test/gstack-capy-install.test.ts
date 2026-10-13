@@ -48,7 +48,7 @@ function fixture(opts: { bun?: string; jq?: boolean } = {}) {
   const log = path.join(base, 'calls.log');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(stub, { recursive: true });
-  for (const rel of ['bin/gstack-capy-install', 'bin/gstack-bun-version.sh', 'bin/gstack-doctor-components.sh']) {
+  for (const rel of ['bin/gstack-capy-install', 'bin/gstack-bun-version.sh', 'bin/gstack-doctor-components.sh', 'bin/gstack-install-verdict.sh']) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.copyFileSync(path.join(REPO, rel), path.join(root, rel));
     fs.chmodSync(path.join(root, rel), fs.statSync(path.join(REPO, rel)).mode);
@@ -200,7 +200,7 @@ describe('gstack-capy-install', () => {
     const before = sh('git rev-parse HEAD', f.root).stdout.trim();
     const r = run(f, ['--revision', 'v9.9.9.9']);
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(lastLine(r.stdout)).toBe('gstack: ok 1.2.3 for=autoplan (requested v9.9.9.9; run gstack-upgrade to move)');
+    expect(lastLine(r.stdout)).toBe(`gstack: ok 1.2.3 for=autoplan (requested v9.9.9.9; run ${f.root}/bin/gstack-upgrade to move)`);
     expect(sh('git rev-parse HEAD', f.root).stdout.trim()).toBe(before);
     expect(run(f, ['--revision', '1.2.3']).stdout).not.toContain('requested');
     expect(lastLine(run(f, ['--revision', before]).stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
@@ -218,6 +218,117 @@ describe('gstack-capy-install', () => {
     const refused = run(f, ['--root', occupied]);
     expect(refused.status).toBe(3);
     expect(refused.stderr).toContain('is not a gstack checkout');
+  });
+});
+
+// Field wave lane A (items 3 and 5): the launch line carries the verified Bun
+// the trailer certified, an installed Bun is reused, a project's exact CI pin
+// is installed alongside a different PATH Bun, ./setup is skipped when this
+// HEAD was already set up, and a verdict file records what was certified.
+describe('gstack-capy-install: launch PATH, Bun reuse, CI pins, setup skip, verdict', () => {
+  const zipBun = (f: ReturnType<typeof fixture>, version: string, runsTs = false) => {
+    const target = sh('grep -q avx2 /proc/cpuinfo && echo linux-x64 || echo linux-x64-baseline').stdout.trim();
+    const zip = path.join(f.base, `bun-${version}.zip`);
+    fs.mkdirSync(path.join(f.base, `z/bun-${target}`), { recursive: true });
+    script(path.join(f.base, `z/bun-${target}/bun`), runsTs
+      ? [`[ "$1" = --version ] && { echo ${version}; exit 0; }`, `exec "${process.execPath}" "$@"`]
+      : [`echo ${version}`]);
+    expect(sh(`cd "${f.base}/z" && zip -qr "${zip}" bun-${target}`).status).toBe(0);
+    const sha = sh(`sha256sum "${zip}" | cut -d' ' -f1`).stdout.trim();
+    const versions = path.join(f.root, 'bin/gstack-bun-version.sh');
+    fs.writeFileSync(versions, fs.readFileSync(versions, 'utf8').replace(new RegExp(`(\\s*${target}\\) echo )[0-9a-f]{64}`), `$1${sha}`));
+    sh('git add -A && git -c user.email=t@t -c user.name=t commit -qm sha', f.root);
+    return zip;
+  };
+  const verdicts = (f: ReturnType<typeof fixture>) => {
+    const dir = path.join(f.home, '.gstack-state/install-verdicts');
+    return fs.existsSync(dir) ? fs.readdirSync(dir).map(n => path.join(dir, n)) : [];
+  };
+
+  test.skipIf(process.platform !== 'linux')('after installing Bun the launch line carries its PATH; a second run reuses it (one download) and skips setup on the same HEAD', () => {
+    const f = fixture({ bun: '1.3.14' });
+    const zip = zipBun(f, '1.4.2');
+    const bunDir = path.join(f.home, '.bun/bin');
+    const first = run(f, ['--for', 'autoplan'], { STUB_CURL_ZIP: zip });
+    expect(first.status, first.stdout + first.stderr).toBe(0);
+    expect(first.stdout).toContain(`GSTACK_LAUNCH: PATH=${bunDir}:$PATH GSTACK_SESSION_KIND=unattended GSTACK_STATE_ROOT=${path.join(f.home, '.gstack-state')} GSTACK_EPHEMERAL=1 GSTACK_CAPY=1 GSTACK_INSTALL_VERDICT=`);
+    expect(first.stdout).toContain(`GSTACK_LAUNCH_PATH: ${bunDir}`);
+    const second = run(f, ['--for', 'autoplan'], { STUB_CURL_ZIP: zip });
+    expect(second.status, second.stdout + second.stderr).toBe(0);
+    expect(second.stdout).toContain(`bun 1.4.2 at ${bunDir}/bun`);
+    expect(second.stdout).toContain(`GSTACK_LAUNCH: PATH=${bunDir}:$PATH `);
+    expect(f.calls().filter(l => l.startsWith('curl '))).toHaveLength(1);
+    expect(f.calls().filter(l => l.startsWith('setup '))).toHaveLength(2);
+    expect(second.stdout).toContain('setup skipped');
+    expect(lastLine(second.stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
+  });
+
+  test('setup runs only on the first of two runs on one HEAD; a new HEAD, a failed doctor or --with-browser runs it again', () => {
+    const f = fixture();
+    expect(run(f).status).toBe(0);
+    expect(run(f).status).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('setup '))).toHaveLength(2);
+    expect(run(f, [], { STUB_DOCTOR_FAIL: '1' }).status).toBe(1);
+    expect(f.calls().filter(l => l.startsWith('setup '))).toHaveLength(4);
+    write(path.join(f.root, 'NEW'), 'x\n');
+    sh('git add NEW && git -c user.email=t@t -c user.name=t commit -qm next', f.root);
+    expect(run(f).status).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('setup '))).toHaveLength(6);
+    expect(run(f, ['--with-browser']).status).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('setup '))).toHaveLength(8);
+  });
+
+  test('a setup that fails once leaves the trailer fail and records nothing; the next run sets up again and ends ok', () => {
+    const f = fixture();
+    const failed = run(f, [], { STUB_SETUP_EXIT: '1' });
+    expect(failed.status).toBe(1);
+    expect(lastLine(failed.stdout)).toMatch(/^gstack: fail setup/);
+    expect(run(f).status).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('setup '))).toHaveLength(3);
+  });
+
+  test.skipIf(process.platform !== 'linux')('PATH Bun 1.4.3 and a CI pin of 1.4.2: the pinned verified Bun is installed alongside and launched with its PATH', () => {
+    const f = fixture({ bun: '1.4.3' });
+    script(path.join(f.stub, 'bun'), ['[ "$1" = --version ] && { echo 1.4.3; exit 0; }', `exec "${process.execPath}" "$@"`]);
+    for (const rel of ['bin/gstack-runtime-pins.ts', 'lib/runtime-pins.ts']) write(path.join(f.root, rel), fs.readFileSync(path.join(REPO, rel), 'utf8'), 0o755);
+    const zip = zipBun(f, '1.4.2', true);
+    const project = path.join(f.base, 'project');
+    write(path.join(project, 'package.json'), '{ "engines": { "bun": ">=1.4.0" } }\n');
+    write(path.join(project, '.github/workflows/ci.yml'), 'jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: 1.4.2\n');
+    const r = run(f, ['--for', 'review', '--project', project], { STUB_CURL_ZIP: zip });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('curl '))).toHaveLength(1);
+    expect(f.calls().find(l => l.startsWith('curl '))).toContain('bun-v1.4.2/bun-');
+    expect(fs.existsSync(path.join(f.home, '.bun/bin/bun'))).toBe(true);
+    expect(r.stdout).toContain(`GSTACK_LAUNCH: PATH=${path.join(f.home, '.bun/bin')}:$PATH `);
+    const other = fixture({ bun: '1.4.3' });
+    script(path.join(other.stub, 'bun'), ['[ "$1" = --version ] && { echo 1.4.3; exit 0; }', `exec "${process.execPath}" "$@"`]);
+    for (const rel of ['bin/gstack-runtime-pins.ts', 'lib/runtime-pins.ts']) write(path.join(other.root, rel), fs.readFileSync(path.join(REPO, rel), 'utf8'), 0o755);
+    write(path.join(project, '.github/workflows/ci.yml'), 'jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: 1.4.1\n');
+    const conflict = run(other, ['--project', project]);
+    expect(conflict.status).toBe(3);
+    expect(conflict.stderr).toContain('pins exactly 1.4.1');
+    expect(conflict.stderr).toContain('(RUNTIME_PIN_CONFLICT; ');
+  });
+
+  test('the verdict file records checkout, HEAD, workflow and trailer, keyed by the checkout; --check certifies without setup or downloads', () => {
+    const f = fixture();
+    const r = run(f, ['--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const files = verdicts(f);
+    expect(files).toHaveLength(1);
+    expect(r.stdout).toContain(`GSTACK_INSTALL_VERDICT=${files[0]}`);
+    const v = JSON.parse(fs.readFileSync(files[0], 'utf8'));
+    expect(v).toMatchObject({ schema_version: 1, checkout: f.root, head: sh('git rev-parse HEAD', f.root).stdout.trim(), for: 'autoplan', ok: true, trailer: 'gstack: ok 1.2.3 for=autoplan' });
+    const setups = f.calls().filter(l => l.startsWith('setup ')).length;
+    const c = run(f, ['--check', '--for', 'autoplan']);
+    expect(c.status, c.stdout + c.stderr).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('setup ')).length).toBe(setups);
+    expect(c.stdout).toContain('GSTACK_LAUNCH: ');
+    expect(lastLine(c.stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
+    const failed = run(f, ['--check', '--for', 'autoplan'], { STUB_DOCTOR_FAIL: '1' });
+    expect(failed.status).toBe(1);
+    expect(JSON.parse(fs.readFileSync(files[0], 'utf8'))).toMatchObject({ ok: false, trailer: 'gstack: fail codex' });
   });
 });
 

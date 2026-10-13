@@ -9,6 +9,8 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { capyHost, type CapyHost } from './capy-host';
+import { SKILL_REQUIREMENTS } from '../../lib/doctor-components';
+import type { InstallVerdict } from '../../lib/install-verdict';
 import { AUTOPLAN, REVIEWER, ROOT, SMALL_PLAN } from './autoplan-run-fixture';
 
 const SESSION_KIND_VAR = ['GSTACK', 'SESSION', 'KIND'].join('_');
@@ -20,23 +22,29 @@ export interface CapyRunner {
   ap(args: string[], extra?: Record<string, string>): SpawnSyncReturns<string>;
   review(prompt: string, extra?: Record<string, string>): SpawnSyncReturns<string>;
   validate(out: string): SpawnSyncReturns<string>;
-  writeVerdict(fields: Record<string, string>): void;
+  writeVerdict(fields: Partial<InstallVerdict>): void;
   cleanup(): void;
 }
 
 /** A launched command on the Capy host: GSTACK_LAUNCH PATH, unattended, GSTACK_CAPY=1, an ok verdict for this HEAD. */
-export function capyRunner(o: { launched?: boolean; verdict?: Record<string, string> | null } = {}): CapyRunner {
+export function capyRunner(o: { launched?: boolean; verdict?: Partial<InstallVerdict> | null } = {}): CapyRunner {
   const host = capyHost({ verifiedBun: '1.4.2' });
   const verdict = path.join(host.stateRoot, 'install-verdict');
   const env: Record<string, string> = {
     ...host.env, PATH: o.launched === false ? host.env.PATH! : host.launchPath,
     [SESSION_KIND_VAR]: RUNNER_KIND, GSTACK_CAPY: '1', GSTACK_INSTALL_VERDICT: verdict,
   };
-  const writeVerdict = (fields: Record<string, string>) => {
+  /** lib/install-verdict.ts schema 1, an ok autoplan verdict for this checkout and HEAD unless overridden. */
+  const writeVerdict = (fields: Partial<InstallVerdict>) => {
+    const trailer = fields.trailer ?? 'gstack: ok 1.91.96.0 for=autoplan';
+    const full: InstallVerdict = {
+      schema_version: 1, checkout: fs.realpathSync(ROOT), head: HEAD, for: 'autoplan', required: [...(SKILL_REQUIREMENTS.autoplan?.requires ?? [])],
+      pins_planning_only: false, ok: trailer.startsWith('gstack: ok'), trailer, min_revision: '1.91.96.0', launch_path: host.bunInstallBin, time: new Date().toISOString(), ...fields,
+    };
     fs.mkdirSync(path.dirname(verdict), { recursive: true });
-    fs.writeFileSync(verdict, JSON.stringify(fields) + '\n');
+    fs.writeFileSync(verdict, JSON.stringify(full) + '\n');
   };
-  if (o.verdict !== null) writeVerdict(o.verdict ?? { trailer: 'gstack: ok 1.91.95.0 for=autoplan', head: HEAD, checkout: fs.realpathSync(ROOT), at: new Date().toISOString() });
+  if (o.verdict !== null) writeVerdict(o.verdict ?? {});
   const run = (args: string[], extra: Record<string, string> = {}) =>
     spawnSync('bun', args, { cwd: ROOT, env: { ...env, ...extra }, encoding: 'utf8', timeout: 120_000 });
   return {

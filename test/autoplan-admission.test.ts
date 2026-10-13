@@ -28,19 +28,19 @@ describe('admission', () => {
     const r = make({ verdict: null });
     const { out, res } = first(r, 'none');
     expect(res.status).toBe(3);
-    expect(res.stderr).toMatch(/install verdict.*not found.*\(INSTALL_VERDICT_FAILED\)$/m);
+    expect(res.stderr).toMatch(/no install verdict at .*\(INSTALL_UNVERIFIED\)$/m);
     expect(res.stdout).toContain('GSTACK_RESULT: skill=autoplan status=refused');
     expect(fs.existsSync(path.join(out, 'run.json'))).toBe(false);
   });
 
   test('a failing verdict, or one for another HEAD or checkout, refuses with the trailer', () => {
     const r = make();
-    r.writeVerdict({ trailer: 'gstack: fail runtime', head: HEAD, checkout: fs.realpathSync(ROOT) });
-    expect(first(r, 'fail').res.stderr).toMatch(/gstack: fail runtime.*\(INSTALL_VERDICT_FAILED\)$/m);
-    r.writeVerdict({ trailer: 'gstack: ok 1.91.95.0 for=autoplan', head: '0'.repeat(40), checkout: fs.realpathSync(ROOT) });
-    expect(first(r, 'head').res.stderr).toMatch(/another HEAD.*\(INSTALL_VERDICT_FAILED\)$/m);
-    r.writeVerdict({ trailer: 'gstack: ok 1.91.95.0 for=autoplan', head: HEAD, checkout: '/elsewhere/gstack' });
-    expect(first(r, 'checkout').res.stderr).toMatch(/another checkout.*\(INSTALL_VERDICT_FAILED\)$/m);
+    r.writeVerdict({ trailer: 'gstack: fail runtime' });
+    expect(first(r, 'fail').res.stderr).toMatch(/gstack: fail runtime.*\(INSTALL_UNVERIFIED\)$/m);
+    r.writeVerdict({ head: '0'.repeat(40) });
+    expect(first(r, 'head').res.stderr).toMatch(/another HEAD.*\(INSTALL_UNVERIFIED\)$/m);
+    r.writeVerdict({ checkout: '/elsewhere/gstack' });
+    expect(first(r, 'checkout').res.stderr).toMatch(/is for checkout \/elsewhere\/gstack.*\(INSTALL_UNVERIFIED\)$/m);
   });
 
   test('an ok verdict admits; status and resume need none; every mutating verb is gated', () => {
@@ -53,7 +53,7 @@ describe('admission', () => {
     for (const args of [['next'], ['submit', '--phase', 'ceo', '--voice', 'outside', '--unavailable', 'x'], ['answer', '--gate-rev', '1', '--reply', 'all'], ['revise', '--plan', path.join(r.host.base, 'ok', 'plan.md')], ['export']]) {
       const res2 = r.ap([args[0]!, '--out', out, ...args.slice(1)]);
       expect(res2.status, args[0]).toBe(3);
-      expect(res2.stderr, args[0]).toMatch(/\(INSTALL_VERDICT_FAILED\)$/m);
+      expect(res2.stderr, args[0]).toMatch(/\(INSTALL_UNVERIFIED\)$/m);
     }
   });
 

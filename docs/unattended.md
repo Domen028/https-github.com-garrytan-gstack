@@ -278,9 +278,10 @@ by its runner. Result codes: `EXECUTION_UNKNOWN`, `RUN_LOCKED`,
   the missing heading added. `resume` completes an interrupted revise.
 - **Admission and upgrades.** `next`, `submit`, `answer`, `revise`, `export`
   and `run` refuse on a Capy host (`GSTACK_CAPY=1`) without an ok install
-  verdict for this checkout at `$GSTACK_INSTALL_VERDICT`
-  (`INSTALL_VERDICT_FAILED`), and in any unattended session when the Bun on
-  PATH is below `engines.bun` (`RUNTIME_BELOW_MINIMUM`);
+  verdict for this checkout, HEAD and workflow at `$GSTACK_INSTALL_VERDICT`
+  (`INSTALL_UNVERIFIED`), and in any unattended session when the running Bun
+  is below gstack's supported minimum (`RUNTIME_BELOW_MINIMUM`); the decision
+  is the same one `gstack-skill-start` makes (see Install admission);
   `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` overrides and records a run deviation.
   `status` and `resume` are never gated. A run directory written by an older
   gstack prints `GSTACK_VERSION_CHANGED` once and moves forward (legacy
@@ -328,3 +329,16 @@ line, on an ephemeral state root.
 `/autoplan` run (the one that produced this wave's plan) and validates clean.
 `test/fixtures/multi-agent-wave/INCIDENTS.md` records what went wrong while it
 was produced by hand and which validator rule now catches each incident.
+
+## Install admission
+
+An unattended run, and a `GSTACK_SESSION_KIND=spawned` run with `GSTACK_CAPY=1`,
+starts only on a supported Bun and, on a Capy machine (`GSTACK_CAPY=1`, set by
+the installer's `GSTACK_LAUNCH` line), with a passing install verdict for this
+checkout, its HEAD and the workflow. Otherwise `gstack-skill-start` prints
+`INSTALL: fail runtime|verdict — <detail>; fix: <command> (<CODE>)` and
+`GSTACK_RESULT: skill=<s> status=refused run=-`, and exits 3; stop and run the
+fix. `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` admits anyway (`INSTALL_VERDICT:
+overridden`), recorded as a deviation. TypeScript entrypoints use
+`checkInstallAdmission` from `lib/install-verdict.ts`; the Bash side is
+`bin/gstack-install-verdict.sh`. See [capy-install.md](capy-install.md#the-launch-line).

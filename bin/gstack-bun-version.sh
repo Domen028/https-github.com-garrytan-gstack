@@ -88,3 +88,29 @@ gstack_bun_incoming_hold() {
   _gb_ver=$(git -C "$1" show "$2:VERSION" 2>/dev/null | head -1)
   echo "bun-too-old: found Bun $_gb_found at $(command -v bun); gstack ${_gb_ver:-update} needs $_gb_floor or newer"
 }
+
+# gstack_bun_launch_dir [exact] — the directory to put first on PATH so
+# gstack's `#!/usr/bin/env bun` bins run a supported Bun: the first of
+# $BUN_INSTALL/bin and $HOME/.bun/bin whose bun is ok (and equals <exact>
+# when given), unless the bun already first on PATH qualifies. Prints the
+# directory (callers read its version with "<dir>/bun --version"); prints
+# nothing and returns 1 when PATH's bun suffices or no candidate qualifies. Shared by
+# gstack-capy-install (the GSTACK_LAUNCH line) and gstack-doctor --check (the
+# runtime row's `found at ... (not on PATH)`).
+gstack_bun_launch_dir() {
+  _gb_path_bun=$(command -v bun 2>/dev/null || true)
+  if [ -n "$_gb_path_bun" ]; then
+    _gb_v=$(bun --version </dev/null 2>/dev/null | head -1)
+    if [ "$(gstack_bun_status "$_gb_v")" = ok ] && { [ -z "${1:-}" ] || [ "$_gb_v" = "$1" ]; }; then return 1; fi
+  fi
+  for _gb_dir in "${BUN_INSTALL:+$BUN_INSTALL/bin}" "${HOME:+$HOME/.bun/bin}"; do
+    [ -n "$_gb_dir" ] && [ -x "$_gb_dir/bun" ] || continue
+    [ "$_gb_dir/bun" = "$_gb_path_bun" ] && continue
+    _gb_v=$("$_gb_dir/bun" --version </dev/null 2>/dev/null | head -1)
+    [ "$(gstack_bun_status "$_gb_v")" = ok ] || continue
+    [ -z "${1:-}" ] || [ "$_gb_v" = "$1" ] || continue
+    printf '%s\n' "$_gb_dir"
+    return 0
+  done
+  return 1
+}

@@ -481,15 +481,36 @@ export const RESULT_CODES = {
     summary: 'the run directory was written by a different gstack version',
     fix: 'nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade',
   },
-  INSTALL_VERDICT_FAILED: {
-    anchor: 'install-verdict-failed',
-    summary: 'on a Capy host (GSTACK_CAPY=1) the install verdict is missing, failing, or for another checkout or HEAD',
-    fix: 'run the Capy gstack skill wrapper (`install.sh --for <skill>`) until its trailer is `gstack: ok`, then launch with its GSTACK_LAUNCH line; GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1 overrides and is recorded as a run deviation',
-  },
   ARTIFACT_GATE_UNSETTLED: {
     anchor: 'artifact-gate-unsettled',
     summary: 'the run says complete while an approval item of its last gate revision or an accepted plan amendment is still pending',
     fix: 'answer the gate until every approval settles and revise (or withdraw) every accepted change with `gstack-autoplan`; never hand-edit status',
+  },
+  // Field wave lane A (items 1-4): gstack-upgrade, the Capy skill bootstrapper, install admission.
+  UPGRADE_REFUSED: {
+    anchor: 'upgrade-refused',
+    summary: 'bin/gstack-upgrade changed nothing: the checkout is dirty, diverged, pinned (detached or off the remote default branch), not a gstack checkout, or the incoming release holds',
+    fix: 'resolve the named cause (commit or move the listed changes, check out the default branch), then re-run bin/gstack-upgrade; it never stashes or resets',
+  },
+  UPGRADE_FETCH_FAILED: {
+    anchor: 'upgrade-fetch-failed',
+    summary: 'bin/gstack-upgrade could not fetch the remote default branch, so it cannot tell whether the checkout is current',
+    fix: 'check network access to the checkout\'s origin (git -C <checkout> remote -v), then re-run bin/gstack-upgrade',
+  },
+  REVISION_BELOW_MINIMUM: {
+    anchor: 'revision-below-minimum',
+    summary: 'the installed gstack revision is below the supported minimum declared in capy/support.env on the remote default branch',
+    fix: 'run the Capy skill installer without --check (it fast-forwards a clean, unpinned checkout), or bin/gstack-upgrade; a pinned, dirty or diverged checkout is named in the row',
+  },
+  CAPY_WRAPPER_STALE: {
+    anchor: 'capy-wrapper-stale',
+    summary: 'the Capy skill copy that ran is older than the checkout\'s GSTACK_CAPY_MIN_WRAPPER',
+    fix: 'ask the owner to copy <checkout>/capy/skill/gstack/ over the Drive skill folder; the checkout wrapper keeps working meanwhile',
+  },
+  INSTALL_UNVERIFIED: {
+    anchor: 'install-unverified',
+    summary: 'a Capy session (GSTACK_CAPY=1) has no passing install verdict for this checkout, HEAD and workflow, so the workflow refused to start',
+    fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
   },
 } as const satisfies Record<string, ResultCode>;
 

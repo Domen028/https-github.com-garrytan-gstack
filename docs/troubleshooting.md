@@ -1126,10 +1126,11 @@ constraint with its source), or change the project's pin.
 revision (a VERSION string, tag, branch or commit) and the checkout is at
 another. An unmet revision is never `ok`.
 
-**Fix.** Move the checkout: `/gstack-upgrade`, or
+**Fix.** Move the checkout: `<checkout>/bin/gstack-upgrade` (the tip of the default
+branch; `/gstack-upgrade` interactively), or
 `git -C <checkout> fetch origin && git -C <checkout> checkout <ref> && ./setup`.
 `bin/gstack-capy-install --revision <ref>` never moves an existing checkout; it
-reports `gstack: ok <installed> (requested <ref>; run gstack-upgrade to move)`.
+reports `gstack: ok <installed> (requested <ref>; run <checkout>/bin/gstack-upgrade to move)`.
 
 <a id="capy-install-runtime-conflict"></a>
 ### `gstack-capy-install: Bun conflict: gstack needs >=<minimum>, <project> pins <constraint> (RUNTIME_PIN_CONFLICT; ...)`
@@ -1169,6 +1170,80 @@ One of them is missing, or the Bun install script's checksum did not match
 or nvm), then re-run `bin/gstack-capy-install`. A checksum mismatch means the
 upstream installer changed: update `GSTACK_BUN_INSTALL_SHA` only after
 reviewing the new script.
+
+<a id="upgrade-refused"></a>
+### `gstack-upgrade: <cause>; nothing was changed; fix: <command> (UPGRADE_REFUSED)`
+
+**Meaning.** `bin/gstack-upgrade` moves a checkout only by fast-forward to the
+tip of its remote default branch. It refused before changing anything: the
+directory is not a gstack checkout, HEAD is detached or on another branch (a
+pin), a tracked file is modified, a local commit is not on the remote branch,
+the incoming release's Bun floor is above the Bun on PATH, or another updater
+holds `<state root>/.setup-lock`. It never stashes, resets or discards.
+
+**Fix.** Resolve the named cause with the printed command (commit or move the
+listed changes, check out the default branch, move local commits to another
+branch), then re-run `bin/gstack-upgrade`. A reinstall that failed after the
+fast-forward is completed by the next run (`reinstall pending from <version>`).
+
+<a id="upgrade-fetch-failed"></a>
+### `gstack-upgrade: could not reach origin (...) (UPGRADE_FETCH_FAILED)`
+
+**Meaning.** The remote default branch could not be listed or fetched (offline,
+proxy, credentials), so `--check` cannot say whether the checkout is current.
+It never reports `current` without the fetch.
+
+**Fix.** Check network access to the checkout's origin
+(`git -C <checkout> remote -v`), then re-run.
+
+<a id="revision-below-minimum"></a>
+### `gstack: fail revision — installed <v> is below the supported minimum <m> (<cause>); fix: ... (REVISION_BELOW_MINIMUM)`
+
+**Meaning.** `capy/support.env` on the remote default branch declares the
+oldest revision whose installer, trailer and fix lines are honest
+(`GSTACK_MIN_REVISION`), and this checkout is older. The Capy skill
+bootstrapper reads it from `FETCH_HEAD`, so even a checkout that predates the
+file learns it. `--check` only reports (`fast-forward available`); install
+mode fast-forwards a clean, unpinned checkout, reinstalls and rechecks under
+one lock. The cause names why nothing moved: `pinned by --revision`, `pinned:
+HEAD is detached`, `tracked files changed: <files>`, `diverged: ...` or
+`auto-upgrade disabled` (`GSTACK_CAPY_AUTO_UPGRADE=0`). `gstack-doctor --check
+--min-revision <m>` fails the revision row the same way.
+
+**Fix.** Run the fix clause: the bootstrapper without `--check`, or
+`<checkout>/bin/gstack-upgrade`. For a pin, drop `--revision` or pin a
+revision at or above the minimum. An interrupted install after the
+fast-forward leaves the trailer `fail`; the next install run completes it.
+
+<a id="capy-wrapper-stale"></a>
+### `gstack-capy-skill: owner action — Drive copy is wrapper <n>, minimum <m>; copy <root>/capy/skill/gstack/ (CAPY_WRAPPER_STALE)`
+
+**Meaning.** The Capy skill folder that ran (the bootstrapper's
+`GSTACK_CAPY_WRAPPER`) is older than the checkout's `GSTACK_CAPY_MIN_WRAPPER`.
+The run continues through the checkout's own wrapper (`bin/gstack-capy-session`);
+only a checkout with no such wrapper refuses (`gstack: fail wrapper`).
+
+**Fix.** The owner copies `<checkout>/capy/skill/gstack/` over the skill folder
+(on Capy, the user-scope Drive `skills/gstack/`). Agents never write it.
+
+<a id="install-unverified"></a>
+### `INSTALL: fail verdict — <detail>; fix: ... (INSTALL_UNVERIFIED)`
+
+**Meaning.** On a Capy machine (`GSTACK_CAPY=1`, set by the `GSTACK_LAUNCH`
+line), an unattended or spawned workflow starts only with a passing install
+verdict (`<state root>/install-verdicts/<sha256 of the checkout path>.json`,
+named as `GSTACK_INSTALL_VERDICT`) for this checkout, its current HEAD and a
+workflow at least as wide as the one starting: a verdict for `--for autoplan`
+does not cover `qa`'s browser, and a planning-only pins SKIP does not cover a
+workflow that runs the repo's tests. `gstack-skill-start` printed this row and
+`GSTACK_RESULT: skill=<s> status=refused run=-`, exit 3. The same start refuses
+an unattended run whose Bun on PATH is below the supported minimum
+(`INSTALL: fail runtime ... (RUNTIME_BELOW_MINIMUM)`) on any host.
+
+**Fix.** Run the Capy skill installer with `--for <workflow>` on this machine
+and launch with the `GSTACK_LAUNCH` line it prints.
+`GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` admits anyway (printed as
+`INSTALL_VERDICT: overridden`); record it as a deviation.
 
 ---
 
@@ -2507,20 +2582,6 @@ older runner cannot know the newer state.
 
 **Fix.** Nothing for the notice. For the refusal, upgrade gstack
 (`bin/gstack-upgrade`) on this machine and rerun the command.
-
-<a id="install-verdict-failed"></a>
-### `INSTALL_VERDICT_FAILED`
-
-**Meaning.** On a Capy host (`GSTACK_CAPY=1`) `gstack-autoplan`'s mutating
-verbs (`next`, `submit`, `answer`, `revise`, `export`) need the install verdict
-the Capy wrapper writes (`GSTACK_INSTALL_VERDICT`) to say `gstack: ok` for this
-checkout and HEAD. Missing, failing, or written for another checkout or HEAD
-refuses before anything is written. `status` and `resume` stay available.
-
-**Fix.** Run the Capy gstack skill wrapper until its trailer is `gstack: ok`,
-then launch commands with its `GSTACK_LAUNCH` line. To proceed anyway, set
-`GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1`; the override is recorded in
-`run.json.deviations` and printed as `ADMISSION: override`.
 
 <a id="artifact-gate-unsettled"></a>
 ### `ARTIFACT_GATE_UNSETTLED`
