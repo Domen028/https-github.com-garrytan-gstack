@@ -156,3 +156,15 @@ describe('priced pilot', () => {
     expect(r.projection.verdict).toBe('unknown');
   });
 });
+
+describe('pricing rows with fetched sources (2026-10-12)', () => {
+  test('the newest Sonnet, the newest Gemini Flash and gbrain embedding models are priced; Opus 4.7 is at its current list price', () => {
+    expect(hasPricing('anthropic/claude-sonnet-5-5')).toBe(true);
+    expect(estimateCostUsd({ input: 1_000_000, output: 1_000_000 }, 'claude-sonnet-5-5')).toBe(12);
+    expect(estimateCostUsd({ input: 1_000_000, output: 1_000_000 }, 'claude-opus-4-7')).toBe(30);
+    expect(hasPricing('google/gemini-3.8-flash')).toBe(true);
+    for (const m of ['voyage:voyage-4', 'openai:text-embedding-3-large', 'text-embedding-3-small', 'gemini-embedding-2']) expect(hasPricing(m)).toBe(true);
+    expect(estimateCostUsd({ input: 1_000_000, output: 0 }, 'voyage:voyage-4')).toBe(0.06);
+    expect(hasPricing('voyage-4-nano')).toBe(false);
+  });
+});
