@@ -165,7 +165,8 @@ describe('gstack-upgrade', () => {
   });
 
   test('every bin a trailer or fix line names exists in the repo', () => {
-    const sources = ['bin/gstack-capy-install', 'bin/gstack-doctor-check.sh', 'bin/gstack-skill-end', 'bin/gstack-upgrade', 'docs/capy-install.md'];
+    const sources = ['bin/gstack-capy-install', 'bin/gstack-doctor-check.sh', 'bin/gstack-skill-end', 'bin/gstack-upgrade', 'docs/capy-install.md',
+      'capy/skill/gstack/SKILL.md', 'capy/skill/gstack/scripts/install.sh'];
     const named = new Set<string>();
     for (const rel of sources) {
       expect(fs.existsSync(path.join(REPO, rel)), rel).toBe(true);

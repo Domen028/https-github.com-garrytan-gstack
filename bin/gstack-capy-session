@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# gstack-capy-session — the full Capy skill wrapper: the checkout-owned half
+# of a Capy session start. The frozen bootstrapper the Drive skill holds
+# (capy/skill/gstack/scripts/install.sh) clones or fast-forwards this checkout
+# and execs this script with its own arguments plus:
+#   GSTACK_CAPY_WRAPPER_REV / GSTACK_CAPY_WRAPPER_PATH  the bootstrapper that ran
+#   GSTACK_CAPY_REMOTE_MIN    the supported minimum from origin's capy/support.env, or `unknown`
+#   GSTACK_CAPY_UPGRADED_FROM the version it fast-forwarded from (setup is never skipped then)
+#   GSTACK_CAPY_LOCK_HELD=1   install mode: .gstack-capy-install.lock is held on an
+#                             inherited descriptor; nothing here takes it again
+# Because this file moves with the checkout, session-start behavior can change
+# without anyone recopying the Drive skill.
+#
+# Usage: gstack-capy-session [--check] --root <checkout> [gstack-capy-install arguments]
+#   --check  certify only (bin/gstack-capy-install --check: the doctor with the
+#            launch PATH and the remote minimum, the verdict, the launch line)
+#   default  install or repair (bin/gstack-capy-install)
+# The last line is the `gstack:` trailer; the exit status is the installer's.
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+prev=""
+for a in "$@"; do [ "$prev" = --root ] && ROOT="$a"; prev="$a"; done
+INSTALLER="$ROOT/bin/gstack-capy-install"
+if [ ! -x "$INSTALLER" ]; then
+  echo "gstack: fail installer — $INSTALLER is missing; fix: bash ${GSTACK_CAPY_WRAPPER_PATH:-<skill>/scripts/install.sh} (re-clones or fast-forwards)"
+  exit 1
+fi
+[ "${GSTACK_CAPY_REMOTE_MIN:-}" = unknown ] && echo "gstack-capy-session: remote minimum unknown (fetch failed); the revision row is local only"
+exec "$INSTALLER" "$@"
