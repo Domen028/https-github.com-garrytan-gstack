@@ -29,13 +29,15 @@ export type RunStatus = ResultStatus | 'awaiting_result' | 'running';
 export interface FindingRow {
   schema_version: 1; run: string; id: string; phase: string; voice: Voice; severity: Severity; title: string;
   model?: string; file?: string; line?: number; disposition?: Disposition; resolution?: string;
-  plan_items?: string[]; native_counterpart?: string | null; source?: string;
+  plan_items?: string[]; native_counterpart?: string | null; source?: string; changes?: 'scope' | 'cost' | 'direction';
 }
 export interface DecisionRow {
   schema_version: 1; run: string; id: string; title: string; options: string[]; recommended: string | null;
   kind: DecisionKind; status: DecisionStatus; gate_rev: number; label?: string; phase?: string;
   default_if_unanswered?: string | null; chosen?: string | null; answered_at?: string; reply?: string;
   source?: string; cost?: string;
+  /** Why the recommendation (gate items built by gstack-autoplan), what a user challenge changes, and the carry-forward identity. */
+  recommended_basis?: string; changes?: string; origin?: string; carried_from?: string; chosen_text?: string;
 }
 export interface TaskRow {
   schema_version: 2; run: string; id: string; title: string; status: TaskStatus; depends_on: string[];
@@ -128,6 +130,7 @@ export const ARTIFACT_SCHEMAS = {
       voice: { enum: ['native', 'outside'] }, model: str, severity: { enum: ['Critical', 'High', 'Medium', 'Low', 'Informational'] },
       title: str, file: str, line: { type: 'integer' }, disposition: { enum: ['open', 'accepted', 'partially_accepted', 'rejected', 'deferred', 'fixed'] },
       resolution: str, plan_items: strList, native_counterpart: nullableStr, source: str,
+      changes: { enum: ['scope', 'cost', 'direction'] },
     },
   },
   decisions: {
@@ -138,6 +141,7 @@ export const ARTIFACT_SCHEMAS = {
       kind: { enum: ['auto', 'approval', 'user_challenge'] }, status: { enum: ['pending', 'approved', 'overridden', 'rejected'] },
       default_if_unanswered: nullableStr, gate_rev: { type: 'integer', minimum: 1 }, phase: str, chosen: nullableStr,
       answered_at: str, reply: str, source: str, cost: str,
+      recommended_basis: str, changes: str, origin: str, carried_from: str, chosen_text: str,
     },
   },
   tasks: {
@@ -393,7 +397,7 @@ function checkRefs(rows: Partial<Record<ArtifactName, Record<string, unknown>[]>
   if (cycle) out.push({ code: 'ARTIFACT_DEPENDENCY_CYCLE', path: 'tasks.jsonl', message: cycle.join(' -> ') });
 }
 
-export interface ValidationResult { valid: boolean; errors: ValidationError[]; manifest?: RunManifest; runDir: string }
+export interface ValidationResult { valid: boolean; errors: ValidationError[]; manifest?: RunManifest; runDir: string; attested?: number }
 
 /**
  * The deterministic completion check a parent runs first. Fails on: invalid
@@ -444,13 +448,31 @@ export function validateRun(runJson: string): ValidationResult {
   }
   checkCounts(manifest, rows, errors);
   checkRefs(rows, ids, errors);
+  checkGateSettled(manifest, rows.decisions, errors);
   if (manifest.session_kind === 'unattended') {
     const record = manifest.artifacts['review-record.md'];
     const abs = record ? resolveInside(runDir, record.path).abs : '';
     const text = abs && fs.existsSync(abs) ? fs.readFileSync(abs, 'utf8') : '';
     if (!text.includes('GUARD_NOT_INSTALLED')) errors.push({ code: 'ARTIFACT_GUARD_LINE_MISSING', path: 'review-record.md', message: 'unattended run without the guard line' });
   }
-  return { valid: errors.length === 0, errors, manifest, runDir };
+  return { valid: errors.length === 0, errors, manifest, runDir, attested: countAttested(manifest) };
+}
+
+/** Voices bound from a hand-run record on the parent's attestation rather than a reviewer receipt. */
+function countAttested(m: RunManifest): number {
+  return (m.required_phases ?? []).reduce((n, p) => n + (['native', 'outside'] as const).filter(v => m.phases?.[p]?.[v]?.receipt === 'attested').length, 0);
+}
+
+/** A complete run has no pending approval at its last gate revision and no pending plan amendment. */
+function checkGateSettled(m: RunManifest, decisions: Record<string, unknown>[] | undefined, out: ValidationError[]): void {
+  if (m.status !== 'complete') return;
+  const last = Math.max(0, ...(decisions ?? []).map(d => Number(d.gate_rev) || 0));
+  for (const d of decisions ?? []) {
+    if (d.gate_rev === last && d.kind === 'approval' && d.status === 'pending') out.push({ code: 'ARTIFACT_GATE_UNSETTLED', path: 'decisions.jsonl', message: `approval ${String(d.label ?? d.id)} at gate_rev ${last} is still pending` });
+  }
+  for (const a of Array.isArray(m.amendments) ? m.amendments as Array<Record<string, unknown>> : []) {
+    if (a.status === 'pending') out.push({ code: 'ARTIFACT_GATE_UNSETTLED', path: 'run.json.amendments', message: `plan amendment ${String(a.decision)} is still pending` });
+  }
 }
 
 /** Validate a standalone artifact file (pregate.json, a ship receipt, timing.json, or a JSONL of rows) against its schema. */

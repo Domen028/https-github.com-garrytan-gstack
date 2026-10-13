@@ -29,7 +29,7 @@ const HELP = `gstack-artifact — the unattended artifact contract (docs/unatten
   urgent <findings.jsonl>                           render the URGENT block (\`None.\` when empty)
 
 Without --json: one error line per problem on stderr, each ending in (<CODE>),
-then ARTIFACT_VALID: run=<id> status=<status> or ARTIFACT_INVALID: <n> error(s) on stdout.
+then ARTIFACT_VALID: run=<id> status=<status>[ attested=<n> when voices bound on attestation] or ARTIFACT_INVALID: <n> error(s) on stdout.
 ${exitTableHelp()}`;
 
 function flag(args: string[], name: string): string | undefined {
@@ -70,11 +70,11 @@ function main(argv: string[]): number {
     }
     const result = validateRun(file);
     if (json) {
-      process.stdout.write(JSON.stringify({ valid: result.valid, run: result.manifest?.run ?? null, status: result.manifest?.status ?? null, run_dir: result.runDir, errors: result.errors }) + '\n');
+      process.stdout.write(JSON.stringify({ valid: result.valid, run: result.manifest?.run ?? null, status: result.manifest?.status ?? null, run_dir: result.runDir, attested: result.attested ?? 0, errors: result.errors }) + '\n');
     } else {
       printErrors(result.errors);
       process.stdout.write(result.valid
-        ? `ARTIFACT_VALID: run=${result.manifest!.run} status=${result.manifest!.status}\n`
+        ? `ARTIFACT_VALID: run=${result.manifest!.run} status=${result.manifest!.status}${result.attested ? ` attested=${result.attested}` : ''}\n`
         : `ARTIFACT_INVALID: ${result.errors.length} error(s)\n`);
     }
     return result.valid ? EXIT.ok : EXIT.fail;
