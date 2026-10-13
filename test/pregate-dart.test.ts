@@ -11,12 +11,12 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
-import { parseSummary, planRuns } from '../lib/pregate/checks/lanes';
+import { dartRunner, parseSummary, planRuns } from '../lib/pregate/checks/lanes';
 import { laneFileSet } from '../lib/pregate/lane-selection';
 import type { Lane } from '../lib/pregate/workflows';
 import { ROOT_OK } from '../lib/pregate/checks/strays';
 import { DEFAULT_CONFIG, validateConfig } from '../lib/pregate/config';
-import { buildGraph, isTestFile, testsFor } from '../lib/pregate/import-graph';
+import { buildGraph, dartPackages, isTestFile, testsFor } from '../lib/pregate/import-graph';
 import type { PregateContext } from '../lib/pregate/types';
 import { parseWorkflow } from '../lib/pregate/workflows';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, write, type FixtureRepo } from './helpers/pregate-fixture';
@@ -82,6 +82,37 @@ describe('Dart import graph', () => {
     expect(testsFor(g, 'packages/core/lib/core_io.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'test/ui/drawer_widget_test.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
   });
+
+  // Value: protects=several directives on one line all map, while a directive inside a line comment still does not;
+  //   fails_when=the directive regex is anchored to line start again (only the first import of `import 'a'; import 'b';` counts) or
+  //   loosened to match after any `;`; why_new=every fixture put one directive per line; seam=none; no_claim=a Dart parser
+  test('directives sharing a line all map; a commented-out directive does not', () => {
+    const repo = dartRepo();
+    commit(repo, {
+      'lib/multi.dart': 'int two() => 2;\n',
+      'test/multi_test.dart': "import 'package:test/test.dart'; import 'package:app/multi.dart';\nvoid main() {}\n",
+      'test/commented_test.dart': "void main() {} // see a; import 'package:app/multi.dart';\n",
+    });
+    expect(testsFor(buildGraph(repo.work), 'lib/multi.dart').tests).toEqual(['test/multi_test.dart']);
+  });
+
+  // Value: protects=a pubspec.yaml that is a symlink out of the repo, or not a regular file, is skipped without throwing (a link to a
+  //   device or FIFO could hang the read); fails_when=the guard is dropped and the outside file names a package or the read throws;
+  //   why_new=every fixture pubspec was a regular in-repo file; seam=none; no_claim=a real /dev/zero or FIFO (a directory and an
+  //   outside file stand in)
+  test('a pubspec.yaml symlinked outside the repo, or a directory of that name, is skipped', () => {
+    const repo = dartRepo();
+    fs.mkdirSync(path.join(repo.root, 'outside'), { recursive: true });
+    fs.writeFileSync(path.join(repo.root, 'outside', 'pubspec.yaml'), 'name: outside\ndependencies:\n  flutter:\n    sdk: flutter\n');
+    fs.mkdirSync(path.join(repo.work, 'packages', 'ext'), { recursive: true });
+    fs.symlinkSync(path.join(repo.root, 'outside', 'pubspec.yaml'), path.join(repo.work, 'packages', 'ext', 'pubspec.yaml'));
+    fs.mkdirSync(path.join(repo.work, 'packages', 'dir', 'pubspec.yaml'), { recursive: true });
+    const files = ['pubspec.yaml', 'packages/core/pubspec.yaml', 'packages/ext/pubspec.yaml', 'packages/dir/pubspec.yaml'];
+    expect([...dartPackages(repo.work, files)]).toEqual([['app', ''], ['core', 'packages/core']]);
+    const env = dartShim(repo);
+    expect(dartRunner(repo.work, 'packages/ext', env)).toEqual({ runner: 'dart test {files}' });
+    expect(dartRunner(repo.work, 'packages/dir', env)).toEqual({ runner: 'dart test {files}' });
+  });
 });
 
 describe('Dart runner and summary (pure)', () => {
@@ -89,6 +120,10 @@ describe('Dart runner and summary (pure)', () => {
     expect(parseSummary('00:01 +3: loading\n00:04 +12 ~1: All tests passed!')).toEqual({ ran: 12, failed: 0 });
     expect(parseSummary('00:02 +5 -1: a test [E]\n00:03 +7 ~2 -2: Some tests failed.')).toEqual({ ran: 9, failed: 2 });
     expect(parseSummary('No tests ran.')).toEqual({ ran: 0, failed: 0 });
+    // Value: protects=package:test's all-skipped verdict (exit 0) reads as 0 ran, so the lane is ZERO-RUN; fails_when=the verdict
+    //   alternation drops `All tests skipped.` and the lane passes on an unknown count; why_new=only passed/failed verdicts were parsed;
+    //   seam=none; no_claim=none beyond protects
+    expect(parseSummary('00:00 +0: loading\n00:01 +0 ~3: All tests skipped.')).toEqual({ ran: 0, failed: 0 });
   });
 
   test('without a declared runner, Dart tests group by package root; a declared runner takes every file', () => {
@@ -117,6 +152,52 @@ describe('Dart runner and summary (pure)', () => {
     expect(planRuns(declared, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual([
       { runner: 'bash scripts/test.sh {files}', cwd: '', files: ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'] },
     ]);
+  });
+
+  // Value: protects=a package-local fvm pin routes that package's tests through fvm, and flow-style `flutter: {sdk: flutter}` picks
+  //   flutter test; fails_when=only the repo root's .fvmrc is read, or the SDK regex only matches block style; why_new=pins and
+  //   pubspecs were root-level and block style; seam=none; no_claim=a real fvm or SDK (PATH shims)
+  test('fvm pins are found from the package up to the repo root; flow-style flutter SDK is detected', () => {
+    const repo = dartRepo();
+    const env = dartShim(repo);
+    fs.writeFileSync(path.join(repo.root, 'shim', 'fvm'), '#!/bin/sh\nexec "$@"\n', { mode: 0o755 });
+    write(repo.work, 'packages/core/.fvmrc', '{"flutter":"3.24.0"}\n');
+    expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: 'fvm dart test {files}' });
+    expect(dartRunner(repo.work, '', env)).toEqual({ runner: 'dart test {files}' });
+    write(repo.work, '.fvmrc', '{"flutter":"3.24.0"}\n');
+    expect(dartRunner(repo.work, 'packages/nested/pkg', env)).toEqual({ runner: 'fvm dart test {files}' });
+    fs.rmSync(path.join(repo.work, '.fvmrc'));
+    fs.rmSync(path.join(repo.work, 'packages/core/.fvmrc'));
+    for (const [pubspec, tool] of [
+      ['name: core\ndependencies:\n  flutter: {sdk: flutter}\n', 'flutter'],
+      ['name: core\ndependencies:\n  flutter: { sdk: flutter }\n', 'flutter'],
+      ['name: core\ndependencies:\n  flutter:\n    sdk: flutter\n', 'flutter'],
+      ['name: core\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n', 'dart'],
+    ] as const) {
+      write(repo.work, 'packages/core/pubspec.yaml', pubspec);
+      expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
+    }
+  });
+
+  // Value: protects=test paths in a run step resolve against the step's working-directory, else the job's, else the workflow's
+  //   defaults, so a platform lane's obligation matches the repo-relative selection; fails_when=the prefix is dropped and the lane file
+  //   set never intersects the selection (the obligation silently disappears); why_new=every fixture ran from the repo root;
+  //   seam=none; no_claim=a real workflow run
+  test('run-step test paths resolve against the step, job or workflow working-directory', () => {
+    const wf = [
+      'defaults:', '  run:', '    working-directory: ./apps/', 'jobs:',
+      '  step:', '    runs-on: ubuntu-24.04', '    steps:',
+      '      - run: |', '          dart test test/core_test.dart', '        working-directory: packages/core/',
+      '      - name: root', '        working-directory: .', '        run: dart test test/ui/drawer_widget_test.dart',
+      '  job:', '    runs-on: windows-latest', '    defaults:', '      run:', '        working-directory: packages/core',
+      '    steps:', '      - run: dart test test/core_test.dart',
+      '  top:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/app_test.dart', '',
+    ].join('\n');
+    const [step, job, top] = parseWorkflow('w.yml', wf, 'darwin');
+    expect(step!.testFiles).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
+    expect(step!.commands).toEqual(['dart test test/core_test.dart', 'dart test test/ui/drawer_widget_test.dart']);
+    expect(job).toMatchObject({ tier: 'platform', testFiles: ['packages/core/test/core_test.dart'] });
+    expect(top!.testFiles).toEqual(['apps/test/app_test.dart']);
   });
 
   test('a workflow run step names its _test.dart files; Dart root manifests are not strays', () => {
@@ -262,7 +343,7 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     const repo = dartRepo(null);
     const { PATH } = dartShim(repo);
     const shim = path.join(repo.root, 'shim');
-    for (const tool of ['dart', 'flutter']) fs.writeFileSync(path.join(shim, tool), `#!/usr/bin/env bash\nshift\necho "ran in $(basename "$PWD"): $*"\nif [ "$(basename "$PWD")" = core ]; then echo "00:01 +0 ~1: All tests passed!"; else echo "00:01 +$#: All tests passed!"; fi\n`, { mode: 0o755 });
+    for (const tool of ['dart', 'flutter']) fs.writeFileSync(path.join(shim, tool), `#!/usr/bin/env bash\nshift\necho "ran in $(basename "$PWD"): $*"\nif [ "$(basename "$PWD")" = core ]; then echo "00:01 +0 ~1: All tests skipped."; else echo "00:01 +$#: All tests passed!"; fi\n`, { mode: 0o755 });
     const userPolicy = path.join(repo.home, 'projects', 'dartzero', 'pregate.json');
     fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
     fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'] }));

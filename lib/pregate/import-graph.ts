@@ -42,13 +42,33 @@ export const DEVICE_TEST_DIR = /(?:^|\/)(?:integration_test|test_driver)\//;
 export function isDeviceDart(rel: string): boolean { return rel.endsWith('.dart') && DEVICE_TEST_DIR.test(rel); }
 export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel) && !isDeviceDart(rel); }
 
+/**
+ * A repo file's text, or null when it is not a regular file, is a symlink
+ * resolving outside the repo, is over `maxBytes` (default 1 MiB), or is
+ * unreadable. A committed symlink to a device or FIFO, or a directory named
+ * like the file, is skipped rather than read (a read could hang or exhaust memory).
+ */
+export function readRepoFile(repoRoot: string, rel: string, maxBytes = 1024 * 1024): string | null {
+  const abs = path.join(repoRoot, rel);
+  try {
+    if (fs.lstatSync(abs).isSymbolicLink()) {
+      const real = fs.realpathSync(abs);
+      const top = fs.realpathSync(repoRoot);
+      if (real !== top && !real.startsWith(top + path.sep)) return null;
+    }
+    const st = fs.statSync(abs);
+    if (!st.isFile() || st.size > maxBytes) return null;
+    return fs.readFileSync(abs, 'utf8');
+  } catch { return null; }
+}
+
 /** Dart package name → its root (`''` for the repository root), from every tracked pubspec.yaml. */
 export function dartPackages(repoRoot: string, files: Iterable<string>): Map<string, string> {
   const out = new Map<string, string>();
   for (const f of files) {
     if (path.posix.basename(f) !== 'pubspec.yaml') continue;
-    let text = '';
-    try { text = fs.readFileSync(path.join(repoRoot, f), 'utf8'); } catch { continue; }
+    const text = readRepoFile(repoRoot, f);
+    if (text === null) continue;
     const name = /^name:\s*['"]?([A-Za-z_][\w]*)/m.exec(text)?.[1];
     const root = path.posix.dirname(f);
     if (name && !out.has(name)) out.set(name, root === '.' ? '' : root);
@@ -70,7 +90,9 @@ export function resolveDartUri(files: Set<string>, packages: Map<string, string>
   return files.has(target) ? target : null;
 }
 
-const DART_DIRECTIVE = /^\s*(?:import|export|part)\b(?!\s+of\b)([^;]*);/gm;
+/** A run of directives from a line start: several may share a line (`import 'a'; import 'b';`). Each one is split out by DART_DIRECTIVE. */
+const DART_DIRECTIVE_RUN = /^\s*(?:(?:library|import|export|part)\b[^;]*;[ \t]*)+/gm;
+const DART_DIRECTIVE = /(?:^|;)\s*(?:import|export|part)\b(?!\s+of\b)([^;]*)(?=;)/g;
 
 export function listRepoFiles(repoRoot: string): string[] {
   const r = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: repoRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
@@ -106,7 +128,7 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
 export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, packages: Map<string, string> = new Map()): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
   if (rel.endsWith('.dart')) {
-    for (const d of source.matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) { const t = resolveDartUri(files, packages, rel, u[1]!); if (t) out.push({ target: t, via: 'import' }); }
+    for (const run of source.matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) { const t = resolveDartUri(files, packages, rel, u[1]!); if (t) out.push({ target: t, via: 'import' }); }
   }
   if (/\.[cm]?[jt]sx?$/.test(rel)) {
     let imports: Array<{ path: string }> = [];

@@ -14,7 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { baseInputs, sha256 } from '../context';
 import { PREGATE_CONFIG_PATH } from '../config';
-import { isDeviceDart } from '../import-graph';
+import { isDeviceDart, readRepoFile } from '../import-graph';
 import { selectLanes, type Selection } from '../lane-selection';
 import { launchRuntime } from '../runtime';
 import { matchesAny } from '../../ship-policy';
@@ -53,22 +53,33 @@ function dartRoot(repoRoot: string, file: string, seen: Map<string, string | nul
   return found;
 }
 
-function fvmPinned(repoRoot: string): boolean {
-  return fs.existsSync(path.join(repoRoot, '.fvmrc')) || fs.existsSync(path.join(repoRoot, '.fvm', 'fvm_config.json'));
+/** An fvm pin (`.fvmrc` or `.fvm/fvm_config.json`) at the package root `root` or any ancestor up to the repo root. */
+function fvmPinned(repoRoot: string, root: string): boolean {
+  for (let d = root; ; d = path.posix.dirname(d)) {
+    const dir = path.join(repoRoot, d === '.' ? '' : d);
+    if (fs.existsSync(path.join(dir, '.fvmrc')) || fs.existsSync(path.join(dir, '.fvm', 'fvm_config.json'))) return true;
+    if (d === '' || d === '.' || d === '/') return false;
+  }
+}
+
+/** Whether any Dart file among `files` sits in a package that fvm pins (the missing-SDK hint offers fvm only then). */
+function fvmPinnedFor(repoRoot: string, files: readonly string[]): boolean {
+  const seen = new Map<string, string | null>();
+  return files.some(f => { const root = f.endsWith('.dart') ? dartRoot(repoRoot, f, seen) : null; return root !== null && fvmPinned(repoRoot, root); });
 }
 
 /**
  * `flutter test` for a package on the Flutter SDK, else `dart test`; through fvm
- * when the repo pins one and fvm is on PATH. `missing` names the tool when
+ * when the package or an ancestor up to the repo root pins one and fvm is on PATH. `missing` names the tool when
  * neither fvm nor the SDK is on PATH, so the lane is incomplete rather than a
  * test failure (exit 127).
  */
 export function dartRunner(repoRoot: string, root: string, env: NodeJS.ProcessEnv): { runner: string } | { missing: string } {
-  let pubspec = '';
-  try { pubspec = fs.readFileSync(path.join(repoRoot, root, 'pubspec.yaml'), 'utf8'); } catch { /* checked by dartRoot */ }
-  const tool = /^\s*sdk:\s*flutter\b/m.test(pubspec) ? 'flutter' : 'dart';
+  const pubspec = readRepoFile(repoRoot, path.posix.join(root, 'pubspec.yaml')) ?? '';
+  // Block style (`flutter:` / `  sdk: flutter`) or flow style (`flutter: {sdk: flutter}`).
+  const tool = /(?:^|[{,])[ \t]*sdk:[ \t]*['"]?flutter\b/m.test(pubspec) ? 'flutter' : 'dart';
   const onPath = (bin: string) => !!Bun.which(bin, { PATH: env.PATH ?? '' });
-  const fvm = fvmPinned(repoRoot) && onPath('fvm');
+  const fvm = fvmPinned(repoRoot, root) && onPath('fvm');
   if (!fvm && !onPath(tool)) return { missing: tool };
   return { runner: `${fvm ? 'fvm ' : ''}${tool} test {files}` };
 }
@@ -112,8 +123,8 @@ export interface RunnerSummary { ran: number | null; failed: number | null }
 /** The runner's own summary line: bun, node --test, vitest, jest, pytest, dart/flutter test. null when not recognised. */
 export function parseSummary(output: string): RunnerSummary {
   let m: RegExpExecArray | null;
-  // dart/flutter test: the last `+passed ~skipped -failed: …` verdict line; progress lines carry no verdict.
-  const dart = [...output.matchAll(/\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed!|Some tests failed\.)/g)].pop();
+  // dart/flutter test: the last `+passed ~skipped -failed: …` verdict line (`All tests skipped.` is +0, so zero-run); progress lines carry no verdict.
+  const dart = [...output.matchAll(/\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed!|All tests skipped\.|Some tests failed\.)/g)].pop();
   if (dart) return { ran: Number(dart[1]) + Number(dart[2] ?? 0), failed: Number(dart[2] ?? 0) };
   if ((m = /^\s*(?:#|ℹ)\s*tests\s+(\d+)/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(?:#|ℹ)\s*fail\s+(\d+)/m.exec(output)?.[1] ?? 0) };
   if ((m = /Ran\s+(\d+)\s+tests?\s+across/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(\d+)\s+fail\b/m.exec(output)?.[1] ?? 0) };
@@ -188,7 +199,7 @@ function run(ctx: PregateContext): CheckResult {
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
   const groups = planRuns(ctx, sel.localTests);
-  if (!Array.isArray(groups)) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${groups.unclaimed.length} of ${sel.localTests.length} selected file(s): ${groups.unclaimed.slice(0, 8).join(' ')}${groups.unclaimed.length > 8 ? ' …' : ''}${groups.missing.length ? `; not on PATH: ${groups.missing.join(', ')}` : ''}`, fix: groups.missing.length ? `install ${groups.missing.join(' and ')}${fvmPinned(ctx.repoRoot) ? ' (or fvm, which this repo pins)' : ''} and rerun` : 'declare `runner` (with {files}) in .gstack/pregate.json, or in <GSTACK_HOME>/projects/<slug>/pregate.json when the base carries none' };
+  if (!Array.isArray(groups)) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${groups.unclaimed.length} of ${sel.localTests.length} selected file(s): ${groups.unclaimed.slice(0, 8).join(' ')}${groups.unclaimed.length > 8 ? ' …' : ''}${groups.missing.length ? `; not on PATH: ${groups.missing.join(', ')}` : ''}`, fix: groups.missing.length ? `install ${groups.missing.join(' and ')}${fvmPinnedFor(ctx.repoRoot, groups.unclaimed) ? ' (or fvm, which this repo pins)' : ''} and rerun` : 'declare `runner` (with {files}) in .gstack/pregate.json, or in <GSTACK_HOME>/projects/<slug>/pregate.json when the base carries none' };
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
   const r = runLocal(ctx, runtime.env, groups);
   const runLines = [...lines, `runtime: ${runtime.label}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
