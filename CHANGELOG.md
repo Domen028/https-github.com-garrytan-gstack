@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.91.98.0] - 2026-10-13
+
+**A lane's plan obligations now meet the repo's own gates before it reports done. Paid gates get a price before approval, a restamp is proved stamp-only by machine, and sealed eval output can't ride a push into a public repo.**
+
+### What this means for you
+
+- **Repo guards run in `gstack-pregate`.** `.gstack/pregate.json` takes `guards`: `{id, when: [globs], command, fix}`. When a changed file matches `when`, the guard runs in its own process with a timeout, and a failure names the guard and its fix. Guards cover the checks an import graph can't see, such as a serial-test manifest row or CLI goldens that spawn the binary. Required guards can't be downgraded, and without `--allow-repo-commands` the run is `incomplete`, never a pass. The lanes check runs on the verified Bun from the install's launch directory and runs serial test files one process each. Unknown flags exit 2 instead of being ignored.
+- **`gstack-eval-plan price-gate` prices a paid gate without running it.** It reads a versioned call-plan file (`--plan-file`, or `price_file` in the base branch's policy) that is bound to the gate command, head and inputs, and prints `GATE_PRICE:` with every precondition the file declares. Nothing runs before approval. A gate that declares no plan is `EVAL_GATE_UNPRICED`; `--allow-unpriced "<reason>"` approves it as a recorded owner override, never as permission to spend. A stale or malformed plan file refuses. The new `reservation-fits-cap` check catches a single call whose reservation can't fit under the smoke cap. `/eval-plan` prices every paid gate this way at approval. The wire format and a reference emitter are in `docs/eval-calls.md`.
+- **Current prices.** Claude Sonnet 5.5, Gemini 3.x Flash and the gbrain embedding models are priced from the providers' pages (source and date in the table), and Claude Opus 4.7 is at its current list price ($5/$25 per million tokens).
+- **`gstack-pregate regate --against <gated-head>` says whether a restamped head needs a new gate.** It computes a fresh tree receipt and prints `STAMP_ONLY:`, one `LANE:` line per gate lane (reusable, rerun or not-reusable), `MIGRATION_COLLISION:` against the base and every other open PR, and `REGATE: needed|not-needed`. `not-needed` requires gate evidence for the gated head, an unchanged execution identity, no stamp-sensitive rerun and no unknown collision lookup. Bare `--against` is an alias.
+- **The repo's stamp rule is the stamp rule.** Ship policy takes `stamp_files` (the files allowed to differ) and literal `stamp_patterns` with one `{version}` slot, such as `since: '{version}'`. A pure restamp of a repo whose versions sit in quoted `since:` rows, package manifests or stamp comments now classifies as stamps. `restamp_command` runs the repo's own restamp inside restamp's staging worktree with the target version, on a clean tree; a failure or a wrong-version output writes nothing. The `migrations` key (directory and id pattern) feeds the collision check.
+- **A sealed-output guard runs before a push.** In a repo whose `.gstack/pregate.json` has a `sealed` key, the managed pre-push hook and `gstack-pregate sealed` check every commit the push publishes: forbidden paths (binary, empty, renamed and add-then-deleted files included), transcripts, quoted answer markers, seeds and machine-local paths. In a public repo a match refuses with the file, line and rule (`SEALED_OUTPUT_REFUSED`); in a private one it warns. The effective policy is the union of the base branch's and the pushed one, so a push can tighten the policy but never relax it. A malformed policy refuses, and unknown visibility counts as public. Waivers come only from a base-branch allow file. Repos without a `sealed` key see no change.
+- **Lane handoffs carry the install and pregate lines.** The coordinator contract now asks a lane to run `gstack-pregate run --allow-repo-commands` (and `gstack-pregate sealed` where configured) before reporting done. Its handoff lists `GSTACK_RESULT`, then `gstack: ok|fail <rev>`, then `PREGATE:`, then the gate summary.
+
+### For contributors
+
+- New: `lib/pregate/checks/guards.ts`, `lib/pregate/regate.ts`, `lib/pregate/runtime.ts`, `lib/sealed-guard.ts`; docs `docs/eval-calls.md`, `docs/pregate.md#regate` and `#gbrain-worked-configs`.
+- New result codes with troubleshooting anchors include `EVAL_GATE_UNPRICED`, `PREGATE_GUARD_FAILED`, `SEALED_OUTPUT_REFUSED` and `MIGRATION_COLLISION`.
+- Pregate and ship-policy validators still refuse unknown keys, so a repo should commit `guards`, `sealed`, `price_file`, `stamp_files`, `stamp_patterns`, `restamp_command` or `migrations` only after its machines run this release.
+
 ## [1.91.95.0] - 2026-10-12
 
 **A reopened `/autoplan` gate now exports a run that validates.**
