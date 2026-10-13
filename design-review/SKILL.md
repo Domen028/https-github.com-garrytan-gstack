@@ -546,6 +546,7 @@ setopt +o nomatch 2>/dev/null || true  # zsh compat
 [ -f package.json ] && echo "RUNTIME:node"
 [ -f go.mod ] && echo "RUNTIME:go"
 [ -f Cargo.toml ] && echo "RUNTIME:rust"
+[ -f pubspec.yaml ] && echo "RUNTIME:dart"
 [ -f composer.json ] && echo "RUNTIME:php"
 [ -f mix.exs ] && echo "RUNTIME:elixir"
 [ -f pom.xml ] && echo "RUNTIME:jvm BUILD:maven"
@@ -553,13 +554,14 @@ setopt +o nomatch 2>/dev/null || true  # zsh compat
 # Detect sub-frameworks
 [ -f Gemfile ] && grep -q "rails" Gemfile 2>/dev/null && echo "FRAMEWORK:rails"
 [ -f package.json ] && grep -q '"next"' package.json 2>/dev/null && echo "FRAMEWORK:nextjs"
+[ -f pubspec.yaml ] && grep -qE '^[[:space:]]*sdk:[[:space:]]*flutter' pubspec.yaml 2>/dev/null && echo "FRAMEWORK:flutter"
 # Existing test path — config files, declared scripts, AND test FILES.
 # A project with real tests and no config file is the common miss.
-ls jest.config.* vitest.config.* playwright.config.* .rspec pytest.ini tox.ini phpunit.xml* 2>/dev/null
+ls jest.config.* vitest.config.* playwright.config.* .rspec pytest.ini tox.ini phpunit.xml* dart_test.yaml 2>/dev/null
 [ -f package.json ] && grep -q '"test"[[:space:]]*:' package.json && echo "SCRIPT:package.json test"
 [ -f Makefile ] && grep -qE '^(test|check):' Makefile && echo "TARGET:make test"
 [ -f pyproject.toml ] && grep -q "pytest" pyproject.toml && echo "CONFIG:pyproject pytest"
-git ls-files | grep -cE '(^|/)(tests?|spec|__tests__)/|(^|/)tests?\.py$|(^|/)test_[^/]+\.py$|_test\.(go|py|rb|ts|js|exs)$|\.(test|spec)\.[jt]sx?$|_spec\.rb$|Test\.(java|kt)$' | sed 's/^/TESTFILES:/'
+git ls-files | grep -cE '(^|/)(tests?|spec|__tests__)/|(^|/)tests?\.py$|(^|/)test_[^/]+\.py$|_test\.(go|py|rb|ts|js|exs|dart)$|\.(test|spec)\.[jt]sx?$|_spec\.rb$|Test\.(java|kt)$' | sed 's/^/TESTFILES:/'
 # Rust keeps unit tests inside src/, so file names alone miss them
 [ -f Cargo.toml ] && git grep -lF '#[test]' -- 'src' >/dev/null 2>&1 && echo "TESTS:rust in-source"
 # Check opt-out marker
@@ -574,6 +576,7 @@ Map the markers to the command you will OFFER — never to one you run on a gues
 | `pytest.ini` / `tox.ini` / pytest in `pyproject.toml` / `test_*.py` | Python | `pytest` |
 | `go.mod` (+ any `*_test.go`) | Go | `go test ./...` |
 | `Cargo.toml` | Rust | `cargo test` |
+| `pubspec.yaml` (+ any `*_test.dart`) | Dart / Flutter | `flutter test` when it depends on the Flutter SDK, else `dart test`; prefix `fvm` when `.fvmrc` pins the SDK |
 | `pom.xml` | JVM (Maven) | `mvn test` |
 | `build.gradle` / `build.gradle.kts` | JVM (Gradle) | `./gradlew test` |
 | `Gemfile` / `Rakefile` / `.rspec` | Ruby | `bundle exec rspec`, `bin/rails test`, or `rake test` |
@@ -582,7 +585,7 @@ Map the markers to the command you will OFFER — never to one you run on a gues
 | `package.json` with a `test` script | Node | that script, run with the package manager the lockfile names |
 | `Makefile` with a `test:` target | any | `make test` |
 
-**If ANY existing-test evidence appears** (a config file, a declared test script or make target, a nonzero `TESTFILES:` count, or `TESTS:rust in-source`): the project has tests. **Do NOT bootstrap.** Print "Existing tests detected: {the evidence}." Then get the command the same way Step 5 does — CLAUDE.md/TESTING.md if documented, otherwise AskUserQuestion offering the candidates from the table above plus "Other", and persist the answer to CLAUDE.md's `## Testing` section so it is never asked again. When the ecosystem ships a runner (Django, Go, Rust, Elixir, Maven/Gradle), that runner is the candidate — never install a second framework beside a working one.
+**If ANY existing-test evidence appears** (a config file, a declared test script or make target, a nonzero `TESTFILES:` count, or `TESTS:rust in-source`): the project has tests. **Do NOT bootstrap.** Print "Existing tests detected: {the evidence}." Then get the command the same way Step 5 does — CLAUDE.md/TESTING.md if documented, otherwise AskUserQuestion offering the candidates from the table above plus "Other", and persist the answer to CLAUDE.md's `## Testing` section so it is never asked again. When the ecosystem ships a runner (Django, Go, Rust, Dart/Flutter, Elixir, Maven/Gradle), that runner is the candidate — never install a second framework beside a working one.
 Read 2-3 existing test files to learn conventions (naming, imports, assertion style, setup patterns).
 Store conventions as prose context for use in Phase 8e.5 or Step 7. **Skip the rest of bootstrap.**
 
@@ -630,6 +633,7 @@ If Aside is not installed or not running (`command -v aside` prints nothing, or 
 | Go | stdlib testing + testify | stdlib only |
 | JVM (Maven/Gradle) | JUnit 5 + AssertJ | JUnit 5 only |
 | Rust | cargo test (built-in) + mockall | — |
+| Dart / Flutter | package:test / flutter_test (built-in) + mocktail | mockito |
 | PHP | phpunit + mockery | pest |
 | Elixir | ExUnit (built-in) + ex_machina | — |
 

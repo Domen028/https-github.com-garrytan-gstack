@@ -55,13 +55,14 @@ setopt +o nomatch 2>/dev/null || true  # zsh compat
 [ -f package.json ] && echo "RUNTIME:node"
 [ -f go.mod ] && echo "RUNTIME:go"
 [ -f Cargo.toml ] && echo "RUNTIME:rust"
+[ -f pubspec.yaml ] && echo "RUNTIME:dart"
 [ -f pom.xml ] && echo "RUNTIME:jvm BUILD:maven"
 { [ -f build.gradle ] || [ -f build.gradle.kts ]; } && echo "RUNTIME:jvm BUILD:gradle"
 # Check for existing test infrastructure — config files, scripts, AND test files
-ls jest.config.* vitest.config.* playwright.config.* cypress.config.* .rspec pytest.ini tox.ini phpunit.xml 2>/dev/null
+ls jest.config.* vitest.config.* playwright.config.* cypress.config.* .rspec pytest.ini tox.ini phpunit.xml dart_test.yaml 2>/dev/null
 [ -f package.json ] && grep -q '"test"[[:space:]]*:' package.json && echo "SCRIPT:package.json test"
 [ -f Makefile ] && grep -qE '^(test|check):' Makefile && echo "TARGET:make test"
-git ls-files | grep -cE '(^|/)(tests?|spec|__tests__)/|(^|/)tests?\.py$|(^|/)test_[^/]+\.py$|_test\.(go|py|rb|ts|js|exs)$|\.(test|spec)\.[jt]sx?$|_spec\.rb$|Test\.(java|kt)$' | sed 's/^/TESTFILES:/'
+git ls-files | grep -cE '(^|/)(tests?|spec|__tests__)/|(^|/)tests?\.py$|(^|/)test_[^/]+\.py$|_test\.(go|py|rb|ts|js|exs|dart)$|\.(test|spec)\.[jt]sx?$|_spec\.rb$|Test\.(java|kt)$' | sed 's/^/TESTFILES:/'
 ```
 
 3. **If no framework detected:** use the bootstrap decision already made in Step 4; report diagram-only coverage if setup was declined. Do not restart bootstrap from this audit.
