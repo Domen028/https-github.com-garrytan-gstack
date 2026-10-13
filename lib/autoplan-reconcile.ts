@@ -26,7 +26,11 @@ const SEVERITY_ALIASES: Record<string, Severity> = {
 export interface CanonicalFinding {
   severity: Severity; title: string; file?: string; line?: number; fix?: string; local_id?: string;
   user_challenge?: boolean; urgent?: boolean; suggested_owner?: string; plan_items?: string[]; dimension?: string;
+  /** What a user challenge changes; only these three make it a gate question (plan B2a). */
+  changes?: Changes;
 }
+export const CHANGES = ['scope', 'cost', 'direction'] as const;
+export type Changes = typeof CHANGES[number];
 export interface ParsedReviewResult {
   receipt: { ok: boolean; phase?: string; sha256?: string; line?: string };
   findings: CanonicalFinding[];
@@ -42,14 +46,25 @@ export function severityOf(value: unknown): Severity | undefined {
 /** Parse a reviewer's result: the INPUT receipt for this phase and snapshot, then the canonical findings fence(s). */
 export function parseReviewResult(text: string, expected: { phase: string; sha256: string }): ParsedReviewResult {
   const errors: string[] = [];
+  const receipt = parseReceipt(text, expected);
+  if (!receipt.ok) errors.push(receipt.error!);
+  const { findings, fenceFound } = parseFences(text, errors);
+  if (!fenceFound) errors.push('no ```gstack-findings fence');
+  return { receipt, findings, fenceFound, errors };
+}
+
+/** The full-read receipt: `INPUT: <phase> <sha256>` in the first five non-empty lines, matching this phase and snapshot. */
+export function parseReceipt(text: string, expected: { phase: string; sha256: string }): ParsedReviewResult['receipt'] & { present: boolean; error?: string } {
   const head = text.split('\n').map(l => l.trim()).filter(Boolean).slice(0, 5);
   const receiptLine = head.find(l => /^INPUT:\s*\S+\s+[0-9a-f]{64}\b/i.test(l));
   const m = receiptLine ? /^INPUT:\s*(\S+)\s+([0-9a-f]{64})/i.exec(receiptLine) : null;
-  const receipt = m
-    ? { ok: m[1]!.toLowerCase() === expected.phase && m[2]!.toLowerCase() === expected.sha256.toLowerCase(), phase: m[1]!.toLowerCase(), sha256: m[2]!.toLowerCase(), line: receiptLine }
-    : { ok: false };
-  if (!receipt.ok) errors.push(m ? `receipt names ${m[1]} ${m[2]!.slice(0, 12)}…, expected ${expected.phase} ${expected.sha256.slice(0, 12)}…` : 'no INPUT: <phase> <sha256> line in the first five lines');
+  if (!m) return { ok: false, present: false, error: 'no INPUT: <phase> <sha256> line in the first five lines' };
+  const ok = m[1]!.toLowerCase() === expected.phase && m[2]!.toLowerCase() === expected.sha256.toLowerCase();
+  return { ok, present: true, phase: m[1]!.toLowerCase(), sha256: m[2]!.toLowerCase(), line: receiptLine,
+    ...(ok ? {} : { error: `receipt names ${m[1]} ${m[2]!.slice(0, 12)}…, expected ${expected.phase} ${expected.sha256.slice(0, 12)}…` }) };
+}
 
+function parseFences(text: string, errors: string[]): { findings: CanonicalFinding[]; fenceFound: boolean } {
   const findings: CanonicalFinding[] = [];
   let fenceFound = false;
   for (const fence of text.matchAll(/^[ \t]*(`{3,}|~{3,})gstack-findings[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*$/gm)) {
@@ -73,11 +88,88 @@ export function parseReviewResult(text: string, expected: { phase: string; sha25
       if (typeof row.suggested_owner === 'string') finding.suggested_owner = row.suggested_owner;
       if (Array.isArray(row.plan_items)) finding.plan_items = row.plan_items.filter((p: unknown): p is string => typeof p === 'string');
       if (typeof row.dimension === 'string') finding.dimension = row.dimension;
+      if (row.changes !== undefined) {
+        if (!(CHANGES as readonly unknown[]).includes(row.changes)) { errors.push(`findings row ${i + 1}: changes ${JSON.stringify(row.changes)} is not one of ${CHANGES.join('|')}`); return; }
+        finding.changes = row.changes;
+      }
       findings.push(finding);
     });
   }
-  if (!fenceFound) errors.push('no ```gstack-findings fence');
-  return { receipt, findings, fenceFound, errors };
+  return { findings, fenceFound };
+}
+
+export const RECORD_SHAPES = 'a ```gstack-findings fence, exactly one findings table (Severity and Title columns), one severity-tagged list (`- [High] title`), or an exact `No findings.` line';
+const SEVERITY_HEADER = /^(severity|sev|priority)$/i;
+const TITLE_HEADER = /^(finding|title|issue|summary)$/i;
+const cells = (line: string) => line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+
+/** Findings tables in a record: header row with severity and title columns, a delimiter row, then body rows. */
+function recordTables(lines: string[]): Array<{ header: string[]; rows: Array<{ cells: string[]; n: number }> }> {
+  const tables: Array<{ header: string[]; rows: Array<{ cells: string[]; n: number }> }> = [];
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (!/^\s*\|/.test(lines[i]!) || !/^\s*\|?\s*:?-{3,}/.test(lines[i + 1]!)) continue;
+    const header = cells(lines[i]!).map(h => h.replace(/[*_`]/g, '').trim());
+    if (!header.some(h => SEVERITY_HEADER.test(h)) || !header.some(h => TITLE_HEADER.test(h))) continue;
+    const rows: Array<{ cells: string[]; n: number }> = [];
+    let j = i + 2;
+    for (; j < lines.length && /^\s*\|/.test(lines[j]!); j++) rows.push({ cells: cells(lines[j]!), n: rows.length + 1 });
+    tables.push({ header, rows });
+    i = j - 1;
+  }
+  return tables;
+}
+
+const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(?:\[([^\]]+)\]|\*\*([^*]+)\*\*|\(([^)]+)\))\s*:?\s*(\S.*)$/;
+
+/**
+ * Findings from a hand-run record (`submit --record`): the canonical fence
+ * when present; else exactly one of a findings table, a severity-tagged list
+ * or an exact `No findings.` line. More than one candidate shape, none, or a
+ * table row whose severity is not recognized is an error: the parser never
+ * guesses a severity.
+ */
+export function parseRecordFindings(text: string): { findings: CanonicalFinding[]; source: 'fence' | 'table' | 'list' | 'none'; errors: string[] } {
+  const errors: string[] = [];
+  const fenced = parseFences(text, errors);
+  if (fenced.fenceFound) return { findings: fenced.findings, source: 'fence', errors };
+  const lines = text.split('\n');
+  const tables = recordTables(lines);
+  const listBlocks: Array<CanonicalFinding[]> = [];
+  let current: CanonicalFinding[] | null = null;
+  for (const line of lines) {
+    const m = LIST_ITEM.exec(line);
+    const severity = m ? severityOf(m[1] ?? m[2] ?? m[3]) : undefined;
+    if (m && severity) { (current ??= (listBlocks.push([]), listBlocks[listBlocks.length - 1]!)).push({ severity, title: m[4]!.trim() }); continue; }
+    if (line.trim()) current = null;
+  }
+  const none = lines.some(l => l.trim() === 'No findings.');
+  const shapes = [...tables.map(() => 'table'), ...listBlocks.map(() => 'list'), ...(none ? ['No findings.'] : [])];
+  if (shapes.length === 0) return { findings: [], source: 'none', errors: [`no findings shape; expected ${RECORD_SHAPES}`] };
+  if (shapes.length > 1) return { findings: [], source: 'none', errors: [`more than one findings shape (${shapes.join(', ')}); keep exactly one of ${RECORD_SHAPES}`] };
+  if (none) return { findings: [], source: 'none', errors };
+  if (listBlocks.length) return { findings: listBlocks[0]!, source: 'list', errors };
+  const { header, rows } = tables[0]!;
+  const col = (re: RegExp) => header.findIndex(h => re.test(h));
+  const at = { sev: col(SEVERITY_HEADER), title: col(TITLE_HEADER), file: col(/^(file|location|where)$/i), fix: col(/^(fix|recommendation|remedy|resolution)$/i), id: col(/^(id|#)$/i), uc: col(/^user[ _]challenge$/i), changes: col(/^changes$/i) };
+  const findings: CanonicalFinding[] = [];
+  for (const row of rows) {
+    const cell = (i: number) => (i >= 0 ? (row.cells[i] ?? '').trim() : '');
+    const severity = severityOf(cell(at.sev).replace(/[*_`]/g, ''));
+    if (!severity) { errors.push(`table row ${row.n}: severity ${JSON.stringify(cell(at.sev))} is not one of ${SEVERITIES.join('|')}`); continue; }
+    if (!cell(at.title)) { errors.push(`table row ${row.n}: title is required`); continue; }
+    const f: CanonicalFinding = { severity, title: cell(at.title) };
+    const loc = /^`?([^`\s:]+?)(?::(\d+))?`?$/.exec(cell(at.file));
+    if (loc?.[1]) { f.file = loc[1]; if (loc[2]) f.line = Number(loc[2]); }
+    if (cell(at.fix)) f.fix = cell(at.fix);
+    if (cell(at.id)) f.local_id = cell(at.id);
+    if (/^(yes|true|y)$/i.test(cell(at.uc))) f.user_challenge = true;
+    if (cell(at.changes)) {
+      if (!(CHANGES as readonly string[]).includes(cell(at.changes).toLowerCase())) { errors.push(`table row ${row.n}: changes ${JSON.stringify(cell(at.changes))} is not one of ${CHANGES.join('|')}`); continue; }
+      f.changes = cell(at.changes).toLowerCase() as Changes;
+    }
+    findings.push(f);
+  }
+  return { findings, source: 'table', errors };
 }
 
 /** Run-bound findings.jsonl rows for one voice of one phase. */
@@ -90,6 +182,7 @@ export function canonicalRows(findings: CanonicalFinding[], ctx: { run: string; 
     ...(f.local_id ? { source: f.local_id } : {}),
     ...(f.user_challenge ? { user_challenge: true } : {}), ...(f.urgent ? { urgent: true } : {}),
     ...(f.suggested_owner ? { suggested_owner: f.suggested_owner } : {}), ...(f.dimension ? { dimension: f.dimension } : {}),
+    ...(f.changes ? { changes: f.changes } : {}),
   } as FindingRow));
 }
 
@@ -100,8 +193,10 @@ export interface ReconciliationRow {
   resolution: string;
   basis: 'file_line' | 'title' | 'override' | 'none';
   severity: { outside: Severity; native: Severity | null };
+  /** A parent override's one shared proposal for both voices' user challenge; the gate renders it as option b. */
+  proposal?: string;
 }
-export interface ReconciliationOverride { outside_id: string; native_id?: string | null; disposition: ReconciliationDisposition; resolution: string }
+export interface ReconciliationOverride { outside_id: string; native_id?: string | null; disposition: ReconciliationDisposition; resolution: string; proposal?: string }
 
 const tokens = (title: string) => new Set(title.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(t => t.length > 2));
 function jaccard(a: Set<string>, b: Set<string>): number {
@@ -139,7 +234,8 @@ export function reconcile(native: FindingRow[], outside: FindingRow[], overrides
     if (override) {
       const n = override.native_id ? native.find(x => x.id === override.native_id) : undefined;
       if (n) used.add(n.id);
-      rows.push({ outside_id: o.id, native_id: n?.id ?? null, disposition: override.disposition, resolution: override.resolution, basis: 'override', severity: { outside: o.severity, native: n?.severity ?? null } });
+      rows.push({ outside_id: o.id, native_id: n?.id ?? null, disposition: override.disposition, resolution: override.resolution, basis: 'override', severity: { outside: o.severity, native: n?.severity ?? null },
+        ...(typeof override.proposal === 'string' && override.proposal.trim() ? { proposal: override.proposal.trim() } : {}) });
       continue;
     }
     let match: FindingRow | undefined;

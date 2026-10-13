@@ -182,15 +182,25 @@ $AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--light
    disagreements as auto items and `p1` plan approval; nothing is approved.
 4. **Answer the gate** with the reply grammar and the revision you read:
    ```bash
-   $AP answer --out <dir> --gate-rev 1 --reply "all"              # APPROVED: status=complete, no new paid phase
-   $AP answer --out <dir> --gate-rev 1 --reply "all except d1b"   # REOPENED: ceo,eng (Eng last); next continues the loop
+   $AP answer --out <dir> --gate-rev 1 --reply "all"              # every recommendation; agreeing plan changes print APPLY:
+   $AP answer --out <dir> --gate-rev 1 --reply "all as-is"        # APPROVED: keeps every direction, no new paid phase
+   $AP answer --out <dir> --gate-rev 1 --reply "all except d1b"   # APPLY: <id> ...; REOPENED: ceo,eng; NEXT: gstack-autoplan revise ...
    ```
+   A user challenge both voices raised on a confirmed finding with the same
+   `changes` value is recommended as `b`, and option b shows both voices'
+   remedies (`recommended: b (both voices; remedies shown)`); a `--reconcile`
+   record naming one shared `proposal` shows that instead. Disagreeing or
+   missing remedies keep `a`. Every accepted plan change prints
+   `APPLY: <decision id> <title> -> <chosen text>` and becomes a pending
+   amendment: `next` refuses with `PLAN_AMEND_PENDING` and `export` refuses a
+   `complete` run until `revise --incorporates` names it (see below).
    A stale revision (`GATE_REV_STALE`, exit 3), bare `yes`/`no`, or a
    conflicting reply (`GATE_REPLY_UNPARSED`) writes nothing. A reply that
    leaves approval items pending records only the answered auto items and
-   keeps the gate. A non-recommended choice on a reviewed item reopens that
-   phase plus Eng, archives their bound files as `*.r<rev>.*`, and the next
-   gate is `gate_rev + 1`; `p1d` reopens every phase; `p1e` ends `incomplete`.
+   keeps the gate; a later reply never overwrites an earlier answer. A choice
+   that changes the plan reopens that phase plus Eng, archives their bound
+   files as `*.r<rev>.*`, and the next gate is `gate_rev + 1`; `p1d` reruns
+   every phase on the current plan; `p1e` ends `incomplete`.
 5. **Export and validate.** `$AP export --out <dir>` writes `plan.md` (with
    the `## URGENT, outside this plan` block first), `review-record.md`,
    `tasks.jsonl`, `decisions.jsonl`, `findings.jsonl`, `timing.json` and
@@ -219,7 +229,8 @@ Each prompt file ends with this contract; `submit` enforces it.
    object per line: `{"id":"F1","severity":"High","title":"...","file":"...","line":12,"fix":"..."}`
    inside a ```` ```gstack-findings ```` fence. `severity` is Critical | High |
    Medium | Low | Informational; `"user_challenge": true` marks a recommended
-   change to the plan's stated direction; `"urgent": true` with
+   change to the plan's stated direction and needs `"changes": "scope" |
+   "cost" | "direction"` (what accepting it changes); `"urgent": true` with
    `"suggested_owner"` marks a security or data-loss finding the plan does not
    own. An empty fence means no findings; a missing fence is refused.
 3. The whole result is written to the printed `result=` path.
@@ -240,6 +251,41 @@ by its runner. Result codes: `EXECUTION_UNKNOWN`, `RUN_LOCKED`,
 `RESULT_RECEIPT_MISSING`, `RESULT_FINDINGS_MISSING`, `MODEL_FAMILY_CONFLICT`,
 `SPEND_CAP_EXCEEDED`, `CONSENSUS_MISSING`, `OUTSIDE_RUNNER_UNAVAILABLE`
 (anchors in [troubleshooting.md](troubleshooting.md)).
+
+### Hand-run records, revised plans and admission
+
+- **Hand-run reviews.** `submit --record <file>` binds a review that did not
+  follow the RESULT FORMAT: the `gstack-findings` fence, one findings table
+  (Severity and Title columns), one severity-tagged list (`- [High] title`) or
+  a `No findings.` line. Without its `INPUT:` line it binds only with
+  `--attest "<reason>"` and `--attempt <id>` (receipt `attested`; refused after
+  a later `revise`), and `gstack-artifact validate` prints `attested=<n>`.
+  `--attempt` may be omitted when exactly one attempt is open.
+  `submit --voice outside --unavailable "<reason>"` (or `--failed`) closes the
+  phase `native_only` once native is bound; `next` and `resume` never
+  redispatch it.
+- **Revising the plan in the same run.** Edit the source plan, then
+  `$AP revise --out <dir> --plan <file> [--incorporates <decision id,...>]`.
+  Every phase whose reviewed Implementation-plan hash differs reopens (plus
+  Eng); newly in-scope phases are added; archives keep `.r<rev>` names with
+  `.v<k>` only on collision; a revise at `gate_pending` makes the next gate
+  `gate_rev + 1`. `--incorporates` discharges only the named amendments and
+  refuses an unchanged plan; `revise --out <dir> --withdraw <decision id>`
+  drops one as a journaled owner decision. `next` prints `PLAN_CHANGED` and
+  `answer` prints `PLAN_SOURCE_CHANGED` when the source plan moved since the
+  snapshot. A plan without both `## Implementation plan` and `## Review record`
+  refuses with `PLAN_SECTIONS_INVALID`; `next --scaffold` reviews a copy with
+  the missing heading added. `resume` completes an interrupted revise.
+- **Admission and upgrades.** `next`, `submit`, `answer`, `revise`, `export`
+  and `run` refuse on a Capy host (`GSTACK_CAPY=1`) without an ok install
+  verdict for this checkout at `$GSTACK_INSTALL_VERDICT`
+  (`INSTALL_VERDICT_FAILED`), and in any unattended session when the Bun on
+  PATH is below `engines.bun` (`RUNTIME_BELOW_MINIMUM`);
+  `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` overrides and records a run deviation.
+  `status` and `resume` are never gated. A run directory written by an older
+  gstack prints `GSTACK_VERSION_CHANGED` once and moves forward (legacy
+  decision ids are renamed and journaled); one written by a newer gstack is
+  refused.
 
 ## Owner brief
 
