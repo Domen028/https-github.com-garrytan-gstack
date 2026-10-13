@@ -134,7 +134,7 @@ describe('Dart runner and summary (pure)', () => {
     // Value: protects=a selection manifest's *_test.dart lines join the lane's file set; fails_when=the manifest regex drops _test.dart;
     //   why_new=manifests were only tested with .test.js lists; seam=none; no_claim=a real planner (printf stands in)
     const ctx = { repoRoot: process.cwd(), allowRepoCommands: true, timeoutMs: 30_000, env: process.env, explain: [],
-      config: { ...DEFAULT_CONFIG, selection: { 't.yml/dart': "printf 'packages/core/test/core_test.dart\\n  shard: test/ui/drawer_widget_test.dart\\nlib/theme.dart\\n'" } } } as unknown as PregateContext;
+      config: { ...DEFAULT_CONFIG, selection: { 't.yml/dart': "printf 'packages/core/test/core_test.dart\\n  shard: test/ui/drawer_widget_test.dart\\nlib/theme.dart\\nintegration_test/app_test.dart\\n'" } } } as unknown as PregateContext;
     expect(laneFileSet(ctx, { id: 't.yml/dart', testFiles: [] } as unknown as Lane)).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
   });
 

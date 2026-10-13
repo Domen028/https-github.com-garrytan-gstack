@@ -39,7 +39,7 @@ export function laneFileSet(ctx: PregateContext, lane: Lane): string[] | '?' | '
     if (!ctx.allowRepoCommands) { ctx.explain.push(`lane ${lane.id}: selection manifest \`${manifest}\` not run (pass --allow-repo-commands); treated as unknown`); return files.size ? [...files] : '?'; }
     const r = spawnSync('bash', ['-c', `set -o pipefail; ${manifest}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
     if (r.status !== 0) { ctx.explain.push(`lane ${lane.id}: selection manifest exited ${r.status}; treated as unknown`); return '?'; }
-    for (const line of (r.stdout ?? '').split('\n')) { const m = /((?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?|(?:[\w.-]+\/)*test_[\w.-]+\.py|(?:[\w.-]+\/)*test\/(?:[\w.-]+\/)*[\w.-]+_test\.dart)/.exec(line.trim()); if (m) files.add(m[1]!); }
+    for (const line of (r.stdout ?? '').split('\n')) { const m = /((?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?|(?:[\w.-]+\/)*test_[\w.-]+\.py|(?<![\w./-])(?:[\w.-]+\/)*test\/(?:[\w.-]+\/)*[\w.-]+_test\.dart)/.exec(line.trim()); if (m) files.add(m[1]!); }
     ctx.explain.push(`lane ${lane.id}: ${files.size} files from manifest \`${manifest}\``);
     return [...files];
   }

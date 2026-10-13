@@ -206,7 +206,7 @@ export function loadConfigFromUser(file: string, knownChecks: readonly string[] 
   try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
     if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
     // An unreadable policy must refuse, never fall back to defaults (its guards would silently vanish).
-    return { ...parseConfig('{}', knownChecks), errors: [{ code: 'PREGATE_CONFIG_INVALID', path: '', message: `cannot read the user-owned policy: ${(e as Error).message}` }], present: true, label: `user ${file}`, kind: 'user' };
+    return { ...parseConfig('{}', knownChecks), errors: [{ code: 'PREGATE_CONFIG_INVALID', path: file, message: `cannot read the user-owned policy: ${(e as Error).message}` }], present: true, label: `user ${file}`, kind: 'user' };
   }
   const load = parseConfig(text, knownChecks);
   // `sealed` (the pre-push guard) and `price_file` (gstack-eval-plan) read only the git copies, so a non-null value in the user file would look active and do nothing.
