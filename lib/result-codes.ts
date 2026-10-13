@@ -471,6 +471,21 @@ export const RESULT_CODES = {
     summary: 'a repo guard from .gstack/pregate.json whose files the branch touched exited non-zero',
     fix: 'run the guard command printed in the table, apply the guard\'s fix line, commit, then rerun `gstack-pregate run --allow-repo-commands`',
   },
+  EVAL_GATE_UNPRICED: {
+    anchor: 'eval-gate-unpriced',
+    summary: 'the paid gate has no call-plan file (no `--plan-file`, no base-policy `price_file`) or the file has no GSTACK_EVAL_CALLS lines, so its cost is unknown',
+    fix: 'have the repo commit a call-plan file (docs/eval-calls.md) and set `price_file` in .gstack/pregate.json, or pass `--allow-unpriced "<reason>"` only on the owner\'s say-so',
+  },
+  EVAL_GATE_OVER_CAP: {
+    anchor: 'eval-gate-over-cap',
+    summary: 'the paid gate\'s priced total, or one call\'s reservation (input plus maximum output), is above the cap',
+    fix: 'cut questions, arms or `max_out_tokens` in the call plan, or raise `--cap-usd` / `--smoke-cap-usd` deliberately with the owner; never split calls to slip under it',
+  },
+  EVAL_PLAN_STALE: {
+    anchor: 'eval-plan-stale',
+    summary: 'the call-plan file\'s binding does not match: a different gate command, a head behind HEAD, or an input whose sha256 at HEAD differs',
+    fix: 'regenerate the call-plan file at HEAD for the exact gate command you are approving, commit it, and rerun `gstack-eval-plan price-gate`',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

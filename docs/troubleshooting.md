@@ -2480,3 +2480,41 @@ downgraded to warn.
 and do what its `fix` line says, commit, then rerun
 `gstack-pregate run --allow-repo-commands`. A lane reports done only after this
 passes and carries the `PREGATE:` line in its handoff.
+
+<a id="eval-gate-unpriced"></a>
+### `EVAL_GATE_UNPRICED`
+
+**Meaning.** `gstack-eval-plan price-gate` found no call-plan file for the paid
+gate: no `--plan-file`, no `price_file` in the base branch's
+`.gstack/pregate.json`, the declared file is missing from the HEAD commit, or
+the file has no `GSTACK_EVAL_CALLS` lines. A gate whose cost is unknown cannot
+be approved as priced.
+
+**Fix.** The consuming repo commits a call-plan file in the format of
+[docs/eval-calls.md](eval-calls.md) and names it in `price_file`. Only when the
+owner accepts an unpriced gate, rerun with `--allow-unpriced "<reason>"`: it
+exits 0, prints `GATE_UNPRICED_OVERRIDE: <reason> (owner-authorized override;
+not authorization to spend)` and records the reason in the receipt.
+
+<a id="eval-gate-over-cap"></a>
+### `EVAL_GATE_OVER_CAP`
+
+**Meaning.** The gate's priced total is above `--cap-usd`, or one call's
+reservation (its share of the input plus `max_out_tokens`) is above `--cap-usd`,
+or above `--smoke-cap-usd` for a `scope=smoke` row. A provider refuses a
+reservation the cap cannot hold, so the run would fail after spending.
+
+**Fix.** Cut questions, arms or `max_out_tokens` in the call plan and
+regenerate it, or raise the cap deliberately with the owner. Never split calls
+to slip under it.
+
+<a id="eval-plan-stale"></a>
+### `EVAL_PLAN_STALE`
+
+**Meaning.** The call-plan file prices something other than what is being
+approved: its `GSTACK_EVAL_GATE` command is not the exact `--gate` string, its
+`GSTACK_EVAL_HEAD` is behind HEAD with files other than the plan file changed
+since, or an input's sha256 at HEAD differs from its `GSTACK_EVAL_INPUT` line.
+
+**Fix.** Regenerate the plan file at HEAD for the exact gate command (the
+repo's own producer), commit it, and rerun `gstack-eval-plan price-gate`.
