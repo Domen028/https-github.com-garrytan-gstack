@@ -79,7 +79,11 @@ approved:
   file itself changed between them (a committed plan file sits one commit on
   top of the head it was computed at, so its own commit is allowed);
 - an input's sha256 of its bytes in the HEAD commit differs from its
-  `GSTACK_EVAL_INPUT` line, or the input is not in HEAD.
+  `GSTACK_EVAL_INPUT` line, or the input is not in HEAD;
+- the base policy declares a `price_file` that is not in the HEAD commit.
+
+`--allow-unpriced` never overrides these: only a gate with no plan declared at
+all, or a plan with zero call lines, is unpriced.
 
 ## Pricing outcomes
 
@@ -98,10 +102,12 @@ GATE_PRICE: total=6.7 calls=200 purposes=answer,judge receipt=.gstack/tmp/price-
 | a model with no row in `lib/pricing.ts`: that row and the total print `unknown`, never zero | 1 | `EVAL_PRICE_MISSING` |
 | total above `--cap-usd` | 1 | `EVAL_GATE_OVER_CAP` |
 | one call's reservation above `--cap-usd`, or above `--smoke-cap-usd` for a `scope=smoke` row (`CHECK: reservation-fits-cap exceeds (…)`) | 1 | `EVAL_GATE_OVER_CAP` |
-| no plan file (no `--plan-file`, no `price_file`, file not in HEAD) or a file with zero call lines | 1 | `EVAL_GATE_UNPRICED` |
+| no plan declared (no `--plan-file` and no `price_file` key) or a file with zero call lines | 1 | `EVAL_GATE_UNPRICED` |
 | the same with `--allow-unpriced "<reason>"` | 0 | prints `GATE_UNPRICED_OVERRIDE: <reason> (owner-authorized override; not authorization to spend)` and records it |
 | malformed or partial file | 1 | `EVAL_DRY_RUN_FAILED` |
-| stale binding | 1 | `EVAL_PLAN_STALE` |
+| stale binding, or a declared `price_file` missing from HEAD (not overridable) | 1 | `EVAL_PLAN_STALE` |
+| `origin/<base>` unresolvable while reading `price_file` | 3 | `POLICY_SOURCE_UNAVAILABLE` |
+| `.gstack/pregate.json` on the base is invalid | 3 | `PREGATE_CONFIG_INVALID` |
 | unknown flag or missing `--gate` | 2 | usage |
 
 The price is an estimate: the table prices standard text tokens and excludes

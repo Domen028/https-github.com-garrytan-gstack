@@ -483,7 +483,7 @@ export const RESULT_CODES = {
   },
   EVAL_PLAN_STALE: {
     anchor: 'eval-plan-stale',
-    summary: 'the call-plan file\'s binding does not match: a different gate command, a head behind HEAD, or an input whose sha256 at HEAD differs',
+    summary: 'the call-plan file\'s binding does not match (a different gate command, a head behind HEAD, an input whose sha256 at HEAD differs) or the declared price_file is not in HEAD',
     fix: 'regenerate the call-plan file at HEAD for the exact gate command you are approving, commit it, and rerun `gstack-eval-plan price-gate`',
   },
 } as const satisfies Record<string, ResultCode>;

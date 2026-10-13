@@ -2486,8 +2486,8 @@ passes and carries the `PREGATE:` line in its handoff.
 
 **Meaning.** `gstack-eval-plan price-gate` found no call-plan file for the paid
 gate: no `--plan-file`, no `price_file` in the base branch's
-`.gstack/pregate.json`, the declared file is missing from the HEAD commit, or
-the file has no `GSTACK_EVAL_CALLS` lines. A gate whose cost is unknown cannot
+`.gstack/pregate.json`, or the file has no `GSTACK_EVAL_CALLS` lines. (A
+declared `price_file` missing from HEAD is `EVAL_PLAN_STALE`, not this.) A gate whose cost is unknown cannot
 be approved as priced.
 
 **Fix.** The consuming repo commits a call-plan file in the format of
@@ -2514,7 +2514,9 @@ to slip under it.
 **Meaning.** The call-plan file prices something other than what is being
 approved: its `GSTACK_EVAL_GATE` command is not the exact `--gate` string, its
 `GSTACK_EVAL_HEAD` is behind HEAD with files other than the plan file changed
-since, or an input's sha256 at HEAD differs from its `GSTACK_EVAL_INPUT` line.
+since, an input's sha256 at HEAD differs from its `GSTACK_EVAL_INPUT` line, or
+the base policy's `price_file` is not in the HEAD commit. `--allow-unpriced`
+does not override it.
 
 **Fix.** Regenerate the plan file at HEAD for the exact gate command (the
 repo's own producer), commit it, and rerun `gstack-eval-plan price-gate`.

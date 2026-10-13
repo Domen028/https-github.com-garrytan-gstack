@@ -166,6 +166,7 @@ function doPriceGate(rest: string[]): number {
   const planFile = flag(rest, '--plan-file');
   if (planFile && !fs.existsSync(planFile)) return usage(`--plan-file ${planFile} does not exist`);
   const plan = resolvePlanSource(repoRoot, { planFile, base: resolveBaseBranch(repoRoot, flag(rest, '--base')) });
+  if ('code' in plan) { process.stderr.write(resultLine('gstack-eval-plan price-gate', plan.code, plan.message) + '\n'); return plan.refused ? EXIT.refused : EXIT.fail; }
   const r = priceGate({ repoRoot, gate, plan, capUsd: num(rest, '--cap-usd'), smokeCapUsd: num(rest, '--smoke-cap-usd'), allowUnpriced: flag(rest, '--allow-unpriced') });
   if (r.receipt) {
     const out = path.resolve(flag(rest, '--out') ?? path.join(repoRoot, '.gstack', 'tmp', 'price-gate'));

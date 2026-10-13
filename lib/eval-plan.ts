@@ -413,20 +413,26 @@ function gitOut(repoRoot: string, args: string[]): Buffer | null {
   return r.status === 0 ? r.stdout : null;
 }
 
-/** `--plan-file` wins; else the base policy's `price_file`, read from the HEAD commit's bytes. */
-export function resolvePlanSource(repoRoot: string, o: { planFile?: string; base: string }): PlanSource {
+export interface PlanSourceRefusal { code: ResultCodeName; message: string; refused: boolean }
+
+/**
+ * `--plan-file` wins; else the base policy's `price_file`, read from the HEAD
+ * commit's bytes. Only "no plan declared" is unpriced (overridable); a declared
+ * file missing at HEAD is stale, an unresolvable base or an invalid policy refuses.
+ */
+export function resolvePlanSource(repoRoot: string, o: { planFile?: string; base: string }): PlanSource | PlanSourceRefusal {
   if (o.planFile) {
     const file = path.resolve(o.planFile);
     const rel = path.relative(repoRoot, file);
     return { text: fs.readFileSync(file), file, source: 'flag', repoPath: rel && !rel.startsWith('..') && !path.isAbsolute(rel) ? rel.split(path.sep).join('/') : null, why: null };
   }
   const load = loadConfigFromBase(repoRoot, o.base);
-  if (isConfigUnavailable(load)) return { text: null, file: null, source: 'none', repoPath: null, why: `no --plan-file and the base policy is unavailable (${load.detail})` };
-  if (load.errors.length) return { text: null, file: null, source: 'none', repoPath: null, why: `${load.label} is invalid: ${load.errors.map(e => `${e.path}: ${e.message}`).join('; ')}` };
+  if (isConfigUnavailable(load)) return { code: 'POLICY_SOURCE_UNAVAILABLE', message: `no --plan-file and the base policy cannot be read (${load.detail})`, refused: true };
+  if (load.errors.length) return { code: 'PREGATE_CONFIG_INVALID', message: `${load.label}: ${load.errors.map(e => `${e.path}: ${e.message}`).join('; ')}`, refused: true };
   const rel = load.config.price_file;
   if (!rel) return { text: null, file: null, source: 'none', repoPath: null, why: `no --plan-file and ${load.label} declares no price_file` };
   const text = gitOut(repoRoot, ['show', `HEAD:${rel}`]);
-  if (!text) return { text: null, file: rel, source: 'price_file', repoPath: rel, why: `price_file ${rel} (${load.label}) is not in the HEAD commit` };
+  if (!text) return { code: 'EVAL_PLAN_STALE', message: `price_file ${rel} (declared in ${load.label}) is not in the HEAD commit`, refused: false };
   return { text, file: rel, source: 'price_file', repoPath: rel, why: null };
 }
 

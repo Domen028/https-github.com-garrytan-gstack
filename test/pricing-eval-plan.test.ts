@@ -280,6 +280,30 @@ describe('price-gate: binding, pricing and the receipt (bin, simulated Capy host
     expect(r.err).toMatch(/behind HEAD.*README\.md.*\(EVAL_PLAN_STALE\)/);
   });
 
+  test('a declared price_file missing at HEAD refuses EVAL_PLAN_STALE (not overridable); an unresolvable base or an invalid pregate.json exits 3', () => {
+    const { repo } = scratchRepo(host.env);
+    const git = (...args: string[]) => spawnSync('git', args, { cwd: repo, env: host.env, encoding: 'utf8' }).stdout.trim();
+    const out = path.join(host.base, 'receipts');
+    let r = runGate(host, repo, ['--gate', GATE, '--base', 'main', '--out', out, '--allow-unpriced', 'owner said so']);
+    expect(r.code).toBe(3);
+    expect(r.err).toContain('(POLICY_SOURCE_UNAVAILABLE)');
+    fs.mkdirSync(path.join(repo, '.gstack'), { recursive: true });
+    fs.writeFileSync(path.join(repo, '.gstack', 'pregate.json'), JSON.stringify({ price_file: 'evals/missing.calls' }));
+    git('add', '.gstack/pregate.json'); git('commit', '-q', '-m', 'policy');
+    git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+    r = runGate(host, repo, ['--gate', GATE, '--base', 'main', '--out', out, '--allow-unpriced', 'owner said so']);
+    expect(r.code).toBe(1);
+    expect(r.err).toMatch(/evals\/missing\.calls.*\(EVAL_PLAN_STALE\)/);
+    expect(r.out).not.toContain('GATE_UNPRICED_OVERRIDE');
+    fs.writeFileSync(path.join(repo, '.gstack', 'pregate.json'), JSON.stringify({ price_file: '../outside.calls' }));
+    git('add', '.gstack/pregate.json'); git('commit', '-q', '-m', 'bad policy');
+    git('update-ref', 'refs/remotes/origin/main', git('rev-parse', 'HEAD'));
+    r = runGate(host, repo, ['--gate', GATE, '--base', 'main', '--out', out, '--allow-unpriced', 'owner said so']);
+    expect(r.code).toBe(3);
+    expect(r.err).toContain('(PREGATE_CONFIG_INVALID)');
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
   test('an unknown or misspelled flag exits 2 instead of pricing without it', () => {
     const { repo } = scratchRepo(host.env);
     expect(runGate(host, repo, ['--gate', GATE, '--cap', '5']).code).toBe(2);
@@ -330,6 +354,7 @@ describe('price-gate: binding, pricing and the receipt (bin, simulated Capy host
 
   test('no plan file, or a file with no call lines, is EVAL_GATE_UNPRICED exit 1; --allow-unpriced exits 0 with a recorded override', () => {
     const { repo, head, rowsSha } = scratchRepo(host.env);
+    spawnSync('git', ['update-ref', 'refs/remotes/origin/main', head], { cwd: repo, env: host.env });
     const out = path.join(host.base, 'receipts');
     let r = runGate(host, repo, ['--gate', GATE, '--base', 'main', '--out', out]);
     expect(r.code).toBe(1);
