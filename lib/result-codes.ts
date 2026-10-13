@@ -128,7 +128,7 @@ export const RESULT_CODES = {
   PROJECT_PIN_MISMATCH: {
     anchor: 'doctor-project-pin-mismatch',
     summary: 'the running Bun or Node is outside a version the target project pins (package.json engines, .tool-versions, .nvmrc, .bun-version or a CI workflow)',
-    fix: 'install the pinned version for this platform, or change the pin in the project',
+    fix: 'install the pinned version for this platform (on Capy: run the gstack skill\'s `scripts/install.sh` without --check), or change the pin in the project',
   },
   REVISION_UNMET: {
     anchor: 'doctor-revision-unmet',

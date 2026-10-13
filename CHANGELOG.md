@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.91.99.0] - 2026-10-13
+
+**A Bun pin mismatch on Capy now names the one command that fixes it, and the skill says to run it.** After gbrain pinned Bun 1.4.3 in CI, a session-start check on a gbrain checkout ended `gstack: fail pins` with a fix line that offered two choices and no command, and the skill's repair step only covered `revision` and `runtime`, so an agent following the skill left the machine failing. The same bootstrapper run without `--check` already installs the pinned Bun (a verified 1.4.3 in about 4 s) and ends `gstack: ok`.
+
+### What this means for you
+
+- **The `pins` row's fix is the exact command on Capy.** Under the Drive bootstrapper, `FAIL pins … (PROJECT_PIN_MISMATCH)` now says `fix: bash <skill>/scripts/install.sh [--for <skill>] (installs the project's pinned Bun when it is a verified version: 1.4.2 1.4.3; otherwise it names the conflict), or change the pin in <project>`. Outside Capy the fix text is unchanged.
+- **The Capy skill's repair step covers `pins`.** Step 2 runs the same command without `--check` when the trailer names `revision`, `runtime` or `pins`. A pin gstack has no verified archive for stops with `RUNTIME_PIN_CONFLICT` naming the pin to raise. The owner copies `capy/skill/gstack/` to the Drive skill folder as before; `scripts/install.sh` is unchanged.
+
+### For contributors
+
+- `test/gstack-doctor.test.ts` checks the Capy fix line (with and without `--for`) and that the non-Capy text does not name the wrapper; it fails before the change.
+
 ## [1.91.98.0] - 2026-10-13
 
 **A lane's plan obligations now meet the repo's own gates before it reports done. Paid gates get a price before approval, a restamp is proved stamp-only by machine, and sealed eval output can't ride a push into a public repo.**
@@ -20,6 +33,7 @@
 - New: `lib/pregate/checks/guards.ts`, `lib/pregate/regate.ts`, `lib/pregate/runtime.ts`, `lib/sealed-guard.ts`; docs `docs/eval-calls.md`, `docs/pregate.md#regate` and `#gbrain-worked-configs`.
 - New result codes with troubleshooting anchors include `EVAL_GATE_UNPRICED`, `PREGATE_GUARD_FAILED`, `SEALED_OUTPUT_REFUSED` and `MIGRATION_COLLISION`.
 - Pregate and ship-policy validators still refuse unknown keys, so a repo should commit `guards`, `sealed`, `price_file`, `stamp_files`, `stamp_patterns`, `restamp_command` or `migrations` only after its machines run this release.
+
 ## [1.91.97.0] - 2026-10-13
 
 **An unattended `/autoplan` run on Capy now closes in its own run directory. Reviews done by Capy subagents bind with one command, a revised plan is reviewed in the same run, and the gate asks fewer, better questions.**

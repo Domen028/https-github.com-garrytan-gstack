@@ -606,6 +606,22 @@ describe('gstack-doctor --check', () => {
     expect(missing.rows.pins.status).toBe('SKIP');
   });
 
+  test('project pins on Capy: the PROJECT_PIN_MISMATCH fix is the exact bootstrapper command, which installs a verified pinned Bun', () => {
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, 'package.json'), '{\n  "engines": {\n    "bun": ">=1.4.2"\n  }\n}\n');
+    const wrapper = '/drive/skills/gstack/scripts/install.sh';
+    const capy = row(f, ['--project', project], { STUB_BUN_VERSION: '1.3.14', GSTACK_CAPY_WRAPPER_PATH: wrapper });
+    expect(capy.rows.pins.status).toBe('FAIL');
+    expect(capy.rows.pins.rest).toContain(`fix: bash ${wrapper} (installs the project's pinned Bun when it is a verified version: 1.4.2 1.4.3; otherwise it names the conflict), or change the pin in ${project}`);
+    expect(capy.rows.pins.rest).toContain('(PROJECT_PIN_MISMATCH; ');
+    const forSkill = row(f, ['--project', project, '--for', 'review'], { STUB_BUN_VERSION: '1.3.14', GSTACK_CAPY_WRAPPER_PATH: wrapper });
+    expect(forSkill.rows.pins.rest).toContain(`fix: bash ${wrapper} --for review (installs`);
+    const plain = row(f, ['--project', project], { STUB_BUN_VERSION: '1.3.14' });
+    expect(plain.rows.pins.rest).toContain('fix: install the pinned version for this platform');
+    expect(plain.rows.pins.rest).not.toContain(wrapper);
+  });
+
   test('--revision: a matching VERSION passes, an unmet revision is never ok', () => {
     const f = makeFixture();
     const ok = row(f, ['--revision', VERSION]);

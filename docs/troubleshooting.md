@@ -1117,7 +1117,11 @@ fails. The row is `SKIP pins (no bun to evaluate the project pins)` when Bun
 is absent, never silent.
 
 **Fix.** Install the pinned version for this platform (the row names each
-constraint with its source), or change the project's pin.
+constraint with its source), or change the project's pin. On Capy the row's
+fix is the exact bootstrapper command, `bash <skill>/scripts/install.sh`
+(the same command without `--check`): it installs the pinned Bun when the pin
+names a verified version and ends `gstack: ok`, or stops with
+`RUNTIME_PIN_CONFLICT` naming the pin to raise.
 
 <a id="doctor-revision-unmet"></a>
 ### `FAIL revision — installed <version> (requested <ref>) (REVISION_UNMET; ...)`

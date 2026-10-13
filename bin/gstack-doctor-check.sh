@@ -297,6 +297,7 @@ _dc_check_pins() {
             return
           fi
           local fix="install the pinned version for this platform (bin/gstack-capy-install installs gstack's verified Bun alongside when a pin names it), or change the pin in $project" note=""
+          [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ] && fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (installs the project's pinned Bun when it is a verified version: $GSTACK_BUN_VERIFIED; otherwise it names the conflict), or change the pin in $project"
           if [ -n "$_dc_ln_dir" ] && [ "$_dc_ln_ver" != "$_dc_bun" ] \
              && bun "$BIN/gstack-runtime-pins.ts" --project "$project" --bun "$_dc_ln_ver" ${node:+--node "$node"} </dev/null 2>/dev/null | grep -q '^PINS_VERDICT: pass'; then
             note="; bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH) satisfies them" fix="$_dc_ln_fix"
