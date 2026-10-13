@@ -476,6 +476,21 @@ export const RESULT_CODES = {
     summary: 'a push or PR would publish sealed or eval output (a sealed path, a transcript, a quoted answer, a seed or a local home path) to a public or unknown destination, or the sealed policy is unreadable',
     fix: 'remove it from every published commit, or add one reviewed `rule<TAB>path<TAB>sha<TAB>reason` line to the base branch\'s .gstack/sealed-allow.tsv; a private destination sets sealed.visibility "private" in the base branch\'s .gstack/pregate.json',
   },
+  EVAL_GATE_UNPRICED: {
+    anchor: 'eval-gate-unpriced',
+    summary: 'the paid gate has no call-plan file (no `--plan-file`, no base-policy `price_file`) or the file has no GSTACK_EVAL_CALLS lines, so its cost is unknown',
+    fix: 'have the repo commit a call-plan file (docs/eval-calls.md) and set `price_file` in .gstack/pregate.json, or pass `--allow-unpriced "<reason>"` only on the owner\'s say-so',
+  },
+  EVAL_GATE_OVER_CAP: {
+    anchor: 'eval-gate-over-cap',
+    summary: 'the paid gate\'s priced total, or one call\'s reservation (input plus maximum output), is above the cap',
+    fix: 'cut questions, arms or `max_out_tokens` in the call plan, or raise `--cap-usd` / `--smoke-cap-usd` deliberately with the owner; never split calls to slip under it',
+  },
+  EVAL_PLAN_STALE: {
+    anchor: 'eval-plan-stale',
+    summary: 'the call-plan file\'s binding does not match (a different gate command, a head behind HEAD, an input whose sha256 at HEAD differs) or the declared price_file is not in HEAD',
+    fix: 'regenerate the call-plan file at HEAD for the exact gate command you are approving, commit it, and rerun `gstack-eval-plan price-gate`',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

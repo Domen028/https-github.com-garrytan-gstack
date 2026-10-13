@@ -23,10 +23,10 @@ test('estimateCostUsd returns 0 for unknown model (no crash)', () => {
 });
 
 test('estimateCostUsd computes correctly for known Claude model', () => {
-  // claude-opus-4-7: $15/MTok input, $75/MTok output
-  // 1M input + 0.5M output = $15 + $37.50 = $52.50
+  // claude-opus-4-7: $5/MTok input, $25/MTok output (platform.claude.com pricing, fetched 2026-10-12)
+  // 1M input + 0.5M output = $5 + $12.50 = $17.50
   const cost = estimateCostUsd({ input: 1_000_000, output: 500_000 }, 'claude-opus-4-7');
-  expect(cost).toBeCloseTo(52.50, 2);
+  expect(cost).toBeCloseTo(17.50, 2);
 });
 
 for (const model of [CLAUDE_FRONTIER_EVAL_MODEL, CODEX_FRONTIER_MODEL]) {
@@ -48,12 +48,12 @@ test('Astra cache reads use its standard cached-input rate', () => {
 
 test('estimateCostUsd applies cached input discount alongside uncached input', () => {
   // tokens.input is uncached-only; tokens.cached is disjoint cache-reads at 10%.
-  // 0 uncached input, 1M cached → 10% of 15 = $1.50
+  // 0 uncached input, 1M cached → 10% of 5 = $0.50
   const cost1 = estimateCostUsd({ input: 0, output: 0, cached: 1_000_000 }, 'claude-opus-4-7');
-  expect(cost1).toBeCloseTo(1.50, 2);
-  // 500K uncached input + 500K cached → $7.50 + $0.75 = $8.25
+  expect(cost1).toBeCloseTo(0.50, 2);
+  // 500K uncached input + 500K cached → $2.50 + $0.25 = $2.75
   const cost2 = estimateCostUsd({ input: 500_000, output: 0, cached: 500_000 }, 'claude-opus-4-7');
-  expect(cost2).toBeCloseTo(8.25, 2);
+  expect(cost2).toBeCloseTo(2.75, 2);
 });
 
 test('PRICING table covers the key model families', () => {

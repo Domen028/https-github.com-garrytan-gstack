@@ -168,6 +168,9 @@ gstack_result_anchor() {
     DRAFT_DIRECTION_UNRESOLVED) printf '%s' 'draft-direction-unresolved' ;;
     PREGATE_GUARD_FAILED) printf '%s' 'pregate-guard-failed' ;;
     SEALED_OUTPUT_REFUSED) printf '%s' 'sealed-output-refused' ;;
+    EVAL_GATE_UNPRICED) printf '%s' 'eval-gate-unpriced' ;;
+    EVAL_GATE_OVER_CAP) printf '%s' 'eval-gate-over-cap' ;;
+    EVAL_PLAN_STALE) printf '%s' 'eval-plan-stale' ;;
     *) return 1 ;;
   esac
 }
