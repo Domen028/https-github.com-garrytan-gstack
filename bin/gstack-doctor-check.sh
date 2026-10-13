@@ -14,7 +14,10 @@
 # Codex model probe runs only with --live.
 #
 # Inputs (set by bin/gstack-doctor): CHECK_FOR (skill), CHECK_REQUIRE (csv),
-# CHECK_JSON (0|1), CHECK_PROJECT (path or ""), CHECK_REVISION (ref or ""), LIVE.
+# CHECK_JSON (0|1), CHECK_PROJECT (path or ""), CHECK_REVISION (ref or ""),
+# CHECK_MIN_REVISION (the supported minimum the Capy wrapper read from the
+# remote's capy/support.env, `unknown` when its fetch failed, or ""), LIVE.
+# GSTACK_CAPY_WRAPPER_PATH (optional) names the wrapper a below-minimum fix runs.
 
 . "$BIN/gstack-doctor-components.sh" || { echo "gstack-doctor: $BIN/gstack-doctor-components.sh is missing; reinstall with cd $SRC && ./setup" >&2; exit 1; }
 . "$BIN/gstack-install-registry.sh" 2>/dev/null || { echo "gstack-doctor: $BIN/gstack-install-registry.sh is missing; reinstall with cd $SRC && ./setup" >&2; exit 1; }
@@ -230,19 +233,32 @@ _dc_check_cso() {
   _dc_fail_or_skip cso "native helper not built${reason:+ ($reason)}" "cd $SRC && ./setup (it names any missing build prerequisite)" COMPONENT_MISSING "optional; toolchain absent or helper not built${reason:+: $reason}"
 }
 
+# _dc_launch_note — when a supported Bun sits off PATH (gstack-capy-install
+# leaves one in $BUN_INSTALL/bin), sets _dc_ln_dir/_dc_ln_ver/_dc_ln_note and
+# _dc_ln_fix so a fresh shell's FAIL says where it is and how to launch with it.
+_dc_launch_note() {
+  _dc_ln_dir=$(gstack_bun_launch_dir 2>/dev/null) || _dc_ln_dir=""
+  _dc_ln_ver="" _dc_ln_note="" _dc_ln_fix=""
+  [ -n "$_dc_ln_dir" ] || return 1
+  _dc_ln_ver=$("$_dc_ln_dir/bun" --version </dev/null 2>/dev/null | clamp 'A-Za-z0-9.+-' 40)
+  _dc_ln_note="; verified bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH)"
+  _dc_ln_fix="export PATH=\"$_dc_ln_dir:\$PATH\" or prefix commands with the GSTACK_LAUNCH line"
+}
+
 _dc_check_runtime() {
   local where found fix="install Bun $GSTACK_BUN_TESTED with the checksum-verified recipe in $SRC/bin/gstack-capy-install (or: bun upgrade), then cd $SRC && ./setup"
+  _dc_launch_note && fix="$_dc_ln_fix"
   if ! where=$(command -v bun 2>/dev/null); then
-    _dc_row FAIL runtime "bun not found on PATH (gstack needs $GSTACK_BUN_TESTED; floor $GSTACK_BUN_FLOOR)" "$fix" RUNTIME_BELOW_MINIMUM
+    _dc_row FAIL runtime "bun not found on PATH (gstack needs $GSTACK_BUN_TESTED; floor $GSTACK_BUN_FLOOR)$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM
     return
   fi
   found=$(bun --version </dev/null 2>/dev/null | clamp 'A-Za-z0-9.+-' 40)
   _dc_bun="$found"
   case "$(gstack_bun_status "$found")" in
     ok) _dc_row PASS runtime "bun $found at $where (floor $GSTACK_BUN_FLOOR, supported minimum $GSTACK_BUN_TESTED)" ;;
-    untested) _dc_row FAIL runtime "bun $found at $where is below the supported minimum $GSTACK_BUN_TESTED (above the security floor $GSTACK_BUN_FLOOR)" "$fix" RUNTIME_BELOW_MINIMUM ;;
-    too-old) _dc_row FAIL runtime "bun $found at $where is below the security floor $GSTACK_BUN_FLOOR (supported minimum $GSTACK_BUN_TESTED)" "$fix" RUNTIME_BELOW_MINIMUM ;;
-    *) _dc_row FAIL runtime "could not read the version of $where" "$fix" RUNTIME_BELOW_MINIMUM ;;
+    untested) _dc_row FAIL runtime "bun $found at $where is below the supported minimum $GSTACK_BUN_TESTED (above the security floor $GSTACK_BUN_FLOOR)$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM ;;
+    too-old) _dc_row FAIL runtime "bun $found at $where is below the security floor $GSTACK_BUN_FLOOR (supported minimum $GSTACK_BUN_TESTED)$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM ;;
+    *) _dc_row FAIL runtime "could not read the version of $where$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM ;;
   esac
 }
 
@@ -275,7 +291,17 @@ _dc_check_pins() {
     pass) _dc_row PASS pins "$project: $summary" ;;
     none) _dc_row PASS pins "$project pins no runtime (no engines, .tool-versions, .nvmrc, .bun-version or CI pin)" ;;
     fail) failline=$(printf '%s\n' "$out" | sed -n 's/^PIN_FAIL: //p' | tr '\n' '|' | sed 's/|$//; s/|/; /g')
-          _dc_row FAIL pins "$failline" "install the pinned version for this platform (bin/gstack-capy-install upgrades Bun when gstack and the project agree), or change the pin in $project" PROJECT_PIN_MISMATCH ;;
+          if [ -n "$CHECK_FOR" ] && gstack_doctor_skill_pins_advisory "$CHECK_FOR"; then
+            _dc_row SKIP pins "planning-only; repo pins differ: $failline, launch bun ${_dc_bun:-unknown}"
+            _dc_pins_advisory=1
+            return
+          fi
+          local fix="install the pinned version for this platform (bin/gstack-capy-install installs gstack's verified Bun alongside when a pin names it), or change the pin in $project" note=""
+          if [ -n "$_dc_ln_dir" ] && [ "$_dc_ln_ver" != "$_dc_bun" ] \
+             && bun "$BIN/gstack-runtime-pins.ts" --project "$project" --bun "$_dc_ln_ver" ${node:+--node "$node"} </dev/null 2>/dev/null | grep -q '^PINS_VERDICT: pass'; then
+            note="; bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH) satisfies them" fix="$_dc_ln_fix"
+          fi
+          _dc_row FAIL pins "$failline$note" "$fix" PROJECT_PIN_MISMATCH ;;
     *) _dc_row SKIP pins "gstack-runtime-pins could not evaluate $project (exit $rc: $(printf '%s\n' "$out" | grep -v '^[[:space:]]*$' | head -1 | clamp ' -~' 120))" ;;
   esac
 }
@@ -317,25 +343,61 @@ _dc_check_cores() {
   fi
 }
 
+# _dc_version_below A B — true when dotted numeric version A sorts below B.
+_dc_version_below() {
+  local a="$1." b="$2." x y
+  while [ -n "$a" ] || [ -n "$b" ]; do
+    x="${a%%.*}" y="${b%%.*}"; a="${a#*.}" b="${b#*.}"
+    case "$x" in ''|*[!0-9]*) x=0 ;; esac
+    case "$y" in ''|*[!0-9]*) y=0 ;; esac
+    [ "$((10#$x))" -lt "$((10#$y))" ] && return 0
+    [ "$((10#$x))" -gt "$((10#$y))" ] && return 1
+  done
+  return 1
+}
+
+# _dc_check_min_revision INSTALLED HEAD — sets the PASS-row suffix _dc_min_note,
+# or prints the REVISION_BELOW_MINIMUM FAIL row for --min-revision and returns 1.
+# Returns 1 after printing a FAIL row.
+_dc_check_min_revision() {
+  local installed="$1" head="$2" fix
+  _dc_min_note=""
+  case "$CHECK_MIN_REVISION" in
+    '') return 0 ;;
+    unknown*) _dc_min_note=" (remote minimum unknown (fetch failed); not compared)"; return 0 ;;
+  esac
+  if _dc_version_below "$installed" "$CHECK_MIN_REVISION"; then
+    if [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ]; then
+      fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (fast-forwards), or $SRC/bin/gstack-upgrade"
+    else
+      fix="$SRC/bin/gstack-upgrade (fast-forwards to the remote default branch, then reinstalls)"
+    fi
+    _dc_row FAIL revision "installed $installed${head:+ at $head} is below the supported minimum $CHECK_MIN_REVISION" "$fix" REVISION_BELOW_MINIMUM
+    return 1
+  fi
+  _dc_min_note=" (>= supported minimum $CHECK_MIN_REVISION)"
+}
+
 _dc_check_revision() {
   local installed head="" want="$CHECK_REVISION" target=""
   installed=$(head -1 "$ROOT/VERSION" 2>/dev/null | clamp '0-9A-Za-z.+-' 40)
   head=$(git -C "$ROOT_REAL" rev-parse --short HEAD 2>/dev/null | clamp '0-9a-f' 12)
   _dc_revision="${installed:-unknown}"
+  _dc_check_min_revision "${installed:-0}" "$head" || return
   if [ -z "$want" ]; then
-    _dc_row PASS revision "${installed:-unknown}${head:+ ($head)}"
+    _dc_row PASS revision "${installed:-unknown}${head:+ ($head)}$_dc_min_note"
     return
   fi
   if [ "$want" = "$installed" ] || [ "$want" = "v$installed" ]; then
-    _dc_row PASS revision "$installed${head:+ ($head)} matches --revision $want"
+    _dc_row PASS revision "$installed${head:+ ($head)} matches --revision $want$_dc_min_note"
     return
   fi
   target=$(git -C "$ROOT_REAL" rev-parse --verify --quiet "$want^{commit}" 2>/dev/null | clamp '0-9a-f' 40)
   if [ -n "$target" ] && [ "$target" = "$(git -C "$ROOT_REAL" rev-parse HEAD 2>/dev/null)" ]; then
-    _dc_row PASS revision "$installed ($head) is --revision $want"
+    _dc_row PASS revision "$installed ($head) is --revision $want$_dc_min_note"
     return
   fi
-  _dc_row FAIL revision "installed ${installed:-unknown}${head:+ at $head} (requested $want)" "cd $SRC && git fetch origin && git checkout $want && ./setup, or run /gstack-upgrade" REVISION_UNMET
+  _dc_row FAIL revision "installed ${installed:-unknown}${head:+ at $head} (requested $want)" "cd $SRC && git fetch origin && git checkout $want && ./setup, or run $SRC/bin/gstack-upgrade to move to the latest release (interactive: /gstack-upgrade)" REVISION_UNMET
 }
 
 _dc_print_json() {
@@ -373,7 +435,7 @@ ROWS
 # gstack_doctor_check — the entry point; returns 0 (ok) or 1 (fail).
 gstack_doctor_check() {
   local id
-  _dc_bun="" _dc_revision=""
+  _dc_bun="" _dc_revision="" _dc_pins_advisory=0 _dc_ln_dir="" _dc_ln_ver="" _dc_ln_fix=""
   _dc_resolve_required
   [ "$CHECK_JSON" -eq 1 ] || echo "required: $_dc_required"
   for id in $GSTACK_DOCTOR_COMPONENTS; do

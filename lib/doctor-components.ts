@@ -132,6 +132,17 @@ export const SKILL_REQUIREMENTS: Readonly<Record<string, SkillRequirement>> = {
   unfreeze: CLAUDE_ONLY,
 };
 
+/**
+ * Planning-only workflows: they read and review a plan but never run the
+ * target repository's tests, so a repo test-pin mismatch is reported as
+ * `SKIP pins (planning-only; ...)` for `--for <skill>` instead of failing.
+ * Workflows that run the repo's tests (ship, review, qa, pregate) keep `pins`
+ * required.
+ */
+export const PINS_ADVISORY_SKILLS: readonly string[] = [
+  'autoplan', 'plan-ceo-review', 'plan-eng-review', 'plan-design-review', 'plan-devex-review', 'office-hours',
+];
+
 /** Rows always evaluated and required, in print order. */
 export const CORE_IDS: readonly ComponentId[] = DOCTOR_COMPONENTS.filter(c => c.kind === 'core').map(c => c.id);
 export const OPTIONAL_IDS: readonly ComponentId[] = DOCTOR_COMPONENTS.filter(c => c.kind === 'optional').map(c => c.id);
@@ -197,6 +208,14 @@ export function renderDoctorComponentsSh(): string {
     'gstack_doctor_skill_optional() {',
     '  case "$1" in',
     ...optionalArms,
+    '    *) return 1 ;;',
+    '  esac',
+    '}',
+    '',
+    '# gstack_doctor_skill_pins_advisory SKILL — true for a planning-only workflow (a repo test-pin mismatch SKIPs pins).',
+    'gstack_doctor_skill_pins_advisory() {',
+    '  case "$1" in',
+    caseArm(PINS_ADVISORY_SKILLS, 'return 0'),
     '    *) return 1 ;;',
     '  esac',
     '}',

@@ -75,6 +75,14 @@ gstack_doctor_skill_optional() {
   esac
 }
 
+# gstack_doctor_skill_pins_advisory SKILL — true for a planning-only workflow (a repo test-pin mismatch SKIPs pins).
+gstack_doctor_skill_pins_advisory() {
+  case "$1" in
+    autoplan|plan-ceo-review|plan-eng-review|plan-design-review|plan-devex-review|office-hours) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # gstack_result_anchor CODE — the docs/troubleshooting.md anchor for a lib/result-codes.ts code; returns 1 for an unknown code.
 gstack_result_anchor() {
   case "$1" in
@@ -166,6 +174,11 @@ gstack_result_anchor() {
     CONTRIBUTOR_SOURCE_UNAVAILABLE) printf '%s' 'contributor-source-unavailable' ;;
     BRIEF_INPUT_MISSING) printf '%s' 'brief-input-missing' ;;
     DRAFT_DIRECTION_UNRESOLVED) printf '%s' 'draft-direction-unresolved' ;;
+    UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;
+    UPGRADE_FETCH_FAILED) printf '%s' 'upgrade-fetch-failed' ;;
+    REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
+    CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;
+    INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
     *) return 1 ;;
   esac
 }

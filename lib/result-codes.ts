@@ -466,6 +466,32 @@ export const RESULT_CODES = {
     summary: 'a `draft direction stands until the owner decides` line names a decision that is still pending',
     fix: 'answer the gate (`gstack-autoplan answer`) before closing; the close rewrites only decided lines',
   },
+  // Field wave lane A (items 1-4): gstack-upgrade, the Capy skill bootstrapper, install admission.
+  UPGRADE_REFUSED: {
+    anchor: 'upgrade-refused',
+    summary: 'bin/gstack-upgrade changed nothing: the checkout is dirty, diverged, pinned (detached or off the remote default branch), not a gstack checkout, or the incoming release holds',
+    fix: 'resolve the named cause (commit or move the listed changes, check out the default branch), then re-run bin/gstack-upgrade; it never stashes or resets',
+  },
+  UPGRADE_FETCH_FAILED: {
+    anchor: 'upgrade-fetch-failed',
+    summary: 'bin/gstack-upgrade could not fetch the remote default branch, so it cannot tell whether the checkout is current',
+    fix: 'check network access to the checkout\'s origin (git -C <checkout> remote -v), then re-run bin/gstack-upgrade',
+  },
+  REVISION_BELOW_MINIMUM: {
+    anchor: 'revision-below-minimum',
+    summary: 'the installed gstack revision is below the supported minimum declared in capy/support.env on the remote default branch',
+    fix: 'run the Capy skill installer without --check (it fast-forwards a clean, unpinned checkout), or bin/gstack-upgrade; a pinned, dirty or diverged checkout is named in the row',
+  },
+  CAPY_WRAPPER_STALE: {
+    anchor: 'capy-wrapper-stale',
+    summary: 'the Capy skill copy that ran is older than the checkout\'s GSTACK_CAPY_MIN_WRAPPER',
+    fix: 'ask the owner to copy <checkout>/capy/skill/gstack/ over the Drive skill folder; the checkout wrapper keeps working meanwhile',
+  },
+  INSTALL_UNVERIFIED: {
+    anchor: 'install-unverified',
+    summary: 'a Capy session (GSTACK_CAPY=1) has no passing install verdict for this checkout, HEAD and workflow, so the workflow refused to start',
+    fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

@@ -5,7 +5,7 @@
 #   gstack-doctor          print one row per check; spends nothing
 #   gstack-doctor --live   also run the paid Codex model probe (one short call)
 #   gstack-doctor --check [--for <skill> | --require <id,id>] [--project <path>]
-#                 [--revision <ref>] [--json] [--live]
+#                 [--revision <ref>] [--min-revision <v>|unknown] [--json] [--live]
 #                          one PASS | FAIL | SKIP row per component, then one
 #                          trailer: `gstack: ok <revision> for=<what>` (exit 0)
 #                          or `gstack: fail <id,id>` (exit 1). --for names the
@@ -39,7 +39,7 @@ usage() {
   sed -n '3,13p' "$0" | sed 's/^# \{0,1\}//'
 }
 
-LIVE=0 CHECK=0 CHECK_JSON=0 CHECK_FOR="" CHECK_REQUIRE="" CHECK_PROJECT="" CHECK_REVISION=""
+LIVE=0 CHECK=0 CHECK_JSON=0 CHECK_FOR="" CHECK_REQUIRE="" CHECK_PROJECT="" CHECK_REVISION="" CHECK_MIN_REVISION=""
 _need_value() { [ -n "${2:-}" ] || { echo "gstack-doctor: $1 needs a value" >&2; usage >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,6 +54,8 @@ while [ $# -gt 0 ]; do
     --project=*) CHECK=1; CHECK_PROJECT="${1#--project=}" ;;
     --revision) _need_value "$1" "${2:-}"; CHECK=1; CHECK_REVISION="$2"; shift ;;
     --revision=*) CHECK=1; CHECK_REVISION="${1#--revision=}" ;;
+    --min-revision) _need_value "$1" "${2:-}"; CHECK=1; CHECK_MIN_REVISION="$2"; shift ;;
+    --min-revision=*) CHECK=1; CHECK_MIN_REVISION="${1#--min-revision=}" ;;
     -h|--help) usage; exit 0 ;;
     *) echo "gstack-doctor: unknown argument '$1'" >&2; usage >&2; exit 2 ;;
   esac
