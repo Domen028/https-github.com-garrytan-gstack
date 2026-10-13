@@ -2481,6 +2481,23 @@ and do what its `fix` line says, commit, then rerun
 `gstack-pregate run --allow-repo-commands`. A lane reports done only after this
 passes and carries the `PREGATE:` line in its handoff.
 
+<a id="migration-collision"></a>
+### `MIGRATION_COLLISION`
+
+**Meaning.** `gstack-pregate regate` read `migrations` (`dir`, `id`) from the
+base branch's `.gstack/ship-policy.json` and found a migration number this
+branch adds that the base branch already has, or that another open PR adds
+under a different file name. Both PRs would pass their own gates and the
+second merge would break the schema order. When the open-PR lookup cannot
+finish (`gh` missing or failing, 1000 open PRs, a PR whose file list GitHub
+truncates and cannot be fetched in full) the line says
+`MIGRATION_COLLISION: unknown (...)` and `REGATE: not-needed` is withheld.
+
+**Fix.** Take the next free migration number when this PR is next to merge,
+rename the file and its id, commit, then rerun
+`gstack-pregate regate --against <gated-head> --bundle <file>`. The renamed
+migration is a code change, so the gate reruns.
+
 <a id="sealed-output-refused"></a>
 ### `SEALED_OUTPUT_REFUSED`
 

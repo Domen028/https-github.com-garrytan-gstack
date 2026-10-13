@@ -210,6 +210,131 @@ Capy's pull-request tool may not run local git hooks, so an agent runs
 `sealed` config (the coordinator contract says so). Hosted CI on the public
 repository only detects a bypass after the upload.
 
+<a id="regate"></a>
+## `gstack-pregate regate`: does the gate still cover HEAD
+
+```
+gstack-pregate regate --against <gated-head> --bundle <evidence-bundle.json> [--require <lane,...>]
+                      [--pr <n>] [--from <gate-ahead.json>] [--predecessor-pr <n> | --predecessor-ref <ref>]
+                      [--base <branch>] [--json]
+gstack-pregate --against <gated-head> ...      the same verb
+```
+
+It evaluates a tree receipt now (never a stored one) between the gated head
+and HEAD under the base branch's ship policy, so the repo's `stamp_files` and
+`stamp_patterns` decide what a stamp is ([ship-policy](ship-policy.md#tree-receipt)).
+Reuse needs an evidence bundle produced on the gated tree, the same execution
+identity, and a predecessor head that is still the recorded one (read from
+`--from`, default `.gstack/tmp/gate-ahead.json` when it names this gated
+head). It prints each differing file (a non-stamp difference with its first
+line), then:
+
+```
+STAMP_ONLY: yes|no files=<n> [changed=<n>]
+LANE: <label> reusable|rerun|not-reusable (<reason>)      one per bundle lane and per --require lane
+MIGRATION_COLLISION: none (...) | unknown (...) | <id> <file> vs <origin/main|PR #n> <file>
+REGATE: not-needed | needed (<every reason>)
+```
+
+`REGATE: not-needed` (exit 0) only when the tree is stamp-only, every lane in
+the bundle and in `--require` is reusable (a stamp-sensitive lane reruns, so it
+needs a regate), the predecessor head is known and unmoved, and the migration
+lookup finished with no collision. Anything else is `needed` (exit 1); no
+bundle prints `REGATE: needed (no gate evidence for <head> ...)`.
+
+Migrations come from the ship policy's `migrations` (`dir`, `id` regex with
+one capture group). The numbers this branch adds under `dir` are compared with
+the base branch's tree and with every other open PR
+(`gh pr list --state open --limit 1000 --json number,headRefOid,files`; the PR
+itself is skipped by head sha or `--pr`). A PR listing 100 files is truncated
+by GitHub, so its full list is fetched with `gh api --paginate`. A failed
+query, 1000 listed PRs or an unfetchable file list is
+`MIGRATION_COLLISION: unknown (...)`, which blocks `not-needed`
+([`MIGRATION_COLLISION`](troubleshooting.md#migration-collision)).
+
+<a id="gbrain-worked-configs"></a>
+## gbrain worked configs
+
+gbrain commits these on master after the gstack that reads the new keys ships
+(older gstack refuses unknown keys). Its `.gitignore` ignores `.gstack/*`
+today, so the change also adds `!.gstack/pregate.json` and
+`!.gstack/ship-policy.json`; both changes are gbrain's.
+
+`.gstack/pregate.json`: guards for the gates the import graph cannot see.
+
+```json
+{
+  "dependencies": {
+    "test/**/*.serial.test.ts": ["test/scripts/serial-files.test.ts"],
+    "scripts/serial-files.tsv": ["test/scripts/serial-files.test.ts"],
+    "src/cli.ts": ["test/cli-goldens.test.ts"],
+    "src/commands/**": ["test/cli-goldens.test.ts"],
+    "src/core/operations*.ts": ["test/cli-goldens.test.ts"]
+  },
+  "guards": [
+    { "id": "serial-manifest", "when": ["test/**/*.serial.test.ts", "scripts/serial-files.tsv", "scripts/run-serial-tests.sh"],
+      "command": "bun test test/scripts/serial-files.test.ts",
+      "fix": "add the serial file's row to scripts/serial-files.tsv" },
+    { "id": "cli-goldens", "when": ["src/cli.ts", "src/cli/**", "src/commands/**", "src/core/operations*.ts", "src/core/ops/**"],
+      "command": "bun test --timeout=60000 test/cli-goldens.test.ts test/cli-dispatch-phase.test.ts test/export-surface-golden.test.ts",
+      "fix": "bun run regen:all, then justify each changed golden in the PR body" },
+    { "id": "regen-check", "when": ["src/**", "skills/**", "templates/**", "plugin/**"],
+      "command": "bun scripts/regen-all.ts --check",
+      "fix": "bun run regen:all and commit the regenerated files" },
+    { "id": "migration-order", "when": ["src/core/schema-migrations/**"],
+      "command": "bun scripts/check-schema-migration-order.ts",
+      "fix": "renumber the migration to the next free number on master" }
+  ]
+}
+```
+
+`.gstack/ship-policy.json`: the stamp rule and migrations. On a pure restamp
+of a gbrain master tree from 0.60.188.0 to 0.60.189.0 the tree receipt
+classifies all 16 changed files as stamps under this policy; an added line in
+`src/core/behavior-change-notice.ts` stays a change.
+
+```json
+{
+  "bump": "patch",
+  "queue_mode": "stamp-at-merge",
+  "changelog": "CHANGELOG.md",
+  "stamp_files": [
+    "VERSION", "package.json", "CHANGELOG.md", "openclaw.plugin.json",
+    ".claude-plugin/plugin.json", ".codex-plugin/plugin.json",
+    "plugin-variants/*/.claude-plugin/plugin.json", "plugin-variants/*/.codex-plugin/plugin.json",
+    "plugin-variants/*/README.md", "plugin/README.md",
+    "BOOTSTRAP_FOR_AGENTS.md", "templates/bootstrap/template-repo/README.md",
+    "src/core/behavior-change-notice.ts"
+  ],
+  "stamp_patterns": [
+    "\"version\": \"{version}\"",
+    "since: '{version}'",
+    "<!-- gbrain-plugin-tree-stamp: {version} -->",
+    "<!-- gbrain-template-stamp: {version} -->",
+    "<!-- gbrain-runbook-stamp: {version} -->"
+  ],
+  "migrations": { "dir": "src/core/schema-migrations", "id": "^v(\\d+)-" }
+}
+```
+
+gbrain's `bun run release:restamp` fetches master, picks its own version,
+refuses a dirty tree and commits, so it cannot be `restamp_command` as it
+stands; the stamp rule above lets gstack's own restamp writer do the work.
+A gbrain mode that takes the version and writes only stamps would make it one.
+
+gbrain-evals `.gstack/pregate.json`: the sealed paths. The globs below are
+placeholders in the shape the guard reads; gbrain-evals fills in its own
+held-out and transcript layout.
+
+```json
+{ "sealed": {
+    "paths": ["heldout/**"],
+    "transcripts": ["runs/**/transcript*.jsonl"],
+    "answer_markers": ["SEALED ANSWER:"],
+    "seed_patterns": ["shuffle_seed=\\d+"],
+    "local_paths": true } }
+```
+
 <a id="issue-links"></a>
 ## `gstack-issue-links`
 

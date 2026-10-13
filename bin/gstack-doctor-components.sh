@@ -167,6 +167,7 @@ gstack_result_anchor() {
     BRIEF_INPUT_MISSING) printf '%s' 'brief-input-missing' ;;
     DRAFT_DIRECTION_UNRESOLVED) printf '%s' 'draft-direction-unresolved' ;;
     PREGATE_GUARD_FAILED) printf '%s' 'pregate-guard-failed' ;;
+    MIGRATION_COLLISION) printf '%s' 'migration-collision' ;;
     SEALED_OUTPUT_REFUSED) printf '%s' 'sealed-output-refused' ;;
     EVAL_GATE_UNPRICED) printf '%s' 'eval-gate-unpriced' ;;
     EVAL_GATE_OVER_CAP) printf '%s' 'eval-gate-over-cap' ;;

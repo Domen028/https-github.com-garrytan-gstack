@@ -471,6 +471,11 @@ export const RESULT_CODES = {
     summary: 'a repo guard from .gstack/pregate.json whose files the branch touched exited non-zero',
     fix: 'run the guard command printed in the table, apply the guard\'s fix line, commit, then rerun `gstack-pregate run --allow-repo-commands`',
   },
+  MIGRATION_COLLISION: {
+    anchor: 'migration-collision',
+    summary: 'a migration number this branch adds is already used on the base branch or by another open PR',
+    fix: 'take the next free migration number when this PR is next to merge (rename the file and its id), commit, then rerun `gstack-pregate regate --against <gated-head> --bundle <file>`',
+  },
   SEALED_OUTPUT_REFUSED: {
     anchor: 'sealed-output-refused',
     summary: 'a push or PR would publish sealed or eval output (a sealed path, a transcript, a quoted answer, a seed or a local home path) to a public or unknown destination, or the sealed policy is unreadable',

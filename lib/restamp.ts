@@ -203,7 +203,7 @@ function allowedOutput(plan: Plan, root: string, rel: string): boolean {
   return matchesAny(p.stamp_paths, rel) || matchesAny(p.stamp_files, rel) || matchesAny(p.release_outputs, rel);
 }
 
-interface Hunk { removed: string[]; added: string[] }
+interface Hunk { removed: string[]; added: string[]; at: number }
 export interface FileDiff { path: string; binary: boolean; hunks: Hunk[]; status: 'M' | 'A' | 'D' | 'R' }
 
 /** Parse `git diff --unified=0` into per-file hunks of removed/added lines (shared with lib/tree-receipt.ts). */
@@ -222,7 +222,7 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     else if (line.startsWith('deleted file mode')) cur.status = 'D';
     else if (line.startsWith('rename to ')) cur.status = 'R';
     else if (line.startsWith('Binary files')) cur.binary = true;
-    else if (line.startsWith('@@')) { hunk = { removed: [], added: [] }; cur.hunks.push(hunk); }
+    else if (line.startsWith('@@')) { hunk = { removed: [], added: [], at: Number(/^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line)?.[1] ?? 0) }; cur.hunks.push(hunk); }
     else if (hunk && line.startsWith('-') && !line.startsWith('---')) hunk.removed.push(line.slice(1));
     else if (hunk && line.startsWith('+') && !line.startsWith('+++')) hunk.added.push(line.slice(1));
   }
