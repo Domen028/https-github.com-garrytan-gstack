@@ -13,6 +13,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { baseInputs, sha256 } from '../context';
+import { PREGATE_CONFIG_PATH } from '../config';
 import { selectLanes, type Selection } from '../lane-selection';
 import { launchRuntime } from '../runtime';
 import { matchesAny } from '../../ship-policy';
@@ -51,6 +52,10 @@ function dartRoot(repoRoot: string, file: string, seen: Map<string, string | nul
   return found;
 }
 
+function fvmPinned(repoRoot: string): boolean {
+  return fs.existsSync(path.join(repoRoot, '.fvmrc')) || fs.existsSync(path.join(repoRoot, '.fvm', 'fvm_config.json'));
+}
+
 /**
  * `flutter test` for a package on the Flutter SDK, else `dart test`; through fvm
  * when the repo pins one and fvm is on PATH. `missing` names the tool when
@@ -62,7 +67,7 @@ export function dartRunner(repoRoot: string, root: string, env: NodeJS.ProcessEn
   try { pubspec = fs.readFileSync(path.join(repoRoot, root, 'pubspec.yaml'), 'utf8'); } catch { /* checked by dartRoot */ }
   const tool = /^\s*sdk:\s*flutter\b/m.test(pubspec) ? 'flutter' : 'dart';
   const onPath = (bin: string) => !!Bun.which(bin, { PATH: env.PATH ?? '' });
-  const fvm = (fs.existsSync(path.join(repoRoot, '.fvmrc')) || fs.existsSync(path.join(repoRoot, '.fvm', 'fvm_config.json'))) && onPath('fvm');
+  const fvm = fvmPinned(repoRoot) && onPath('fvm');
   if (!fvm && !onPath(tool)) return { missing: tool };
   return { runner: `${fvm ? 'fvm ' : ''}${tool} test {files}` };
 }
@@ -90,7 +95,7 @@ export function planRuns(ctx: PregateContext, files: readonly string[]): RunGrou
   const unclaimed: string[] = [];
   const missing = new Set<string>();
   for (const [root, list] of [...dart].sort(([a], [b]) => a.localeCompare(b))) {
-    const r = dartRunner(ctx.repoRoot, root, ctx.env ?? process.env);
+    const r = dartRunner(ctx.repoRoot, root, ctx.env);
     if ('missing' in r) { missing.add(r.missing); unclaimed.push(...list.map(f => (root ? `${root}/${f}` : f))); } else groups.push({ runner: r.runner, cwd: root, files: list });
   }
   if (rest.length) {
@@ -173,13 +178,13 @@ function run(ctx: PregateContext): CheckResult {
   const lines = describe(sel);
   const base: CheckResult = { id: 'lanes', stage: 'tests', status: 'pass', inputs, lines, remote: sel.remote };
   if (sel.noLane.length) {
-    return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: 'add a test that names the file, or declare its lane (or []) under dependencies in .gstack/pregate.json' };
+    return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: noLaneFix(ctx, sel.noLane) };
   }
   if (sel.tests.length === 0) return { ...base, detail: ctx.touched.length ? 'nothing touched selects a test' : 'no touched files' };
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
   const groups = planRuns(ctx, sel.localTests);
-  if (!Array.isArray(groups)) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${groups.unclaimed.length} of ${sel.localTests.length} selected file(s): ${groups.unclaimed.slice(0, 8).join(' ')}${groups.unclaimed.length > 8 ? ' …' : ''}${groups.missing.length ? `; not on PATH: ${groups.missing.join(', ')}` : ''}`, fix: groups.missing.length ? `install ${groups.missing.join(' and ')} (or fvm with the repo's pin) and rerun` : 'declare `runner` (with {files}) in .gstack/pregate.json, or in <GSTACK_HOME>/projects/<slug>/pregate.json when the base carries none' };
+  if (!Array.isArray(groups)) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${groups.unclaimed.length} of ${sel.localTests.length} selected file(s): ${groups.unclaimed.slice(0, 8).join(' ')}${groups.unclaimed.length > 8 ? ' …' : ''}${groups.missing.length ? `; not on PATH: ${groups.missing.join(', ')}` : ''}`, fix: groups.missing.length ? `install ${groups.missing.join(' and ')}${fvmPinned(ctx.repoRoot) ? ' (or fvm, which this repo pins)' : ''} and rerun` : 'declare `runner` (with {files}) in .gstack/pregate.json, or in <GSTACK_HOME>/projects/<slug>/pregate.json when the base carries none' };
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
   const r = runLocal(ctx, runtime.env, groups);
   const runLines = [...lines, `runtime: ${runtime.label}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
@@ -189,6 +194,15 @@ function run(ctx: PregateContext): CheckResult {
   if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests for ${sel.localTests.length} selected file(s)`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
   const detail = `${r.ran ?? 'count unavailable'} tests ran in ${sel.localTests.length} file(s)${r.serial ? ` (${r.serial} serial)` : ''}, exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;
   return { ...withRun, status: sel.remote.length ? 'requires-remote' : 'pass', detail };
+}
+
+/** Device-only Flutter tests are not tests here (they need a device), so a touched one has no lane unless declared `[]`. */
+const DEVICE_TEST = /(?:^|\/)(?:integration_test|test_driver)\/.*_test\.dart$/;
+
+function noLaneFix(ctx: PregateContext, noLane: readonly string[]): string {
+  const file = ctx.configLabel.startsWith('user ') ? ctx.configLabel.slice('user '.length) : PREGATE_CONFIG_PATH;
+  const device = noLane.some(f => DEVICE_TEST.test(f)) ? `; pregate does not run device tests, so declare "integration_test/**": [] (and "test_driver/**": []) and let CI run them` : '';
+  return `add a test that names the file, or declare its lane (or []) under dependencies in ${file}${device}`;
 }
 
 export const lanesCheck: CheckDef = { id: 'lanes', stage: 'tests', tier: 1, downgradable: true, needsRepoCommands: true, run };

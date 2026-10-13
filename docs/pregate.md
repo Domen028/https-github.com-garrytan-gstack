@@ -117,7 +117,9 @@ Two stages with separate clocks, both printed:
   `test/<name>*.test.ts` convention ∪ `dependencies`; Dart `import`/`export`/`part`
   directives resolve `package:<name>/x` through every tracked `pubspec.yaml`, and
   `*_test.dart` files are tests, except under `integration_test/` and
-  `test_driver/`, which need a device: declare their lane under `dependencies`), transitively through
+  `test_driver/`: they need a device, so pregate never runs them, and a touched
+  one has no lane until you declare `"integration_test/**": []` under
+  `dependencies` and let CI run them), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched file with no lane is `FAIL lanes — <file> has no test lane`, never
   a pass. Lanes and platform tiers come from `.github/workflows/*.yml`

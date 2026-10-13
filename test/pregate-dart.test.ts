@@ -123,6 +123,7 @@ describe('Dart runner and summary (pure)', () => {
     expect(lanes[0]!.runsTests).toBe(true);
     const win = parseWorkflow('w.yml', 'jobs:\n  dart:\n    runs-on: windows-latest\n    steps:\n      - run: dart test\n', 'darwin');
     expect(win[0]).toMatchObject({ tier: 'platform', runsTests: true });
+    for (const cmd of ['melos run test', 'melos test', 'very_good test --recursive', 'dart run test']) expect(parseWorkflow('m.yml', `jobs:\n  dart:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: ${cmd}\n`)[0]!.runsTests).toBe(true);
     for (const f of ['pubspec.yaml', 'pubspec.lock', 'analysis_options.yaml', 'dart_test.yaml']) expect(ROOT_OK.test(f)).toBe(true);
     expect(ROOT_OK.test('scratch.dart')).toBe(false);
     // Value: protects=a selection manifest's *_test.dart lines join the lane's file set; fails_when=the manifest regex drops _test.dart;
@@ -268,5 +269,38 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     expect(pinned.out).toMatch(/^tests {6}lanes {5}pass /m);
     expect(pinned.out).toMatch(/lanes: ran: fvm dart test /);
     expect(fs.readFileSync(/log: (\S+)/.exec(pinned.out)![1]!, 'utf8')).toContain('via fvm');
+
+    // Value: protects=no SDK and no fvm on PATH is incomplete with an install hint (not exit 127 judged as a test failure), and the
+    //   hint offers fvm only because this repo pins it; fails_when=the missing branch or its fix text regresses; why_new=only planRuns'
+    //   return value was tested; seam=none; no_claim=a real SDK install
+    for (const tool of ['fvm', 'dart', 'flutter']) fs.rmSync(path.join(bin, tool));
+    const missing = run();
+    expect(missing.status).not.toBe(EXIT.ok);
+    expect(missing.out).toMatch(/^tests {6}lanes {5}incomplete .*not on PATH: dart/m);
+    expect(missing.out).toContain('fix: install dart (or fvm, which this repo pins) and rerun');
+  }, 30_000);
+
+  // Value: protects=a touched device test (integration_test/) is never run locally, fails with a fix naming the active user policy file,
+  //   and the documented `[]` declaration clears it; fails_when=the docs' remedy stops working or the fix points at the wrong file;
+  //   why_new=device tests were only checked at isTestFile; seam=none; no_claim=CI running the device test
+  test('a touched integration test has no local lane until declared [] in the user policy', () => {
+    const repo = dartRepo(null);
+    commit(repo, { 'integration_test/app_test.dart': "import 'package:integration_test/integration_test.dart';\nvoid main() {}\n" });
+    repo.git('push', '-q', 'origin', 'HEAD:main');
+    repo.git('fetch', '-q', 'origin');
+    const env = { ...dartShim(repo), GSTACK_PROJECT_SLUG: 'dartdevice' };
+    const userPolicy = path.join(repo.home, 'projects', 'dartdevice', 'pregate.json');
+    fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+    fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'] }));
+    commit(repo, { 'integration_test/app_test.dart': "import 'package:integration_test/integration_test.dart';\nvoid main() { }\n" });
+    const run = () => runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], env);
+    const stuck = run();
+    expect(stuck.out).toContain('FAIL lanes — integration_test/app_test.dart has no test lane');
+    expect(stuck.out).toContain(`under dependencies in ${userPolicy}; pregate does not run device tests`);
+    fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'], dependencies: { 'integration_test/**': [] } }));
+    const declared = run();
+    expect(declared.status).toBe(EXIT.ok);
+    expect(declared.out).not.toContain('has no test lane');
+    expect(declared.out).toContain('nothing touched selects a test');
   }, 30_000);
 });

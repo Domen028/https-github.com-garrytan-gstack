@@ -205,10 +205,10 @@ export function loadConfigFromUser(file: string, knownChecks: readonly string[] 
   let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
   const load = parseConfig(text, knownChecks);
-  // `sealed` (the pre-push guard) and `price_file` (gstack-eval-plan) read only the git copies, so in the user file they would look active and do nothing.
+  // `sealed` (the pre-push guard) and `price_file` (gstack-eval-plan) read only the git copies, so a non-null value in the user file would look active and do nothing.
   let raw: unknown = null;
   try { raw = JSON.parse(text); } catch { /* parseConfig reported it */ }
-  const ignored = raw && typeof raw === 'object' && !Array.isArray(raw) ? ['sealed', 'price_file'].filter(k => k in (raw as object)) : [];
+  const ignored = raw && typeof raw === 'object' && !Array.isArray(raw) ? ['sealed', 'price_file'].filter(k => (raw as Record<string, unknown>)[k] != null) : [];
   const errors = [...load.errors, ...ignored.map(k => ({ code: 'PREGATE_CONFIG_INVALID' as const, path: k, message: `the user-owned policy covers gstack-pregate run only; ${k} is read from ${PREGATE_CONFIG_PATH} on the base branch` }))];
   return { ...load, errors, present: true, label: `user ${file}`, kind: 'user' };
 }
