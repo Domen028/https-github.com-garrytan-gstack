@@ -12,9 +12,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { parseSummary, planRuns } from '../lib/pregate/checks/lanes';
+import { ROOT_OK } from '../lib/pregate/checks/strays';
 import { DEFAULT_CONFIG, validateConfig } from '../lib/pregate/config';
 import { buildGraph, isTestFile, testsFor } from '../lib/pregate/import-graph';
 import type { PregateContext } from '../lib/pregate/types';
+import { parseWorkflow } from '../lib/pregate/workflows';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, write, type FixtureRepo } from './helpers/pregate-fixture';
 
 const repos: FixtureRepo[] = [];
@@ -85,6 +87,13 @@ describe('Dart runner and summary (pure)', () => {
     expect(planRuns(declared, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual([
       { runner: 'bash scripts/test.sh {files}', cwd: '', files: ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'] },
     ]);
+  });
+
+  test('a workflow run step names its _test.dart files; Dart root manifests are not strays', () => {
+    const lanes = parseWorkflow('t.yml', 'jobs:\n  dart:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: fvm flutter test test/ui/drawer_widget_test.dart packages/core/test/core_test.dart\n');
+    expect(lanes[0]!.testFiles).toEqual(['test/ui/drawer_widget_test.dart', 'packages/core/test/core_test.dart']);
+    for (const f of ['pubspec.yaml', 'pubspec.lock', 'analysis_options.yaml', 'dart_test.yaml']) expect(ROOT_OK.test(f)).toBe(true);
+    expect(ROOT_OK.test('scratch.dart')).toBe(false);
   });
 
   test('config: local takes <workflow>/<job> ids only', () => {
