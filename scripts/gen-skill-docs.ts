@@ -1070,7 +1070,7 @@ export async function runGeneration(settings: GenerationOptions = {}): Promise<G
           generateDesignChecklistMd(), 'asset', host);
         emit(path.join(options.outputRoot, DOM_DUMP_FILE), DOM_DUMP_SCRIPT + '\n', 'asset', host);
       }
-      if (host === 'claude' && includesSkill(hostConfig, 'autoplan')) {
+      if (host === 'claude' && includesSkill(hostConfig, 'autoplan') && templates.some(t => t.tmpl === 'autoplan/SKILL.md.tmpl')) {
         emit(path.join(options.outputRoot, AUTOPLAN_DRIVER_RELPATH), renderAutoplanDriver(options), 'asset', host);
       }
 
