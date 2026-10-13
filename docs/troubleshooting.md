@@ -1193,6 +1193,26 @@ listed changes, check out the default branch, move local commits to another
 branch), then re-run `bin/gstack-upgrade`. A reinstall that failed after the
 fast-forward is completed by the next run (`reinstall pending from <version>`).
 
+<a id="upgrade-busy"></a>
+### `gstack-upgrade: live gstack sessions hold this installation: pid <p> (<age>m), ...; nothing was changed; fix: ... (UPGRADE_BUSY)`
+
+**Meaning.** Several agents share this checkout (Capy subagents on one
+machine, say). Each session start writes a workflow lease,
+`<git dir>/gstack-leases/<harness pid>` (`bin/gstack-lease touch`, from
+`bin/gstack-skill-start`), and `bin/gstack-upgrade` refused before changing
+anything because a lease whose pid is alive and not in its own process
+ancestry exists: fast-forwarding would change gstack under a session
+mid-workflow. Leases older than 120 minutes are pruned; a lease whose
+process has exited never blocks. The upgrader's own session (the pid chain it
+runs under) never counts.
+
+**Fix.** Wait for those sessions to finish (`bin/gstack-lease list` shows
+every lease with its age and `alive|dead`), then re-run `bin/gstack-upgrade`.
+When you know they are idle, `GSTACK_UPGRADE_FORCE=1 bin/gstack-upgrade`
+proceeds. At a Capy session start the same refusal appears as
+`SELF_UPGRADE: skipped (live gstack sessions hold this installation: ...)`
+and the session continues on the installed revision.
+
 <a id="upgrade-fetch-failed"></a>
 ### `gstack-upgrade: could not reach origin (...) (UPGRADE_FETCH_FAILED)`
 
@@ -1837,6 +1857,20 @@ applied; the unparsed tokens are listed.
 **Fix.** Reply with `all`, with `<id><option>` tokens (`d3b uc1a`), or with
 `all except <tokens>`. A bare `yes` or `no` is ambiguous across multi-option
 items and is never guessed.
+
+<a id="answer-by-required"></a>
+### `ANSWER_BY_REQUIRED`
+
+**Meaning.** `gstack-autoplan answer` ran in an unattended run without
+`--by`, or with a value that is neither `human` nor `agent:<id>`. The
+artifacts must say who answered a gate: an owner typing tokens and an agent
+relaying or deciding them look identical in `decisions.jsonl` otherwise.
+Nothing was applied.
+
+**Fix.** Re-run with `--by human` when the owner typed the tokens, or
+`--by agent:<thread or id>` when an agent relays or decides. The value is
+recorded as `answered_by` on every decision row the reply answers and in the
+review record's gate line.
 
 ## Queue-aware ship: policy, restamp, tree receipt, ship receipt
 

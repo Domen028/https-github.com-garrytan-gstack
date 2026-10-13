@@ -1,0 +1,154 @@
+/**
+ * bin/gstack-lease: the workflow lease on a shared gstack installation (field
+ * wave residual R4). Eight Capy subagents share one checkout; each session
+ * start touches `<git dir>/gstack-leases/<harness pid>` (install-scoped, like
+ * gstack-upgrade.pending), and an updater refuses to move the checkout while
+ * a lease whose pid is alive and not in its own ancestry exists. Pinned:
+ * `touch` writes and prunes (older than 120 min), `live` lists live foreign
+ * leases (exit 0) or nothing (exit 1), `list` shows every lease with its age
+ * and alive|dead, and bin/gstack-skill-start touches the lease for the
+ * harness pid it derives. Fixture: a throwaway git checkout, a sleeping child
+ * process as the live pid, an exited process as the dead pid.
+ */
+import { afterEach, describe, expect, test } from 'bun:test';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+const REPO = path.resolve(import.meta.dir, '..');
+const LEASE = path.join(REPO, 'bin/gstack-lease');
+const START = path.join(REPO, 'bin/gstack-skill-start');
+const dirs: string[] = [];
+const children: ChildProcess[] = [];
+afterEach(() => {
+  for (const c of children.splice(0)) c.kill('SIGKILL');
+  for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true });
+});
+
+function checkout() {
+  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-lease-')));
+  dirs.push(dir);
+  const r = spawnSync('git', ['init', '-q', dir], { encoding: 'utf8', timeout: 30_000 });
+  if (r.status !== 0) throw new Error(r.stderr);
+  return { dir, leases: path.join(dir, '.git/gstack-leases') };
+}
+
+// These cases assert the default lease location, <git dir>/gstack-leases of a
+// temp checkout; the test preload's GSTACK_LEASE_DIR (which keeps every other
+// suite out of this repo's .git) would override it, so strip it here.
+const { GSTACK_LEASE_DIR: _preloadLeaseDir, ...baseEnv } = process.env as Record<string, string>;
+const run = (args: string[], env: Record<string, string> = {}) =>
+  spawnSync('bash', [LEASE, ...args], { encoding: 'utf8', env: { ...baseEnv, ...env }, timeout: 30_000 });
+
+/** A child that stays alive for the test: its pid is a live, foreign (non-ancestor) lease holder. */
+function sleeper(): number {
+  const c = spawn('sleep', ['300'], { stdio: 'ignore' });
+  children.push(c);
+  return c.pid!;
+}
+
+/** A pid that no longer exists: a child that has already exited. */
+function deadPid(): number {
+  const r = spawnSync('true', [], { timeout: 30_000 });
+  return r.pid!;
+}
+
+describe('gstack-lease', () => {
+  test('bash -n passes and the bin is executable', () => {
+    expect(fs.existsSync(LEASE), LEASE).toBe(true);
+    expect(fs.statSync(LEASE).mode & 0o111).not.toBe(0);
+    const r = spawnSync('bash', ['-n', LEASE], { encoding: 'utf8', timeout: 30_000 });
+    expect(r.status, r.stderr).toBe(0);
+  });
+
+  test('touch writes <git dir>/gstack-leases/<pid> for --pid and prunes leases older than 120 minutes', () => {
+    const { dir, leases } = checkout();
+    fs.mkdirSync(leases, { recursive: true });
+    fs.writeFileSync(path.join(leases, '99999991'), '');
+    const threeHoursAgo = new Date(Date.now() - 3 * 3600_000);
+    fs.utimesSync(path.join(leases, '99999991'), threeHoursAgo, threeHoursAgo);
+    fs.writeFileSync(path.join(leases, '99999992'), '');
+    const r = run(['touch', '--root', dir, '--pid', '4242']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(fs.readdirSync(leases).sort()).toEqual(['4242', '99999992']);
+  });
+
+  test('live: a sleeping child is a live lease (exit 0, pid and age printed); a dead pid alone is none (exit 1)', () => {
+    const { dir } = checkout();
+    const dead = deadPid();
+    expect(run(['touch', '--root', dir, '--pid', String(dead)]).status).toBe(0);
+    const none = run(['live', '--root', dir]);
+    expect(none.status, none.stdout + none.stderr).toBe(1);
+    expect(none.stdout.trim()).toBe('');
+
+    const live = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(live)]).status).toBe(0);
+    const some = run(['live', '--root', dir]);
+    expect(some.status, some.stdout + some.stderr).toBe(0);
+    expect(some.stdout.trim().split('\n')).toEqual([expect.stringMatching(new RegExp(`^${live} \\d+m$`))]);
+
+    const list = run(['list', '--root', dir]);
+    expect(list.status).toBe(0);
+    expect(list.stdout).toMatch(new RegExp(`^${live} \\d+m alive$`, 'm'));
+    expect(list.stdout).toMatch(new RegExp(`^${dead} \\d+m dead$`, 'm'));
+  });
+
+  test('live --exclude-ancestry-of <pid> drops a lease held by that pid or one of its ancestors (this test process)', () => {
+    const { dir } = checkout();
+    expect(run(['touch', '--root', dir, '--pid', String(process.pid)]).status).toBe(0);
+    const unfiltered = run(['live', '--root', dir]);
+    expect(unfiltered.status, unfiltered.stdout + unfiltered.stderr).toBe(0);
+    expect(unfiltered.stdout).toMatch(new RegExp(`^${process.pid} \\d+m$`, 'm'));
+    // $$ inside the bin is a child of this bun process, so our own lease is ancestry.
+    const own = spawnSync('bash', ['-c', `"$LEASE" live --root "$ROOT" --exclude-ancestry-of $$`], {
+      encoding: 'utf8', env: { ...baseEnv, LEASE, ROOT: dir }, timeout: 30_000,
+    });
+    expect(own.status, own.stdout + own.stderr).toBe(1);
+    expect(own.stdout.trim()).toBe('');
+    const foreign = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(foreign)]).status).toBe(0);
+    const mixed = spawnSync('bash', ['-c', `"$LEASE" live --root "$ROOT" --exclude-ancestry-of $$`], {
+      encoding: 'utf8', env: { ...baseEnv, LEASE, ROOT: dir }, timeout: 30_000,
+    });
+    expect(mixed.status).toBe(0);
+    expect(mixed.stdout.trim().split('\n')).toEqual([expect.stringMatching(new RegExp(`^${foreign} \\d+m$`))]);
+  });
+
+  test('touch without --pid uses the same harness pid gstack-skill-start derives (this process past the tool-call shell)', () => {
+    const { dir, leases } = checkout();
+    const r = spawnSync('bash', ['-c', `"$LEASE" touch --root "$ROOT"; true`], {
+      encoding: 'utf8', env: { ...baseEnv, LEASE, ROOT: dir }, timeout: 30_000,
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(fs.readdirSync(leases)).toEqual([String(process.pid)]);
+  });
+
+  test('a directory that is not a git checkout fails closed for the caller (exit 2) and writes nothing', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-lease-plain-'));
+    dirs.push(dir);
+    const r = run(['touch', '--root', dir, '--pid', '1']);
+    expect(r.status).toBe(2);
+    expect(fs.readdirSync(dir)).toEqual([]);
+    expect(run(['live', '--root', dir]).status).toBe(2);
+  });
+
+  test('gstack-skill-start touches the lease for its --parent-pid (GSTACK_LEASE_DIR hermetic), fail-open', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-lease-home-'));
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-lease-state-'));
+    dirs.push(home, state);
+    fs.writeFileSync(path.join(state, 'config.yaml'), 'update_check: false\n');
+    const leaseDir = path.join(state, 'leases');
+    const lease = path.join(leaseDir, '424243');
+    try {
+      const r = spawnSync(START, ['--skill', 'testskill', '--parent-pid', '424243'], {
+        encoding: 'utf8', cwd: home, env: { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: state, GSTACK_LEASE_DIR: leaseDir }, timeout: 30_000,
+      });
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(fs.existsSync(path.join(state, 'sessions', '424243'))).toBe(true);
+      expect(fs.existsSync(lease), lease).toBe(true);
+    } finally {
+      fs.rmSync(lease, { force: true });
+    }
+  });
+});

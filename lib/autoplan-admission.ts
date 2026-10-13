@@ -9,6 +9,7 @@
  * hosts' ambient spawned sessions (a warning line), are not refused.
  */
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { RunError } from './autoplan-state';
 import { checkInstallAdmission } from './install-verdict';
@@ -16,6 +17,18 @@ import { checkInstallAdmission } from './install-verdict';
 const ROOT = path.resolve(import.meta.dir, '..');
 
 export interface Admission { lines: string[]; deviation?: string }
+
+/**
+ * A workflow lease on the shared installation (bin/gstack-lease): the upgrader
+ * refuses UPGRADE_BUSY while a live lease it does not own exists, so a
+ * session-start fast-forward cannot move the checkout under a running
+ * autoplan driver. Fail-open: a missing or failing bin never blocks the run.
+ */
+export function touchInstallLease(env: NodeJS.ProcessEnv = process.env): void {
+  const bin = path.join(ROOT, 'bin', 'gstack-lease');
+  if (process.platform === 'win32' || !fs.existsSync(bin)) return;
+  try { spawnSync(bin, ['touch', '--root', ROOT, '--from', String(process.ppid)], { encoding: 'utf8', timeout: 10_000, env, stdio: 'ignore' }); } catch { /* fail-open */ }
+}
 
 /** Throws RunError (exit 3) unless the session may write; an override or a warning returns the line to print. */
 export function admit(env: NodeJS.ProcessEnv = process.env): Admission {

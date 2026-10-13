@@ -90,7 +90,7 @@ export function renderBrief(inputs: BriefInputs, o: { page?: number; summary?: s
     '',
     renderDecisions(inputs, page).trimEnd(),
     '',
-    `Full review: ${record}${recordNote}. Answer with \`gstack-autoplan answer --out <dir> --gate-rev ${inputs.gate.gate_rev} --reply "<all | d3b uc1a | all except d3b>"\`.`,
+    `Full review: ${record}${recordNote}. Answer with \`gstack-autoplan answer --out <dir> --gate-rev ${inputs.gate.gate_rev} --reply "<all | d3b uc1a | all except d3b>" --by human\`.`,
     '',
   ].join('\n');
 }

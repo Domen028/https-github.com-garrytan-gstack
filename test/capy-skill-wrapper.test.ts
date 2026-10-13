@@ -46,7 +46,19 @@ const STUB_INSTALLER = [
   'echo "gstack: ok $(cat VERSION) for=autoplan"',
 ].join('\n') + '\n';
 
-function fixture(opts: { minWrapper?: number } = {}) {
+/** What bin/gstack-capy-session's self-upgrade runs: bin/gstack-upgrade and its sourced helpers. */
+const UPGRADE_DEPS = [
+  'bin/gstack-upgrade', 'bin/gstack-bun-version.sh', 'bin/gstack-paths', 'bin/gstack-state-root.sh',
+  'bin/gstack-egress-lib.sh', 'bin/gstack-egress-receipt', 'lib/egress-receipt.ts', 'lib/state-root.ts',
+  'bin/gstack-lease', 'bin/gstack-harness-pid.sh',
+];
+
+/**
+ * cloneAt 'A' (default): the clone sits at A (1.0.0), below B's minimum 1.0.1.
+ * cloneAt 'B': the clone sits at B, AT the minimum, and the remote moves on to
+ * C (1.0.2, minimum unchanged): behind origin but not below the floor.
+ */
+function fixture(opts: { minWrapper?: number; cloneAt?: 'A' | 'B' } = {}) {
   const host = capyHost({ systemBun: '1.4.2' });
   hosts.push(host);
   const git = (args: string[], cwd: string) => {
@@ -68,10 +80,10 @@ function fixture(opts: { minWrapper?: number } = {}) {
   git(['init', '-q', '--bare', '-b', 'main', bare], host.base);
   git(['push', '-q', bare, 'main'], seed);
   const root = path.join(host.base, 'gstack');
-  git(['clone', '-q', '--single-branch', '--depth', '1', `file://${bare}`, root], host.base);
+  if ((opts.cloneAt ?? 'A') === 'A') git(['clone', '-q', '--single-branch', '--depth', '1', `file://${bare}`, root], host.base);
   write(path.join(seed, 'VERSION'), '1.0.1\n');
   write(path.join(seed, 'capy/support.env'), `GSTACK_MIN_REVISION=1.0.1\nGSTACK_CAPY_MIN_WRAPPER=${opts.minWrapper ?? 1}\n`);
-  for (const rel of ['capy/skill/gstack/scripts/install.sh', 'capy/skill/gstack/SKILL.md', 'bin/gstack-capy-session', 'bin/gstack-install-verdict.sh']) {
+  for (const rel of ['capy/skill/gstack/scripts/install.sh', 'capy/skill/gstack/SKILL.md', 'bin/gstack-capy-session', 'bin/gstack-install-verdict.sh', ...UPGRADE_DEPS]) {
     if (fs.existsSync(path.join(REPO, rel))) write(path.join(seed, rel), fs.readFileSync(path.join(REPO, rel), 'utf8'), 0o755);
   }
   write(path.join(seed, 'bin/gstack-capy-install'), STUB_INSTALLER, 0o755);
@@ -79,6 +91,14 @@ function fixture(opts: { minWrapper?: number } = {}) {
   git(['commit', '-qm', 'B'], seed);
   const b = git(['rev-parse', 'HEAD'], seed);
   git(['push', '-q', bare, 'main'], seed);
+  let c = '';
+  if (opts.cloneAt === 'B') {
+    git(['clone', '-q', '--single-branch', '--depth', '1', `file://${bare}`, root], host.base);
+    write(path.join(seed, 'VERSION'), '1.0.2\n');
+    git(['commit', '-qam', 'C'], seed);
+    c = git(['rev-parse', 'HEAD'], seed);
+    git(['push', '-q', bare, 'main'], seed);
+  }
   const env = { ...host.env, GSTACK_CAPY_ROOT: root, GSTACK_CAPY_REPO: `file://${bare}`, WRAP_LOG: log, WRAP_FAIL_ONCE: path.join(host.base, 'fail-once') };
   const run = (args: string[] = [], extra: Record<string, string> = {}) => {
     const r = spawnSync('bash', [BOOT, ...args], { cwd: host.home, encoding: 'utf8', env: { ...env, ...extra }, timeout: 120_000 });
@@ -86,7 +106,7 @@ function fixture(opts: { minWrapper?: number } = {}) {
     return { ...r, lines, last: lines.at(-1) ?? '' };
   };
   return {
-    host, root, bare, a, b, run, git: (args: string[]) => git(args, root),
+    host, root, bare, a, b, c, run, git: (args: string[]) => git(args, root),
     calls: () => fs.existsSync(log) ? fs.readFileSync(log, 'utf8').trim().split('\n').filter(Boolean) : [],
   };
 }
@@ -207,6 +227,67 @@ describe('capy skill bootstrapper (capy/skill/gstack/scripts/install.sh)', () =>
     expect(install.status, install.stdout + install.stderr).toBe(0);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(install.last).toBe('gstack: ok 1.0.1 for=autoplan');
+  });
+});
+
+describe('capy skill: always current when online (the minimum is the floor, not the trigger)', () => {
+  test('install mode: a clean checkout at the minimum but behind origin is fast-forwarded by the checkout half and installed from the new revision; the next start is current', () => {
+    const f = fixture({ cloneAt: 'B' });
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(f.git(['rev-parse', '--is-shallow-repository'])).toBe('true');
+    const r = f.run(['--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).not.toContain('gstack-capy-skill: upgraded');
+    expect(r.stdout).toContain('gstack-upgrade: upgraded 1.0.1 -> 1.0.2');
+    expect(r.stdout).toMatch(/^SELF_UPGRADE: done 1\.0\.1 -> 1\.0\.2$/m);
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.c);
+    expect(r.last).toBe('gstack: ok 1.0.2 for=autoplan');
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=1.0.1`]);
+    expect(fs.existsSync(path.join(f.root, '.git/gstack-upgrade.pending'))).toBe(false);
+
+    const next = f.run(['--for', 'autoplan']);
+    expect(next.status, next.stdout + next.stderr).toBe(0);
+    expect(next.stdout).toMatch(/^SELF_UPGRADE: none \(current\)$/m);
+    expect(next.stdout).not.toContain('SELF_UPGRADE: done');
+    expect(next.last).toBe('gstack: ok 1.0.2 for=autoplan');
+    expect(f.calls().at(-1)).toBe(`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=`);
+  });
+
+  test('--check mode never moves a behind checkout: it names the gap and the fast-forwarding command, then certifies the installed revision', () => {
+    const f = fixture({ cloneAt: 'B' });
+    const r = f.run(['--check', '--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(new RegExp(`^gstack-capy-session: behind origin/main: 1\\.0\\.1 -> 1\\.0\\.2 \\(1 commits\\); fix: bash ${BOOT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} --for autoplan \\(fast-forwards\\)$`, 'm'));
+    expect(r.stdout).not.toContain('SELF_UPGRADE');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(r.last).toBe('gstack: ok 1.0.1 for=autoplan');
+    expect(f.calls()).toEqual([`installer --check --root ${f.root} --for autoplan lock= rev=1 min=1.0.1 from=`]);
+  });
+
+  test('a dirty behind checkout is skipped with gstack-upgrade\'s reason and still ends ok: above the floor, the trailer is the doctor\'s', () => {
+    const f = fixture({ cloneAt: 'B' });
+    fs.writeFileSync(path.join(f.root, 'README.md'), 'local edit\n');
+    const r = f.run(['--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^SELF_UPGRADE: skipped \(tracked files changed: README\.md.*\)$/m);
+    expect(r.stdout).not.toContain('SELF_UPGRADE: done');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(fs.readFileSync(path.join(f.root, 'README.md'), 'utf8')).toBe('local edit\n');
+    expect(r.last).toBe('gstack: ok 1.0.1 for=autoplan');
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=`]);
+  });
+
+  test('GSTACK_CAPY_SELF_UPGRADE=off and GSTACK_CAPY_AUTO_UPGRADE=0 each disable the fast-forward by name and leave HEAD where it is', () => {
+    const f = fixture({ cloneAt: 'B' });
+    const off = f.run(['--for', 'autoplan'], { GSTACK_CAPY_SELF_UPGRADE: 'off' });
+    expect(off.status, off.stdout + off.stderr).toBe(0);
+    expect(off.stdout).toMatch(/^SELF_UPGRADE: disabled \(GSTACK_CAPY_SELF_UPGRADE\)$/m);
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    const auto = f.run(['--for', 'autoplan'], { GSTACK_CAPY_AUTO_UPGRADE: '0' });
+    expect(auto.status, auto.stdout + auto.stderr).toBe(0);
+    expect(auto.stdout).toMatch(/^SELF_UPGRADE: disabled \(GSTACK_CAPY_AUTO_UPGRADE\)$/m);
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(auto.last).toBe('gstack: ok 1.0.1 for=autoplan');
   });
 });
 

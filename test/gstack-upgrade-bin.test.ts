@@ -10,7 +10,7 @@
  * on the simulated Capy host (test/helpers/capy-host.ts).
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { capyHost, type CapyHost } from './helpers/capy-host';
@@ -19,9 +19,21 @@ const REPO = path.resolve(import.meta.dir, '..');
 const DEPS = [
   'bin/gstack-upgrade', 'bin/gstack-bun-version.sh', 'bin/gstack-paths', 'bin/gstack-state-root.sh',
   'bin/gstack-egress-lib.sh', 'bin/gstack-egress-receipt', 'lib/egress-receipt.ts', 'lib/state-root.ts',
+  'bin/gstack-lease', 'bin/gstack-harness-pid.sh', 'bin/gstack-install-verdict.sh',
 ];
 const hosts: CapyHost[] = [];
-afterEach(() => { for (const h of hosts.splice(0)) h.cleanup(); });
+const children: ChildProcess[] = [];
+afterEach(() => {
+  for (const c of children.splice(0)) c.kill('SIGKILL');
+  for (const h of hosts.splice(0)) h.cleanup();
+});
+
+/** A child that stays alive for the test: a live lease holder that is not in gstack-upgrade's ancestry. */
+function sleeper(): number {
+  const c = spawn('sleep', ['300'], { stdio: 'ignore' });
+  children.push(c);
+  return c.pid!;
+}
 
 const write = (file: string, text: string, mode = 0o644) => {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -162,6 +174,62 @@ describe('gstack-upgrade', () => {
       expect(offline.stderr).toContain('(UPGRADE_FETCH_FAILED)');
       expect(f.git(['rev-parse', 'HEAD'])).toBe(f.a);
     }
+  });
+
+  test('refuses UPGRADE_BUSY while a foreign live lease exists, HEAD and bytes unchanged; GSTACK_UPGRADE_FORCE=1 proceeds', () => {
+    const f = fixture();
+    const live = sleeper();
+    const touch = spawnSync('bash', [path.join(f.root, 'bin/gstack-lease'), 'touch', '--root', f.root, '--pid', String(live)], { encoding: 'utf8', env: f.host.env, timeout: 30_000 });
+    expect(touch.status, touch.stdout + touch.stderr).toBe(0);
+    // Our own session's lease (this bun process is an ancestor of the upgrader) never counts.
+    spawnSync('bash', [path.join(f.root, 'bin/gstack-lease'), 'touch', '--root', f.root, '--pid', String(process.pid)], { encoding: 'utf8', env: f.host.env, timeout: 30_000 });
+    const reflog = f.git(['reflog']);
+    const r = f.run();
+    expect(r.status, r.stdout + r.stderr).toBe(3);
+    expect(r.stderr).toContain('(UPGRADE_BUSY)');
+    expect(r.stderr).toContain('nothing was changed');
+    expect(r.stderr).toMatch(new RegExp(`pid ${live} \\(\\d+m\\)`));
+    expect(r.stderr).not.toContain(`pid ${process.pid} `);
+    expect(r.stderr).toContain('wait for those sessions to finish, or re-run with GSTACK_UPGRADE_FORCE=1 when you know they are idle');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.a);
+    expect(fs.readFileSync(path.join(f.root, 'VERSION'), 'utf8')).toBe('1.0.0\n');
+    expect(f.git(['reflog'])).toBe(reflog);
+    expect(fs.existsSync(path.join(f.root, '.git/gstack-upgrade.pending'))).toBe(false);
+    expect(f.calls()).toEqual([]);
+    const forced = f.run([], { GSTACK_UPGRADE_FORCE: '1' });
+    expect(forced.status, forced.stdout + forced.stderr).toBe(0);
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(f.calls()).toEqual(['setup --refresh-registered']);
+  });
+
+  test('a dead-pid lease does not block', () => {
+    const f = fixture();
+    const dead = spawnSync('true', [], { timeout: 30_000 }).pid!;
+    const touch = spawnSync('bash', [path.join(f.root, 'bin/gstack-lease'), 'touch', '--root', f.root, '--pid', String(dead)], { encoding: 'utf8', env: f.host.env, timeout: 30_000 });
+    expect(touch.status, touch.stdout + touch.stderr).toBe(0);
+    const r = f.run();
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('UPGRADE_BUSY');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+  });
+
+  test('--ff-only-no-reinstall: HEAD moves and the upgraded line prints, no reinstall ran, no pending marker; refusals still hold', () => {
+    const f = fixture();
+    fs.writeFileSync(path.join(f.root, 'README.md'), 'local edit\n');
+    const dirty = f.run(['--ff-only-no-reinstall']);
+    expect(dirty.status).toBe(3);
+    expect(dirty.stderr).toContain('(UPGRADE_REFUSED)');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.a);
+    f.git(['checkout', '-q', '--', 'README.md']);
+    const r = f.run(['--ff-only-no-reinstall']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('gstack-upgrade: upgraded 1.0.0 -> 1.0.1');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(f.calls()).toEqual([]);
+    expect(fs.existsSync(path.join(f.root, '.git/gstack-upgrade.pending'))).toBe(false);
+    const again = f.run(['--check']);
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(again.stdout).toContain('gstack-upgrade: current 1.0.1');
   });
 
   test('every bin a trailer or fix line names exists in the repo', () => {

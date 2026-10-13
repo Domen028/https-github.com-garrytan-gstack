@@ -81,7 +81,7 @@ function runLog(state: RunState, findings: number, tasks: number, decisions: { t
   }
   for (const h of state.history) lines.push(`Reopened ${h.phase} at gate_rev ${h.gate_rev}: ${h.reason} (${h.at})`);
   if (state.history.length) lines.push('');
-  lines.push(`Gate: ${state.gate_rev ? `gate_rev ${state.gate_rev}, ${decisions.total} decisions (${decisions.pending} pending)${state.gate && typeof (state.gate as any).reply === 'string' ? `; answered "${(state.gate as any).reply}"` : ''}` : 'not reached'}. Findings: ${findings}. Tasks: ${tasks}.`);
+  lines.push(`Gate: ${state.gate_rev ? `gate_rev ${state.gate_rev}, ${decisions.total} decisions (${decisions.pending} pending)${state.gate && typeof (state.gate as any).reply === 'string' ? `; answered "${(state.gate as any).reply}"${typeof (state.gate as any).answered_by === 'string' ? ` answered by ${(state.gate as any).answered_by}` : ''}` : ''}` : 'not reached'}. Findings: ${findings}. Tasks: ${tasks}.`);
   return lines.join('\n') + '\n';
 }
 

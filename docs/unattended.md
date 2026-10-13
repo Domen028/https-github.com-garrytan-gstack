@@ -186,22 +186,32 @@ the plan.
    `PHASE_NOT_AWAITING`, exit 3). Both voices in closes the phase: the
    reconciliation (`confirmed` / `disagree` / `new` per outside finding, with
    disagreement and resolution kept separate) is written to
-   `<phase>-consensus.{json,md}`, and the Eng prompt refuses to open without
-   every closed prior phase's consensus (`CONSENSUS_MISSING`).
+   `<phase>-consensus.{json,md}`, and every later phase's prompts (DX, design
+   and Eng alike) carry each closed predecessor's consensus as data; a phase
+   refuses to open without one (`CONSENSUS_MISSING`).
 3. **Loop `next` until `status=gate_pending`.** Eng always runs last. The gate
    (`gate.json`, `gate_rev`) lists user challenges as approval items,
    disagreements as auto items and `p1` plan approval; nothing is approved.
 4. **Answer the gate** with the reply grammar and the revision you read:
    ```bash
-   $AP answer --out <dir> --gate-rev 1 --reply "all"              # every recommendation; agreeing plan changes print APPLY:
-   $AP answer --out <dir> --gate-rev 1 --reply "all as-is"        # APPROVED: keeps every direction, no new paid phase
-   $AP answer --out <dir> --gate-rev 1 --reply "all except d1b"   # APPLY: <id> ...; REOPENED: ceo,eng; NEXT: gstack-autoplan revise ...
+   $AP answer --out <dir> --gate-rev 1 --reply "all" --by human            # every recommendation the owner may delegate; agreeing plan changes stay pending
+   $AP answer --out <dir> --gate-rev 1 --reply "all as-is" --by human      # APPROVED: keeps every direction, no new paid phase
+   $AP answer --out <dir> --gate-rev 1 --reply "all except d1b" --by human # APPLY: <id> ...; REOPENED: ceo,eng; NEXT: gstack-autoplan revise ...
    ```
+   `--by human` means the owner typed the tokens; `--by agent:<thread or id>`
+   means an agent relayed or decided them. An unattended run refuses an answer
+   without it (`ANSWER_BY_REQUIRED`, exit 3) and records the value as
+   `answered_by` on every decision row and in the review record's gate line,
+   so a gate an agent closed is distinguishable from one the owner closed.
    A user challenge both voices raised on a confirmed finding with the same
    `changes` value is recommended as `b`, and option b shows both voices'
    remedies (`recommended: b (both voices; remedies shown)`); a `--reconcile`
    record naming one shared `proposal` shows that instead. Disagreeing or
-   missing remedies keep `a`. Every accepted plan change prints
+   missing remedies keep `a`. `all` never answers an item recommended `b`:
+   that would change the owner's stated direction on their behalf, so those
+   items stay pending (`GATE_PENDING: uc1 unanswered (reply with uc1a|uc1b; all
+   does not answer items recommended b)`) until their own token arrives, and
+   the rendered gate names them under the reply grammar. Every accepted plan change prints
    `APPLY: <decision id> <title> -> <chosen text>` and becomes a pending
    amendment: `next` refuses with `PLAN_AMEND_PENDING` and `export` refuses a
    `complete` run until `revise --incorporates` names it (see below).

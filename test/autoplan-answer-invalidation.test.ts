@@ -71,23 +71,23 @@ describe('answer', () => {
   test('stale, unparsed and conflicting replies write nothing; a reply that leaves approval items pending keeps the gate', () => {
     const out = gatedRun('stale');
     const before = { run: fs.readFileSync(path.join(out, 'run.json'), 'utf8'), decisions: fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8'), journal: journal(out).length };
-    const stale = autoplan(['answer', '--out', out, '--gate-rev', '7', '--reply', 'all']);
+    const stale = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '7', '--reply', 'all']);
     expect(stale.status).toBe(3);
     expect(stale.stderr).toMatch(/\(GATE_REV_STALE\)$/m);
     expect(stale.stdout).toContain('GSTACK_RESULT: skill=autoplan status=refused');
-    const unparsed = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'd1b approve it']);
+    const unparsed = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'd1b approve it']);
     expect(unparsed.status).toBe(1);
     expect(unparsed.stderr).toMatch(/unparsed: approve, it.*\(GATE_REPLY_UNPARSED\)$/m);
-    const conflicting = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'd1a d1b p1a']);
+    const conflicting = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'd1a d1b p1a']);
     expect(conflicting.status).toBe(1);
     expect(conflicting.stderr).toMatch(/conflicts with d1a.*\(GATE_REPLY_UNPARSED\)$/m);
-    const missingRev = autoplan(['answer', '--out', out, '--reply', 'all']);
+    const missingRev = autoplan(['answer', '--by', 'human', '--out', out, '--reply', 'all']);
     expect(missingRev.status).toBe(3);
     expect(fs.readFileSync(path.join(out, 'run.json'), 'utf8')).toBe(before.run);
     expect(fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8')).toBe(before.decisions);
     expect(journal(out).length).toBe(before.journal);
     // partial: only the auto item answered; approval items stay pending; nothing reviewed changes
-    const partial = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'd1a', '--json']);
+    const partial = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'd1a', '--json']);
     expect(partial.status, partial.stderr).toBe(0);
     expect(JSON.parse(partial.stdout)).toMatchObject({ status: 'gate_pending', outcome: 'gate_pending', pending: ['uc1', 'uc2', 'p1'] });
     const rows = decisions(out);
@@ -98,7 +98,7 @@ describe('answer', () => {
   test('`all` finalizes without another paid phase: status complete, decisions approved, no phase reopened', () => {
     const out = gatedRun('approve');
     const counter = readRun(out).attempt_counter;
-    const r = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all']);
+    const r = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'all']);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^APPROVED: gate_rev=1 as-is$/m);
     expect(r.stdout).toContain('GSTACK_RESULT: skill=autoplan status=complete run=' + out);
@@ -114,7 +114,7 @@ describe('answer', () => {
 
   test('a non-recommended choice on a ceo item reopens ceo and eng only, archives their bound files, and the next gate is gate_rev 2', () => {
     const out = gatedRun('reopen');
-    const r = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all except d1b', '--json']);
+    const r = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'all except d1b', '--json']);
     expect(r.status, r.stderr).toBe(0);
     const runId = readRun(out).run;
     expect(JSON.parse(r.stdout)).toMatchObject({ status: 'running', outcome: 'reopened', reopened: ['ceo', 'eng'], amendments: [`${runId}-d1`] });
@@ -142,10 +142,10 @@ describe('answer', () => {
     const rows = decisions(out);
     expect(rows.filter((x: any) => x.gate_rev === 1)).toHaveLength(4);
     expect(rows.filter((x: any) => x.gate_rev === 2 && x.status === 'pending').length).toBeGreaterThan(0);
-    const staleAgain = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all']);
+    const staleAgain = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'all']);
     expect(staleAgain.status).toBe(3);
     // closing gate_rev 2 exports a run that validates: rev-2 rows get their own ids beside rev 1's
-    const approve = autoplan(['answer', '--out', out, '--gate-rev', '2', '--reply', 'all']);
+    const approve = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '2', '--reply', 'all']);
     expect(approve.stdout).toContain('GSTACK_RESULT: skill=autoplan status=complete run=' + out);
     expect(autoplan(['export', '--out', out]).status).toBe(0);
     const ids = decisions(out).map((x: any) => x.id);
@@ -162,7 +162,7 @@ describe('answer', () => {
 
   test('an eng-only override reopens eng alone; p1d reopens every phase; p1c keeps the gate; p1e ends incomplete', () => {
     const out = gatedRun('eng-only');
-    const engOnly = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all except uc2b', '--json']);
+    const engOnly = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'all except uc2b', '--json']);
     const runId = readRun(out).run;
     expect(JSON.parse(engOnly.stdout)).toMatchObject({ outcome: 'reopened', reopened: ['eng'], amendments: [`${runId}-uc2`] });
     expect(readRun(out).phases.ceo.closed_at).toBeTruthy();
@@ -173,13 +173,13 @@ describe('answer', () => {
     expect(runPhase(out, 'ceo').outside.stdout).toMatch(/PHASE_CLOSED: ceo/);
     const eng = runPhase(out, 'eng');
     expect(eng.outside.stdout).toContain('status=gate_pending');
-    const interrogate = autoplan(['answer', '--out', out, '--gate-rev', '2', '--reply', 'all except p1c', '--json']);
+    const interrogate = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '2', '--reply', 'all except p1c', '--json']);
     expect(JSON.parse(interrogate.stdout)).toMatchObject({ status: 'gate_pending', outcome: 'gate_pending' });
-    const revise = autoplan(['answer', '--out', out, '--gate-rev', '2', '--reply', 'all except p1d', '--json']);
+    const revise = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '2', '--reply', 'all except p1d', '--json']);
     expect(JSON.parse(revise.stdout)).toMatchObject({ outcome: 'reopened', reopened: ['ceo', 'eng'] });
     runPhase(out, 'ceo');
     runPhase(out, 'eng');
-    const reject = autoplan(['answer', '--out', out, '--gate-rev', '3', '--reply', 'all except p1e']);
+    const reject = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '3', '--reply', 'all except p1e']);
     expect(reject.status).toBe(0);
     expect(reject.stdout).toContain('GSTACK_RESULT: skill=autoplan status=incomplete run=' + out);
     expect(readRun(out).deviations).toContain('plan rejected by the owner at gate_rev 3');

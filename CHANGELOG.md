@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.91.101.0] - 2026-10-13
+
+**The field wave's residual gaps are closed.** v1.91.96.0 through v1.91.100.0 shipped the install-honesty and unattended-`/autoplan` wave (`docs/designs/GSTACK_FIELD_WAVE_2026_10_12.md`); running that release on a Capy machine left six gaps, each reproduced here with a test that failed first.
+
+### What this means for you
+
+- **`all` no longer overrides a recommendation to change the plan.** `gstack-autoplan answer <rev> all` resolves only the items the reviewers recommend keeping; an item recommended `b` stays pending (`GATE_PENDING: <ids> unanswered …`) with the hint `all does not answer <id> (recommended b changes the plan); reply <id>a or <id>b yourself`. `all except <id>b` still answers everything in one line.
+- **Every gate answer names who gave it.** `answer` takes `--by <human|agent:<id>>`; an unattended run refuses an answer without it (`ANSWER_BY_REQUIRED`, exit 3), and `decisions.jsonl` records `answered_by` so a review record can tell the owner's call from a delegate's.
+- **Later reviewers see the earlier consensus.** The DX and Design prompts carry the CEO consensus (and each later phase every closed predecessor's), the way Eng already did, so a reopened CEO decision reaches every phase that depends on it.
+- **An upgrade never moves a checkout under a live session.** Each `gstack-skill-start` touches an install-scoped lease (`bin/gstack-lease`, `<git dir>/gstack-leases/<harness pid>`, pruned after 120 minutes; the `/autoplan` driver renews it on every mutating command). `gstack-upgrade` refuses with `UPGRADE_BUSY` (exit 3) while a lease whose pid is alive and outside its own process chain exists; `gstack-lease list` shows them and `GSTACK_UPGRADE_FORCE=1` overrides.
+- **Capy sessions stay at the tip, not at the floor.** `GSTACK_MIN_REVISION` is the floor below which the trailer fails and the frozen bootstrapper fast-forwards. Above it, `bin/gstack-capy-session` fast-forwards any clean, unpinned checkout behind origin at install-mode session start (`SELF_UPGRADE: done <old> -> <new>`, then installs from the new revision); a refusal prints `SELF_UPGRADE: skipped (<reason>)` and the session continues on the installed revision. `--check` never moves the checkout and reports `gstack-capy-session: behind origin/<branch>: … fix: …`. `GSTACK_CAPY_SELF_UPGRADE=off` disables only this fast-forward; `GSTACK_CAPY_AUTO_UPGRADE=0` disables every one.
+- **gstack's own tools run on the Bun that launched them.** `lib/autoplan-prompts.ts`, `lib/restamp.ts` and `bin/gstack-gbrain-sync.ts` spawn `process.execPath` instead of whatever `bun` the PATH resolves, so a Capy machine whose PATH lacks `~/.bun/bin` no longer fails mid-workflow (`lib/autoplan-admission.ts` keeps probing the PATH Bun on purpose; that probe is the point).
+
+### For contributors
+
+- `test/autoplan-residuals.test.ts` pins the `all` rule, the carried consensus, the `process.execPath` rule under `lib/` and `bin/*.ts`, and `--by`; `test/gstack-lease.test.ts` covers the lease; `test/gstack-upgrade-bin.test.ts` and `test/capy-skill-wrapper.test.ts` cover `UPGRADE_BUSY` and `SELF_UPGRADE:`.
+- `bin/gstack-harness-pid.sh` is the one harness-pid derivation, sourced by `bin/gstack-skill-start` and `bin/gstack-lease`.
+- The test preload and `test/helpers/hermetic-env.ts` set a per-run `GSTACK_LEASE_DIR`, so no test leases the developer's checkout.
+
 ## [1.91.100.0] - 2026-10-13
 
 **A gbrain LongMemEval call plan now prices in full.** gbrain's `eval longmemeval --call-plan` (gbrain#6638) writes a `GSTACK_EVAL_CALLS` file for every lane of the run. `gstack-eval-plan price-gate` verified its binding but stopped at `EVAL_PRICE_MISSING` with the total unknown: it had no row for the judge (`gpt-4o`) or the reranker (`rerank-2.5`), and it did not recognize the dated Claude id gbrain resolves (`claude-haiku-4-5-20251001`). On the gbrain fixture plan (`--mode tokenmax --judge`) all seven lanes now price, for a total of $0.447.

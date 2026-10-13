@@ -114,6 +114,11 @@ export const RESULT_CODES = {
     summary: 'part of the reply matched no gate item or option, so nothing was applied',
     fix: 'reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
   },
+  ANSWER_BY_REQUIRED: {
+    anchor: 'answer-by-required',
+    summary: 'an unattended gate answer named no valid answerer, so nothing was applied',
+    fix: 'pass `--by human` when the owner typed the tokens, or `--by agent:<thread or id>` when an agent relays or decides; the value lands on every decision row as answered_by',
+  },
   // PR A (multi-agent wave): gstack-doctor --check, gstack-capy-install, gstack-browser-ensure.
   COMPONENT_MISSING: {
     anchor: 'doctor-component-missing',
@@ -526,6 +531,11 @@ export const RESULT_CODES = {
     anchor: 'upgrade-refused',
     summary: 'bin/gstack-upgrade changed nothing: the checkout is dirty, diverged, pinned (detached or off the remote default branch), not a gstack checkout, or the incoming release holds',
     fix: 'resolve the named cause (commit or move the listed changes, check out the default branch), then re-run bin/gstack-upgrade; it never stashes or resets',
+  },
+  UPGRADE_BUSY: {
+    anchor: 'upgrade-busy',
+    summary: 'bin/gstack-upgrade changed nothing: another live session holds a workflow lease on this installation (bin/gstack-lease live), so moving the checkout would change gstack under it',
+    fix: 'wait for those sessions to finish (bin/gstack-lease list names each pid and age), then re-run bin/gstack-upgrade; GSTACK_UPGRADE_FORCE=1 overrides when you know they are idle',
   },
   UPGRADE_FETCH_FAILED: {
     anchor: 'upgrade-fetch-failed',
