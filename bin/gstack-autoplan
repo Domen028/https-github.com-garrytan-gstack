@@ -32,7 +32,7 @@ import { migrateRun } from '../lib/autoplan-migrate';
 import { reviseRun } from '../lib/autoplan-revise';
 import { pendingAmendments, type RunState } from '../lib/autoplan-state';
 import { FILES, RunError, initRun, markOutside, nextStep, readState, resumeRun, statusLines, submitResult, withRunLock, writeState } from '../lib/autoplan-run';
-import type { Phase } from '../lib/autoplan-prompts';
+import { driverFile, type Phase } from '../lib/autoplan-prompts';
 import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { createRunner, familyConflict, type RunnerId } from '../lib/outside-voice-runner';
 import { resultLine } from '../lib/result-codes';
@@ -40,8 +40,9 @@ import { release } from '../lib/spend-ledger';
 import { COORDINATOR_CONTRACT } from '../lib/coordinator-contract';
 
 const HELP = `gstack-autoplan — unattended /autoplan: next/submit loop, answer, resume (docs/unattended.md)
+DRIVER: ${driverFile()}
 
-  next    --out <dir> [--plan <file>] [--plan-heading <text>] [--scaffold] [--ui|--no-ui] [--developer-tool] [--agent-primary]
+  next    --out <dir> [--plan <file>] [--plan-heading <text>] [--scaffold] [--ui|--no-ui] [--developer-tool] [--agent-primary] [--no-dx]
           [--no-outside] [--light] [--spend-cap <usd>] [--estimate-usd <n>] [--deadline <min>] [--redispatch <attempt>] [--json]
           --scaffold (first next): a plan missing one of its two sections is reviewed from <out>/plan-source.md with the heading added
           --light loads each phase's checklist plus the sections its scope needs (the unattended default); interactive kinds load everything
@@ -131,7 +132,7 @@ function doNext(out: string, rest: string[], json: boolean): number {
     if (!plan) throw new RunError('RUN_NOT_INITIALIZED', `${out} has no run.json; pass --plan <file> on the first next`, 3);
     const ui = rest.includes('--ui') ? true : rest.includes('--no-ui') ? false : undefined;
     initRun({ plan, out, cwd, planHeading: flag(rest, '--plan-heading'), outsideEnabled: !rest.includes('--no-outside'), spendCap: num(rest, '--spend-cap') ?? null,
-      deadlineMin: num(rest, '--deadline'), light: rest.includes('--light'), scaffold: rest.includes('--scaffold'), scope: { ui, developerTool: rest.includes('--developer-tool'), agentPrimary: rest.includes('--agent-primary') } }, initLines);
+      deadlineMin: num(rest, '--deadline'), light: rest.includes('--light'), scaffold: rest.includes('--scaffold'), scope: { ui, developerTool: rest.includes('--developer-tool'), agentPrimary: rest.includes('--agent-primary'), dx: rest.includes('--no-dx') ? false : undefined } }, initLines);
   }
   const redispatch = rest.flatMap((a, i) => (a === '--redispatch' && rest[i + 1] ? [rest[i + 1]!] : []));
   const r = nextStep({ out, cwd, estimateUsd: num(rest, '--estimate-usd'), redispatch });

@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import { exportRun } from './autoplan-export';
 import { applyRenames, planReopen } from './autoplan-gate';
 import { normalizeRevision, reviewHash, scaffold } from './autoplan-plan-text';
+import { parseScopeTokens } from './autoplan-scope';
 import { PHASES, detectScope, extractHeading, phaseOrder, type Phase, type ScopeFlags } from './autoplan-prompts';
 import { FILES, RunError, journal, now, pendingAmendments, readJournal, readState, writeState, type RunState } from './autoplan-state';
 
@@ -78,8 +79,8 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   fs.writeFileSync(path.join(staging, FILES.active), normalizeRevision(text, state.restore));
   fs.writeFileSync(path.join(staging, FILES.source), text);
 
-  const flags = (state.scope_flags ?? { ui: state.scope.source === 'flags' ? state.scope.ui : undefined, developerTool: state.scope.developer_tool, agentPrimary: state.scope.agent_primary }) as ScopeFlags;
-  const detected = detectScope(path.join(staging, FILES.active), o.cwd, flags);
+  const flags = (state.scope_flags ?? (state.scope.cli_flags ? parseScopeTokens(state.scope.cli_flags, 'run.json') : { ui: state.scope.source === 'flags' ? state.scope.ui : undefined, developerTool: state.scope.developer_tool, agentPrimary: state.scope.agent_primary })) as ScopeFlags;
+  const detected = detectScope(path.join(staging, FILES.active), o.cwd, flags, file);
   const order = PHASES.filter(p => state.phase_order.includes(p) || phaseOrder(detected).includes(p));
   const added = order.filter(p => !state.phase_order.includes(p));
   const opened = state.phase_order.filter(p => state.phases[p]?.snapshot);

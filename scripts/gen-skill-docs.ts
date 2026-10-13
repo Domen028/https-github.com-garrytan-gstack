@@ -878,6 +878,15 @@ function processTemplate(tmplPath: string, host: Host, options: RenderOptions): 
   return { outputPath, content, symlinkLoop, metadata };
 }
 
+/** autoplan/DRIVER.md (field wave item 13): one host-neutral render of autoplan/DRIVER.md.tmpl through the same resolvers. */
+export const AUTOPLAN_DRIVER_RELPATH = 'autoplan/DRIVER.md';
+export function renderAutoplanDriver(options: RenderOptions): string {
+  const tmplPath = path.join(ROOT, `${AUTOPLAN_DRIVER_RELPATH}.tmpl`);
+  const tmpl = fs.readFileSync(tmplPath, 'utf-8');
+  const ctx = buildContext(tmpl, tmplPath, 'claude', options, 'autoplan');
+  return GENERATED_HEADER.replace('{{SOURCE}}', `${AUTOPLAN_DRIVER_RELPATH}.tmpl`) + resolvePlaceholders(tmpl, ctx, getHostConfig('claude'), `${AUTOPLAN_DRIVER_RELPATH}.tmpl`, options);
+}
+
 /**
  * Generate one on-demand section file (`<skill>/sections/<name>.md.tmpl` →
  * `<name>.md`). Sections are BODY FRAGMENTS — no frontmatter, no catalog trim,
@@ -1060,6 +1069,9 @@ export async function runGeneration(settings: GenerationOptions = {}): Promise<G
         emit(path.join(options.outputRoot, 'review', 'design-checklist.md'),
           generateDesignChecklistMd(), 'asset', host);
         emit(path.join(options.outputRoot, DOM_DUMP_FILE), DOM_DUMP_SCRIPT + '\n', 'asset', host);
+      }
+      if (host === 'claude' && includesSkill(hostConfig, 'autoplan')) {
+        emit(path.join(options.outputRoot, AUTOPLAN_DRIVER_RELPATH), renderAutoplanDriver(options), 'asset', host);
       }
 
       if (host === 'openclaw') {

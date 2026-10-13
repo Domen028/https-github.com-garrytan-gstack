@@ -12,9 +12,16 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { decisionId } from './gate-list';
+import { resolveSourceRoot } from './source-root';
 import { RunError, journal, readDecisions, writeDecisions, type RunState } from './autoplan-state';
 
-export const GSTACK_VERSION = fs.readFileSync(path.join(import.meta.dir, '..', 'VERSION'), 'utf8').trim();
+function readVersion(): string {
+  for (const root of [path.join(import.meta.dir, '..'), resolveSourceRoot(path.join(import.meta.dir, '..'))]) {
+    try { return fs.readFileSync(path.join(root, 'VERSION'), 'utf8').trim(); } catch { /* try the recorded source checkout */ }
+  }
+  return 'unknown';
+}
+export const GSTACK_VERSION = readVersion();
 
 /** Numeric compare of dotted versions (1.91.95.0); missing parts are 0. */
 export function compareVersions(a: string, b: string): number {

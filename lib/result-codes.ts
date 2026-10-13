@@ -112,7 +112,7 @@ export const RESULT_CODES = {
   GATE_REPLY_UNPARSED: {
     anchor: 'gate-reply-unparsed',
     summary: 'part of the reply matched no gate item or option, so nothing was applied',
-    fix: 'reply with `all`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
+    fix: 'reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
   },
   // PR A (multi-agent wave): gstack-doctor --check, gstack-capy-install, gstack-browser-ensure.
   COMPONENT_MISSING: {

@@ -11,23 +11,32 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { readScopeMarker, scopeMarker, scopeTokens, type ScopeFlags, type UiEvidence } from './autoplan-scope';
 import { COORDINATOR_CONTRACT } from './coordinator-contract';
+import { resolveSourceRoot } from './source-root';
 
 export const PHASES = ['ceo', 'design', 'dx', 'eng'] as const;
 export type Phase = typeof PHASES[number];
 export const REVIEW_SKILL: Record<Phase, string> = { ceo: 'plan-ceo-review', design: 'plan-design-review', dx: 'plan-devex-review', eng: 'plan-eng-review' };
 const ROOT = path.resolve(import.meta.dir, '..');
 export const SNAPSHOT_TOOL = path.join(ROOT, 'bin', 'gstack-autoplan-snapshot.ts');
+/** The parent's driver doc, in this checkout or the one an install root records (lib/source-root.ts). */
+export const driverFile = () => path.join(resolveSourceRoot(ROOT), 'autoplan', 'DRIVER.md');
 
-/** The Phase 0 UI trigger from autoplan/SKILL.md.tmpl Step 2: view/rendering terms, 2+ matches, acronyms excluded. */
-const UI_TERMS = ['component', 'screen', 'form', 'button', 'modal', 'layout', 'dashboard', 'sidebar', 'nav', 'dialog'];
-export function detectUiScope(planText: string): { ui: boolean; matches: Array<{ term: string; count: number }> } {
-  const matches = UI_TERMS.map(term => ({ term, count: [...planText.matchAll(new RegExp(`\\b${term}s?\\b`, 'gi'))].length })).filter(m => m.count > 0);
-  return { ui: matches.reduce((s, m) => s + m.count, 0) >= 2, matches };
+export { detectUiScope, type ScopeFlags } from './autoplan-scope';
+
+export type ScopeSource = 'flag' | 'marker' | 'detected';
+export interface Scope {
+  ui: boolean; dx: boolean; ui_matches: number; dx_matches: number; developer_tool: boolean; agent_primary: boolean;
+  sources: { ui: ScopeSource; dx: ScopeSource };
+  ui_evidence?: UiEvidence; dx_terms?: Array<{ term: string; count: number }>;
+  /** Flags from the command line (revise re-detects with these) and the plan's marker tokens. */
+  cli_flags?: string[]; marker?: string[] | null;
+  /** The marker the author can add to keep CLI flags for the next run on this plan. */
+  pin?: { marker: string; file: string } | null;
+  /** Runs created before per-axis provenance. */
+  source?: 'detected' | 'flags';
 }
-
-export interface ScopeFlags { ui?: boolean; developerTool?: boolean; agentPrimary?: boolean; dx?: boolean }
-export interface Scope { ui: boolean; dx: boolean; ui_matches: number; dx_matches: number; developer_tool: boolean; agent_primary: boolean; source: 'detected' | 'flags' }
 
 export function snapshotTool(args: string[], cwd: string): any {
   const r = spawnSync('bun', [SNAPSHOT_TOOL, ...args], { cwd, encoding: 'utf8', timeout: 120_000, env: process.env });
@@ -35,14 +44,47 @@ export function snapshotTool(args: string[], cwd: string): any {
   return JSON.parse(r.stdout);
 }
 
-/** UI from the plan text; DX from the snapshot tool's own term count plus the semantic flags (flags only enable). */
-export function detectScope(activePlan: string, cwd: string, flags: ScopeFlags): Scope {
-  const dx = snapshotTool(['scope', activePlan, ...(flags.developerTool ? ['--developer-tool'] : []), ...(flags.agentPrimary ? ['--agent-primary'] : [])], cwd);
-  const ui = detectUiScope(fs.readFileSync(activePlan, 'utf8'));
+/**
+ * UI and DX evidence from the snapshot tool (both read the Implementation plan only); per axis, CLI flags win over the
+ * plan's first-line scope marker, which wins over detection. `--developer-tool` and `--agent-primary` only enable DX;
+ * `--no-dx` turns it off. The source plan is read for its marker and never written.
+ */
+export function detectScope(activePlan: string, cwd: string, flags: ScopeFlags, sourcePlan: string = activePlan): Scope {
+  const marker = readScopeMarker(fs.readFileSync(sourcePlan, 'utf8'), sourcePlan);
+  const m = marker?.flags ?? {};
+  const developerTool = !!(flags.developerTool || m.developerTool);
+  const agentPrimary = !!(flags.agentPrimary || m.agentPrimary);
+  const detected = snapshotTool(['scope', activePlan, ...(developerTool ? ['--developer-tool'] : []), ...(agentPrimary ? ['--agent-primary'] : [])], cwd);
+  const dxSource: ScopeSource = flags.dx !== undefined ? 'flag' : m.dx !== undefined ? 'marker'
+    : flags.developerTool || flags.agentPrimary ? 'flag' : m.developerTool || m.agentPrimary ? 'marker' : 'detected';
+  const cli = scopeTokens(flags);
+  const merged = scopeTokens({ ui: flags.ui ?? m.ui, dx: flags.dx ?? m.dx, developerTool, agentPrimary });
+  const pinned = !cli.length || (marker !== null && [...merged].sort().join(' ') === [...marker.tokens].sort().join(' '));
   return {
-    ui: flags.ui ?? ui.ui, dx: flags.dx ?? dx.dxRequired, ui_matches: ui.matches.reduce((s, m) => s + m.count, 0), dx_matches: dx.matchCount,
-    developer_tool: !!flags.developerTool, agent_primary: !!flags.agentPrimary, source: flags.ui !== undefined || flags.dx !== undefined ? 'flags' : 'detected',
+    ui: flags.ui ?? m.ui ?? detected.uiRequired, dx: flags.dx ?? m.dx ?? detected.dxRequired,
+    ui_matches: detected.uiMatches, dx_matches: detected.matchCount, developer_tool: developerTool, agent_primary: agentPrimary,
+    sources: { ui: flags.ui !== undefined ? 'flag' : m.ui !== undefined ? 'marker' : 'detected', dx: dxSource }, ui_evidence: detected.uiEvidence, dx_terms: detected.matches,
+    cli_flags: cli, marker: marker?.tokens ?? null, pin: pinned ? null : { marker: scopeMarker(merged), file: sourcePlan },
   };
+}
+
+/** Per-axis provenance, reading runs created before it existed through their single `source`. */
+export function scopeSources(scope: Scope): { ui: ScopeSource; dx: ScopeSource } {
+  if (scope.sources) return scope.sources;
+  const s: ScopeSource = scope.source === 'flags' ? 'flag' : 'detected';
+  return { ui: s, dx: s };
+}
+export const scopeSourceLabel = (scope: Scope) => { const s = scopeSources(scope); return `ui:${s.ui},dx:${s.dx}`; };
+
+/** What the first `next` prints: the evidence behind each axis, its provenance, and the marker that would keep CLI flags. */
+export function scopeLines(scope: Scope): string[] {
+  const list = (xs: Array<{ term: string; count: number }> | undefined) => (xs?.length ? xs.map(t => `${t.term}×${t.count}`).join(', ') : 'none');
+  const ev = scope.ui_evidence;
+  const ui = `ui=${scope.ui ? 'yes' : 'no'} (terms: ${list(ev?.terms)}; visual: ${ev?.visual.length ? ev.visual.join(', ') : 'none'}; files: ${ev?.files.length ? ev.files.join(', ') : 'none'})`;
+  const dx = `dx=${scope.dx ? 'yes' : 'no'} (detected: ${list(scope.dx_terms)}${scope.developer_tool ? '; developer tool' : ''}${scope.agent_primary ? '; agent primary' : ''})`;
+  const lines = [`SCOPE: ${ui} ${dx} source=${scopeSourceLabel(scope)}`];
+  if (scope.pin) lines.push(`SCOPE_PIN: add ${scope.pin.marker} as the first line of ${scope.pin.file} to keep these flags`);
+  return lines;
 }
 export function phaseOrder(scope: Scope): Phase[] {
   return PHASES.filter(p => (p === 'design' ? scope.ui : p === 'dx' ? scope.dx : true));
@@ -91,16 +133,17 @@ export const BOUNDARY = 'IMPORTANT: Do NOT read or execute any SKILL.md files or
 export const SECTION_SCOPES = ['always', 'ui', 'dx', 'db', 'perf', 'security', 'incident'] as const;
 export type SectionScope = typeof SECTION_SCOPES[number];
 export interface SectionLoad { checklist: string | null; loaded: string[]; skipped: string[]; line: string }
-/** A scoped section is off only when its scope is off by flags, or detected off with zero supporting matches; anything weaker is uncertain and loads it. */
+/** A scoped section is off only when its scope is off by a flag or the plan's marker, or detected off with zero supporting matches; anything weaker is uncertain and loads it. */
 export function sectionScopeOff(sectionScope: SectionScope, scope: Scope): boolean {
-  if (sectionScope === 'ui') return scope.source === 'flags' ? !scope.ui : !scope.ui && scope.ui_matches === 0;
-  if (sectionScope === 'dx') return scope.source === 'flags' ? !scope.dx : !scope.dx && scope.dx_matches === 0;
+  const sources = scopeSources(scope);
+  if (sectionScope === 'ui') return sources.ui !== 'detected' ? !scope.ui : !scope.ui && scope.ui_matches === 0;
+  if (sectionScope === 'dx') return sources.dx !== 'detected' ? !scope.dx : !scope.dx && scope.dx_matches === 0;
   return false;
 }
 export function sectionLoadFor(phase: Phase, scope: Scope, mode: 'full' | 'light'): SectionLoad {
   const dir = path.join(ROOT, REVIEW_SKILL[phase], 'sections');
   const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')) as { sections: Array<{ id: string; file: string; scope?: string; runner_only?: boolean }> };
-  const detected = `ui=${scope.ui ? 'yes' : 'no'},dx=${scope.dx ? 'yes' : 'no'},source=${scope.source}`;
+  const detected = `ui=${scope.ui ? 'yes' : 'no'},dx=${scope.dx ? 'yes' : 'no'},source=${scopeSourceLabel(scope)}`;
   const loaded: string[] = [], skipped: string[] = [];
   let checklist: string | null = null;
   for (const s of manifest.sections) {

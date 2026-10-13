@@ -21,10 +21,10 @@ import { canonicalRows, parseReceipt, parseRecordFindings, parseReviewResult, ty
 import { closePhase, finishGate } from './autoplan-gate';
 import { GSTACK_VERSION } from './autoplan-migrate';
 import { driftLine, reviewHash, scaffold } from './autoplan-plan-text';
-import { PHASES, SNAPSHOT_TOOL, detectScope, extractHeading, phaseOrder, reviewSkillFile, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
+import { PHASES, SNAPSHOT_TOOL, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
 import { recoverRevise } from './autoplan-revise';
 import { FILES, RunError, journal, now, pendingAmendments, readDecisions, readJournal, readState, voiceTerminal, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
-import { checkRealityRows } from './plan-reality';
+import { checkPlanReality, checkRealityRows, PLAN_REALITY_CHECKER } from './plan-reality';
 import type { RunStatus } from './headless-artifacts';
 import { sha256File } from './headless-artifacts';
 import { outsideConsent } from './outside-consent';
@@ -91,7 +91,7 @@ export function initRun(o: InitOptions, lines: string[] = []): RunState {
   const active = path.join(out, FILES.active);
   const restore = path.join(out, FILES.restore);
   const init = snapshotTool(['init', source, active, restore], o.cwd);
-  const scope = detectScope(active, o.cwd, o.scope ?? {});
+  const scope = detectScope(active, o.cwd, o.scope ?? {}, path.resolve(o.plan));
   const order = phaseOrder(scope);
   const run = o.runId ?? `${path.basename(out)}-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
   // codex_reviews gates the outside voice here, before any dispatch: a refusal is a terminal not_run outcome per phase.
@@ -172,14 +172,16 @@ export function nextStep(o: NextOptions): NextResult {
   }
   const phase = currentPhase(state);
   if (!phase) { finishGate(state); writeState(state); return result; }
+  const first = !state.phase_order.some(p => state.phases[p]?.snapshot);
   openPhase(state, phase, o.cwd);
   const ps = state.phases[phase]!;
   result.phase = phase;
   lines.push(`PHASE: ${phase} snapshot=${ps.snapshot} order=${state.phase_order.join(',')}`);
   const drift = driftLine(state, 'PLAN_CHANGED');
   if (drift) lines.push(drift);
+  if (first) lines.push(...scopeLines(state.scope), `DRIVER: ${driverFile()}`);
   if (ps.outside?.reason === 'consent_missing') lines.push(`OUTSIDE: ${phase} not_run reason=consent_missing`, String(ps.outside.detail));
-  if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${state.scope.source}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
+  if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${scopeSourceLabel(state.scope)}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
   const prompts = ps.prompts!;
   for (const voice of ['native', 'outside'] as const) {
     const v = voiceState(state, phase, voice);
@@ -228,15 +230,17 @@ export interface SubmitOptions {
 export interface SubmitResult { state: RunState; closed: boolean; findings: number; lines: string[] }
 
 /** Report-only PLAN_REALITY on the active plan, once per Implementation-plan hash and checker (revise clears it). */
-export const PLAN_REALITY_CHECKER = 'plan-reality/1';
 function recordPlanReality(state: RunState): string[] {
-  let sha: string;
-  try { sha = reviewHash(fs.readFileSync(state.active_plan, 'utf8')); } catch { return []; }
+  let text: string;
+  try { text = fs.readFileSync(state.active_plan, 'utf8'); } catch { return []; }
+  const sha = reviewHash(text);
   if (state.plan_reality?.plan_sha256 === sha && state.plan_reality.checker === PLAN_REALITY_CHECKER) return [];
-  const check = checkRealityRows(fs.readFileSync(state.active_plan, 'utf8'), { phase: 'plan', sessionKind: state.session_kind });
-  state.plan_reality = { plan_sha256: sha, checker: PLAN_REALITY_CHECKER, verdict: check.verdict, line: check.line };
-  journal(state.out, { event: 'plan_reality', plan_sha256: sha, checker: PLAN_REALITY_CHECKER, verdict: check.verdict });
-  return [`${check.line} (report only)`];
+  const rows = checkRealityRows(text, { phase: 'plan', sessionKind: state.session_kind });
+  const plan = checkPlanReality(text, { sessionKind: state.session_kind });
+  const verdict = rows.verdict !== 'complete' ? rows.verdict : plan.verdict;
+  state.plan_reality = { plan_sha256: sha, checker: PLAN_REALITY_CHECKER, verdict, line: `${rows.line}; ${plan.line}` };
+  journal(state.out, { event: 'plan_reality', plan_sha256: sha, checker: PLAN_REALITY_CHECKER, verdict });
+  return [`${rows.line} (report only)`, `${plan.line} (report only)`, ...plan.numberLines];
 }
 
 function resolveAttempt(v: VoiceState, attempt: string | undefined, phase: string, voice: Voice): AttemptState {
