@@ -265,6 +265,17 @@ lines whose decision is still pending stay and are reported as
 `DRAFT_DIRECTION_UNRESOLVED` (exit 1). `gstack-autoplan answer` runs the same
 rewrite when a reply completes the gate (journal event `draft_directions_closed`).
 
+## Lane done: pregate, the sealed guard and the handoff lines
+
+A lane under a coordinator runs `gstack-pregate run --allow-repo-commands` on
+its branch before it reports done (the unit tier on the changed files plus
+the repo's guards, [docs/pregate.md#guards](pregate.md#guards)). In a repo
+whose `.gstack/pregate.json` has a `sealed` key it runs `gstack-pregate sealed`
+before any push or PR creation, since a PR tool may not run local hooks. Its
+handoff carries, right after the `GSTACK_RESULT` line, the `gstack: ok|fail
+<rev>` line and then the `PREGATE:` line. The coordinator contract
+(`gstack-autoplan contract`) states the same rule word for word.
+
 ## Timing
 
 `/autoplan` prints `ESTIMATE: ...` at Phase 0 (`gstack-autoplan-timing
