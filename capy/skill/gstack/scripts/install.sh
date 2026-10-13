@@ -27,7 +27,7 @@ root="${GSTACK_CAPY_ROOT:-$HOME/.local/share/gstack}"
 repo="${GSTACK_CAPY_REPO:-https://github.com/garrytan/gstack.git}"
 echo "gstack-capy-skill: wrapper $GSTACK_CAPY_WRAPPER ($self)"
 
-check=0 skill="" revision="" min_note="" remote_min="" min_wrapper=""
+check=0 skill="" revision="" min_note="" remote_min=""
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -80,20 +80,17 @@ if [ ! -f "$root/setup" ]; then
       || { echo "gstack: fail installer — could not clone $repo; fix: check network access, then $fix_cmd"; exit 1; }
   fi
   remote_min=$(support_get "$(cat "$root/capy/support.env" 2>/dev/null)" GSTACK_MIN_REVISION)
-  min_wrapper=$(support_get "$(cat "$root/capy/support.env" 2>/dev/null)" GSTACK_CAPY_MIN_WRAPPER)
 else
   # The remote's rules: fetch the default branch into FETCH_HEAD (never --depth
   # into an existing checkout), read capy/support.env from it.
   default=$(bounded git -C "$root" ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p' | head -1)
-  remote_min="" min_wrapper="" min_note=""
+  remote_min="" min_note=""
   if [ -n "$default" ] && bounded git -C "$root" fetch --quiet origin "$default" 2>/dev/null; then
     support=$(git -C "$root" show FETCH_HEAD:capy/support.env 2>/dev/null)
     remote_min=$(support_get "$support" GSTACK_MIN_REVISION)
-    min_wrapper=$(support_get "$support" GSTACK_CAPY_MIN_WRAPPER)
   else
     min_note="remote minimum unknown (fetch failed)"
     echo "gstack-capy-skill: $min_note; checking the local install only"
-    min_wrapper=$(support_get "$(cat "$root/capy/support.env" 2>/dev/null)" GSTACK_CAPY_MIN_WRAPPER)
   fi
   installed=$(head -1 "$root/VERSION" 2>/dev/null)
   if [ -n "$remote_min" ] && below "${installed:-0}" "$remote_min"; then
@@ -125,13 +122,6 @@ else
 fi
 
 session="$root/bin/gstack-capy-session"
-if [ -n "$min_wrapper" ] && below "$GSTACK_CAPY_WRAPPER" "$min_wrapper"; then
-  if [ ! -x "$session" ]; then
-    echo "gstack: fail wrapper — Capy skill wrapper $GSTACK_CAPY_WRAPPER is older than this checkout's minimum $min_wrapper and $root has no bin/gstack-capy-session; fix: copy $root/capy/skill/gstack/ over the skill folder (CAPY_WRAPPER_STALE)"
-    exit 1
-  fi
-  echo "gstack-capy-skill: owner action — Drive copy is wrapper $GSTACK_CAPY_WRAPPER, minimum $min_wrapper; copy $root/capy/skill/gstack/ (CAPY_WRAPPER_STALE)"
-fi
 if [ ! -x "$session" ]; then
   echo "gstack: fail installer — checkout at $root (installed $(head -1 "$root/VERSION" 2>/dev/null || echo unknown)) predates bin/gstack-capy-session${min_note:+ and the $min_note}; fix: check network access to $(git -C "$root" remote get-url origin 2>/dev/null || echo "$repo"), then $fix_cmd (it fast-forwards a checkout below the supported minimum)"
   exit 1
