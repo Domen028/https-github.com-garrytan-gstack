@@ -254,3 +254,20 @@ Six reviewer passes (CEO, DX and Eng; native claude-opus-5-5 and outside gpt-6.1
 ## Review record
 
 Autoplan run `ap-20261012235347` (gstack 1.91.95.0, Capy cloud machine, no Claude Code harness; native claude-opus-5-5 and outside gpt-6.1-sol as host subagents; scope `--no-ui --developer-tool`, order ceo,dx,eng, snapshot `7ce72ff6…0f09d9` for all three phases). CEO: 15 + 10 findings (confirmed 1). DX: 30 + 16 (confirmed 0). Eng: 18 + 22 (confirmed 1). Gate rev 1 answered as recorded above; `REOPENED: ceo,eng`. Full results, consensus files and the gate are kept with the run; the amendments above are the accepted outcome.
+
+### Amendment verification (outside voice gpt-6.1-sol, after gate rev 1)
+
+One outside pass checked the gate decisions and amendments against every Critical and High finding in the six results (4 Critical and 53 High by its count of the fences; the gate summary above undercounted). 35 resolved, 1 declined, 21 open or partial; it ranked 15 builder corrections. Sent to the builders as replacements:
+
+- **CD2:** price from a versioned call-plan data file (`price-gate --plan-file`, or base-policy `price_file`) bound to the gate command, head and inputs. No repository command runs before approval, and `--allow-unpriced` is a recorded owner override that never authorizes spend.
+- **CD4 boundary:** published commits are `git rev-list <local> --not --remotes=<remote>`, not a local merge-base. Malformed policy fails closed. Unknown visibility counts as public, and a cached private verdict older than an hour is re-queried before it can downgrade a refusal. P3 promises a local check against accidental publication; hosted CI only detects bypasses after upload.
+- **CD3:** `regate` derives reuse only from a freshly evaluated tree receipt, with per-lane verdicts and stamp-sensitive reruns. A delegated restamp requires a clean caller tree.
+- **A:** the bootstrapper and the full wrapper live at distinct paths with a lock handoff. The verdict is keyed by checkout realpath and HEAD, and its path is carried in `GSTACK_LAUNCH`. It is required only under `GSTACK_CAPY=1`, so other hosts get the local runtime check. Support metadata resolves through `.source-path`.
+- **B-core:** `revise --incorporates <ids>` clears only the named amendments. The UC option b renders both voices' remedies verbatim. One integrated conformance test covers the whole loop.
+
+Declined, with reasons:
+
+- **Fully semantic agreement detection (correction 3).** It cannot be decided mechanically. Rendering both remedies plus `all as-is` leaves the call visible to the owner.
+- **Pinning the upgrade to a qualified release sha (correction 9).** Every gstack main commit is a stamped, CI-green release, so the minimum is the policy lever. The plan no longer claims that a checkout of an old sha rolls back migrations.
+
+PR order: A, then B stacked on A (it reads A's verdict helper), and C independent.
