@@ -725,12 +725,13 @@ describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pi
     verifiedBun(f);
     const fresh = check(f, [], { STUB_BUN_VERSION: '1.3.14' });
     expect(fresh.rows.runtime.status).toBe('FAIL');
-    expect(fresh.rows.runtime.rest).toContain(`bun 1.4.2 found at ${f.home}/.bun/bin (not on PATH)`);
-    expect(fresh.rows.runtime.rest).toContain(`fix: export PATH="${f.home}/.bun/bin:$PATH" or prefix commands with the GSTACK_LAUNCH line`);
+    const home = bashPath(f.home);
+    expect(fresh.rows.runtime.rest).toContain(`bun 1.4.2 found at ${home}/.bun/bin (not on PATH)`);
+    expect(fresh.rows.runtime.rest).toContain(`fix: export PATH="${home}/.bun/bin:$PATH" or prefix commands with the GSTACK_LAUNCH line`);
     expect(fresh.rows.runtime.rest).toContain('(RUNTIME_BELOW_MINIMUM; ');
     const launched = check(f, [], { STUB_BUN_VERSION: '1.3.14', PATH: `${f.home}/.bun/bin${path.delimiter}${f.env.PATH}` });
     expect(launched.rows.runtime.status, launched.out).toBe('PASS');
-    expect(launched.rows.runtime.rest).toContain(`at ${f.home}/.bun/bin/bun`);
+    expect(launched.rows.runtime.rest).toContain(`at ${home}/.bun/bin/bun`);
   });
 
   test('--min-revision: below FAILs with REVISION_BELOW_MINIMUM naming the upgrade command; at or above PASSes; unknown says so and never claims the minimum', () => {
@@ -757,7 +758,7 @@ describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pi
   test('planning-only workflows SKIP a repo test-pin mismatch; test-running workflows and --require keep pins required', () => {
     const f = makeFixture();
     const project = path.join(f.base, 'project');
-    write(path.join(project, '.github/workflows/ci.yml'), 'jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: oven-sh/setup-bun@v2\n        with:\n          bun-version: 1.4.2\n');
+    write(path.join(project, '.bun-version'), '1.4.2\n');
     const planning = check(f, ['--for', 'autoplan', '--project', project], { STUB_BUN_VERSION: '1.4.3' });
     expect(planning.rows.pins.status, planning.out).toBe('SKIP');
     expect(planning.rows.pins.rest).toMatch(/^\(planning-only; repo pins .*1\.4\.2.*, launch bun 1\.4\.3\)$/);
