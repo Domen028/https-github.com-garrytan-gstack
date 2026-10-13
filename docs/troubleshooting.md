@@ -1117,7 +1117,11 @@ fails. The row is `SKIP pins (no bun to evaluate the project pins)` when Bun
 is absent, never silent.
 
 **Fix.** Install the pinned version for this platform (the row names each
-constraint with its source), or change the project's pin.
+constraint with its source), or change the project's pin. On Capy the row's
+fix is the exact bootstrapper command, `bash <skill>/scripts/install.sh`
+(the same command without `--check`): it installs the pinned Bun when the pin
+names a verified version and ends `gstack: ok`, or stops with
+`RUNTIME_PIN_CONFLICT` naming the pin to raise.
 
 <a id="doctor-revision-unmet"></a>
 ### `FAIL revision — installed <version> (requested <ref>) (REVISION_UNMET; ...)`
@@ -1126,21 +1130,25 @@ constraint with its source), or change the project's pin.
 revision (a VERSION string, tag, branch or commit) and the checkout is at
 another. An unmet revision is never `ok`.
 
-**Fix.** Move the checkout: `/gstack-upgrade`, or
+**Fix.** Move the checkout: `<checkout>/bin/gstack-upgrade` (the tip of the default
+branch; `/gstack-upgrade` interactively), or
 `git -C <checkout> fetch origin && git -C <checkout> checkout <ref> && ./setup`.
 `bin/gstack-capy-install --revision <ref>` never moves an existing checkout; it
-reports `gstack: ok <installed> (requested <ref>; run gstack-upgrade to move)`.
+reports `gstack: ok <installed> (requested <ref>; run <checkout>/bin/gstack-upgrade to move)`.
 
 <a id="capy-install-runtime-conflict"></a>
 ### `gstack-capy-install: Bun conflict: gstack needs >=<minimum>, <project> pins <constraint> (RUNTIME_PIN_CONFLICT; ...)`
 
-**Meaning.** The installer upgrades Bun only when gstack's supported minimum
-and the target project's pin agree on a version. Here they do not (for
-example the project pins `bun@1.3.14` exactly), so the installer changed
-nothing and stopped before `./setup`.
+**Meaning.** The installer installs one verified Bun archive: gstack's
+supported minimum, or the project's exact pin when that pin is above the
+minimum and listed in the message's `verified archives:`. Here the two do not
+meet (for example the project pins `bun@1.3.14`, or a version gstack has no
+verified archive for), so the installer changed nothing and stopped before
+`./setup`.
 
-**Fix.** Raise the project's pin to gstack's supported minimum, or install
-gstack on a machine whose Bun the project accepts. `--project <path>` names
+**Fix.** Pin a verified version in the project, upgrade gstack to a release
+that verifies the pinned version, or install gstack on a machine whose Bun the
+project accepts. `--project <path>` names
 the project whose pins apply.
 
 <a id="browser-ensure-failed"></a>
@@ -1169,6 +1177,80 @@ One of them is missing, or the Bun install script's checksum did not match
 or nvm), then re-run `bin/gstack-capy-install`. A checksum mismatch means the
 upstream installer changed: update `GSTACK_BUN_INSTALL_SHA` only after
 reviewing the new script.
+
+<a id="upgrade-refused"></a>
+### `gstack-upgrade: <cause>; nothing was changed; fix: <command> (UPGRADE_REFUSED)`
+
+**Meaning.** `bin/gstack-upgrade` moves a checkout only by fast-forward to the
+tip of its remote default branch. It refused before changing anything: the
+directory is not a gstack checkout, HEAD is detached or on another branch (a
+pin), a tracked file is modified, a local commit is not on the remote branch,
+the incoming release's Bun floor is above the Bun on PATH, or another updater
+holds `<state root>/.setup-lock`. It never stashes, resets or discards.
+
+**Fix.** Resolve the named cause with the printed command (commit or move the
+listed changes, check out the default branch, move local commits to another
+branch), then re-run `bin/gstack-upgrade`. A reinstall that failed after the
+fast-forward is completed by the next run (`reinstall pending from <version>`).
+
+<a id="upgrade-fetch-failed"></a>
+### `gstack-upgrade: could not reach origin (...) (UPGRADE_FETCH_FAILED)`
+
+**Meaning.** The remote default branch could not be listed or fetched (offline,
+proxy, credentials), so `--check` cannot say whether the checkout is current.
+It never reports `current` without the fetch.
+
+**Fix.** Check network access to the checkout's origin
+(`git -C <checkout> remote -v`), then re-run.
+
+<a id="revision-below-minimum"></a>
+### `gstack: fail revision — installed <v> is below the supported minimum <m> (<cause>); fix: ... (REVISION_BELOW_MINIMUM)`
+
+**Meaning.** `capy/support.env` on the remote default branch declares the
+oldest revision whose installer, trailer and fix lines are honest
+(`GSTACK_MIN_REVISION`), and this checkout is older. The Capy skill
+bootstrapper reads it from `FETCH_HEAD`, so even a checkout that predates the
+file learns it. `--check` only reports (`fast-forward available`); install
+mode fast-forwards a clean, unpinned checkout, reinstalls and rechecks under
+one lock. The cause names why nothing moved: `pinned by --revision`, `pinned:
+HEAD is detached`, `tracked files changed: <files>`, `diverged: ...` or
+`auto-upgrade disabled` (`GSTACK_CAPY_AUTO_UPGRADE=0`). `gstack-doctor --check
+--min-revision <m>` fails the revision row the same way.
+
+**Fix.** Run the fix clause: the bootstrapper without `--check`, or
+`<checkout>/bin/gstack-upgrade`. For a pin, drop `--revision` or pin a
+revision at or above the minimum. An interrupted install after the
+fast-forward leaves the trailer `fail`; the next install run completes it.
+
+<a id="capy-wrapper-stale"></a>
+### `gstack-capy-skill: owner action — Drive copy is wrapper <n>, minimum <m>; copy <root>/capy/skill/gstack/ (CAPY_WRAPPER_STALE)`
+
+**Meaning.** The Capy skill folder that ran (the bootstrapper's
+`GSTACK_CAPY_WRAPPER`) is older than the checkout's `GSTACK_CAPY_MIN_WRAPPER`.
+The run continues through the checkout's own wrapper (`bin/gstack-capy-session`);
+only a checkout with no such wrapper refuses (`gstack: fail wrapper`).
+
+**Fix.** The owner copies `<checkout>/capy/skill/gstack/` over the skill folder
+(on Capy, the user-scope Drive `skills/gstack/`). Agents never write it.
+
+<a id="install-unverified"></a>
+### `INSTALL: fail verdict — <detail>; fix: ... (INSTALL_UNVERIFIED)`
+
+**Meaning.** On a Capy machine (`GSTACK_CAPY=1`, set by the `GSTACK_LAUNCH`
+line), an unattended or spawned workflow starts only with a passing install
+verdict (`<state root>/install-verdicts/<sha256 of the checkout path>.json`,
+named as `GSTACK_INSTALL_VERDICT`) for this checkout, its current HEAD and a
+workflow at least as wide as the one starting: a verdict for `--for autoplan`
+does not cover `qa`'s browser, and a planning-only pins SKIP does not cover a
+workflow that runs the repo's tests. `gstack-skill-start` printed this row and
+`GSTACK_RESULT: skill=<s> status=refused run=-`, exit 3. The same start refuses
+an unattended run whose Bun on PATH is below the supported minimum
+(`INSTALL: fail runtime ... (RUNTIME_BELOW_MINIMUM)`) on any host.
+
+**Fix.** Run the Capy skill installer with `--for <workflow>` on this machine
+and launch with the `GSTACK_LAUNCH` line it prints.
+`GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` admits anyway (printed as
+`INSTALL_VERDICT: overridden`); record it as a deviation.
 
 ---
 
@@ -2464,3 +2546,162 @@ it failed, `git checkout -- . && ./setup` in the checkout discards local edits
 and rewrites every file. Use your install directory if it is not
 `~/.claude/skills/gstack` (`./setup --status` prints it). Expected result: the
 next `./setup` prints no CRLF warning.
+
+## Field wave lane CD: pregate guards, regate, sealed output
+
+<a id="pregate-guard-failed"></a>
+### `PREGATE_GUARD_FAILED`
+
+**Meaning.** A guard from the base branch's `.gstack/pregate.json` (a repo
+command such as a serial-test manifest check or a CLI golden test) matched a
+file the branch touched and exited non-zero. Guards cover what the import graph
+cannot see: manifests, subprocess goldens, registries. They cannot be
+downgraded to warn.
+
+**Fix.** Read the guard's lines in the table (exit code, output tail, log path)
+and do what its `fix` line says, commit, then rerun
+`gstack-pregate run --allow-repo-commands`. A lane reports done only after this
+passes and carries the `PREGATE:` line in its handoff.
+
+<a id="migration-collision"></a>
+### `MIGRATION_COLLISION`
+
+**Meaning.** `gstack-pregate regate` read `migrations` (`dir`, `id`) from the
+base branch's `.gstack/ship-policy.json` and found a migration number this
+branch adds that the base branch already has, or that another open PR adds
+under a different file name. Both PRs would pass their own gates and the
+second merge would break the schema order. When the open-PR lookup cannot
+finish (`gh` missing or failing, 1000 open PRs, a PR whose file list GitHub
+truncates and cannot be fetched in full) the line says
+`MIGRATION_COLLISION: unknown (...)` and `REGATE: not-needed` is withheld.
+
+**Fix.** Take the next free migration number when this PR is next to merge,
+rename the file and its id, commit, then rerun
+`gstack-pregate regate --against <gated-head> --bundle <file>`. The renamed
+migration is a code change, so the gate reruns.
+
+<a id="sealed-output-refused"></a>
+### `SEALED_OUTPUT_REFUSED`
+
+**Meaning.** The repo declares a `sealed` policy in `.gstack/pregate.json`
+(base branch ∪ the pushed commit) and a commit this push publishes adds a
+sealed path or transcript (binary, empty and later-deleted files included), or
+adds a line with a sealed-answer marker, a seed or a local home path, and the
+destination is public or its visibility is unknown (a new or unreadable
+repository counts as public). An unreadable or malformed sealed policy refuses
+too. The managed pre-push hook and `gstack-pregate sealed` print one line per
+finding: rule, `file[:line]`, commit. They never print the matched text.
+
+**Fix.** Remove the output from every published commit before the branch
+reaches the public repository (a later commit that deletes it still publishes
+it). A reviewed false positive gets one line in the base branch's
+`.gstack/sealed-allow.tsv`: `rule<TAB>path<TAB>sha<TAB>reason`. A private
+destination sets `"visibility": "private"` under `sealed` in the base branch's
+`.gstack/pregate.json`. Capy's pull-request tool may not run local hooks, so
+run `gstack-pregate sealed` yourself before any push or PR creation.
+
+<a id="eval-gate-unpriced"></a>
+### `EVAL_GATE_UNPRICED`
+
+**Meaning.** `gstack-eval-plan price-gate` found no call-plan file for the paid
+gate: no `--plan-file`, no `price_file` in the base branch's
+`.gstack/pregate.json`, or the file has no `GSTACK_EVAL_CALLS` lines. (A
+declared `price_file` missing from HEAD is `EVAL_PLAN_STALE`, not this.) A gate whose cost is unknown cannot
+be approved as priced.
+
+**Fix.** The consuming repo commits a call-plan file in the format of
+[docs/eval-calls.md](eval-calls.md) and names it in `price_file`. Only when the
+owner accepts an unpriced gate, rerun with `--allow-unpriced "<reason>"`: it
+exits 0, prints `GATE_UNPRICED_OVERRIDE: <reason> (owner-authorized override;
+not authorization to spend)` and records the reason in the receipt.
+
+<a id="eval-gate-over-cap"></a>
+### `EVAL_GATE_OVER_CAP`
+
+**Meaning.** The gate's priced total is above `--cap-usd`, or one call's
+reservation (its share of the input plus `max_out_tokens`) is above `--cap-usd`,
+or above `--smoke-cap-usd` for a `scope=smoke` row. A provider refuses a
+reservation the cap cannot hold, so the run would fail after spending.
+
+**Fix.** Cut questions, arms or `max_out_tokens` in the call plan and
+regenerate it, or raise the cap deliberately with the owner. Never split calls
+to slip under it.
+
+<a id="eval-plan-stale"></a>
+### `EVAL_PLAN_STALE`
+
+**Meaning.** The call-plan file prices something other than what is being
+approved: its `GSTACK_EVAL_GATE` command is not the exact `--gate` string, its
+`GSTACK_EVAL_HEAD` is behind HEAD with files other than the plan file changed
+since, an input's sha256 at HEAD differs from its `GSTACK_EVAL_INPUT` line, or
+the base policy's `price_file` is not in the HEAD commit. `--allow-unpriced`
+does not override it.
+
+**Fix.** Regenerate the plan file at HEAD for the exact gate command (the
+repo's own producer), commit it, and rerun `gstack-eval-plan price-gate`.
+
+<a id="plan-sections-invalid"></a>
+### `PLAN_SECTIONS_INVALID`
+
+**Meaning.** `gstack-autoplan next` reviews only the plan's `## Implementation
+plan` section and keeps the `## Review record` private, so the plan needs
+exactly one non-empty Implementation plan section followed by one Review record
+section, both outside code fences. A plan with neither heading is wrapped
+automatically; one heading alone, duplicate or reversed headings, or an empty
+section is refused before anything is written. The error names the problem.
+
+**Fix.** Add the missing heading, or rerun the first `next` with `--scaffold`:
+it writes `<out>/plan-source.md` with the missing heading added, reviews that
+copy and prints `SCAFFOLDED:`. Your plan file is never edited. Duplicate,
+reversed or empty sections are ambiguous and must be fixed by hand.
+
+<a id="plan-amend-pending"></a>
+### `PLAN_AMEND_PENDING`
+
+**Meaning.** The owner accepted at least one plan change at the gate (each was
+printed as an `APPLY:` line), and the run's plan has not absorbed it, so a rerun
+would review the old plan. `next` refuses until every accepted change is
+incorporated or withdrawn; `export` refuses a `complete` run with one pending.
+
+**Fix.** Edit the plan, then `gstack-autoplan revise --out <dir> --plan <file>
+--incorporates <decision id,...>`. `revise` binds each named id to the old and
+new Implementation-plan hashes and refuses when the Implementation plan did
+not change; an id you do not name stays pending. To drop an accepted change
+instead, `gstack-autoplan revise --out <dir> --withdraw <decision id>` records
+the withdrawal in the journal.
+
+<a id="amendment-unknown"></a>
+### `AMENDMENT_UNKNOWN`
+
+**Meaning.** `gstack-autoplan revise --incorporates` or `--withdraw` named a
+decision id that is not a pending amendment: the owner never accepted it as a
+plan change at the gate (for example a gate answered before gstack recorded
+amendments), or it was already incorporated or withdrawn. Nothing was changed.
+
+**Fix.** Name only the ids the refusal lists after `pending:`. With none
+pending, revise without `--incorporates`:
+`gstack-autoplan revise --out <dir> --plan <file>`.
+
+<a id="gstack-version-changed"></a>
+### `GSTACK_VERSION_CHANGED`
+
+**Meaning.** `run.json.gstack_version` names a different gstack than the one
+running. For an older run (or one written before the field existed) this is a
+notice: the command journals `gstack_version_changed`, runs the forward
+migrations (for example rewriting decision ids minted before 1.91.95) and
+continues. For a run written by a newer gstack the command refuses, because an
+older runner cannot know the newer state.
+
+**Fix.** Nothing for the notice. For the refusal, upgrade gstack
+(`bin/gstack-upgrade`) on this machine and rerun the command.
+
+<a id="artifact-gate-unsettled"></a>
+### `ARTIFACT_GATE_UNSETTLED`
+
+**Meaning.** `gstack-artifact validate` found a run whose status is `complete`
+while an approval item of its last gate revision is still pending, or an
+accepted plan change (`run.json.amendments`) is still pending. The runner never
+writes that state; it comes from a hand edit or an older runner.
+
+**Fix.** Answer the gate with `gstack-autoplan answer` until no approval is
+pending, and `revise --incorporates` or `--withdraw` each pending amendment.

@@ -13,7 +13,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
-import { REALITY_ROWS, REALITY_SCOPES, TIER1_ROW_IDS, checkRealityRows, parseRealityLines, parseScopes, renderIncidentTable, renderRows, requiredRows } from '../lib/plan-reality';
+import { REALITY_ROWS, REALITY_SCOPES, TIER1_ROW_IDS, checkPlanReality, checkRealityRows, parseRealityLines, parseScopes, renderIncidentTable, renderRows, requiredRows } from '../lib/plan-reality';
+import { extractHeading } from '../lib/autoplan-prompts';
 import { RESULT_CODES } from '../lib/result-codes';
 import { generatePlanRealityRows } from '../scripts/resolvers/plan-reality';
 import type { TemplateContext } from '../scripts/resolvers/types';
@@ -175,6 +176,8 @@ describe('gstack-plan-reality bin', () => {
     const parsed = JSON.parse(unreceipted.out);
     expect(parsed.unreceipted).toEqual(['premise-table']);
     expect(unreceipted.err).toContain('(REALITY_RECEIPT_MISSING)');
+    const unreceiptedText = run(['check', '--phase', 'ceo', '-'], `${partial}\n${FIXTURE.rows['premise-table']!.decoy}`);
+    expect(unreceiptedText.out).toMatch(/^PLAN_REALITY: phase=ceo .*\bunreceipted=premise-table\b.* verdict=repair$/m);
     expect(run(['check', '--phase', 'ceo', path.join(tmp, 'absent.md')]).code).toBe(EXIT.fail);
     fs.rmSync(tmp, { recursive: true, force: true });
   });
@@ -231,5 +234,80 @@ describe('rendered templates carry the contract', () => {
     for (const code of ['REALITY_ROW_MISSING', 'REALITY_RECEIPT_MISSING'] as const) {
       expect(doc).toContain(`<a id="${RESULT_CODES[code].anchor}"></a>`);
     }
+  });
+});
+
+describe('field wave item 12: a receipt per measured number, the rule text for a rule claim', () => {
+  const others = (id: string) => Object.entries(FIXTURE.rows).filter(([k]) => k !== id).map(([, r]) => r.positive).join('\n');
+  const FIVE = 'REALITY: numbers pass p50 120ms, p95 340ms, 13% faster, 28k tokens, cost $41 [measured: test/bench.ts:10]';
+
+  test('five measured numbers sharing one receipt leave four unreceipted, each printed with its clause', () => {
+    const r = checkRealityRows(`${others('numbers')}\n${FIVE}`, { phase: 'eng', sessionKind: 'unattended' });
+    expect(r.missing).toEqual([]);
+    expect(r.unreceipted).toEqual([]);
+    expect(r.unreceipted_numbers).toEqual(['p50 120ms', 'p95 340ms', '13% faster', '28k tokens']);
+    expect(r.numberLines).toEqual(['NUMBER_UNRECEIPTED: p50 120ms', 'NUMBER_UNRECEIPTED: p95 340ms', 'NUMBER_UNRECEIPTED: 13% faster', 'NUMBER_UNRECEIPTED: 28k tokens']);
+    expect(r.verdict).toBe('incomplete');
+    expect(r.line).toContain(' unreceipted_numbers=4 ');
+    expect(checkRealityRows(`${others('numbers')}\n${FIVE}`, { phase: 'eng' }).verdict).toBe('repair');
+  });
+
+  test('each clause with its own receipt (file:line, script path or a command in backticks) passes; unmeasured counts, versions and ids need none', () => {
+    const own = 'REALITY: numbers pass p95 340ms lib/x.ts:4, 13% faster `bun run bench --json`, 28k tokens scripts/count-tokens.ts, recall 0.82 vs 0.79 on gstack 1.91.95.0 per F2 and #3160 [estimated]';
+    const r = checkRealityRows(`${others('numbers')}\n${own}`, { phase: 'eng' });
+    expect(r.unreceipted_numbers).toEqual([]);
+    expect(r.verdict).toBe('complete');
+  });
+
+  test('a rule claim without the rule text is unquoted; the quoted rule or a file:line link to it passes', () => {
+    const bare = 'REALITY: binding-decisions pass the decision rule was written first 91bbd9e';
+    const r = checkRealityRows(`${others('binding-decisions')}\n${bare}`, { phase: 'eng', sessionKind: 'unattended' });
+    expect(r.unreceipted).toEqual([]);
+    expect(r.unquoted).toEqual([bare]);
+    expect(r.line).toContain(' unquoted=1 ');
+    expect(r.verdict).toBe('incomplete');
+    const quoted = 'REALITY: binding-decisions pass the decision rule was written first: "stop if recall drops below the base on any bucket" 91bbd9e';
+    expect(checkRealityRows(`${others('binding-decisions')}\n${quoted}`, { phase: 'eng' }).verdict).toBe('complete');
+    const linked = 'REALITY: binding-decisions pass the decision rule was written first, see docs/plan.md:4';
+    expect(checkRealityRows(`${others('binding-decisions')}\n${linked}`, { phase: 'eng' }).unquoted).toEqual([]);
+  });
+
+  test('receipts on dot paths count; a sha receipt needs a hex letter or a commit/backtick context', () => {
+    expect(parseRealityLines('REALITY: pr-count pass one PR .gstack/ship-policy.json:1')[0]!.receipt).toBe('.gstack/ship-policy.json:1');
+    expect(parseRealityLines('REALITY: pr-count pass ci lane .github/workflows/ci.yml:12-20')[0]!.receipt).toBe('.github/workflows/ci.yml:12-20');
+    expect(parseRealityLines('REALITY: numbers pass run took 20261012 cycles')[0]!.receipt).toBeNull();
+    expect(parseRealityLines('REALITY: already-done pass base clean at commit 1234567')[0]!.receipt).toBe('commit 1234567');
+    expect(parseRealityLines('REALITY: already-done pass base clean at `7654321` today')[0]!.receipt).toBe('`7654321`');
+  });
+
+  test('bin: NUMBER_UNRECEIPTED lines follow the PLAN_REALITY line and the verdict exits 1 with a fix', () => {
+    const r = run(['check', '--phase', 'eng', '-', '--session-kind', 'unattended'], `${others('numbers')}\n${FIVE}`);
+    expect(r.code).toBe(EXIT.fail);
+    expect(r.out.split('\n').filter(Boolean)).toEqual([
+      expect.stringMatching(/^PLAN_REALITY: phase=eng rows=7\/7 missing=none unreceipted_numbers=4 .*verdict=incomplete$/),
+      'NUMBER_UNRECEIPTED: p50 120ms', 'NUMBER_UNRECEIPTED: p95 340ms', 'NUMBER_UNRECEIPTED: 13% faster', 'NUMBER_UNRECEIPTED: 28k tokens',
+    ]);
+    expect(r.err).toContain('(REALITY_RECEIPT_MISSING)');
+    expect(r.err).toContain('fix:');
+  });
+
+  test('checkPlanReality(planText): plan prose gets the same number and rule checks, pure and session-kind mapped', () => {
+    const plan = 'Cold install measured 32.5 s; the warm rerun takes 13 s (bin/gstack-capy-install:91).\n```\nlatency 900 ms in a fenced example\n```\nThe decision rule was written first.\nThe preregistered rule is below.\n> stop when recall drops below the base\n';
+    const r = checkPlanReality(plan, { sessionKind: 'unattended' });
+    expect(r.unreceipted_numbers).toEqual(['Cold install measured 32.5 s']);
+    expect(r.unquoted).toEqual(['The decision rule was written first.']);
+    expect(r.verdict).toBe('incomplete');
+    expect(r.line).toBe('PLAN_REALITY: scope=plan unreceipted_numbers=1 unquoted=1 verdict=incomplete');
+    expect(r.numberLines).toEqual(['NUMBER_UNRECEIPTED: Cold install measured 32.5 s']);
+    expect(checkPlanReality('Add a retry with a 30 s cap (lib/worker.ts:12).\n').line).toBe('PLAN_REALITY: scope=plan unreceipted_numbers=0 unquoted=0 verdict=complete');
+    expect(checkPlanReality(plan).verdict).toBe('repair');
+  });
+
+  test('false-positive bound: the field-wave plan itself raises only a small, pinned count', () => {
+    const text = fs.readFileSync(path.join(ROOT, 'docs', 'designs', 'GSTACK_FIELD_WAVE_2026_10_12.md'), 'utf8');
+    const r = checkPlanReality(extractHeading(text, 'Implementation plan')!);
+    expect(r.unquoted).toEqual([]);
+    expect(r.unreceipted_numbers.length).toBeGreaterThan(0);
+    expect(r.unreceipted_numbers.length).toBeLessThanOrEqual(6);
   });
 });

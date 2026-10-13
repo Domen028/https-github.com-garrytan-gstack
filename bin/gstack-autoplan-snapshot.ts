@@ -20,13 +20,13 @@ function dxTermsFor(content: string) {
   return { threshold: 2, matches, matchCount, dxRequiredByTerms: matchCount >= 2 };
 }
 
-/** Byte-bound scope evidence; semantic product/user triggers can only enable DX. */
+/** Byte-bound scope evidence; semantic product/user triggers can only enable DX. UI evidence (lib/autoplan-scope.ts) loads only here, so every other command still runs from a lone copy of this file. */
 export function detectDxScope(activePlan: string, developerTool = false, agentPrimary = false) {
   const source = realpathSync(activePlan);
   const content = extractImplementationPlan(readFileSync(source, 'utf8'));
   const terms = dxTermsFor(content);
   return { activePlan: source, sha256: sha256(content), ...terms, developerTool, agentPrimary,
-    dxRequired: terms.dxRequiredByTerms || developerTool || agentPrimary };
+    dxRequired: terms.dxRequiredByTerms || developerTool || agentPrimary, ...(require('../lib/autoplan-scope') as typeof import('../lib/autoplan-scope')).detectUiScope(content) };
 }
 
 // The native dispatch payload is assembled from the same immutable bytes as
@@ -66,7 +66,8 @@ reviewing this plan. You have NOT seen any prior review. Evaluate:
 For each finding: what's wrong, severity, and the fix.`
 };
 
-function implementationBounds(plan: string) {
+/** The section headings outside code fences, in order (the runner's PLAN_SECTIONS_INVALID diagnosis reads these). */
+export function sectionHeadings(plan: string) {
   const boundaries: Array<{ name: string; start: number; end: number }> = [];
   let offset = 0;
   let fence: { char: string; length: number } | null = null;
@@ -86,6 +87,11 @@ function implementationBounds(plan: string) {
     }
     offset += raw.length;
   }
+  return boundaries;
+}
+
+function implementationBounds(plan: string) {
+  const boundaries = sectionHeadings(plan);
   if (boundaries.length !== 2 || boundaries[0]!.name !== 'Implementation plan' || boundaries[1]!.name !== 'Review record') {
     throw new Error('Expected one Implementation plan section followed by one Review record section outside Markdown code/quotes');
   }
@@ -149,7 +155,7 @@ export function acceptedBlocks(text: string): Map<string, AcceptedBlock> {
 
 // Marker lines belong to the author's retention record, not blind review data.
 // Keep every requirement-body byte, including line endings and literal examples.
-function implementationForReview(source: string): string {
+export function implementationForReview(source: string): string {
   let result = ''; let offset = 0;
   for (const block of acceptedBlocks(source).values()) {
     if (block.none) throw new Error('No-change record does not belong in Implementation plan');
@@ -411,7 +417,9 @@ export function initializePlan(sourcePlan: string, activePlan: string, restorePa
     if (!text.trim() || !Buffer.from(text).equals(original)) throw new Error('Initialization source must be nonempty UTF-8 text');
     let plan = text;
     try { extractImplementationPlan(plan); }
-    catch {
+    catch (error) {
+      // Only a plan with no section headings is wrapped; a present-but-wrong or empty section reports its own error.
+      if (sectionHeadings(text).length) throw error;
       plan = `## Implementation plan\n${text}${text.endsWith('\n') ? '' : '\n'}## Review record\n`;
       // Partial/duplicate boundaries and unclosed fences remain errors, not raw-plan fallbacks.
       extractImplementationPlan(plan);

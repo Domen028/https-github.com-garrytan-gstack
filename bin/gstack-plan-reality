@@ -20,7 +20,9 @@ const HELP = `gstack-plan-reality — reality rows for plan reviews
 
 Row line: \`${REALITY_LINE_SHAPE}\` (receipt: path:line, path:line-line or a commit sha).
 Scopes: ${REALITY_SCOPES.filter(s => s !== 'always').join(', ')}. Session kind unattended → verdict=incomplete; else verdict=repair.
-Prints \`PLAN_REALITY: phase=<p> rows=<n>/<m> missing=<ids|none> [unverified=<n>] verdict=complete|incomplete|repair\`.
+Prints \`PLAN_REALITY: phase=<p> rows=<n>/<m> missing=<ids|none> [unreceipted=<ids>] [unreceipted_numbers=<n>] [unquoted=<n>] [unverified=<n>] verdict=complete|incomplete|repair\`,
+then one \`NUMBER_UNRECEIPTED: <clause>\` per measured number (unit or measured/costs/took) without its own receipt.
+A line claiming a decision rule must quote it (\`"..."\`, a fenced or > block after it) or link it (file:line).
 ${exitTableHelp()}`;
 
 function flag(args: string[], name: string): string | undefined {
@@ -55,10 +57,12 @@ function main(argv: string[]): number {
     const sessionKind = flag(rest, '--session-kind') ?? process.env.GSTACK_SESSION_KIND;
     const result = checkRealityRows(text, { phase, scopes, sessionKind });
     if (json) process.stdout.write(JSON.stringify(result) + '\n');
-    else process.stdout.write(result.line + '\n');
+    else process.stdout.write([result.line, ...result.numberLines].join('\n') + '\n');
     for (const id of result.unknownRows) process.stderr.write(`gstack-plan-reality: ${file}: REALITY row ${JSON.stringify(id)} is not a known row; it was ignored\n`);
     if (result.missing.length) process.stderr.write(resultLine('gstack-plan-reality check', 'REALITY_ROW_MISSING', `phase ${phase}: ${result.missing.join(', ')}`) + '\n');
     if (result.unreceipted.length) process.stderr.write(resultLine('gstack-plan-reality check', 'REALITY_RECEIPT_MISSING', `phase ${phase}: ${result.unreceipted.join(', ')}`) + '\n');
+    if (result.unreceipted_numbers.length) process.stderr.write(resultLine('gstack-plan-reality check', 'REALITY_RECEIPT_MISSING', `phase ${phase}: ${result.unreceipted_numbers.length} measured number(s) share or lack a receipt; give each clause its own file:line, script path or command`) + '\n');
+    for (const claim of result.unquoted) process.stderr.write(resultLine('gstack-plan-reality check', 'REALITY_RECEIPT_MISSING', `phase ${phase}: a decision rule is claimed without its text; quote it or link its file:line: ${claim}`) + '\n');
     return result.verdict === 'complete' ? EXIT.ok : EXIT.fail;
   }
   return usage(`unknown command ${cmd}`);

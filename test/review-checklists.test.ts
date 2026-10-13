@@ -89,20 +89,23 @@ describe('review checklists (plan B4)', () => {
   });
 
   test('the runner loads the checklist in light mode, keeps always sections, and falls back to the deep section when scope is uncertain', () => {
-    const detectedNoUi: Scope = { ui: false, dx: true, ui_matches: 0, dx_matches: 4, developer_tool: false, agent_primary: false, source: 'detected' };
+    const detectedNoUi: Scope = { ui: false, dx: true, ui_matches: 0, dx_matches: 4, developer_tool: false, agent_primary: false, sources: { ui: 'detected', dx: 'detected' } };
     const light = sectionLoadFor('ceo', detectedNoUi, 'light');
     expect(light.checklist).toContain('## Checklist (runner profile)');
     expect(light.loaded).toEqual(['review-sections']);
     expect(light.skipped).toEqual([]);
-    expect(light.line).toBe('Skipped sections: none (scope: ui=no,dx=yes,source=detected)');
+    expect(light.line).toBe('Skipped sections: none (scope: ui=no,dx=yes,source=ui:detected,dx:detected)');
     const full = sectionLoadFor('ceo', detectedNoUi, 'full');
     expect(full.checklist).toBeNull();
     expect(full.loaded).toEqual(['review-sections']);
     // a scoped section is skipped only when its scope is off by flags or detected with zero matches; weak detection keeps it
     expect(sectionScopeOff('ui', detectedNoUi)).toBe(true);
     expect(sectionScopeOff('ui', { ...detectedNoUi, ui_matches: 1 })).toBe(false);
-    expect(sectionScopeOff('ui', { ...detectedNoUi, source: 'flags' })).toBe(true);
-    expect(sectionScopeOff('ui', { ...detectedNoUi, source: 'flags', ui: true })).toBe(false);
+    expect(sectionScopeOff('ui', { ...detectedNoUi, sources: { ui: 'flag', dx: 'detected' } })).toBe(true);
+    expect(sectionScopeOff('ui', { ...detectedNoUi, sources: { ui: 'flag', dx: 'detected' }, ui: true })).toBe(false);
+    expect(sectionScopeOff('ui', { ...detectedNoUi, ui_matches: 1, sources: { ui: 'marker', dx: 'detected' } })).toBe(true);
+    expect(sectionScopeOff('dx', { ...detectedNoUi, dx: false, dx_matches: 2, sources: { ui: 'detected', dx: 'flag' } })).toBe(true);
+    expect(sectionScopeOff('ui', { ...detectedNoUi, sources: undefined as never, source: 'flags', ui_matches: 1 })).toBe(true);
     expect(sectionScopeOff('dx', { ...detectedNoUi, dx: false, dx_matches: 0 })).toBe(true);
     expect(sectionScopeOff('dx', { ...detectedNoUi, dx: false, dx_matches: 2 })).toBe(false);
     for (const s of ['always', 'db', 'perf', 'security', 'incident'] as const) expect(sectionScopeOff(s, { ...detectedNoUi, ui: false, dx: false, dx_matches: 0 })).toBe(false);

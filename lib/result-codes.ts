@@ -112,7 +112,7 @@ export const RESULT_CODES = {
   GATE_REPLY_UNPARSED: {
     anchor: 'gate-reply-unparsed',
     summary: 'part of the reply matched no gate item or option, so nothing was applied',
-    fix: 'reply with `all`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
+    fix: 'reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
   },
   // PR A (multi-agent wave): gstack-doctor --check, gstack-capy-install, gstack-browser-ensure.
   COMPONENT_MISSING: {
@@ -128,7 +128,7 @@ export const RESULT_CODES = {
   PROJECT_PIN_MISMATCH: {
     anchor: 'doctor-project-pin-mismatch',
     summary: 'the running Bun or Node is outside a version the target project pins (package.json engines, .tool-versions, .nvmrc, .bun-version or a CI workflow)',
-    fix: 'install the pinned version for this platform, or change the pin in the project',
+    fix: 'install the pinned version for this platform (on Capy: run the gstack skill\'s `scripts/install.sh` without --check), or change the pin in the project',
   },
   REVISION_UNMET: {
     anchor: 'doctor-revision-unmet',
@@ -465,6 +465,87 @@ export const RESULT_CODES = {
     anchor: 'draft-direction-unresolved',
     summary: 'a `draft direction stands until the owner decides` line names a decision that is still pending',
     fix: 'answer the gate (`gstack-autoplan answer`) before closing; the close rewrites only decided lines',
+  },
+  PREGATE_GUARD_FAILED: {
+    anchor: 'pregate-guard-failed',
+    summary: 'a repo guard from .gstack/pregate.json whose files the branch touched exited non-zero',
+    fix: 'run the guard command printed in the table, apply the guard\'s fix line, commit, then rerun `gstack-pregate run --allow-repo-commands`',
+  },
+  MIGRATION_COLLISION: {
+    anchor: 'migration-collision',
+    summary: 'a migration number this branch adds is already used on the base branch or by another open PR',
+    fix: 'take the next free migration number when this PR is next to merge (rename the file and its id), commit, then rerun `gstack-pregate regate --against <gated-head> --bundle <file>`',
+  },
+  SEALED_OUTPUT_REFUSED: {
+    anchor: 'sealed-output-refused',
+    summary: 'a push or PR would publish sealed or eval output (a sealed path, a transcript, a quoted answer, a seed or a local home path) to a public or unknown destination, or the sealed policy is unreadable',
+    fix: 'remove it from every published commit, or add one reviewed `rule<TAB>path<TAB>sha<TAB>reason` line to the base branch\'s .gstack/sealed-allow.tsv; a private destination sets sealed.visibility "private" in the base branch\'s .gstack/pregate.json',
+  },
+  EVAL_GATE_UNPRICED: {
+    anchor: 'eval-gate-unpriced',
+    summary: 'the paid gate has no call-plan file (no `--plan-file`, no base-policy `price_file`) or the file has no GSTACK_EVAL_CALLS lines, so its cost is unknown',
+    fix: 'have the repo commit a call-plan file (docs/eval-calls.md) and set `price_file` in .gstack/pregate.json, or pass `--allow-unpriced "<reason>"` only on the owner\'s say-so',
+  },
+  EVAL_GATE_OVER_CAP: {
+    anchor: 'eval-gate-over-cap',
+    summary: 'the paid gate\'s priced total, or one call\'s reservation (input plus maximum output), is above the cap',
+    fix: 'cut questions, arms or `max_out_tokens` in the call plan, or raise `--cap-usd` / `--smoke-cap-usd` deliberately with the owner; never split calls to slip under it',
+  },
+  EVAL_PLAN_STALE: {
+    anchor: 'eval-plan-stale',
+    summary: 'the call-plan file\'s binding does not match (a different gate command, a head behind HEAD, an input whose sha256 at HEAD differs) or the declared price_file is not in HEAD',
+    fix: 'regenerate the call-plan file at HEAD for the exact gate command you are approving, commit it, and rerun `gstack-eval-plan price-gate`',
+  },
+  PLAN_SECTIONS_INVALID: {
+    anchor: 'plan-sections-invalid',
+    summary: 'the plan does not have exactly one non-empty `## Implementation plan` section followed by one `## Review record` section',
+    fix: 'add the missing heading, or rerun the first `gstack-autoplan next` with --scaffold to review a scaffolded copy (your plan file is never edited); duplicate, reversed or empty sections are fixed by hand',
+  },
+  PLAN_AMEND_PENDING: {
+    anchor: 'plan-amend-pending',
+    summary: 'the owner accepted plan changes at the gate that the plan has not absorbed yet',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`',
+  },
+  AMENDMENT_UNKNOWN: {
+    anchor: 'amendment-unknown',
+    summary: '`revise --incorporates` or `--withdraw` named a decision that is not a pending amendment (never accepted as a plan change, or already incorporated or withdrawn)',
+    fix: 'name only the ids the refusal lists after `pending:`; with none pending, drop --incorporates and run `gstack-autoplan revise --out <dir> --plan <file>`',
+  },
+  GSTACK_VERSION_CHANGED: {
+    anchor: 'gstack-version-changed',
+    summary: 'the run directory was written by a different gstack version',
+    fix: 'nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade',
+  },
+  ARTIFACT_GATE_UNSETTLED: {
+    anchor: 'artifact-gate-unsettled',
+    summary: 'the run says complete while an approval item of its last gate revision or an accepted plan amendment is still pending',
+    fix: 'answer the gate until every approval settles and revise (or withdraw) every accepted change with `gstack-autoplan`; never hand-edit status',
+  },
+  // Field wave lane A (items 1-4): gstack-upgrade, the Capy skill bootstrapper, install admission.
+  UPGRADE_REFUSED: {
+    anchor: 'upgrade-refused',
+    summary: 'bin/gstack-upgrade changed nothing: the checkout is dirty, diverged, pinned (detached or off the remote default branch), not a gstack checkout, or the incoming release holds',
+    fix: 'resolve the named cause (commit or move the listed changes, check out the default branch), then re-run bin/gstack-upgrade; it never stashes or resets',
+  },
+  UPGRADE_FETCH_FAILED: {
+    anchor: 'upgrade-fetch-failed',
+    summary: 'bin/gstack-upgrade could not fetch the remote default branch, so it cannot tell whether the checkout is current',
+    fix: 'check network access to the checkout\'s origin (git -C <checkout> remote -v), then re-run bin/gstack-upgrade',
+  },
+  REVISION_BELOW_MINIMUM: {
+    anchor: 'revision-below-minimum',
+    summary: 'the installed gstack revision is below the supported minimum declared in capy/support.env on the remote default branch',
+    fix: 'run the Capy skill installer without --check (it fast-forwards a clean, unpinned checkout), or bin/gstack-upgrade; a pinned, dirty or diverged checkout is named in the row',
+  },
+  CAPY_WRAPPER_STALE: {
+    anchor: 'capy-wrapper-stale',
+    summary: 'the Capy skill copy that ran is older than the checkout\'s GSTACK_CAPY_MIN_WRAPPER',
+    fix: 'ask the owner to copy <checkout>/capy/skill/gstack/ over the Drive skill folder; the checkout wrapper keeps working meanwhile',
+  },
+  INSTALL_UNVERIFIED: {
+    anchor: 'install-unverified',
+    summary: 'a Capy session (GSTACK_CAPY=1) has no passing install verdict for this checkout, HEAD and workflow, so the workflow refused to start',
+    fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
   },
 } as const satisfies Record<string, ResultCode>;
 

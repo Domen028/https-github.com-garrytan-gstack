@@ -14,7 +14,13 @@ import type { ResultCodeName } from './result-codes';
 
 export type Voice = 'native' | 'outside';
 export interface AttemptState { attempt: string; state: 'dispatched' | 'submitted' | 'execution_unknown' | 'cancelled' | 'superseded'; prompt: string; result: string; estimate_usd: number; dispatched_at: string; terminal_at?: string }
-export interface VoiceState extends VoiceOutcome { attempt?: string; attempts?: AttemptState[]; result_sha256?: string; findings?: number; label?: string; usage?: Record<string, unknown>; detail?: string }
+export interface VoiceState extends VoiceOutcome {
+  attempt?: string; attempts?: AttemptState[]; result_sha256?: string; findings?: number; label?: string; usage?: Record<string, unknown>; detail?: string;
+  /** verified: the INPUT receipt matched the snapshot; attested: a --record bound without one, on the parent's word (attest_reason). */
+  receipt?: 'verified' | 'attested'; attest_reason?: string; findings_source?: 'fence' | 'table' | 'list' | 'none'; reviewed_sha256?: string;
+}
+/** An accepted plan change (gate option with changes_plan) the plan must absorb before the run continues. */
+export interface Amendment { decision: string; title: string; chosen: string; text: string; gate_rev: number; status: 'pending' | 'incorporated' | 'withdrawn'; at: string; settled_at?: string }
 export interface PhaseState {
   snapshot?: string; snapshot_dir?: string; snapshot_path?: string; methodology?: string; opened_at?: string; closed_at?: string;
   native?: VoiceState; outside?: VoiceState; consensus?: Record<string, unknown>; skipped?: string;
@@ -25,7 +31,20 @@ export interface RunState extends RunManifest {
   revision: number; out: string; plan_source: string; active_plan: string; restore: string; scope: Scope; phase_order: Phase[];
   phases: Record<string, PhaseState>; native_model?: string; outside_model?: string; outside_enabled: boolean; attempt_counter: number;
   spend_cap_usd: number | null; deadline_at?: string; light?: boolean; history: Array<Record<string, unknown>>; created_at: string; updated_at: string;
+  /** The gstack that last wrote this run (lib/autoplan-migrate.ts); absent on runs written before 1.91.96. */
+  gstack_version?: string;
+  /** The --plan file the owner edits (drift hints, revise), the --plan-heading it was cut from, and the scope flags revise re-detects with. */
+  plan_input?: string; plan_heading?: string; scope_flags?: Record<string, boolean | undefined>; scaffolded?: boolean;
+  plan_revision?: number; amendments?: Amendment[];
+  plan_reality?: { plan_sha256: string; checker: string; verdict: string; line: string };
 }
+
+export const TERMINAL_VOICE_STATUSES = ['completed', 'disabled', 'unavailable', 'failed', 'skipped'] as const;
+/** The one terminal-voice predicate `next`, `submit`, `resume` and phase close share: a terminal voice is never dispatched or resurrected. */
+export function voiceTerminal(v: { status?: string } | undefined): boolean {
+  return (TERMINAL_VOICE_STATUSES as readonly string[]).includes(String(v?.status));
+}
+export const pendingAmendments = (state: RunState): Amendment[] => (state.amendments ?? []).filter(a => a.status === 'pending');
 export class RunError extends Error {
   constructor(public code: ResultCodeName, public detail: string, public exit: 1 | 3 = 1) { super(`${code}: ${detail}`); }
 }

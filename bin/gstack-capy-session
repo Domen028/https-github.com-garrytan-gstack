@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# gstack-capy-session — the full Capy skill wrapper: the checkout-owned half
+# of a Capy session start. The frozen bootstrapper the Drive skill holds
+# (capy/skill/gstack/scripts/install.sh) clones or fast-forwards this checkout
+# and execs this script with its own arguments plus:
+#   GSTACK_CAPY_WRAPPER_REV / GSTACK_CAPY_WRAPPER_PATH  the bootstrapper that ran
+#   GSTACK_CAPY_REMOTE_MIN    the supported minimum from origin's capy/support.env, or `unknown`
+#   GSTACK_CAPY_UPGRADED_FROM the version it fast-forwarded from (setup is never skipped then)
+#   GSTACK_CAPY_LOCK_HELD=1   install mode: .gstack-capy-install.lock is held on an
+#                             inherited descriptor; nothing here takes it again
+# Because this file moves with the checkout, session-start behavior can change
+# without anyone recopying the Drive skill; that includes the stale-copy owner
+# action, read from capy/support.env through gstack_support_env_get.
+#
+# Usage: gstack-capy-session [--check] --root <checkout> [gstack-capy-install arguments]
+#   --check  certify only (bin/gstack-capy-install --check: the doctor with the
+#            launch PATH and the remote minimum, the verdict, the launch line)
+#   default  install or repair (bin/gstack-capy-install)
+# The last line is the `gstack:` trailer; the exit status is the installer's.
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+prev=""
+for a in "$@"; do [ "$prev" = --root ] && ROOT="$a"; prev="$a"; done
+INSTALLER="$ROOT/bin/gstack-capy-install"
+if [ ! -x "$INSTALLER" ]; then
+  echo "gstack: fail installer — $INSTALLER is missing; fix: bash ${GSTACK_CAPY_WRAPPER_PATH:-<skill>/scripts/install.sh} (re-clones or fast-forwards)"
+  exit 1
+fi
+[ "${GSTACK_CAPY_REMOTE_MIN:-}" = unknown ] && echo "gstack-capy-session: remote minimum unknown (fetch failed); the revision row is local only"
+# shellcheck source=bin/gstack-install-verdict.sh
+. "$ROOT/bin/gstack-install-verdict.sh"
+MIN_WRAPPER=$(gstack_support_env_get "$(gstack_source_root "$ROOT/bin")" GSTACK_CAPY_MIN_WRAPPER)
+if [ -n "$MIN_WRAPPER" ] && [ "${GSTACK_CAPY_WRAPPER_REV:-0}" -lt "$MIN_WRAPPER" ] 2>/dev/null; then
+  echo "gstack-capy-skill: owner action — Drive copy is wrapper ${GSTACK_CAPY_WRAPPER_REV:-0}, minimum $MIN_WRAPPER; copy $ROOT/capy/skill/gstack/ (CAPY_WRAPPER_STALE)"
+fi
+exec "$INSTALLER" "$@"

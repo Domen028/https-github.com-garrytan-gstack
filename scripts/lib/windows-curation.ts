@@ -57,6 +57,9 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
   // commands through the pre-gate's POSIX `bash -o pipefail` runner. The pure parsers and the
   // import graph are covered by test/pregate-selection.test.ts, which the bin/ pattern excludes too.
   { file: 'test/gstack-regen.test.ts', reason: 'spawns bin/gstack-regen through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and POSIX fixture regen commands' },
+  { file: 'test/pregate-guards.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and runs node guard and lane fixture commands through the POSIX runner' },
+  { file: 'test/pregate-regate.test.ts', reason: 'spawns bin/gstack-pregate regate through test/helpers/restamp-fixture.ts runBin (shebang via CreateProcess)' },
+  { file: 'test/stamp-templates.test.ts', reason: 'spawns bin/gstack-tree-receipt through test/helpers/restamp-fixture.ts runBin (shebang via CreateProcess)' },
   { file: 'test/pregate-invalidation.test.ts', reason: 'spawns bin/gstack-pregate and bin/gstack-ship-receipt through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and the pipefail lane runner' },
   { file: 'test/ship-issue-intent.test.ts', reason: 'spawns bin/gstack-issue-links and bin/gstack-ship-receipt through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) with a `gh` shell shim on PATH' },
   // PR E2: lane ownership and evidence verification run bin/gstack-lane-check and bin/gstack-evidence

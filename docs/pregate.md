@@ -63,6 +63,10 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
 | `local` | `workflow.yml/job` lanes a local run satisfies: a platform-agnostic toolchain (Dart on `ubuntu-latest` from a Mac), or a repo whose CI is off. Their tests run here instead of becoming `requires-remote` |
+| `guards` | `[{ id, when: [globs], command, fix?, timeout_s? }]`: repo commands a lane must pass when a touched file matches `when` (manifest checks, subprocess goldens the import graph cannot see); see [guards](#guards) |
+| `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
+| `sealed` | sealed or eval output that must never reach a public destination; read by the pre-push hook and `gstack-pregate sealed` (see [sealed output](#sealed)) |
+| `price_file` | repo-relative path of the paid gate's call-plan data file (`GSTACK_EVAL_CALLS v1`); `gstack-eval-plan price-gate` prices from it and never executes anything ([docs/eval-calls.md](eval-calls.md)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
 takes effect. A repo that keeps `.gstack/` out of git (a shared repo where gstack
@@ -95,6 +99,15 @@ Two stages with separate clocks, both printed:
   searched for the old value; a consumer the branch did not update fails with
   `file:line`.
 
+- `guards`: each guard in `.gstack/pregate.json` whose `when` globs match a
+  touched file (renames included) runs its `command` in its own process, under
+  the verified launch Bun, with its own `timeout_s` (default `--timeout`). A
+  non-zero exit fails pregate naming the guard and its `fix`
+  (`PREGATE_GUARD_FAILED`); a timeout is `incomplete`; without
+  `--allow-repo-commands` the selected guards are listed and the check is
+  `incomplete`. Guards are read from the base branch's copy and cannot be
+  downgraded to warn. See [guards](#guards).
+
 **Stage 2, test execution:**
 
 - `lanes`: touched files map to tests through `lib/pregate/import-graph.ts`
@@ -111,7 +124,12 @@ Two stages with separate clocks, both printed:
   machine cannot run becomes a `requires-remote` obligation naming
   `workflow.yml/job`. `--explain` prints each test's provenance and every
   uncertain mapping (a planner-computed matrix without a `selection` manifest
-  selects conservatively).
+  selects conservatively). Test files matching `serial_patterns` (default
+  `**/*.serial.test.*`) run one process per file after the unit files. The
+  runner and every guard run with the verified launch Bun first on PATH: the
+  first of `$BUN_INSTALL/bin` and `~/.bun/bin` whose Bun satisfies gstack's and
+  the project's `engines.bun` (the row prints `runtime: bun <v> from <dir>`),
+  so a Capy host's older image Bun cannot flip the verdict.
 
 Every check records the input identity it ran against (the working-tree
 fingerprint before and after, the selection, the command hash); a tree that
@@ -127,8 +145,202 @@ The record is `.gstack/tmp/pregate.json` (`gstack-artifact validate --as pregate
 receipt then carries `pregate` and `requires_remote`. `gstack-pregate verify`
 runs the same check standalone.
 
-Tier 2 checks (`guards`, `ratchets`, `lint`, `links`, `hermetic`, `patches`,
-`integrator`) are named in `--only`'s help and land in a follow-up pre-gate PR.
+Unknown flags exit 2 with usage on every verb (an agent told to run a flag this
+gstack lacks never gets a green it did not ask for). Tier 2 checks still to come
+(`ratchets`, `lint`, `links`, `hermetic`, `patches`, `integrator`) are named in
+`--only`'s help.
+
+<a id="guards"></a>
+## Guards and the lane-done rule
+
+A lane runs `gstack-pregate run --allow-repo-commands` on its branch before it
+reports done, and its handoff carries the `PREGATE:` line (the coordinator
+contract says so word for word). The unit tier covers the changed files'
+tests; guards cover the repo's mechanical gates the import graph cannot see:
+
+```json
+{ "guards": [
+    { "id": "serial-manifest", "when": ["test/**/*.serial.test.ts", "scripts/serial-files.tsv"],
+      "command": "bun test test/scripts/serial-files.test.ts",
+      "fix": "add the file's row to scripts/serial-files.tsv" } ] }
+```
+
+`dependencies` still maps globs to extra *tests* the lanes check selects; a
+guard is a *command* with its own fix line. Older gstack refuses unknown keys
+(`PREGATE_CONFIG_INVALID`), so a repo commits `guards` only after the gstack
+that reads them ships. The worked gbrain configuration is in
+[gbrain worked configs](#gbrain-worked-configs).
+
+<a id="sealed"></a>
+## Sealed output: the pre-push hook and `gstack-pregate sealed`
+
+```json
+{ "sealed": {
+    "paths": ["heldout/**"],
+    "transcripts": ["runs/**/transcript*.jsonl"],
+    "answer_markers": ["SEALED ANSWER:"],
+    "seed_patterns": ["shuffle_seed=\\d+"],
+    "local_paths": true } }
+```
+
+A repo with a `sealed` key gets a configured local check against accidental
+publication whenever the managed pre-push hook (`gstack-redact
+install-prepush-hook`, no reinstall needed) or the standalone preflight runs:
+
+```
+gstack-pregate sealed [--range <a..b>] [--remote origin] [--base <branch>] [--json]
+```
+
+- **Boundary.** Every commit the push publishes: `git rev-list <local sha>
+  --not --remotes=<remote>` (and the remote tip when the ref exists); a
+  destination with no refs means everything reachable. `--range` names the
+  commits explicitly.
+- **Rules.** `sealed.path` and `sealed.transcript` check every path a commit
+  adds, renames or copies, whatever its content (binary, empty, deleted again
+  in a later commit); `sealed.answer`, `sealed.seed` and `sealed.local_path`
+  (`/home/<user>/`, `/Users/<user>/`, `C:\Users\<user>\`) check each commit's added
+  lines. Findings print rule, `file[:line]` and commit, never the text.
+- **Policy.** The union of the destination base branch's `sealed` and the
+  pushed commit's: a push can tighten it, never relax it. A malformed or
+  unreadable policy refuses. Waivers come only from the base branch's
+  `.gstack/sealed-allow.tsv` (`rule<TAB>path<TAB>sha<TAB>reason`) and are
+  listed on every push.
+- **Visibility.** `sealed.visibility` from the base branch, else a cache under
+  the state root (`sealed-visibility.json`: a `public` answer for 24 hours, a
+  `private` one for 1 hour before it may turn a refusal into a warning), else
+  `gh repo view --json visibility` (5 s). Unknown, unreadable or newly created
+  counts as public. Public refuses (`SEALED_OUTPUT_REFUSED`, exit 1); private
+  warns.
+
+Capy's pull-request tool may not run local git hooks, so an agent runs
+`gstack-pregate sealed` before any push or PR creation in a repo with a
+`sealed` config (the coordinator contract says so). Hosted CI on the public
+repository only detects a bypass after the upload.
+
+<a id="regate"></a>
+## `gstack-pregate regate`: does the gate still cover HEAD
+
+```
+gstack-pregate regate --against <gated-head> --bundle <evidence-bundle.json> [--require <lane,...>]
+                      [--pr <n>] [--from <gate-ahead.json>] [--predecessor-pr <n> | --predecessor-ref <ref>]
+                      [--base <branch>] [--json]
+gstack-pregate --against <gated-head> ...      the same verb
+```
+
+It evaluates a tree receipt now (never a stored one) between the gated head
+and HEAD under the base branch's ship policy, so the repo's `stamp_files` and
+`stamp_patterns` decide what a stamp is ([ship-policy](ship-policy.md#tree-receipt)).
+Reuse needs an evidence bundle produced on the gated tree, the same execution
+identity, and a predecessor head that is still the recorded one (read from
+`--from`, default `.gstack/tmp/gate-ahead.json` when it names this gated
+head). It prints each differing file (a non-stamp difference with its first
+line), then:
+
+```
+STAMP_ONLY: yes|no files=<n> [changed=<n>]
+LANE: <label> reusable|rerun|not-reusable (<reason>)      one per bundle lane and per --require lane
+MIGRATION_COLLISION: none (...) | unknown (...) | <id> <file> vs <origin/main|PR #n> <file>
+REGATE: not-needed | needed (<every reason>)
+```
+
+`REGATE: not-needed` (exit 0) only when the tree is stamp-only, every lane in
+the bundle and in `--require` is reusable (a stamp-sensitive lane reruns, so it
+needs a regate), the predecessor head is known and unmoved, and the migration
+lookup finished with no collision. Anything else is `needed` (exit 1); no
+bundle prints `REGATE: needed (no gate evidence for <head> ...)`.
+
+Migrations come from the ship policy's `migrations` (`dir`, `id` regex with
+one capture group). The numbers this branch adds under `dir` are compared with
+the base branch's tree and with every other open PR
+(`gh pr list --state open --limit 1000 --json number,headRefOid,files`; the PR
+itself is skipped by head sha or `--pr`). A PR listing 100 files is truncated
+by GitHub, so its full list is fetched with `gh api --paginate`. A failed
+query, 1000 listed PRs or an unfetchable file list is
+`MIGRATION_COLLISION: unknown (...)`, which blocks `not-needed`
+([`MIGRATION_COLLISION`](troubleshooting.md#migration-collision)).
+
+<a id="gbrain-worked-configs"></a>
+## gbrain worked configs
+
+gbrain commits these on master after the gstack that reads the new keys ships
+(older gstack refuses unknown keys). Its `.gitignore` ignores `.gstack/*`
+today, so the change also adds `!.gstack/pregate.json` and
+`!.gstack/ship-policy.json`; both changes are gbrain's.
+
+`.gstack/pregate.json`: guards for the gates the import graph cannot see.
+
+```json
+{
+  "dependencies": {
+    "test/**/*.serial.test.ts": ["test/scripts/serial-files.test.ts"],
+    "scripts/serial-files.tsv": ["test/scripts/serial-files.test.ts"],
+    "src/cli.ts": ["test/cli-goldens.test.ts"],
+    "src/commands/**": ["test/cli-goldens.test.ts"],
+    "src/core/operations*.ts": ["test/cli-goldens.test.ts"]
+  },
+  "guards": [
+    { "id": "serial-manifest", "when": ["test/**/*.serial.test.ts", "scripts/serial-files.tsv", "scripts/run-serial-tests.sh"],
+      "command": "bun test test/scripts/serial-files.test.ts",
+      "fix": "add the serial file's row to scripts/serial-files.tsv" },
+    { "id": "cli-goldens", "when": ["src/cli.ts", "src/cli/**", "src/commands/**", "src/core/operations*.ts", "src/core/ops/**"],
+      "command": "bun test --timeout=60000 test/cli-goldens.test.ts test/cli-dispatch-phase.test.ts test/export-surface-golden.test.ts",
+      "fix": "bun run regen:all, then justify each changed golden in the PR body" },
+    { "id": "regen-check", "when": ["src/**", "skills/**", "templates/**", "plugin/**"],
+      "command": "bun scripts/regen-all.ts --check",
+      "fix": "bun run regen:all and commit the regenerated files" },
+    { "id": "migration-order", "when": ["src/core/schema-migrations/**"],
+      "command": "bun scripts/check-schema-migration-order.ts",
+      "fix": "renumber the migration to the next free number on master" }
+  ]
+}
+```
+
+`.gstack/ship-policy.json`: the stamp rule and migrations. On a pure restamp
+of a gbrain master tree from 0.60.188.0 to 0.60.189.0 the tree receipt
+classifies all 16 changed files as stamps under this policy; an added line in
+`src/core/behavior-change-notice.ts` stays a change.
+
+```json
+{
+  "bump": "patch",
+  "queue_mode": "stamp-at-merge",
+  "changelog": "CHANGELOG.md",
+  "stamp_files": [
+    "VERSION", "package.json", "CHANGELOG.md", "openclaw.plugin.json",
+    ".claude-plugin/plugin.json", ".codex-plugin/plugin.json",
+    "plugin-variants/*/.claude-plugin/plugin.json", "plugin-variants/*/.codex-plugin/plugin.json",
+    "plugin-variants/*/README.md", "plugin/README.md",
+    "BOOTSTRAP_FOR_AGENTS.md", "templates/bootstrap/template-repo/README.md",
+    "src/core/behavior-change-notice.ts"
+  ],
+  "stamp_patterns": [
+    "\"version\": \"{version}\"",
+    "since: '{version}'",
+    "<!-- gbrain-plugin-tree-stamp: {version} -->",
+    "<!-- gbrain-template-stamp: {version} -->",
+    "<!-- gbrain-runbook-stamp: {version} -->"
+  ],
+  "migrations": { "dir": "src/core/schema-migrations", "id": "^v(\\d+)-" }
+}
+```
+
+gbrain's `bun run release:restamp` fetches master, picks its own version,
+refuses a dirty tree and commits, so it cannot be `restamp_command` as it
+stands; the stamp rule above lets gstack's own restamp writer do the work.
+A gbrain mode that takes the version and writes only stamps would make it one.
+
+gbrain-evals `.gstack/pregate.json`: the sealed paths. The globs below are
+placeholders in the shape the guard reads; gbrain-evals fills in its own
+held-out and transcript layout.
+
+```json
+{ "sealed": {
+    "paths": ["heldout/**"],
+    "transcripts": ["runs/**/transcript*.jsonl"],
+    "answer_markers": ["SEALED ANSWER:"],
+    "seed_patterns": ["shuffle_seed=\\d+"],
+    "local_paths": true } }
+```
 
 <a id="issue-links"></a>
 ## `gstack-issue-links`
