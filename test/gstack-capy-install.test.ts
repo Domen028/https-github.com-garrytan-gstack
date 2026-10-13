@@ -160,6 +160,30 @@ describe('gstack-capy-install', () => {
     expect(conflictRange.stderr).toContain('pins >=2.0.0');
   });
 
+  test('an exact project pin above the minimum with a verified archive is the Bun installed; an unverified one stops naming the verified versions', () => {
+    const f = fixture({ bun: '1.3.14' });
+    const project = path.join(f.base, 'project');
+    write(path.join(project, '.bun-version'), '1.4.3\n');
+    sh('git init -q', project);
+    const zip = path.join(f.base, 'bad.zip');
+    fs.mkdirSync(path.join(f.base, 'z/bun-linux-x64'), { recursive: true });
+    script(path.join(f.base, 'z/bun-linux-x64/bun'), ['echo 1.4.3']);
+    expect(sh(`cd "${f.base}/z" && zip -qr "${zip}" bun-linux-x64`).status).toBe(0);
+    const adopted = run(f, ['--project', project], { STUB_CURL_ZIP: zip });
+    expect(adopted.stdout).toContain('installing bun 1.4.3 from its release archive');
+    expect(f.calls().filter(l => l.startsWith('curl '))).toEqual([expect.stringContaining('https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux')]);
+    expect(adopted.status).toBe(3);
+    expect(adopted.stderr).toContain('SHA-256 mismatch');
+    const g = fixture({ bun: '1.3.14' });
+    write(path.join(project, '.bun-version'), '1.4.9\n');
+    const unverified = run(g, ['--project', project]);
+    expect(unverified.status).toBe(3);
+    expect(unverified.stderr).toContain(`${project}/.bun-version pins exactly 1.4.9`);
+    expect(unverified.stderr).toContain('verified archives: 1.4.2 1.4.3');
+    expect(unverified.stderr).toContain('(RUNTIME_PIN_CONFLICT; ');
+    expect(g.calls().some(l => l.startsWith('curl ') || l.startsWith('setup '))).toBe(false);
+  });
+
   test('Bun below the minimum: the exact release archive is downloaded and SHA-256 verified; a mismatch installs nothing', () => {
     const f = fixture({ bun: '1.3.14' });
     const zip = path.join(f.base, 'bad.zip');

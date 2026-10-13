@@ -1135,13 +1135,16 @@ reports `gstack: ok <installed> (requested <ref>; run <checkout>/bin/gstack-upgr
 <a id="capy-install-runtime-conflict"></a>
 ### `gstack-capy-install: Bun conflict: gstack needs >=<minimum>, <project> pins <constraint> (RUNTIME_PIN_CONFLICT; ...)`
 
-**Meaning.** The installer upgrades Bun only when gstack's supported minimum
-and the target project's pin agree on a version. Here they do not (for
-example the project pins `bun@1.3.14` exactly), so the installer changed
-nothing and stopped before `./setup`.
+**Meaning.** The installer installs one verified Bun archive: gstack's
+supported minimum, or the project's exact pin when that pin is above the
+minimum and listed in the message's `verified archives:`. Here the two do not
+meet (for example the project pins `bun@1.3.14`, or a version gstack has no
+verified archive for), so the installer changed nothing and stopped before
+`./setup`.
 
-**Fix.** Raise the project's pin to gstack's supported minimum, or install
-gstack on a machine whose Bun the project accepts. `--project <path>` names
+**Fix.** Pin a verified version in the project, upgrade gstack to a release
+that verifies the pinned version, or install gstack on a machine whose Bun the
+project accepts. `--project <path>` names
 the project whose pins apply.
 
 <a id="browser-ensure-failed"></a>
