@@ -147,6 +147,25 @@ echo "REPO_MODE: $REPO_MODE"
 echo "SESSION_KIND: $_SESSION_KIND$_SESSION_KIND_NOTE"
 echo "STATE_ROOT: $_GH durable=$_DURABLE"
 echo "SESSIONS: ${_SESSIONS:-0}"
+# Install admission (field wave A2): an unattended or Capy-spawned run on an
+# unsupported Bun, or on a Capy machine without a matching install verdict,
+# refuses here instead of running anyway. Rules: bin/gstack-install-verdict.sh.
+if . "$_BIN/gstack-install-verdict.sh" 2>/dev/null && . "$_BIN/gstack-bun-version.sh" 2>/dev/null && . "$_BIN/gstack-doctor-components.sh" 2>/dev/null; then
+  gstack_install_admission "$_BIN" "$SKILL_NAME" "$_SESSION_KIND"
+  [ -n "$_ia_line" ] && echo "$_ia_line"
+  if [ "$_ia_refuse" = 1 ]; then
+    # The preamble already honors instruction blocks bound to this run's
+    # SESSION_ID, so the stop rule rides here instead of growing every skill.
+    _ia_sid="$PARENT_PID-$(date +%s)-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' \n')"
+    _ia_result="GSTACK_RESULT: skill=$(printf '%s' "$SKILL_NAME" | tr -cd 'a-zA-Z0-9._-') status=refused run=-"
+    echo "SESSION_ID: $_ia_sid"
+    echo "GSTACK_INSTRUCTION_BEGIN: install-refused $_ia_sid"
+    echo "This workflow refused to start (the INSTALL: row above). STOP: report that row and its fix: command to the parent, run nothing else from this skill, and end with \`$_ia_result\`."
+    echo "GSTACK_INSTRUCTION_END"
+    echo "$_ia_result"
+    exit 3
+  fi
+fi
 # Tamper visibility (#2733 review): a repo-provided settings env block or a CI
 # wrapper could set GSTACK_SESSION_KIND or OPENCLAW_SESSION for a real human's
 # session, silently flipping every gate to auto-choose. Surface the env-driven

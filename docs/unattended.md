@@ -282,3 +282,16 @@ line, on an ephemeral state root.
 `/autoplan` run (the one that produced this wave's plan) and validates clean.
 `test/fixtures/multi-agent-wave/INCIDENTS.md` records what went wrong while it
 was produced by hand and which validator rule now catches each incident.
+
+## Install admission
+
+An unattended run, and a `GSTACK_SESSION_KIND=spawned` run with `GSTACK_CAPY=1`,
+starts only on a supported Bun and, on a Capy machine (`GSTACK_CAPY=1`, set by
+the installer's `GSTACK_LAUNCH` line), with a passing install verdict for this
+checkout, its HEAD and the workflow. Otherwise `gstack-skill-start` prints
+`INSTALL: fail runtime|verdict — <detail>; fix: <command> (<CODE>)` and
+`GSTACK_RESULT: skill=<s> status=refused run=-`, and exits 3; stop and run the
+fix. `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` admits anyway (`INSTALL_VERDICT:
+overridden`), recorded as a deviation. TypeScript entrypoints use
+`checkInstallAdmission` from `lib/install-verdict.ts`; the Bash side is
+`bin/gstack-install-verdict.sh`. See [capy-install.md](capy-install.md#the-launch-line).
