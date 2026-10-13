@@ -67,12 +67,16 @@ resets.
    read with the doctor's own parser (`bin/gstack-runtime-pins.ts`: engines,
    packageManager, `.tool-versions`, `.bun-version` and CI `bun-version:` lanes
    for this platform). When neither the Bun on PATH nor the installed one
-   satisfies gstack's minimum and the pins, and every exact pin equals the
-   version gstack carries a verified archive for (1.4.2), the installer
-   downloads that exact release archive, verifies its SHA-256 against
-   `bin/gstack-bun-version.sh` and installs it into `$BUN_INSTALL/bin`, beside
-   any different system Bun (no symlink into a shared bin directory). Any other
-   exact pin, or a range gstack's minimum does not satisfy, stops with both
+   satisfies gstack's minimum and the pins, the installer downloads one exact
+   release archive, verifies its SHA-256 against `bin/gstack-bun-version.sh`
+   and installs it into `$BUN_INSTALL/bin`, beside any different system Bun (no
+   symlink into a shared bin directory). That archive is the supported minimum
+   (1.4.2), or the project's exact pin when it is above the minimum and gstack
+   carries a verified archive for it (`GSTACK_BUN_VERIFIED`: 1.4.2, 1.4.3), so a
+   repo whose CI pins `bun-version: 1.4.3` gets 1.4.3. With an exact pin, only
+   that version satisfies it. Any other exact pin (below the minimum, two
+   different ones, or one without a verified archive), or a range gstack's
+   minimum does not satisfy, stops with both
    constraints ([RUNTIME_PIN_CONFLICT](troubleshooting.md#capy-install-runtime-conflict),
    exit 3) before `./setup`. With no Bun at or above the security floor, the
    verified one is installed first so the pins can be read.
