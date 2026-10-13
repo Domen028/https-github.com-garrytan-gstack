@@ -9,6 +9,8 @@
  *   gstack-pregate clear --remote <workflow.yml/job> --run-url <url> | --bundle-lane <label> [--out <pregate.json>]
  *   gstack-pregate lanes [--explain]                             the lane list and platform tiers read from .github/workflows
  *   gstack-pregate validate | init [--explain] [--force]         the working-tree .gstack/pregate.json
+ *   gstack-pregate sealed [--range <a..b>] [--remote <name>] [--base <branch>] [--json]
+ *                                                                the sealed-output guard (lib/sealed-guard.ts) before any push or PR creation
  *
  * Runs at the entry of /ship Step 5 (before Step 6's paid evals and any
  * remote gate) under `set -o pipefail`, aggregates exit codes itself, prints
@@ -28,6 +30,7 @@ import { CHECKS, CHECK_IDS, PREGATE_OUT_REL, PREGATE_TIER2, clearObligation, rea
 import { describeLane, discoverLanes } from '../lib/pregate/workflows';
 import { ensureTmpExcluded } from '../lib/restamp';
 import { resultLine, type ResultCodeName } from '../lib/result-codes';
+import { evaluateSealed, publishedCommits, rangeCommits, renderSealed } from '../lib/sealed-guard';
 import { policyUnavailableLine, resolveBaseBranch } from '../lib/ship-policy';
 
 const HELP = `gstack-pregate — cheap checks before anything paid or remote (docs/pregate.md)
@@ -37,6 +40,9 @@ const HELP = `gstack-pregate — cheap checks before anything paid or remote (do
   clear           record the receipt that clears one requires-remote obligation
   lanes           print every CI lane with its platform tier (from .github/workflows/*.yml)
   validate | init the working-tree ${PREGATE_CONFIG_PATH}
+  sealed [--range <a..b>] [--remote <name>] [--base <branch>]
+                  the sealed-output guard (docs/pregate.md#sealed) over the commits <remote> lacks, or the range:
+                  run it before any push or PR creation in a repo with a \`sealed\` config; exit 1 refuses (SEALED_OUTPUT_REFUSED)
 
   --stage preflight|tests|all   default all
   --only <check,...>            restrict to these checks (${CHECK_IDS.join(', ')}; tier 2 later: ${PREGATE_TIER2.join(', ')})
@@ -62,6 +68,7 @@ const VERB_FLAGS: Record<string, [string[], string[]]> = {
   lanes: [[], ['--explain', '--json']],
   validate: [[], ['--json']],
   init: [[], ['--explain', '--force']],
+  sealed: [['--range', '--base', '--remote'], ['--json']],
 };
 const HINTS: Record<string, string> = { '--sealed': 'the sealed-output guard is the verb `gstack-pregate sealed`' };
 
@@ -152,6 +159,33 @@ function cmdClear(root: string, rest: string[]): number {
   return EXIT.ok;
 }
 
+function gitOut(root: string, args: string[]): string | null {
+  const r = spawnSync('git', args, { cwd: root, encoding: 'utf8', timeout: 30_000 });
+  return r.status === 0 ? r.stdout.trim() : null;
+}
+
+/** The sealed-output guard before any push or PR creation: the commits `--remote` lacks (or `--range a..b`), under base ∪ pushed policy. */
+function cmdSealed(root: string, rest: string[], json: boolean): number {
+  const base = resolveBaseBranch(root, flag(rest, '--base'));
+  const remote = flag(rest, '--remote') ?? 'origin';
+  const range = flag(rest, '--range');
+  const end = range ? (range.split(/\.\.\.?/)[1] || 'HEAD') : 'HEAD';
+  const pushedSha = gitOut(root, ['rev-parse', '--verify', '--quiet', `${end}^{commit}`]);
+  if (!pushedSha) { process.stderr.write(`gstack-pregate sealed: ${end} is not a commit\n`); return EXIT.usage; }
+  const listed = range ? rangeCommits(root, range) : publishedCommits(root, { localSha: pushedSha, remoteName: remote });
+  const baseRef = gitOut(root, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${base}^{commit}`]) ? `refs/remotes/${remote}/${base}` : null;
+  const remoteUrl = gitOut(root, ['remote', 'get-url', remote]);
+  const report = 'error' in listed
+    ? { status: 'error' as const, error: listed.error, policyLabels: [], commits: 0, findings: [], waived: [], visibility: 'unknown' as const, visibilitySource: '', target: remoteUrl ?? remote }
+    : evaluateSealed({ repoRoot: root, targets: [{ commits: listed.commits, pushedSha }], baseRef, baseLabel: `${remote}/${base}`, remoteUrl, target: remoteUrl ?? remote });
+  const blocks = report.status === 'refused' || report.status === 'error';
+  if (json) { process.stdout.write(JSON.stringify({ ...report, ok: !blocks }) + '\n'); return blocks ? EXIT.fail : EXIT.ok; }
+  process.stderr.write(renderSealed(report, 'gstack-pregate sealed'));
+  const policy = report.policyLabels.length ? report.policyLabels.join(' + ') : `no sealed key on ${baseRef ?? `${remote}/${base}`} or ${end}`;
+  process.stdout.write(`SEALED: ${report.status} findings=${report.findings.length} commits=${report.commits} visibility=${report.visibility}${report.visibility === 'unknown' ? ' (counted public)' : ''} waived=${report.waived.length} policy=${policy}\n`);
+  return blocks ? EXIT.fail : EXIT.ok;
+}
+
 function main(argv: string[]): number {
   const cmd = argv[0] && !argv[0].startsWith('--') ? argv[0] : 'run';
   const rest = argv[0] && !argv[0].startsWith('--') ? argv.slice(1) : argv;
@@ -164,6 +198,7 @@ function main(argv: string[]): number {
   if (cmd === 'run') return cmdRun(root, rest, json);
   if (cmd === 'verify') return cmdVerify(root, rest, json);
   if (cmd === 'clear') return cmdClear(root, rest);
+  if (cmd === 'sealed') return cmdSealed(root, rest, json);
   if (cmd === 'lanes') {
     const lanes = discoverLanes(root);
     if (json) { process.stdout.write(JSON.stringify(lanes) + '\n'); return EXIT.ok; }

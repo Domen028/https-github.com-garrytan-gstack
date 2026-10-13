@@ -127,6 +127,16 @@ describe('guards (CD1)', () => {
   });
 });
 
+describe('pregate config: sealed (CD4)', () => {
+  test('`gstack-pregate validate` accepts a sealed policy and names each bad field', () => {
+    expect(codes({ sealed: { paths: ['heldout/**'], transcripts: ['runs/**/transcript*.jsonl'], answer_markers: ['SEALED ANSWER:'], seed_patterns: ['seed=\\d+'], local_paths: true, visibility: 'private' } })).toEqual([]);
+    expect(codes({ sealed: { paths: 'heldout/**' } })).toEqual(['PREGATE_CONFIG_INVALID:sealed.paths']);
+    expect(codes({ sealed: { seed_patterns: ['('] } })).toEqual(['PREGATE_CONFIG_INVALID:sealed.seed_patterns[0]']);
+    expect(codes({ sealed: { visibility: 'internal' } })).toEqual(['PREGATE_CONFIG_INVALID:sealed.visibility']);
+    expect(codes({ sealed: { block: true } })).toEqual(['PREGATE_CONFIG_INVALID:sealed.block']);
+  });
+});
+
 describe('gstack-pregate flags (CD1)', () => {
   test('an unknown flag is usage (exit 2) on every verb instead of a silent normal run', () => {
     const repo = makeFixtureRepo(); repos.push(repo);

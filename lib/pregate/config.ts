@@ -18,6 +18,8 @@
  *                 (manifest checks, CLI goldens); never downgradable
  *   serial_patterns globs of test files the lanes check runs one process each
  *                 (default: every `*.serial.test.*` file)
+ *   sealed        the sealed-output guard's rules (lib/sealed-guard.ts; read by
+ *                 the pre-push hook and `gstack-pregate sealed`, not by `run`)
  *   price_file    the call-plan data file `gstack-eval-plan price-gate` prices
  *                 a paid gate from (GSTACK_EVAL_CALLS v1; never executed)
  */
@@ -25,6 +27,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import type { ResultCodeName } from '../result-codes';
+import { sealedErrors } from '../sealed-guard';
 import { containedRelative, globToRegExp } from '../ship-policy';
 
 export const PREGATE_CONFIG_PATH = '.gstack/pregate.json';
@@ -49,7 +52,7 @@ export interface ConfigError { code: ResultCodeName; path: string; message: stri
 
 const MAX_LIST = 256;
 const MAX_COMMAND = 512;
-const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays', 'guards', 'serial_patterns', 'price_file'];
+const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays', 'guards', 'serial_patterns', 'price_file', 'sealed'];
 const MAX_GUARDS = 32;
 const GUARD_KEYS = ['id', 'when', 'command', 'fix', 'timeout_s'];
 
@@ -102,6 +105,7 @@ export function validateConfig(raw: unknown, knownChecks: readonly string[] = []
     if (why) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'price_file', message: why });
   }
   if ('guards' in obj) guardErrors(obj.guards, errors);
+  if ('sealed' in obj) for (const e of sealedErrors(obj.sealed)) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: e.path, message: e.message });
   if ('serial_patterns' in obj) {
     const list = obj.serial_patterns;
     if (!Array.isArray(list) || list.some(g => typeof g !== 'string')) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'serial_patterns', message: 'must be an array of globs' });
@@ -208,6 +212,7 @@ export function explainConfig(): string {
     'strays.allow: root files or new top-level directories that are intentional',
     'guards: [{ id, when: [globs], command, fix?, timeout_s? }]: each guard whose globs match a touched file runs in its own process (--allow-repo-commands); a failure fails pregate with the guard id and fix; never downgradable',
     `serial_patterns: test-file globs the lanes check runs one process per file, apart from the unit files (default ${DEFAULT_SERIAL_PATTERNS.join(', ')})`,
+    'sealed: { paths, transcripts, answer_markers, seed_patterns, local_paths, visibility }: sealed or eval output the pre-push hook and `gstack-pregate sealed` refuse to publish to a public destination (docs/pregate.md#sealed)',
     'price_file: repo-relative path of the GSTACK_EVAL_CALLS v1 call-plan file `gstack-eval-plan price-gate` prices a paid gate from; never executed (docs/eval-calls.md)',
   ].join('\n') + '\n';
 }

@@ -64,6 +64,7 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `strays.allow` | intentional root files or new top-level directories |
 | `guards` | `[{ id, when: [globs], command, fix?, timeout_s? }]`: repo commands a lane must pass when a touched file matches `when` (manifest checks, subprocess goldens the import graph cannot see); see [guards](#guards) |
 | `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
+| `sealed` | sealed or eval output that must never reach a public destination; read by the pre-push hook and `gstack-pregate sealed` (see [sealed output](#sealed)) |
 | `price_file` | repo-relative path of the paid gate's call-plan data file (`GSTACK_EVAL_CALLS v1`); `gstack-eval-plan price-gate` prices from it and never executes anything ([docs/eval-calls.md](eval-calls.md)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
@@ -162,6 +163,52 @@ guard is a *command* with its own fix line. Older gstack refuses unknown keys
 (`PREGATE_CONFIG_INVALID`), so a repo commits `guards` only after the gstack
 that reads them ships. The worked gbrain configuration is in
 [gbrain worked configs](#gbrain-worked-configs).
+
+<a id="sealed"></a>
+## Sealed output: the pre-push hook and `gstack-pregate sealed`
+
+```json
+{ "sealed": {
+    "paths": ["heldout/**"],
+    "transcripts": ["runs/**/transcript*.jsonl"],
+    "answer_markers": ["SEALED ANSWER:"],
+    "seed_patterns": ["shuffle_seed=\\d+"],
+    "local_paths": true } }
+```
+
+A repo with a `sealed` key gets a configured local check against accidental
+publication whenever the managed pre-push hook (`gstack-redact
+install-prepush-hook`, no reinstall needed) or the standalone preflight runs:
+
+```
+gstack-pregate sealed [--range <a..b>] [--remote origin] [--base <branch>] [--json]
+```
+
+- **Boundary.** Every commit the push publishes: `git rev-list <local sha>
+  --not --remotes=<remote>` (and the remote tip when the ref exists); a
+  destination with no refs means everything reachable. `--range` names the
+  commits explicitly.
+- **Rules.** `sealed.path` and `sealed.transcript` check every path a commit
+  adds, renames or copies, whatever its content (binary, empty, deleted again
+  in a later commit); `sealed.answer`, `sealed.seed` and `sealed.local_path`
+  (`/home/<user>/`, `/Users/<user>/`, `C:\Users\<user>\`) check each commit's added
+  lines. Findings print rule, `file[:line]` and commit, never the text.
+- **Policy.** The union of the destination base branch's `sealed` and the
+  pushed commit's: a push can tighten it, never relax it. A malformed or
+  unreadable policy refuses. Waivers come only from the base branch's
+  `.gstack/sealed-allow.tsv` (`rule<TAB>path<TAB>sha<TAB>reason`) and are
+  listed on every push.
+- **Visibility.** `sealed.visibility` from the base branch, else a cache under
+  the state root (`sealed-visibility.json`: a `public` answer for 24 hours, a
+  `private` one for 1 hour before it may turn a refusal into a warning), else
+  `gh repo view --json visibility` (5 s). Unknown, unreadable or newly created
+  counts as public. Public refuses (`SEALED_OUTPUT_REFUSED`, exit 1); private
+  warns.
+
+Capy's pull-request tool may not run local git hooks, so an agent runs
+`gstack-pregate sealed` before any push or PR creation in a repo with a
+`sealed` config (the coordinator contract says so). Hosted CI on the public
+repository only detects a bypass after the upload.
 
 <a id="issue-links"></a>
 ## `gstack-issue-links`

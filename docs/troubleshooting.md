@@ -2480,3 +2480,23 @@ downgraded to warn.
 and do what its `fix` line says, commit, then rerun
 `gstack-pregate run --allow-repo-commands`. A lane reports done only after this
 passes and carries the `PREGATE:` line in its handoff.
+
+<a id="sealed-output-refused"></a>
+### `SEALED_OUTPUT_REFUSED`
+
+**Meaning.** The repo declares a `sealed` policy in `.gstack/pregate.json`
+(base branch ∪ the pushed commit) and a commit this push publishes adds a
+sealed path or transcript (binary, empty and later-deleted files included), or
+adds a line with a sealed-answer marker, a seed or a local home path, and the
+destination is public or its visibility is unknown (a new or unreadable
+repository counts as public). An unreadable or malformed sealed policy refuses
+too. The managed pre-push hook and `gstack-pregate sealed` print one line per
+finding: rule, `file[:line]`, commit. They never print the matched text.
+
+**Fix.** Remove the output from every published commit before the branch
+reaches the public repository (a later commit that deletes it still publishes
+it). A reviewed false positive gets one line in the base branch's
+`.gstack/sealed-allow.tsv`: `rule<TAB>path<TAB>sha<TAB>reason`. A private
+destination sets `"visibility": "private"` under `sealed` in the base branch's
+`.gstack/pregate.json`. Capy's pull-request tool may not run local hooks, so
+run `gstack-pregate sealed` yourself before any push or PR creation.

@@ -471,6 +471,11 @@ export const RESULT_CODES = {
     summary: 'a repo guard from .gstack/pregate.json whose files the branch touched exited non-zero',
     fix: 'run the guard command printed in the table, apply the guard\'s fix line, commit, then rerun `gstack-pregate run --allow-repo-commands`',
   },
+  SEALED_OUTPUT_REFUSED: {
+    anchor: 'sealed-output-refused',
+    summary: 'a push or PR would publish sealed or eval output (a sealed path, a transcript, a quoted answer, a seed or a local home path) to a public or unknown destination, or the sealed policy is unreadable',
+    fix: 'remove it from every published commit, or add one reviewed `rule<TAB>path<TAB>sha<TAB>reason` line to the base branch\'s .gstack/sealed-allow.tsv; a private destination sets sealed.visibility "private" in the base branch\'s .gstack/pregate.json',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

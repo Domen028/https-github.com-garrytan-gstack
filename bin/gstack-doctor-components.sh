@@ -167,6 +167,7 @@ gstack_result_anchor() {
     BRIEF_INPUT_MISSING) printf '%s' 'brief-input-missing' ;;
     DRAFT_DIRECTION_UNRESOLVED) printf '%s' 'draft-direction-unresolved' ;;
     PREGATE_GUARD_FAILED) printf '%s' 'pregate-guard-failed' ;;
+    SEALED_OUTPUT_REFUSED) printf '%s' 'sealed-output-refused' ;;
     *) return 1 ;;
   esac
 }
