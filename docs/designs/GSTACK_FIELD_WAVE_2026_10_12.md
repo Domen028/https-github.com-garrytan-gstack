@@ -24,7 +24,7 @@ Thesis: **a parent agent on Capy can trust what gstack tells it about itself, cl
 
 - **P1. Install state is honest and self-correcting.** Every fix line names a command that exists. At session start a checkout below the supported minimum fast-forwards itself, reinstalls and rechecks; workflows refuse while the trailer is `fail`. The trailer agrees with the Bun that workflows run. A stale Capy skill wrapper is refused by name.
 - **P2. An unattended /autoplan run closes in the run directory.** Phases reviewed by Capy subagents (free-form records or the canonical format) bind with `submit`; a host without the outside voice can mark it unavailable; a revised plan reopens affected phases in the same run; a 3-rev run validates; reruns ask only scope, cost or direction questions; user-challenge defaults follow agreeing voices.
-- **P3. Plan obligations reach the repo's mechanical gates before a lane reports done,** paid gates are dry-run and priced before approval, a restamp is proved stamp-only by machine, and sealed or eval output cannot be pushed to a public repo by accident.
+- **P3. Plan obligations reach the repo's mechanical gates before a lane reports done,** paid gates are dry-run and priced before approval, a restamp is proved stamp-only by machine, and sealed or eval output is kept off any machine that can push to a public repo (owner custody, the primary control), with a local check that refuses an accidental push where local hooks run.
 
 ### Delivery shape
 
@@ -153,6 +153,7 @@ Every fix lands with a test that fails on `dbf400e` first, run on a simulated Ca
 - New lib/sealed-guard.ts, called from bin/gstack-redact-prepush after `addedLinesFor` (the existing hook, no reinstall) and exposed as `gstack-pregate --sealed [--range <a..b>]`. Config key `sealed` in the repo's `.gstack/pregate.json` read from the pushed commit: `{paths: [globs that may never be pushed], transcripts: [globs], answer_markers: [regexes], seed_patterns: [regexes], local_paths: true}`. In a public repo every match refuses the push, naming the file, line and rule id (`sealed.path`, `sealed.transcript`, `sealed.answer`, `sealed.seed`, `sealed.local_path`); in a private repo it warns. Repos without a `sealed` key see no change.
 - Visibility: config override, then a 24-hour cache under the state root, then `gh repo view --json visibility` on the push target with a 5 s timeout; `unknown` counts as public.
 - Capy's PR tool may not run local hooks, so the vendored Capy skill and the coordinator contract say to run `gstack-pregate --sealed` before any push or PR creation in a repo with a `sealed` config.
+- Custody is the primary control: sealed held-out sets stay in owner custody (never on Capy Drive or a Capy machine that can push to the public repo); the guard is defense in depth. Whether Capy's PR tool runs local pre-push hooks is not measured in this wave; PR C's body says so and the coordinator records the measurement. Server-side push protection on the public repo is the owner's call and is listed in the rollout tranche.
 - Tests: a scratch public repo (visibility override) with a `sealed` config refuses a push of each kind, naming file and rule (today: exit 0, no output); a private override warns and passes; a repo without the key passes silently.
 
 ### Keep what worked (regression pins)
@@ -254,3 +255,29 @@ Six reviewer passes (CEO, DX and Eng; native claude-opus-5-5 and outside gpt-6.1
 ## Review record
 
 Autoplan run `ap-20261012235347` (gstack 1.91.95.0, Capy cloud machine, no Claude Code harness; native claude-opus-5-5 and outside gpt-6.1-sol as host subagents; scope `--no-ui --developer-tool`, order ceo,dx,eng, snapshot `7ce72ff6…0f09d9` for all three phases). CEO: 15 + 10 findings (confirmed 1). DX: 30 + 16 (confirmed 0). Eng: 18 + 22 (confirmed 1). Gate rev 1 answered as recorded above; `REOPENED: ceo,eng`. Full results, consensus files and the gate are kept with the run; the amendments above are the accepted outcome.
+
+### Amendment verification (outside voice gpt-6.1-sol, after gate rev 1)
+
+One outside pass checked the gate decisions and amendments against every Critical and High finding in the six results (4 Critical and 53 High by its count of the fences; the gate summary above undercounted). 35 resolved, 1 declined, 21 open or partial; it ranked 15 builder corrections. Sent to the builders as replacements:
+
+- **CD2:** price from a versioned call-plan data file (`price-gate --plan-file`, or base-policy `price_file`) bound to the gate command, head and inputs. No repository command runs before approval, and `--allow-unpriced` is a recorded owner override that never authorizes spend.
+- **CD4 boundary:** published commits are `git rev-list <local> --not --remotes=<remote>`, not a local merge-base. Malformed policy fails closed. Unknown visibility counts as public, and a cached private verdict older than an hour is re-queried before it can downgrade a refusal. P3 promises a local check against accidental publication; hosted CI only detects bypasses after upload.
+- **CD3:** `regate` derives reuse only from a freshly evaluated tree receipt, with per-lane verdicts and stamp-sensitive reruns. A delegated restamp requires a clean caller tree.
+- **A:** the bootstrapper and the full wrapper live at distinct paths with a lock handoff. The verdict is keyed by checkout realpath and HEAD, and its path is carried in `GSTACK_LAUNCH`. It is required only under `GSTACK_CAPY=1`, so other hosts get the local runtime check. Support metadata resolves through `.source-path`.
+- **B-core:** `revise --incorporates <ids>` clears only the named amendments. The UC option b renders both voices' remedies verbatim. One integrated conformance test covers the whole loop.
+
+Declined, with reasons:
+
+- **Fully semantic agreement detection (correction 3).** It cannot be decided mechanically. Rendering both remedies plus `all as-is` leaves the call visible to the owner.
+- **Pinning the upgrade to a qualified release sha (correction 9).** Every gstack main commit is a stamped, CI-green release, so the minimum is the policy lever. The plan no longer claims that a checkout of an old sha rolls back migrations.
+
+PR order: A, then B stacked on A (it reads A's verdict helper), and C independent.
+
+### Gate revisions 2 and 3 (on PR B's code)
+
+The run moved to PR B (`capy/gstack-autoplan-wave`). It printed `GSTACK_VERSION_CHANGED` and migrated. `revise --plan` with the amended plan reopened CEO and DX on snapshot `b5d68733…` (Eng was already reopened by the rev 1 answer). `revise --incorporates d1b,…` named rev 1 ids that 1.91.95 never recorded as amendments; it now refuses with `AMENDMENT_UNKNOWN` instead of `PLAN_AMEND_PENDING` (fixed in PR B, with a fail-first test). All three phases reran through `submit` with verified receipts.
+
+- **Gate rev 2:** 75 findings, 3 items. `d1b` accepted: P3 now makes owner custody the primary control for sealed output, and the CD4 notes say that whether Capy's PR tool runs local hooks is unmeasured. `d2a` kept: every phase snapshots the whole plan, so any edit reopens each phase. `p1b`. The change was bound with `revise --incorporates ap-20261012235347-r2-d1` (snapshot `5ad91c4b…`), and CEO, DX and Eng reran with the `DECIDED AT THE GATE` block.
+- **Gate rev 3:** 2 items. `all` (approved as-is). The open item `d1` (one voice: High findings that are not user challenges leave no disposition) is recorded as a follow-up, not a change to this wave.
+- `export`, then `gstack-artifact validate run.json`: `ARTIFACT_VALID: run=ap-20261012235347 status=complete`, with 3 gate revisions, 2 plan revisions, 1 amendment incorporated, 76 findings, 29 tasks, 11 decisions and none pending.
+- Across 9 phase closes, `confirmed=0`: the consensus matcher never paired a native finding with an outside one, so item 10's agreeing-voices default did not fire on a real run. This is a follow-up.
