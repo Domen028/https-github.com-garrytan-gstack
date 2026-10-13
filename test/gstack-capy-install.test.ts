@@ -171,6 +171,7 @@ describe('gstack-capy-install', () => {
     expect(sh(`cd "${f.base}/z" && zip -qr "${zip}" bun-linux-x64`).status).toBe(0);
     const adopted = run(f, ['--project', project], { STUB_CURL_ZIP: zip });
     expect(adopted.stdout).toContain('installing bun 1.4.3 from its release archive');
+    expect(adopted.stdout).not.toContain("gstack's minimum 1.4.3");
     expect(f.calls().filter(l => l.startsWith('curl '))).toEqual([expect.stringContaining('https://github.com/oven-sh/bun/releases/download/bun-v1.4.3/bun-linux')]);
     expect(adopted.status).toBe(3);
     expect(adopted.stderr).toContain('SHA-256 mismatch');
