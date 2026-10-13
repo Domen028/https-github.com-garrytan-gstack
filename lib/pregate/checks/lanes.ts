@@ -32,30 +32,98 @@ export function detectRunner(ctx: PregateContext, files: readonly string[]): str
   return null;
 }
 
+/** One runner invocation: `files` relative to `cwd` (repo-relative, `''` for the root). */
+export interface RunGroup { runner: string; cwd: string; files: string[] }
+
+/** The nearest directory at or above `file` holding a pubspec.yaml, repo-relative; null outside any Dart package. */
+function dartRoot(repoRoot: string, file: string): string | null {
+  for (let d = path.posix.dirname(file); ; d = path.posix.dirname(d)) {
+    const rel = d === '.' ? '' : d;
+    if (fs.existsSync(path.join(repoRoot, rel, 'pubspec.yaml'))) return rel;
+    if (d === '.' || d === '/' || d === '') return null;
+  }
+}
+
+/** `flutter test` for a package on the Flutter SDK, else `dart test`; through fvm when the repo pins one and fvm is installed. */
+export function dartRunner(repoRoot: string, root: string): string {
+  let pubspec = '';
+  try { pubspec = fs.readFileSync(path.join(repoRoot, root, 'pubspec.yaml'), 'utf8'); } catch { /* checked by dartRoot */ }
+  const tool = /^\s*sdk:\s*flutter\b/m.test(pubspec) ? 'flutter' : 'dart';
+  const fvm = (fs.existsSync(path.join(repoRoot, '.fvmrc')) || fs.existsSync(path.join(repoRoot, '.fvm', 'fvm_config.json'))) && Bun.which('fvm');
+  return `${fvm ? 'fvm ' : ''}${tool} test {files}`;
+}
+
+/**
+ * The invocations that run `files`. A declared runner takes every file. Otherwise
+ * Dart tests run from their own package root (a sub-package's imports resolve
+ * against its own pubspec), and the rest go to the detected runner; a file no
+ * runner claims makes the plan null (`incomplete`, never a pass).
+ */
+export function planRuns(ctx: PregateContext, files: readonly string[]): RunGroup[] | null {
+  if (ctx.config.runner) return [{ runner: ctx.config.runner, cwd: '', files: [...files] }];
+  const groups: RunGroup[] = [];
+  const dart = new Map<string, string[]>();
+  const rest: string[] = [];
+  for (const f of files) {
+    const root = f.endsWith('.dart') ? dartRoot(ctx.repoRoot, f) : null;
+    if (root === null) { rest.push(f); continue; }
+    dart.set(root, [...(dart.get(root) ?? []), root ? f.slice(root.length + 1) : f]);
+  }
+  for (const [root, list] of [...dart].sort(([a], [b]) => a.localeCompare(b))) groups.push({ runner: dartRunner(ctx.repoRoot, root), cwd: root, files: list });
+  if (rest.length) {
+    const runner = detectRunner(ctx, rest);
+    if (!runner) return null;
+    groups.push({ runner, cwd: '', files: rest });
+  }
+  return groups;
+}
+
 export interface RunnerSummary { ran: number | null; failed: number | null }
 
-/** The runner's own summary line: bun, node --test, vitest, jest, pytest. null when not recognised. */
+/** The runner's own summary line: bun, node --test, vitest, jest, pytest, dart/flutter test. null when not recognised. */
 export function parseSummary(output: string): RunnerSummary {
   let m: RegExpExecArray | null;
+  // dart/flutter test: the last `+passed ~skipped -failed: …` verdict line; progress lines carry no verdict.
+  const dart = [...output.matchAll(/\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed!|Some tests failed\.)/g)].pop();
+  if (dart) return { ran: Number(dart[1]) + Number(dart[2] ?? 0), failed: Number(dart[2] ?? 0) };
   if ((m = /^\s*(?:#|ℹ)\s*tests\s+(\d+)/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(?:#|ℹ)\s*fail\s+(\d+)/m.exec(output)?.[1] ?? 0) };
   if ((m = /Ran\s+(\d+)\s+tests?\s+across/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(\d+)\s+fail\b/m.exec(output)?.[1] ?? 0) };
   if ((m = /^\s*(\d+)\s+pass\s*$/m.exec(output))) return { ran: Number(m[1]) + Number(/^\s*(\d+)\s+fail\s*$/m.exec(output)?.[1] ?? 0), failed: Number(/^\s*(\d+)\s+fail\s*$/m.exec(output)?.[1] ?? 0) };
   if ((m = /Tests:\s+(?:(\d+)\s+failed,\s+)?(?:(\d+)\s+passed,\s+)?(\d+)\s+total/.exec(output))) return { ran: Number(m[3]), failed: Number(m[1] ?? 0) };
   if ((m = /Tests\s+(?:(\d+)\s+failed\s*\|\s*)?(\d+)\s+passed/.exec(output))) return { ran: Number(m[2]) + Number(m[1] ?? 0), failed: Number(m[1] ?? 0) };
-  if (/no tests ran/.test(output) || /No tests found/i.test(output)) return { ran: 0, failed: 0 };
+  if (/no tests ran/i.test(output) || /No tests found/i.test(output)) return { ran: 0, failed: 0 };
   if ((m = /(?:(\d+)\s+failed,?\s*)?(\d+)\s+passed/.exec(output))) return { ran: Number(m[2]) + Number(m[1] ?? 0), failed: Number(m[1] ?? 0) };
   return { ran: null, failed: null };
 }
 
-function runLocal(ctx: PregateContext, runner: string, files: string[]): { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string } {
-  const command = runner.replace('{files}', files.map(f => `'${f.replace(/'/g, `'\\''`)}'`).join(' '));
+function runLocal(ctx: PregateContext, groups: RunGroup[]): { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string } {
+  const quote = (f: string) => `'${f.replace(/'/g, `'\\''`)}'`;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-lanes-'));
   const log = path.join(dir, 'lanes.log');
-  const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: ctx.timeoutMs, maxBuffer: 256 * 1024 * 1024, env: { ...ctx.env, CI: ctx.env.CI ?? '1' } });
-  const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
+  const commands: string[] = [];
+  let output = '';
+  let exit: number | null = 0;
+  let ran: number | null = 0;
+  let failed: number | null = 0;
+  const deadline = Date.now() + ctx.timeoutMs;
+  for (const g of groups) {
+    const command = g.runner.replace('{files}', g.files.map(quote).join(' '));
+    commands.push(g.cwd ? `(cd ${quote(g.cwd)} && ${command})` : command);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) { exit = null; break; }
+    const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd: path.join(ctx.repoRoot, g.cwd), encoding: 'utf8', timeout: remaining, maxBuffer: 256 * 1024 * 1024, env: { ...ctx.env, CI: ctx.env.CI ?? '1' } });
+    const out = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
+    output += `${groups.length > 1 ? `$ ${commands[commands.length - 1]}\n` : ''}${out}`;
+    // Every group runs so one log names every failure; the worst exit wins and a timeout is never a pass.
+    if (r.status === null) { exit = null; break; }
+    if (r.status !== 0 && exit === 0) exit = r.status;
+    const summary = parseSummary(out);
+    ran = ran === null || summary.ran === null ? null : ran + summary.ran;
+    failed = failed === null || summary.failed === null ? null : failed + summary.failed;
+  }
+  const command = commands.join(' ; ');
   fs.writeFileSync(log, `$ ${command}\n${output}`);
-  const summary = parseSummary(output);
-  return { exit: r.status, ...summary, log, tail: output.trim().split('\n').slice(-25), command };
+  return { exit, ran, failed, log, tail: output.trim().split('\n').slice(-25), command };
 }
 
 function describe(sel: Selection): string[] {
@@ -78,9 +146,9 @@ function run(ctx: PregateContext): CheckResult {
   if (sel.tests.length === 0) return { ...base, detail: ctx.touched.length ? 'nothing touched selects a test' : 'no touched files' };
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
-  const runner = detectRunner(ctx, sel.localTests);
-  if (!runner) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${sel.localTests.length} selected file(s)`, fix: 'declare `runner` (with {files}) in .gstack/pregate.json' };
-  const r = runLocal(ctx, runner, sel.localTests);
+  const groups = planRuns(ctx, sel.localTests);
+  if (!groups) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${sel.localTests.length} selected file(s)`, fix: 'declare `runner` (with {files}) in .gstack/pregate.json' };
+  const r = runLocal(ctx, groups);
   const runLines = [...lines, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
   const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command) } };
   if (r.exit === null) return { ...withRun, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `local lane timed out after ${ctx.timeoutMs} ms (${sel.localTests.length} files)`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };

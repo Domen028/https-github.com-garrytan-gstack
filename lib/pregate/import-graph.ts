@@ -9,6 +9,8 @@
  *   3. the `bin/<name>` → `test/<name>*.test.*` convention (with and without
  *      the `gstack-` prefix);
  *   4. explicit `.gstack/pregate.json` `dependencies` declarations.
+ * Dart directives (`import`/`export`/`part`, conditional URIs included) resolve
+ * `package:<name>/x` through every tracked pubspec.yaml to `<root>/lib/x`.
  * Uncertainty selects more tests, never fewer: a dependency on a directory
  * selects every test under it; a touched file with no path to a test is the
  * caller's `no lane` failure, not a pass. test/helpers/touchfile-closure.ts
@@ -19,8 +21,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { matchesAny } from '../ship-policy';
 
-export const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|py|rb|sh|bash|go|rs)$/;
-export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb)$|_spec\.rb$/;
+export const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|py|rb|sh|bash|go|rs|dart)$/;
+export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb|dart)$|_spec\.rb$/;
 
 export interface Edge { from: string; via: 'import' | 'literal' | 'convention' | 'declared' | 'generated' }
 export interface Graph {
@@ -36,6 +38,36 @@ const JOIN = /\bjoin\(([^()]*)\)/g;
 const RESOLVE_EXT = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
 
 export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel); }
+
+/** Dart package name → its root (`''` for the repository root), from every tracked pubspec.yaml. */
+export function dartPackages(repoRoot: string, files: Iterable<string>): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const f of files) {
+    if (path.posix.basename(f) !== 'pubspec.yaml') continue;
+    let text = '';
+    try { text = fs.readFileSync(path.join(repoRoot, f), 'utf8'); } catch { continue; }
+    const name = /^name:\s*['"]?([A-Za-z_][\w]*)/m.exec(text)?.[1];
+    const root = path.posix.dirname(f);
+    if (name && !out.has(name)) out.set(name, root === '.' ? '' : root);
+  }
+  return out;
+}
+
+/** The repo file one Dart directive URI names: `package:<name>/x` → `<root>/lib/x`, a relative URI from `fromFile`; `dart:` and external packages are null. */
+export function resolveDartUri(files: Set<string>, packages: Map<string, string>, fromFile: string, uri: string): string | null {
+  const pkg = /^package:([\w]+)\/(.+)$/.exec(uri);
+  if (pkg) {
+    const root = packages.get(pkg[1]!);
+    if (root === undefined) return null;
+    const target = normalize(path.posix.join(root, 'lib', pkg[2]!));
+    return files.has(target) ? target : null;
+  }
+  if (/^[a-z][\w+.-]*:/.test(uri)) return null;
+  const target = normalize(path.posix.join(path.posix.dirname(fromFile), uri));
+  return files.has(target) ? target : null;
+}
+
+const DART_DIRECTIVE = /^\s*(?:import|export|part)\b(?!\s+of\b)([^;]*);/gm;
 
 export function listRepoFiles(repoRoot: string): string[] {
   const r = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: repoRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
@@ -68,8 +100,11 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
 }
 
 /** Every dependency reference one source file makes: imports, requires, quoted repo paths and join() segment runs. */
-export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string): Array<{ target: string; via: Edge['via'] }> {
+export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, packages: Map<string, string> = new Map()): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
+  if (rel.endsWith('.dart')) {
+    for (const d of source.matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) { const t = resolveDartUri(files, packages, rel, u[1]!); if (t) out.push({ target: t, via: 'import' }); }
+  }
   if (/\.[cm]?[jt]sx?$/.test(rel)) {
     let imports: Array<{ path: string }> = [];
     try { imports = scanner.scanImports(source); } catch { imports = []; }
@@ -111,11 +146,12 @@ export function buildGraph(repoRoot: string, opts: BuildOptions = {}): Graph {
   for (const f of all) { let d = path.posix.dirname(f); while (d && d !== '.') { dirs.add(d); d = path.posix.dirname(d); } }
   const graph: Graph = { files, tests: new Set(all.filter(isTestFile)), reverse: new Map() };
   const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
+  const packages = dartPackages(repoRoot, all);
   for (const rel of all) {
     if (!SOURCE_EXT.test(rel) && !rel.startsWith('bin/')) continue;
     let source: string;
     try { const st = fs.statSync(path.join(repoRoot, rel)); if (!st.isFile() || st.size > maxBytes) continue; source = fs.readFileSync(path.join(repoRoot, rel), 'utf8'); } catch { continue; }
-    for (const { target, via } of referencesIn(files, dirs, rel, source)) addEdge(graph, target, rel, via);
+    for (const { target, via } of referencesIn(files, dirs, rel, source, packages)) addEdge(graph, target, rel, via);
   }
   for (const test of graph.tests) {
     const m = /^(?:[\w.-]+\/)*?test\/([\w-]+)\.(?:test|spec)\./.exec(test);

@@ -13,6 +13,13 @@
  *   warn          check ids downgraded to warn (never `secrets`; `lanes` keeps
  *                 its required-lane and requires-remote verdicts)
  *   strays.allow  root files or new top-level directories that are intentional
+ *   local         `<workflow.yml>/<job>` lanes a local run satisfies (a
+ *                 platform-agnostic toolchain, or a repo whose CI is off):
+ *                 their tests run here instead of becoming requires-remote
+ *
+ * A repo that keeps `.gstack/` out of git can hold the same file at
+ * `<GSTACK_HOME>/projects/<slug>/pregate.json`, honoured only when the base
+ * carries none. It lives outside the repo, so a PR still cannot reach it.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -31,13 +38,15 @@ export interface PregateConfig {
   selection: Record<string, string>;
   warn: string[];
   strays: { allow: string[] };
+  local: string[];
 }
-export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, selection: {}, warn: [], strays: { allow: [] } };
+export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, selection: {}, warn: [], strays: { allow: [] }, local: [] };
 export interface ConfigError { code: ResultCodeName; path: string; message: string }
 
 const MAX_LIST = 256;
 const MAX_COMMAND = 512;
-const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays'];
+const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays', 'local'];
+const LANE_ID = /^[A-Za-z0-9_.-]+\.ya?ml\/[A-Za-z0-9_-]+$/;
 
 function globError(g: string): string | null {
   const why = containedRelative(g);
@@ -79,7 +88,7 @@ export function validateConfig(raw: unknown, knownChecks: readonly string[] = []
     const sel = obj.selection;
     if (!sel || typeof sel !== 'object' || Array.isArray(sel)) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'selection', message: 'must be an object of <workflow.yml>/<job> → command' });
     else for (const [lane, command] of Object.entries(sel as Record<string, unknown>)) {
-      if (!/^[A-Za-z0-9_.-]+\.ya?ml\/[A-Za-z0-9_-]+$/.test(lane)) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: `selection[${JSON.stringify(lane)}]`, message: 'key must be <workflow file>/<job id>' });
+      if (!LANE_ID.test(lane)) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: `selection[${JSON.stringify(lane)}]`, message: 'key must be <workflow file>/<job id>' });
       const why = commandError(command);
       if (why) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: `selection[${JSON.stringify(lane)}]`, message: why });
     }
@@ -102,6 +111,10 @@ export function validateConfig(raw: unknown, knownChecks: readonly string[] = []
       }
     }
   }
+  if ('local' in obj) {
+    if (!Array.isArray(obj.local) || obj.local.some(l => typeof l !== 'string')) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'local', message: 'must be an array of <workflow file>/<job id>' });
+    else (obj.local as string[]).forEach((l, i) => { if (!LANE_ID.test(l)) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: `local[${i}]`, message: `${JSON.stringify(l)} must be <workflow file>/<job id>` }); });
+  }
   return errors;
 }
 
@@ -112,10 +125,10 @@ export function parseConfig(text: string, knownChecks: readonly string[] = []): 
   const errors = validateConfig(raw, knownChecks);
   if (errors.length) return { config: DEFAULT_CONFIG, errors };
   const o = raw as Partial<PregateConfig>;
-  return { config: { $schema: o.$schema, runner: o.runner ?? null, dependencies: o.dependencies ?? {}, selection: o.selection ?? {}, warn: o.warn ?? [], strays: { allow: o.strays?.allow ?? [] } }, errors: [] };
+  return { config: { $schema: o.$schema, runner: o.runner ?? null, dependencies: o.dependencies ?? {}, selection: o.selection ?? {}, warn: o.warn ?? [], strays: { allow: o.strays?.allow ?? [] }, local: o.local ?? [] }, errors: [] };
 }
 
-export type ConfigLoad = { config: PregateConfig; errors: ConfigError[]; present: boolean; label: string; kind: 'base' | 'head' | 'none' } | { unavailable: true; base: string; detail: string };
+export type ConfigLoad = { config: PregateConfig; errors: ConfigError[]; present: boolean; label: string; kind: 'base' | 'head' | 'user' | 'none' } | { unavailable: true; base: string; detail: string };
 
 function git(cwd: string, args: string[]): { ok: boolean; out: string } {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000 });
@@ -137,6 +150,13 @@ export function loadConfigFromHead(repoRoot: string, knownChecks: readonly strin
   return { ...parseConfig(fs.readFileSync(file, 'utf8'), knownChecks), present: true, label: `head (unreviewed) ${PREGATE_CONFIG_PATH}`, kind: 'head' };
 }
 
+/** The user-owned copy for a repo that keeps `.gstack/` out of git; the caller consults it only when the base has none. */
+export function loadConfigFromUser(file: string, knownChecks: readonly string[] = []): ConfigLoad | null {
+  let text: string;
+  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  return { ...parseConfig(text, knownChecks), present: true, label: `user ${file}`, kind: 'user' };
+}
+
 export function isConfigUnavailable(load: ConfigLoad): load is { unavailable: true; base: string; detail: string } {
   return (load as any).unavailable === true;
 }
@@ -149,6 +169,7 @@ export function exampleConfigJson(): string {
     selection: {},
     warn: [],
     strays: { allow: [] },
+    local: [],
   };
   return JSON.stringify(example, null, 2) + '\n';
 }
@@ -160,5 +181,7 @@ export function explainConfig(): string {
     'selection: <workflow.yml>/<job> → the runner-owned command that lists that lane’s test files when its matrix is planner-computed',
     `warn: check ids downgraded to warn; never ${NON_DOWNGRADABLE.join(', ')}; lanes keeps its required-lane and requires-remote verdicts`,
     'strays.allow: root files or new top-level directories that are intentional',
+    'local: <workflow.yml>/<job> lanes a local run satisfies (platform-agnostic toolchain, or CI off); their tests run here, not requires-remote',
+    'no .gstack/pregate.json on the base: <GSTACK_HOME>/projects/<slug>/pregate.json is read instead (outside the repo; a PR cannot reach it)',
   ].join('\n') + '\n';
 }

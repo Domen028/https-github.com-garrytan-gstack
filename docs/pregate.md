@@ -57,14 +57,19 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 
 | Key | Meaning |
 |---|---|
-| `runner` | the local test command with `{files}` (gstack: `bun test {files}`); without it `lanes` is `incomplete` |
+| `runner` | the local test command with `{files}` (gstack: `bun test {files}`); unset, it is detected (bun, vitest, jest, pytest, `node --test`, and `flutter test`/`dart test` per Dart package root, through fvm when the repo pins it); nothing detected is `incomplete` |
 | `dependencies` | glob → test files for subprocess targets, runtime reads and generated inputs the import graph cannot see; `[]` declares "no lane needed" (docs, licences) |
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
+| `local` | `workflow.yml/job` lanes a local run satisfies: a platform-agnostic toolchain (Dart on `ubuntu-latest` from a Mac), or a repo whose CI is off. Their tests run here instead of becoming `requires-remote` |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
-takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
+takes effect. A repo that keeps `.gstack/` out of git (a shared repo where gstack
+is one contributor's tool) can hold the same file at
+`<GSTACK_HOME>/projects/<slug>/pregate.json`. It is read only when the base
+carries none, it lives outside the repository so a PR still cannot reach it, and
+the record names it (`policy user <path>`). `gstack-pregate validate` / `init` cover the working-tree file.
 
 ## `gstack-pregate`
 
@@ -94,7 +99,9 @@ Two stages with separate clocks, both printed:
 
 - `lanes`: touched files map to tests through `lib/pregate/import-graph.ts`
   (static imports ∪ repo-path string literals ∪ the `bin/<name>` →
-  `test/<name>*.test.ts` convention ∪ `dependencies`), transitively through
+  `test/<name>*.test.ts` convention ∪ `dependencies`; Dart `import`/`export`/`part`
+  directives resolve `package:<name>/x` through every tracked `pubspec.yaml`, and
+  `*_test.dart` files are tests), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched file with no lane is `FAIL lanes — <file> has no test lane`, never
   a pass. Lanes and platform tiers come from `.github/workflows/*.yml`
