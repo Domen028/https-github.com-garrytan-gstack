@@ -95,7 +95,7 @@ describe('capy skill bootstrapper (capy/skill/gstack/scripts/install.sh)', () =>
   test('the first line names the wrapper revision and path; bash -n passes for the bootstrapper and the full wrapper', () => {
     for (const file of [BOOT, path.join(REPO, 'bin/gstack-capy-session')]) {
       expect(fs.existsSync(file), file).toBe(true);
-      const r = spawnSync('bash', ['-n', file], { encoding: 'utf8' });
+      const r = spawnSync('bash', ['-n', file], { encoding: 'utf8', timeout: 30_000 });
       expect(r.status, `${file}: ${r.stderr}`).toBe(0);
     }
     const f = fixture();

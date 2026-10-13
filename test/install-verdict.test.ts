@@ -16,7 +16,7 @@ import { checkInstallAdmission, installVerdictPath, readInstallVerdict, sourceRo
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const REAL = fs.realpathSync(ROOT);
-const HEAD = execFileSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+const HEAD = execFileSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 30_000 }).trim();
 const dirs: string[] = [];
 afterEach(() => { for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true }); });
 const tmp = () => { const d = fs.mkdtempSync(path.join(os.tmpdir(), 'install-verdict-')); dirs.push(d); return d; };
@@ -65,7 +65,7 @@ describe('install verdict (TypeScript)', () => {
 });
 
 describe('source root and support file (one helper, direct and symlinked layouts)', () => {
-  const bash = (bin: string, fn: string) => spawnSync('bash', ['-c', `. "${path.join(ROOT, 'bin/gstack-install-verdict.sh')}" && ${fn}`, '_', bin], { encoding: 'utf8' });
+  const bash = (bin: string, fn: string) => spawnSync('bash', ['-c', `. "${path.join(ROOT, 'bin/gstack-install-verdict.sh')}" && ${fn}`, '_', bin], { encoding: 'utf8', timeout: 30_000 });
   test('a checkout bin resolves to the checkout; an installed root follows .source-path; both read capy/support.env', () => {
     const runtime = tmp();
     fs.symlinkSync(path.join(ROOT, 'bin'), path.join(runtime, 'bin'));
