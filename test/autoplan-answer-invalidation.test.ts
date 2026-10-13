@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { attemptsOf, autoplan, journal, readRun, review, ROOT, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
+import { attemptsOf, autoplan, journal, readRun, review, ROOT, runPhase, SMALL_PLAN, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-answer-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -39,6 +39,25 @@ function gatedRun(name: string): string {
   return out;
 }
 const decisions = (out: string) => fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
+
+/**
+ * An accepted plan change is a pending amendment (B-core interlock): `next` refuses with PLAN_AMEND_PENDING and writes
+ * nothing until the plan is edited and `revise --incorporates` names the decision. Returns the revise output.
+ */
+function incorporate(out: string, ids: string[], edit: string) {
+  const before = fs.readFileSync(path.join(out, 'run.json'), 'utf8');
+  const blocked = autoplan(['next', '--out', out]);
+  expect(blocked.status).toBe(3);
+  expect(blocked.stderr).toMatch(new RegExp(`${ids.join(',')}.*\\(PLAN_AMEND_PENDING\\)$`, 'm'));
+  expect(fs.readFileSync(path.join(out, 'run.json'), 'utf8')).toBe(before);
+  const plan = path.join(path.dirname(out), 'plan.md');
+  fs.writeFileSync(plan, SMALL_PLAN.replace('Tests cover', `${edit} Tests cover`));
+  const revised = autoplan(['revise', '--out', out, '--plan', plan, '--incorporates', ids.join(',')]);
+  expect(revised.status, revised.stderr).toBe(0);
+  expect(revised.stdout).toMatch(/^AMENDMENTS: pending=none$/m);
+  expect(journal(out).filter(j => j.event === 'amendment_incorporated').map(j => j.decision)).toEqual(expect.arrayContaining(ids));
+  return revised;
+}
 
 describe('answer', () => {
   test('the gate lists the disagreement as an auto item and the user challenges as approval items', () => {
@@ -97,7 +116,8 @@ describe('answer', () => {
     const out = gatedRun('reopen');
     const r = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all except d1b', '--json']);
     expect(r.status, r.stderr).toBe(0);
-    expect(JSON.parse(r.stdout)).toMatchObject({ status: 'running', outcome: 'reopened', reopened: ['ceo', 'eng'] });
+    const runId = readRun(out).run;
+    expect(JSON.parse(r.stdout)).toMatchObject({ status: 'running', outcome: 'reopened', reopened: ['ceo', 'eng'], amendments: [`${runId}-d1`] });
     const run = readRun(out);
     expect(run.phases.ceo).toEqual({});
     expect(run.phases.eng).toEqual({});
@@ -108,6 +128,9 @@ describe('answer', () => {
     expect(Object.keys(run.artifacts)).not.toContain('ceo-native.md');
     const d1 = decisions(out).find((d: any) => d.label === 'D1');
     expect(d1).toMatchObject({ status: 'overridden', chosen: 'b', gate_rev: 1 });
+    expect(journal(out).filter(j => j.event === 'reopened').map(j => j.phase)).toEqual(['ceo', 'eng']);
+    // the accepted change is applied to the plan and named before any phase reruns; the reopened phases stay reopened once
+    incorporate(out, [`${runId}-d1`], 'Gate reuse also checks the lockfile hash.');
     expect(journal(out).filter(j => j.event === 'reopened').map(j => j.phase)).toEqual(['ceo', 'eng']);
     // the loop continues: ceo first, then eng, then a new gate at gate_rev 2 whose rows join the old ones
     const ceo = runPhase(out, 'ceo');
@@ -140,8 +163,14 @@ describe('answer', () => {
   test('an eng-only override reopens eng alone; p1d reopens every phase; p1c keeps the gate; p1e ends incomplete', () => {
     const out = gatedRun('eng-only');
     const engOnly = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all except uc2b', '--json']);
-    expect(JSON.parse(engOnly.stdout)).toMatchObject({ outcome: 'reopened', reopened: ['eng'] });
+    const runId = readRun(out).run;
+    expect(JSON.parse(engOnly.stdout)).toMatchObject({ outcome: 'reopened', reopened: ['eng'], amendments: [`${runId}-uc2`] });
     expect(readRun(out).phases.ceo.closed_at).toBeTruthy();
+    // the revised plan changes the hash ceo reviewed, so revise (not the answer) reruns ceo on v2 before eng
+    const revised = incorporate(out, [`${runId}-uc2`], 'Retries stop at the dead-letter queue.');
+    expect(revised.stdout).toMatch(/^REVISED: plan=\S+ reopened=ceo$/m);
+    expect(journal(out).filter(j => j.event === 'reopened').map(j => [j.phase, j.reason ?? null])).toEqual([['eng', expect.anything()], ['ceo', expect.stringContaining('revise')]]);
+    expect(runPhase(out, 'ceo').outside.stdout).toMatch(/PHASE_CLOSED: ceo/);
     const eng = runPhase(out, 'eng');
     expect(eng.outside.stdout).toContain('status=gate_pending');
     const interrogate = autoplan(['answer', '--out', out, '--gate-rev', '2', '--reply', 'all except p1c', '--json']);

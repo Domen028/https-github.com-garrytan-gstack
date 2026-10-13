@@ -180,6 +180,11 @@ gstack_result_anchor() {
     EVAL_GATE_UNPRICED) printf '%s' 'eval-gate-unpriced' ;;
     EVAL_GATE_OVER_CAP) printf '%s' 'eval-gate-over-cap' ;;
     EVAL_PLAN_STALE) printf '%s' 'eval-plan-stale' ;;
+    PLAN_SECTIONS_INVALID) printf '%s' 'plan-sections-invalid' ;;
+    PLAN_AMEND_PENDING) printf '%s' 'plan-amend-pending' ;;
+    AMENDMENT_UNKNOWN) printf '%s' 'amendment-unknown' ;;
+    GSTACK_VERSION_CHANGED) printf '%s' 'gstack-version-changed' ;;
+    ARTIFACT_GATE_UNSETTLED) printf '%s' 'artifact-gate-unsettled' ;;
     UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;
     UPGRADE_FETCH_FAILED) printf '%s' 'upgrade-fetch-failed' ;;
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;

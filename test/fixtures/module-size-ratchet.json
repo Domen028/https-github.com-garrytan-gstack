@@ -85,6 +85,10 @@
     { "file": "lib/autoplan-export.ts", "movedFrom": "(new: the unattended export file set, B2/B12)" },
     { "file": "lib/spec-review-cap.ts", "movedFrom": "(new: the spec-review loop at the cap: numbered gaps and deterministic fix verification, B8)" },
     { "file": "bin/gstack-autoplan", "movedFrom": "(new: thin entrypoint over lib/autoplan-run.ts, B2)" },
+    { "file": "lib/autoplan-plan-text.ts", "movedFrom": "(new: plan wrap, Implementation-plan review hash, scaffold and drift lines, field wave B1c)" },
+    { "file": "lib/autoplan-admission.ts", "movedFrom": "(new: install verdict and Bun minimum admission for mutating autoplan verbs, field wave B-core)" },
+    { "file": "lib/autoplan-migrate.ts", "movedFrom": "(new: gstack_version stamp and legacy decision-id migration at load, field wave B1a)" },
+    { "file": "lib/autoplan-revise.ts", "movedFrom": "(new: the revise transaction, amendments and its resume recovery, field wave B1c)" },
     { "file": "bin/gstack-outside-voice", "movedFrom": "(new: thin entrypoint over lib/outside-voice-runner.ts, B3)" },
     { "file": "lib/plan-reality.ts", "movedFrom": "(new: the reality-row table, the REALITY: line grammar and the row checker, D1)" },
     { "file": "bin/gstack-plan-reality", "movedFrom": "(new: thin entrypoint over lib/plan-reality.ts, D1)" },
@@ -107,7 +111,10 @@
     { "file": "lib/pregate/checks/guards.ts", "movedFrom": "(new: pre-gate repo guards, field wave CD1)" },
     { "file": "lib/pregate/runtime.ts", "movedFrom": "(new: the verified launch Bun for repo commands, field wave CD1)" },
     { "file": "lib/sealed-guard.ts", "movedFrom": "(new: the sealed-output guard shared by the pre-push hook and gstack-pregate sealed, field wave CD4)" },
-    { "file": "lib/pregate/regate.ts", "movedFrom": "(new: the regate verdict from a fresh tree receipt plus migration collisions, field wave CD3)" }
+    { "file": "lib/pregate/regate.ts", "movedFrom": "(new: the regate verdict from a fresh tree receipt plus migration collisions, field wave CD3)" },
+    { "file": "lib/autoplan-scope.ts", "movedFrom": "(new: UI evidence from rendered surfaces and the plan scope marker, shared by the runner and the snapshot tool, field wave B2c)" },
+    { "file": "lib/source-root.ts", "movedFrom": "(new: the source checkout behind an install root, from its recorded .source-path, field wave B2e)" },
+    { "file": "scripts/resolvers/autoplan-driver.ts", "movedFrom": "(new: renders autoplan/DRIVER.md from the runner's constants, field wave B2e)" }
   ],
   "residualFiles": [
     { "file": "scripts/test-free-shards.ts", "maxLines": 2361, "reason": "free lane policy after the shard engine took spawn, sandbox, logs, seeds and flags" },

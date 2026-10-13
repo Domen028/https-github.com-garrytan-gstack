@@ -14,41 +14,53 @@
  * EXECUTION_UNKNOWN, never redispatching them on its own. Thin bin:
  * bin/gstack-autoplan.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { canonicalRows, parseReviewResult } from './autoplan-reconcile';
+import { canonicalRows, parseReceipt, parseRecordFindings, parseReviewResult, type CanonicalFinding } from './autoplan-reconcile';
 import { closePhase, finishGate } from './autoplan-gate';
-import { PHASES, SNAPSHOT_TOOL, detectScope, extractHeading, phaseOrder, reviewSkillFile, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
-import { FILES, RunError, journal, now, readJournal, readState, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
+import { GSTACK_VERSION } from './autoplan-migrate';
+import { driftLine, reviewHash, scaffold } from './autoplan-plan-text';
+import { PHASES, SNAPSHOT_TOOL, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
+import { recoverRevise } from './autoplan-revise';
+import { FILES, RunError, journal, now, pendingAmendments, readDecisions, readJournal, readState, voiceTerminal, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
+import { checkPlanReality, checkRealityRows, PLAN_REALITY_CHECKER } from './plan-reality';
 import type { RunStatus } from './headless-artifacts';
 import { sha256File } from './headless-artifacts';
 import { outsideConsent } from './outside-consent';
 import { familyConflict, modelFamily } from './outside-voice-runner';
 import { renderSpend, reserve, settle, summarize, readLedger } from './spend-ledger';
 
+/** An unreadable run.lock younger than this is a lock some other gstack is still writing, never a stale one. */
+const LOCK_WRITE_GRACE_MS = 30_000;
+
 /** Exclusive ownership for one command: a lock whose pid is alive is never stolen; a dead pid's lock is reclaimed. */
 export function withRunLock<T>(out: string, fn: () => T, opts: { steal?: boolean } = {}): T {
   fs.mkdirSync(out, { recursive: true });
   const lock = path.join(out, FILES.lock);
   const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: now() });
+  const staged = `${lock}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+  fs.writeFileSync(staged, mine);
   for (let i = 0; ; i++) {
     try {
-      const fd = fs.openSync(lock, 'wx');
-      fs.writeSync(fd, mine);
-      fs.closeSync(fd);
+      fs.linkSync(staged, lock);
+      fs.unlinkSync(staged);
       break;
     } catch (e: any) {
-      if (e.code !== 'EEXIST') throw e;
+      if (e.code !== 'EEXIST') { fs.rmSync(staged, { force: true }); throw e; }
       let owner: { pid?: number; host?: string; at?: string } = {};
-      try { owner = JSON.parse(fs.readFileSync(lock, 'utf8')); } catch { /* unreadable: treat as stale below */ }
+      let unreadable = false;
+      try { owner = JSON.parse(fs.readFileSync(lock, 'utf8')); } catch { unreadable = true; }
       let alive = false;
-      if (owner.host === os.hostname() && typeof owner.pid === 'number') {
+      if (unreadable) {
+        try { alive = Date.now() - fs.statSync(lock).mtimeMs < LOCK_WRITE_GRACE_MS; } catch { /* gone: retry the link */ }
+      } else if (owner.host === os.hostname() && typeof owner.pid === 'number') {
         try { process.kill(owner.pid, 0); alive = true; } catch (k: any) { alive = k.code === 'EPERM'; }
       } else if (owner.host && owner.host !== os.hostname()) alive = !opts.steal;
-      if (alive) throw new RunError('RUN_LOCKED', `pid ${owner.pid} on ${owner.host} since ${owner.at}`, 3);
+      if (alive) { fs.rmSync(staged, { force: true }); throw new RunError('RUN_LOCKED', unreadable ? `${lock} is being written by another command` : `pid ${owner.pid} on ${owner.host} since ${owner.at}`, 3); }
       try { fs.unlinkSync(lock); } catch { /* raced with its owner's exit */ }
-      if (i > 50) throw new RunError('RUN_LOCKED', `could not reclaim ${lock}`, 3);
+      if (i > 50) { fs.rmSync(staged, { force: true }); throw new RunError('RUN_LOCKED', `could not reclaim ${lock}`, 3); }
     }
   }
   try { return fn(); } finally { try { if (fs.readFileSync(lock, 'utf8') === mine) fs.unlinkSync(lock); } catch { /* already gone */ } }
@@ -57,23 +69,37 @@ export function withRunLock<T>(out: string, fn: () => T, opts: { steal?: boolean
 // ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
-export interface InitOptions { plan: string; out: string; cwd: string; scope?: ScopeFlags; planHeading?: string; outsideEnabled?: boolean; spendCap?: number | null; sessionKind?: string; deadlineMin?: number; light?: boolean; runId?: string }
+export interface InitOptions { plan: string; out: string; cwd: string; scope?: ScopeFlags; planHeading?: string; outsideEnabled?: boolean; spendCap?: number | null; sessionKind?: string; deadlineMin?: number; light?: boolean; runId?: string; scaffold?: boolean }
 
-export function initRun(o: InitOptions): RunState {
+/** `lines` receives what init itself reports (SCAFFOLDED:). A plan with one section heading missing refuses, or with `scaffold` is reviewed from a scaffolded copy. */
+export function initRun(o: InitOptions, lines: string[] = []): RunState {
   const out = path.resolve(o.out);
-  fs.mkdirSync(out, { recursive: true });
-  let source = path.resolve(o.plan);
+  const input = path.resolve(o.plan);
+  let source = input;
   if (!fs.existsSync(source)) throw new Error(`plan not found: ${source}`);
+  let scaffolded = false;
   if (o.planHeading) {
     const section = extractHeading(fs.readFileSync(source, 'utf8'), o.planHeading);
     if (section === undefined) throw new Error(`heading ${JSON.stringify(o.planHeading)} not found in ${source}`);
+    fs.mkdirSync(out, { recursive: true });
     source = path.join(out, FILES.source);
     fs.writeFileSync(source, section);
+  } else {
+    const diag = scaffold(fs.readFileSync(source, 'utf8'));
+    if (diag.problem && (!o.scaffold || !diag.text)) throw new RunError('PLAN_SECTIONS_INVALID', `${source}: ${diag.problem}`, 3);
+    if (diag.text) {
+      fs.mkdirSync(out, { recursive: true });
+      source = path.join(out, FILES.source);
+      fs.writeFileSync(source, diag.text);
+      scaffolded = true;
+      lines.push(`SCAFFOLDED: added "${diag.added}" (copy at ${source}; ${input} unchanged)`);
+    }
   }
+  fs.mkdirSync(out, { recursive: true });
   const active = path.join(out, FILES.active);
   const restore = path.join(out, FILES.restore);
   const init = snapshotTool(['init', source, active, restore], o.cwd);
-  const scope = detectScope(active, o.cwd, o.scope ?? {});
+  const scope = detectScope(active, o.cwd, o.scope ?? {}, path.resolve(o.plan));
   const order = phaseOrder(scope);
   const run = o.runId ?? `${path.basename(out)}-${new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)}`;
   // codex_reviews gates the outside voice here, before any dispatch: a refusal is a terminal not_run outcome per phase.
@@ -90,6 +116,8 @@ export function initRun(o: InitOptions): RunState {
     deviations: ['autoplan guard: not enforced by this host; publication order is unverified (GUARD_NOT_INSTALLED)'],
     ...(o.deadlineMin ? { deadline_at: new Date(Date.now() + o.deadlineMin * 60_000).toISOString() } : {}),
     ...(o.light ? { light: true } : {}),
+    gstack_version: GSTACK_VERSION, plan_input: input, scope_flags: { ...(o.scope ?? {}) },
+    ...(o.planHeading ? { plan_heading: o.planHeading } : {}), ...(scaffolded ? { scaffolded: true } : {}),
   };
   fs.writeFileSync(path.join(out, 'timing.json'), JSON.stringify({ schema_version: 1, run, phases: [], started_at: now(), session_kind: state.session_kind }, null, 2) + '\n');
   journal(out, { event: 'init', run, plan_source: source, scope, phase_order: order, ...(consentMissing ? { outside: 'not_run', reason: 'consent_missing' } : {}) });
@@ -127,7 +155,9 @@ function openPhase(state: RunState, phase: Phase, cwd: string): void {
     }
   }
   const sections = sectionLoadFor(phase, state.scope, state.session_kind === 'unattended' || state.light ? 'light' : 'full');
-  const prompts = writePrompts({ phase, snapshot: { nativePrompt: snap.nativePrompt, snapshotPath: snap.snapshotPath, sha256: snap.sha256 }, outDir: state.out, priorConsensus: prior, sections });
+  const decided = (state.gate_rev ?? 0) >= 1 ? readDecisions(state.out).filter(r => r.chosen != null && r.status !== 'pending')
+    .map(r => `r${r.gate_rev} ${(r.label ?? r.id).toLowerCase()}${r.chosen} ${r.title}${r.chosen_text ? ` -> ${r.chosen_text}` : ''}`) : [];
+  const prompts = writePrompts({ phase, snapshot: { nativePrompt: snap.nativePrompt, snapshotPath: snap.snapshotPath, sha256: snap.sha256 }, outDir: state.out, priorConsensus: prior, sections, decided });
   ps.snapshot = snap.sha256; ps.snapshot_dir = path.dirname(snap.snapshotPath); ps.snapshot_path = snap.snapshotPath; ps.methodology = methodology.methodologyPath; ps.opened_at = now();
   ps.sections = { loaded: sections.loaded, skipped: sections.skipped, checklist: !!sections.checklist };
   ps.native = { status: 'pending', attempts: [] };
@@ -144,18 +174,26 @@ export function nextStep(o: NextOptions): NextResult {
   const result: NextResult = { state, attempts: [], lines };
   if (state.status === 'gate_pending' || state.status === 'complete' || state.status === 'incomplete' || state.status === 'refused') return result;
   if (state.deadline_at && Date.parse(state.deadline_at) < Date.now()) { state.status = 'interrupted'; writeState(state); lines.push(`DEADLINE: passed at ${state.deadline_at}`); return result; }
+  const pending = pendingAmendments(state).map(a => a.decision);
+  if (pending.length) {
+    throw new RunError('PLAN_AMEND_PENDING', `accepted at the gate but not in the plan: ${pending.join(', ')}; edit the plan, then gstack-autoplan revise --out ${state.out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${pending.join(',')} (or --withdraw <id>)`, 3);
+  }
   const phase = currentPhase(state);
   if (!phase) { finishGate(state); writeState(state); return result; }
+  const first = !state.phase_order.some(p => state.phases[p]?.snapshot);
   openPhase(state, phase, o.cwd);
   const ps = state.phases[phase]!;
   result.phase = phase;
   lines.push(`PHASE: ${phase} snapshot=${ps.snapshot} order=${state.phase_order.join(',')}`);
+  const drift = driftLine(state, 'PLAN_CHANGED');
+  if (drift) lines.push(drift);
+  if (first) lines.push(...scopeLines(state.scope), `DRIVER: ${driverFile()}`);
   if (ps.outside?.reason === 'consent_missing') lines.push(`OUTSIDE: ${phase} not_run reason=consent_missing`, String(ps.outside.detail));
-  if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${state.scope.source}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
+  if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${scopeSourceLabel(state.scope)}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
   const prompts = ps.prompts!;
   for (const voice of ['native', 'outside'] as const) {
     const v = voiceState(state, phase, voice);
-    if (v.status === 'completed' || v.status === 'disabled' || v.status === 'skipped') continue;
+    if (voiceTerminal(v)) continue;
     const open = openAttempt(v);
     if (open?.state === 'execution_unknown') {
       if (!o.redispatch?.includes(open.attempt)) throw new RunError('EXECUTION_UNKNOWN', `${open.attempt} (${phase} ${voice})`, 3);
@@ -190,8 +228,51 @@ function familyHint(state: RunState, voice: Voice): string {
 // ---------------------------------------------------------------------------
 // submit
 // ---------------------------------------------------------------------------
-export interface SubmitOptions { out: string; phase: string; voice: Voice; result: string; model: string; attempt: string; runner?: string; usageUsd?: number; reconcile?: string; cwd: string }
+export interface SubmitOptions {
+  out: string; phase: string; voice: Voice; model?: string; cwd: string; runner?: string; usageUsd?: number; reconcile?: string;
+  /** Exactly one of: a canonical result, a hand-run record, or a terminal outside outcome. */
+  result?: string; record?: string; unavailable?: string; failed?: string;
+  /** Optional when exactly one attempt is open for the phase and voice; required for an attested bind. */
+  attempt?: string; attest?: string;
+}
 export interface SubmitResult { state: RunState; closed: boolean; findings: number; lines: string[] }
+
+/** Report-only PLAN_REALITY on the active plan, once per Implementation-plan hash and checker (revise clears it). */
+function recordPlanReality(state: RunState): string[] {
+  let text: string;
+  try { text = fs.readFileSync(state.active_plan, 'utf8'); } catch { return []; }
+  const sha = reviewHash(text);
+  if (state.plan_reality?.plan_sha256 === sha && state.plan_reality.checker === PLAN_REALITY_CHECKER) return [];
+  const rows = checkRealityRows(text, { phase: 'plan', sessionKind: state.session_kind });
+  const plan = checkPlanReality(text, { sessionKind: state.session_kind });
+  const verdict = rows.verdict !== 'complete' ? rows.verdict : plan.verdict;
+  state.plan_reality = { plan_sha256: sha, checker: PLAN_REALITY_CHECKER, verdict, line: `${rows.line}; ${plan.line}` };
+  journal(state.out, { event: 'plan_reality', plan_sha256: sha, checker: PLAN_REALITY_CHECKER, verdict });
+  return [`${rows.line} (report only)`, `${plan.line} (report only)`, ...plan.numberLines];
+}
+
+function resolveAttempt(v: VoiceState, attempt: string | undefined, phase: string, voice: Voice): AttemptState {
+  const open = openAttempt(v);
+  if (!open || (attempt !== undefined && open.attempt !== attempt)) {
+    throw new RunError('ATTEMPT_MISMATCH', `${attempt ?? '(none given)'} is not the open attempt for ${phase} ${voice}${open ? ` (${open.attempt} is)` : ''}`, 3);
+  }
+  return open;
+}
+
+/** The record's receipt and findings: a matching INPUT line binds verified; none binds only on --attest with --attempt, never across a later revise. */
+function readRecord(state: RunState, phase: Phase, open: AttemptState, o: SubmitOptions, text: string): { findings: CanonicalFinding[]; source: VoiceState['findings_source']; receipt: 'verified' | 'attested' } {
+  const receipt = parseReceipt(text, { phase, sha256: state.phases[phase]!.snapshot! });
+  if (receipt.present && !receipt.ok) throw new RunError('RESULT_RECEIPT_MISSING', receipt.error!);
+  if (!receipt.present) {
+    if (!o.attest) throw new RunError('RESULT_RECEIPT_MISSING', `${o.record} has no INPUT: ${phase} <sha256> line; bind it on your word with --attest "<reason>" --attempt ${open.attempt}, or have the reviewer start with the INPUT line its prompt names`);
+    if (!o.attempt) throw new RunError('ATTEMPT_MISMATCH', `an attested bind names its attempt: pass --attempt ${open.attempt}`, 3);
+    const revised = readJournal(state.out).find(r => r.event === 'plan_revised' && String(r.ts) > open.dispatched_at);
+    if (revised) throw new RunError('RESULT_RECEIPT_MISSING', `the plan was revised after ${open.attempt} was dispatched (${revised.ts}); an attestation cannot say which plan was read: redispatch with gstack-autoplan next --redispatch, or bind a record with the INPUT line`);
+  }
+  const parsed = parseRecordFindings(text);
+  if (parsed.errors.length) throw new RunError('RESULT_FINDINGS_MISSING', parsed.errors.join('; '));
+  return { findings: parsed.findings, source: parsed.source, receipt: receipt.present ? 'verified' : 'attested' };
+}
 
 export function submitResult(o: SubmitOptions): SubmitResult {
   const state = readState(path.resolve(o.out));
@@ -199,18 +280,31 @@ export function submitResult(o: SubmitOptions): SubmitResult {
   const phase = o.phase as Phase;
   const ps = state.phases[phase];
   const v = ps?.[o.voice];
-  if (!ps?.snapshot || !v || ps.closed_at || v.status === 'completed' || v.status === 'disabled' || v.status === 'skipped') throw new RunError('PHASE_NOT_AWAITING', `${phase} ${o.voice} is ${v?.status ?? 'not opened'}`, 3);
-  const open = openAttempt(v);
-  if (!open || open.attempt !== o.attempt) throw new RunError('ATTEMPT_MISMATCH', `${o.attempt} is not the open attempt for ${phase} ${o.voice}${open ? ` (${open.attempt} is)` : ''}`, 3);
-  if (!fs.existsSync(o.result)) throw new RunError('RESULT_RECEIPT_MISSING', `result file not found: ${o.result}`);
-  const text = fs.readFileSync(o.result, 'utf8');
-  const parsed = parseReviewResult(text, { phase, sha256: ps.snapshot });
-  if (!parsed.receipt.ok) throw new RunError('RESULT_RECEIPT_MISSING', parsed.errors[0]!);
-  if (!parsed.fenceFound || parsed.errors.length) throw new RunError('RESULT_FINDINGS_MISSING', parsed.errors.join('; '));
+  if (ps?.skipped) throw new RunError('PHASE_NOT_AWAITING', `${phase} is skipped (${ps.skipped})`, 3);
+  if (!ps?.snapshot) throw new RunError('PHASE_NOT_AWAITING', `${phase} has not been opened; run gstack-autoplan next --out ${state.out} first`, 3);
+  if (!v || ps.closed_at || voiceTerminal(v)) throw new RunError('PHASE_NOT_AWAITING', `${phase} ${o.voice} is ${v?.status ?? 'not opened'}`, 3);
+  if (o.unavailable !== undefined || o.failed !== undefined) {
+    const lines = closeOutside(state, phase, o.unavailable !== undefined ? 'unavailable' : 'failed', (o.unavailable ?? o.failed)!);
+    writeState(state);
+    return { state, closed: !!ps.closed_at, findings: 0, lines };
+  }
+  const open = resolveAttempt(v, o.attempt, phase, o.voice);
+  const file = (o.record ?? o.result)!;
+  if (!fs.existsSync(file)) throw new RunError('RESULT_RECEIPT_MISSING', `result file not found: ${file}`);
+  const text = fs.readFileSync(file, 'utf8');
+  let bind: ReturnType<typeof readRecord>;
+  if (o.record) bind = readRecord(state, phase, open, o, text);
+  else {
+    const parsed = parseReviewResult(text, { phase, sha256: ps.snapshot });
+    if (!parsed.receipt.ok) throw new RunError('RESULT_RECEIPT_MISSING', parsed.errors[0]!);
+    if (!parsed.fenceFound || parsed.errors.length) throw new RunError('RESULT_FINDINGS_MISSING', parsed.errors.join('; '));
+    bind = { findings: parsed.findings, source: 'fence', receipt: 'verified' };
+  }
+  const model = o.model!;
   let conflict: string | undefined;
-  if (o.voice === 'outside') conflict = familyConflict(o.model, state.native_model);
-  else if (state.outside_model) conflict = familyConflict(state.outside_model, o.model);
-  else if (modelFamily(o.model) === 'unknown') conflict = `native model ${JSON.stringify(o.model)} has no recognized family`;
+  if (o.voice === 'outside') conflict = familyConflict(model, state.native_model);
+  else if (state.outside_model) conflict = familyConflict(state.outside_model, model);
+  else if (modelFamily(model) === 'unknown') conflict = `native model ${JSON.stringify(model)} has no recognized family`;
   if (conflict) throw new RunError('MODEL_FAMILY_CONFLICT', conflict, 3);
 
   // Bind: immutable copy, per-voice canonical rows, journal, ledger, manifest. Nothing above this line wrote.
@@ -218,39 +312,53 @@ export function submitResult(o: SubmitOptions): SubmitResult {
   const tmp = `${bound}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, text);
   fs.renameSync(tmp, bound);
-  const rows = canonicalRows(parsed.findings, { run: state.run, phase, voice: o.voice, model: o.model });
+  const rows = canonicalRows(bind.findings, { run: state.run, phase, voice: o.voice, model });
   fs.writeFileSync(`${bound}.findings.jsonl`, rows.map(r => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
   const sha = sha256File(bound);
-  journal(state.out, { event: 'submitted', attempt: o.attempt, phase, voice: o.voice, result: bound, result_sha256: sha, model: o.model, runner: o.runner ?? null, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown' });
-  settle(path.join(state.out, FILES.spend), o.attempt, o.usageUsd ?? 'unknown');
+  const receipt = { receipt: bind.receipt, findings_source: bind.source, reviewed_sha256: ps.snapshot, ...(bind.receipt === 'attested' ? { attest_reason: o.attest } : {}) };
+  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: bound, result_sha256: sha, model, runner: o.runner ?? null, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
+  settle(path.join(state.out, FILES.spend), open.attempt, o.usageUsd ?? 'unknown');
   open.state = 'submitted'; open.terminal_at = now();
-  Object.assign(v, { status: 'completed', model: o.model, provider: o.runner ?? (o.voice === 'native' ? 'host-subagent' : 'unknown'), output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: o.attempt, usage: { usd: o.usageUsd ?? 'unknown' } } satisfies Partial<VoiceState>);
+  Object.assign(v, { status: 'completed', model, provider: o.runner ?? (o.voice === 'native' ? 'host-subagent' : 'unknown'), output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: open.attempt, usage: { usd: o.usageUsd ?? 'unknown' }, ...receipt } satisfies Partial<VoiceState>);
+  if (bind.receipt === 'attested') (state.deviations ??= []).push(`receipt attested: ${phase} ${o.voice} ${open.attempt} bound from a hand-run record without a reviewer receipt (snapshot ${ps.snapshot.slice(0, 12)}; reason: ${o.attest})`);
   state.artifacts[path.basename(bound)] = { path: path.basename(bound), sha256: sha };
-  if (o.voice === 'native') state.native_model = o.model; else state.outside_model = o.model;
-  const lines = [`BOUND: ${o.attempt} phase=${phase} voice=${o.voice} model=${o.model} findings=${rows.length} sha256=${sha.slice(0, 12)}`];
-  const outsideTerminal = ['completed', 'disabled', 'unavailable', 'failed', 'skipped'].includes(String(ps.outside?.status));
-  const closed = ps.native?.status === 'completed' && outsideTerminal;
-  if (closed) {
-    const close = closePhase(state, phase, { overridesFile: o.reconcile });
-    lines.push(`PHASE_CLOSED: ${phase} confirmed=${close.consensus.confirmed} disagree=${close.consensus.disagree} new=${close.consensus.new} native_only=${close.consensus.native_only} coverage=${close.consensus.coverage}`);
-    if (!currentPhase(state)) finishGate(state); else state.status = 'running';
-  } else state.status = 'awaiting_result';
+  if (o.voice === 'native') state.native_model = model; else state.outside_model = model;
+  const lines = [`BOUND: ${open.attempt} phase=${phase} voice=${o.voice} model=${model} findings=${rows.length} sha256=${sha.slice(0, 12)} receipt=${bind.receipt}`];
+  lines.push(...recordPlanReality(state));
+  const closed = ps.native?.status === 'completed' && voiceTerminal(ps.outside);
+  if (closed) lines.push(...closeAndAdvance(state, phase, o.reconcile));
+  else state.status = 'awaiting_result';
   writeState(state);
   return { state, closed, findings: rows.length, lines };
+}
+
+function closeAndAdvance(state: RunState, phase: Phase, reconcile?: string): string[] {
+  const close = closePhase(state, phase, { overridesFile: reconcile });
+  if (!currentPhase(state)) finishGate(state); else state.status = 'running';
+  return [`PHASE_CLOSED: ${phase} confirmed=${close.consensus.confirmed} disagree=${close.consensus.disagree} new=${close.consensus.new} native_only=${close.consensus.native_only} coverage=${close.consensus.coverage}`];
+}
+
+/**
+ * Record the outside voice of `phase` unavailable or failed: its open attempt
+ * is cancelled and the outcome journaled with that attempt id before the
+ * manifest is written (resume replays it); closes the phase when native is bound.
+ */
+export function closeOutside(state: RunState, phase: Phase, status: 'unavailable' | 'failed', detail: string): string[] {
+  const v = voiceState(state, phase, 'outside');
+  const open = openAttempt(v);
+  journal(state.out, { event: 'outside_' + status, phase, attempt: open?.attempt ?? null, detail });
+  if (open) { open.state = 'cancelled'; open.terminal_at = now(); settle(path.join(state.out, FILES.spend), open.attempt, 'unknown'); }
+  Object.assign(v, { status, detail });
+  const lines = [`OUTSIDE: ${phase} ${status} (${detail})`];
+  if (state.phases[phase]?.native?.status === 'completed') lines.push(...closeAndAdvance(state, phase));
+  else if (state.status !== 'gate_pending') state.status = 'awaiting_result';
+  return lines;
 }
 
 /** Mark the outside voice of the current phase unavailable/failed (the runner could not run); closes the phase if native is bound. */
 export function markOutside(out: string, phase: Phase, status: 'unavailable' | 'failed', detail: string): RunState {
   const state = readState(out);
-  const v = voiceState(state, phase, 'outside');
-  const open = openAttempt(v);
-  if (open) { open.state = 'cancelled'; open.terminal_at = now(); settle(path.join(out, FILES.spend), open.attempt, 'unknown'); }
-  Object.assign(v, { status, detail });
-  journal(out, { event: 'outside_' + status, phase, detail });
-  if (state.phases[phase]?.native?.status === 'completed') {
-    closePhase(state, phase, {});
-    if (!currentPhase(state)) finishGate(state); else state.status = 'running';
-  }
+  closeOutside(state, phase, status, detail);
   writeState(state);
   return state;
 }
@@ -261,11 +369,22 @@ export function markOutside(out: string, phase: Phase, status: 'unavailable' | '
 export interface ResumeResult { state: RunState; unknown: string[]; rebound: string[]; lines: string[] }
 
 export function resumeRun(out: string): ResumeResult {
+  const recovered = recoverRevise(out);
   const state = readState(out);
   const rows = readJournal(out);
-  const terminal = new Set(rows.filter(r => ['submitted', 'cancelled', 'superseded'].includes(r.event)).map(r => r.attempt));
+  const terminal = new Set(rows.filter(r => ['submitted', 'cancelled', 'superseded', 'outside_unavailable', 'outside_failed'].includes(r.event)).map(r => r.attempt));
   const unknown: string[] = [];
   const rebound: string[] = [];
+  // An outside outcome journaled before its manifest write: replay it onto the attempt it names, never onto a later round.
+  for (const r of rows) {
+    if (r.event !== 'outside_unavailable' && r.event !== 'outside_failed') continue;
+    const ps = state.phases[r.phase];
+    const v = ps?.outside;
+    const a = v?.attempts?.find(x => x.attempt === r.attempt);
+    if (!a || !v || voiceTerminal(v) || ps.closed_at) continue;
+    if (a.state === 'dispatched' || a.state === 'execution_unknown') { a.state = 'cancelled'; a.terminal_at = r.ts; }
+    Object.assign(v, { status: r.event.slice('outside_'.length), detail: r.detail });
+  }
   for (const r of rows) {
     if (r.event !== 'dispatched') continue;
     const ps = state.phases[r.phase];
@@ -276,7 +395,8 @@ export function resumeRun(out: string): ResumeResult {
       const sub = rows.find(x => x.event === 'submitted' && x.attempt === r.attempt);
       if (sub && a && a.state !== 'submitted' && fs.existsSync(sub.result) && sha256File(sub.result) === sub.result_sha256) {
         a.state = 'submitted'; a.terminal_at = sub.ts;
-        Object.assign(v!, { status: 'completed', model: sub.model, provider: sub.runner ?? 'unknown', output: path.basename(sub.result), result_sha256: sub.result_sha256, findings: sub.findings, attempt: sub.attempt });
+        Object.assign(v!, { status: 'completed', model: sub.model, provider: sub.runner ?? 'unknown', output: path.basename(sub.result), result_sha256: sub.result_sha256, findings: sub.findings, attempt: sub.attempt,
+          ...(sub.receipt ? { receipt: sub.receipt, findings_source: sub.findings_source, reviewed_sha256: sub.reviewed_sha256, ...(sub.attest_reason ? { attest_reason: sub.attest_reason } : {}) } : {}) });
         state.artifacts[path.basename(sub.result)] = { path: path.basename(sub.result), sha256: sub.result_sha256 };
         if (r.voice === 'native') state.native_model = sub.model; else state.outside_model = sub.model;
         rebound.push(r.attempt);
@@ -292,8 +412,7 @@ export function resumeRun(out: string): ResumeResult {
   for (const phase of state.phase_order) {
     const ps = state.phases[phase];
     if (!ps?.snapshot || ps.closed_at) continue;
-    const outsideTerminal = ['completed', 'disabled', 'unavailable', 'failed', 'skipped'].includes(String(ps.outside?.status));
-    if (ps.native?.status === 'completed' && outsideTerminal) closePhase(state, phase, {});
+    if (ps.native?.status === 'completed' && voiceTerminal(ps.outside)) closePhase(state, phase, {});
   }
   if (!currentPhase(state) && !['gate_pending', 'complete', 'incomplete', 'refused'].includes(state.status)) finishGate(state);
   else if (state.status === 'interrupted' || state.status === 'running' || state.status === 'awaiting_result') {
@@ -302,7 +421,7 @@ export function resumeRun(out: string): ResumeResult {
   }
   journal(out, { event: 'resumed', unknown, rebound, status: state.status });
   writeState(state);
-  const lines = [`RESUMED: run=${state.run} status=${state.status} execution_unknown=${unknown.length} rebound=${rebound.length}`];
+  const lines = [...recovered, `RESUMED: run=${state.run} status=${state.status} execution_unknown=${unknown.length} rebound=${rebound.length}`];
   for (const a of unknown) lines.push(`EXECUTION_UNKNOWN: ${a}`);
   return { state, unknown, rebound, lines };
 }
