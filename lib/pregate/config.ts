@@ -13,6 +13,8 @@
  *   warn          check ids downgraded to warn (never `secrets`; `lanes` keeps
  *                 its required-lane and requires-remote verdicts)
  *   strays.allow  root files or new top-level directories that are intentional
+ *   price_command the non-executing call-plan command `gstack-eval-plan gate`
+ *                 prices a paid gate from (GSTACK_EVAL_CALLS v1 lines)
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -31,13 +33,14 @@ export interface PregateConfig {
   selection: Record<string, string>;
   warn: string[];
   strays: { allow: string[] };
+  price_command: string | null;
 }
-export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, selection: {}, warn: [], strays: { allow: [] } };
+export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, selection: {}, warn: [], strays: { allow: [] }, price_command: null };
 export interface ConfigError { code: ResultCodeName; path: string; message: string }
 
 const MAX_LIST = 256;
 const MAX_COMMAND = 512;
-const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays'];
+const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays', 'price_command'];
 
 function globError(g: string): string | null {
   const why = containedRelative(g);
@@ -60,6 +63,10 @@ export function validateConfig(raw: unknown, knownChecks: readonly string[] = []
     const why = commandError(obj.runner);
     if (why) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'runner', message: why });
     else if (!(obj.runner as string).includes('{files}')) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'runner', message: 'must contain the {files} placeholder' });
+  }
+  if ('price_command' in obj && obj.price_command !== null) {
+    const why = commandError(obj.price_command);
+    if (why) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'price_command', message: why });
   }
   if ('dependencies' in obj) {
     const deps = obj.dependencies;
@@ -112,7 +119,7 @@ export function parseConfig(text: string, knownChecks: readonly string[] = []): 
   const errors = validateConfig(raw, knownChecks);
   if (errors.length) return { config: DEFAULT_CONFIG, errors };
   const o = raw as Partial<PregateConfig>;
-  return { config: { $schema: o.$schema, runner: o.runner ?? null, dependencies: o.dependencies ?? {}, selection: o.selection ?? {}, warn: o.warn ?? [], strays: { allow: o.strays?.allow ?? [] } }, errors: [] };
+  return { config: { $schema: o.$schema, runner: o.runner ?? null, dependencies: o.dependencies ?? {}, selection: o.selection ?? {}, warn: o.warn ?? [], strays: { allow: o.strays?.allow ?? [] }, price_command: o.price_command ?? null }, errors: [] };
 }
 
 export type ConfigLoad = { config: PregateConfig; errors: ConfigError[]; present: boolean; label: string; kind: 'base' | 'head' | 'none' } | { unavailable: true; base: string; detail: string };
@@ -160,5 +167,6 @@ export function explainConfig(): string {
     'selection: <workflow.yml>/<job> → the runner-owned command that lists that lane’s test files when its matrix is planner-computed',
     `warn: check ids downgraded to warn; never ${NON_DOWNGRADABLE.join(', ')}; lanes keeps its required-lane and requires-remote verdicts`,
     'strays.allow: root files or new top-level directories that are intentional',
+    'price_command: one command that prints GSTACK_EVAL_CALLS v1 lines without calling a provider; `gstack-eval-plan gate` prices a paid gate from it (docs/eval-calls.md)',
   ].join('\n') + '\n';
 }

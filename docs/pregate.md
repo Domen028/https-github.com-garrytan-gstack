@@ -62,6 +62,7 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
+| `price_command` | one command that prints the paid gate's call plan (`GSTACK_EVAL_CALLS v1` lines) without calling a provider; `gstack-eval-plan gate` prices from it ([docs/eval-calls.md](eval-calls.md)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
 takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
