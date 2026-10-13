@@ -466,6 +466,31 @@ export const RESULT_CODES = {
     summary: 'a `draft direction stands until the owner decides` line names a decision that is still pending',
     fix: 'answer the gate (`gstack-autoplan answer`) before closing; the close rewrites only decided lines',
   },
+  PLAN_SECTIONS_INVALID: {
+    anchor: 'plan-sections-invalid',
+    summary: 'the plan does not have exactly one non-empty `## Implementation plan` section followed by one `## Review record` section',
+    fix: 'add the missing heading, or rerun the first `gstack-autoplan next` with --scaffold to review a scaffolded copy (your plan file is never edited); duplicate, reversed or empty sections are fixed by hand',
+  },
+  PLAN_AMEND_PENDING: {
+    anchor: 'plan-amend-pending',
+    summary: 'the owner accepted plan changes at the gate that the plan has not absorbed yet',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`',
+  },
+  GSTACK_VERSION_CHANGED: {
+    anchor: 'gstack-version-changed',
+    summary: 'the run directory was written by a different gstack version',
+    fix: 'nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade',
+  },
+  INSTALL_VERDICT_FAILED: {
+    anchor: 'install-verdict-failed',
+    summary: 'on a Capy host (GSTACK_CAPY=1) the install verdict is missing, failing, or for another checkout or HEAD',
+    fix: 'run the Capy gstack skill wrapper (`install.sh --for <skill>`) until its trailer is `gstack: ok`, then launch with its GSTACK_LAUNCH line; GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1 overrides and is recorded as a run deviation',
+  },
+  ARTIFACT_GATE_UNSETTLED: {
+    anchor: 'artifact-gate-unsettled',
+    summary: 'the run says complete while an approval item of its last gate revision or an accepted plan amendment is still pending',
+    fix: 'answer the gate until every approval settles and revise (or withdraw) every accepted change with `gstack-autoplan`; never hand-edit status',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

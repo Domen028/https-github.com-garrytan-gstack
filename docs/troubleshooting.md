@@ -2464,3 +2464,71 @@ it failed, `git checkout -- . && ./setup` in the checkout discards local edits
 and rewrites every file. Use your install directory if it is not
 `~/.claude/skills/gstack` (`./setup --status` prints it). Expected result: the
 next `./setup` prints no CRLF warning.
+
+<a id="plan-sections-invalid"></a>
+### `PLAN_SECTIONS_INVALID`
+
+**Meaning.** `gstack-autoplan next` reviews only the plan's `## Implementation
+plan` section and keeps the `## Review record` private, so the plan needs
+exactly one non-empty Implementation plan section followed by one Review record
+section, both outside code fences. A plan with neither heading is wrapped
+automatically; one heading alone, duplicate or reversed headings, or an empty
+section is refused before anything is written. The error names the problem.
+
+**Fix.** Add the missing heading, or rerun the first `next` with `--scaffold`:
+it writes `<out>/plan-source.md` with the missing heading added, reviews that
+copy and prints `SCAFFOLDED:`. Your plan file is never edited. Duplicate,
+reversed or empty sections are ambiguous and must be fixed by hand.
+
+<a id="plan-amend-pending"></a>
+### `PLAN_AMEND_PENDING`
+
+**Meaning.** The owner accepted at least one plan change at the gate (each was
+printed as an `APPLY:` line), and the run's plan has not absorbed it, so a rerun
+would review the old plan. `next` refuses until every accepted change is
+incorporated or withdrawn; `export` refuses a `complete` run with one pending.
+
+**Fix.** Edit the plan, then `gstack-autoplan revise --out <dir> --plan <file>
+--incorporates <decision id,...>`. `revise` binds each named id to the old and
+new Implementation-plan hashes and refuses when the Implementation plan did
+not change; an id you do not name stays pending. To drop an accepted change
+instead, `gstack-autoplan revise --out <dir> --withdraw <decision id>` records
+the withdrawal in the journal.
+
+<a id="gstack-version-changed"></a>
+### `GSTACK_VERSION_CHANGED`
+
+**Meaning.** `run.json.gstack_version` names a different gstack than the one
+running. For an older run (or one written before the field existed) this is a
+notice: the command journals `gstack_version_changed`, runs the forward
+migrations (for example rewriting decision ids minted before 1.91.95) and
+continues. For a run written by a newer gstack the command refuses, because an
+older runner cannot know the newer state.
+
+**Fix.** Nothing for the notice. For the refusal, upgrade gstack
+(`bin/gstack-upgrade`) on this machine and rerun the command.
+
+<a id="install-verdict-failed"></a>
+### `INSTALL_VERDICT_FAILED`
+
+**Meaning.** On a Capy host (`GSTACK_CAPY=1`) `gstack-autoplan`'s mutating
+verbs (`next`, `submit`, `answer`, `revise`, `export`) need the install verdict
+the Capy wrapper writes (`GSTACK_INSTALL_VERDICT`) to say `gstack: ok` for this
+checkout and HEAD. Missing, failing, or written for another checkout or HEAD
+refuses before anything is written. `status` and `resume` stay available.
+
+**Fix.** Run the Capy gstack skill wrapper until its trailer is `gstack: ok`,
+then launch commands with its `GSTACK_LAUNCH` line. To proceed anyway, set
+`GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1`; the override is recorded in
+`run.json.deviations` and printed as `ADMISSION: override`.
+
+<a id="artifact-gate-unsettled"></a>
+### `ARTIFACT_GATE_UNSETTLED`
+
+**Meaning.** `gstack-artifact validate` found a run whose status is `complete`
+while an approval item of its last gate revision is still pending, or an
+accepted plan change (`run.json.amendments`) is still pending. The runner never
+writes that state; it comes from a hand edit or an older runner.
+
+**Fix.** Answer the gate with `gstack-autoplan answer` until no approval is
+pending, and `revise --incorporates` or `--withdraw` each pending amendment.
