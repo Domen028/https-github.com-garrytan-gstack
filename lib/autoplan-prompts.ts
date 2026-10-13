@@ -13,12 +13,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { readScopeMarker, scopeMarker, scopeTokens, type ScopeFlags, type UiEvidence } from './autoplan-scope';
 import { COORDINATOR_CONTRACT } from './coordinator-contract';
+import { resolveSourceRoot } from './source-root';
 
 export const PHASES = ['ceo', 'design', 'dx', 'eng'] as const;
 export type Phase = typeof PHASES[number];
 export const REVIEW_SKILL: Record<Phase, string> = { ceo: 'plan-ceo-review', design: 'plan-design-review', dx: 'plan-devex-review', eng: 'plan-eng-review' };
 const ROOT = path.resolve(import.meta.dir, '..');
 export const SNAPSHOT_TOOL = path.join(ROOT, 'bin', 'gstack-autoplan-snapshot.ts');
+/** The parent's driver doc, in this checkout or the one an install root records (lib/source-root.ts). */
+export const driverFile = () => path.join(resolveSourceRoot(ROOT), 'autoplan', 'DRIVER.md');
 
 export { detectUiScope, type ScopeFlags } from './autoplan-scope';
 

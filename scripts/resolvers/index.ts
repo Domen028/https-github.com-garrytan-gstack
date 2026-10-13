@@ -52,6 +52,7 @@ import { generateImplementerDispatchRules } from './dispatch-rules';
 import { generatePlanRealityRows } from './plan-reality';
 import { generateSidewaysSweep, generateFlakeFixNumber } from './sideways';
 import { generateCoordinatorContract } from './coordinator-contract';
+import { generateAutoplanDriverCodes, generateAutoplanDriverCommands, generateAutoplanDriverFiles, generateAutoplanDriverGate, generateAutoplanDriverPhases, generateAutoplanDriverResultFormat } from './autoplan-driver';
 import { generateQAScope, generateQAExploratory, generateQAFunctional, generateQAResource, generateQAReview, generateQAReviewPreflight, generateQAMethodReads } from './qa';
 
 export const RESOLVERS: Record<string, ResolverFn> = {
@@ -176,6 +177,12 @@ export const RESOLVERS: Record<string, ResolverFn> = {
   TASKS_SECTION_EMIT: generateTasksSectionEmit,
   TASKS_SECTION_AGGREGATE: generateTasksSectionAggregate,
   COORDINATOR_CONTRACT: generateCoordinatorContract,
+  AUTOPLAN_DRIVER_PHASES: generateAutoplanDriverPhases,
+  AUTOPLAN_DRIVER_COMMANDS: generateAutoplanDriverCommands,
+  AUTOPLAN_DRIVER_RESULT_FORMAT: generateAutoplanDriverResultFormat,
+  AUTOPLAN_DRIVER_GATE: generateAutoplanDriverGate,
+  AUTOPLAN_DRIVER_FILES: generateAutoplanDriverFiles,
+  AUTOPLAN_DRIVER_CODES: generateAutoplanDriverCodes,
   SECTION,
   SECTION_INDEX,
 };

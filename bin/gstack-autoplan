@@ -24,7 +24,7 @@ import * as path from 'node:path';
 import { answerGate } from '../lib/autoplan-gate';
 import { exportRun } from '../lib/autoplan-export';
 import { FILES, RunError, initRun, markOutside, nextStep, readState, resumeRun, statusLines, submitResult, withRunLock, writeState } from '../lib/autoplan-run';
-import type { Phase } from '../lib/autoplan-prompts';
+import { driverFile, type Phase } from '../lib/autoplan-prompts';
 import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { createRunner, familyConflict, type RunnerId } from '../lib/outside-voice-runner';
 import { resultLine } from '../lib/result-codes';
@@ -32,6 +32,7 @@ import { release } from '../lib/spend-ledger';
 import { COORDINATOR_CONTRACT } from '../lib/coordinator-contract';
 
 const HELP = `gstack-autoplan — unattended /autoplan: next/submit loop, answer, resume (docs/unattended.md)
+DRIVER: ${driverFile()}
 
   next    --out <dir> [--plan <file>] [--plan-heading <text>] [--ui|--no-ui] [--developer-tool] [--agent-primary] [--no-dx]
           [--no-outside] [--light] [--spend-cap <usd>] [--estimate-usd <n>] [--deadline <min>] [--redispatch <attempt>] [--json]

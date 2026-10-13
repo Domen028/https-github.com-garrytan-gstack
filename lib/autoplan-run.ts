@@ -19,7 +19,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { canonicalRows, parseReviewResult } from './autoplan-reconcile';
 import { closePhase, finishGate } from './autoplan-gate';
-import { PHASES, SNAPSHOT_TOOL, detectScope, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
+import { PHASES, SNAPSHOT_TOOL, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
 import { FILES, RunError, journal, now, readJournal, readState, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
 import type { RunStatus } from './headless-artifacts';
 import { sha256File } from './headless-artifacts';
@@ -151,7 +151,7 @@ export function nextStep(o: NextOptions): NextResult {
   const ps = state.phases[phase]!;
   result.phase = phase;
   lines.push(`PHASE: ${phase} snapshot=${ps.snapshot} order=${state.phase_order.join(',')}`);
-  if (first) lines.push(...scopeLines(state.scope));
+  if (first) lines.push(...scopeLines(state.scope), `DRIVER: ${driverFile()}`);
   if (ps.outside?.reason === 'consent_missing') lines.push(`OUTSIDE: ${phase} not_run reason=consent_missing`, String(ps.outside.detail));
   if (ps.sections) lines.push(`Skipped sections: ${ps.sections.skipped.length ? ps.sections.skipped.join(',') : 'none'} (scope: ui=${state.scope.ui ? 'yes' : 'no'},dx=${state.scope.dx ? 'yes' : 'no'},source=${scopeSourceLabel(state.scope)}; checklist=${ps.sections.checklist ? 'loaded' : 'none'})`);
   const prompts = ps.prompts!;
