@@ -118,8 +118,8 @@ Two stages with separate clocks, both printed:
   directives resolve `package:<name>/x` through every tracked `pubspec.yaml`, and
   `*_test.dart` files are tests, except under `integration_test/` and
   `test_driver/`: they need a device, so pregate never runs them, and a touched
-  one has no lane until you declare `"integration_test/**": []` under
-  `dependencies` and let CI run them), transitively through
+  one has no lane until you declare `"**/integration_test/**": []` (and
+  `"**/test_driver/**": []`) under `dependencies` and let CI run them), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched file with no lane is `FAIL lanes — <file> has no test lane`, never
   a pass. Lanes and platform tiers come from `.github/workflows/*.yml`

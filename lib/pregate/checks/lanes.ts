@@ -14,6 +14,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { baseInputs, sha256 } from '../context';
 import { PREGATE_CONFIG_PATH } from '../config';
+import { isDeviceDart } from '../import-graph';
 import { selectLanes, type Selection } from '../lane-selection';
 import { launchRuntime } from '../runtime';
 import { matchesAny } from '../../ship-policy';
@@ -196,12 +197,9 @@ function run(ctx: PregateContext): CheckResult {
   return { ...withRun, status: sel.remote.length ? 'requires-remote' : 'pass', detail };
 }
 
-/** Device-only Flutter tests are not tests here (they need a device), so a touched one has no lane unless declared `[]`. */
-const DEVICE_TEST = /(?:^|\/)(?:integration_test|test_driver)\/.*_test\.dart$/;
-
 function noLaneFix(ctx: PregateContext, noLane: readonly string[]): string {
   const file = ctx.configLabel.startsWith('user ') ? ctx.configLabel.slice('user '.length) : PREGATE_CONFIG_PATH;
-  const device = noLane.some(f => DEVICE_TEST.test(f)) ? `; pregate does not run device tests, so declare "integration_test/**": [] (and "test_driver/**": []) and let CI run them` : '';
+  const device = noLane.some(isDeviceDart) ? `; pregate does not run device tests, so declare "**/integration_test/**": [] (and "**/test_driver/**": []) and let CI run them` : '';
   return `add a test that names the file, or declare its lane (or []) under dependencies in ${file}${device}`;
 }
 

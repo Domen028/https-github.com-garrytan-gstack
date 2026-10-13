@@ -70,7 +70,7 @@ describe('Dart import graph', () => {
     // Value: protects=device-only Flutter tests (integration_test/, test_driver/) are never auto-selected for a local `flutter test`;
     //   fails_when=the exclusion is dropped and touching lib/ launches the app or fails with no device; why_new=no integration test file was classified;
     //   seam=none; no_claim=a device run
-    for (const f of ['integration_test/app_test.dart', 'packages/core/integration_test/core_test.dart', 'test_driver/app_test.dart']) expect(isTestFile(f)).toBe(false);
+    for (const f of ['integration_test/app_test.dart', 'packages/core/integration_test/core_test.dart', 'test_driver/app_test.dart', 'test_driver/integration_test.dart']) expect(isTestFile(f)).toBe(false);
     expect(testsFor(g, 'lib/theme.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'lib/widgets/drawer_parts.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'packages/core/lib/core.dart').tests).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
@@ -166,6 +166,10 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     expect(sealed.status).toBe(EXIT.refused);
     expect(sealed.err).toContain('covers gstack-pregate run only; sealed');
     expect(sealed.err).toContain('edit that file directly');
+    // Value: protects=a null price_file (the documented default, a no-op) is accepted; fails_when=the check regresses to key presence;
+    //   why_new=only a non-null sealed was tested; seam=none; no_claim=none beyond protects
+    fs.writeFileSync(userPolicy, JSON.stringify({ price_file: null }));
+    expect(run().err).not.toContain('PREGATE_CONFIG_INVALID');
 
     // A local lane runs here; a lane not named stays an obligation.
     fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit'] }));
@@ -283,7 +287,7 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
   // Value: protects=a touched device test (integration_test/) is never run locally, fails with a fix naming the active user policy file,
   //   and the documented `[]` declaration clears it; fails_when=the docs' remedy stops working or the fix points at the wrong file;
   //   why_new=device tests were only checked at isTestFile; seam=none; no_claim=CI running the device test
-  test('a touched integration test has no local lane until declared [] in the user policy', () => {
+  test('a touched integration test (root or nested package) has no local lane until declared [] in the user policy', () => {
     const repo = dartRepo(null);
     commit(repo, { 'integration_test/app_test.dart': "import 'package:integration_test/integration_test.dart';\nvoid main() {}\n" });
     repo.git('push', '-q', 'origin', 'HEAD:main');
@@ -292,12 +296,16 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     const userPolicy = path.join(repo.home, 'projects', 'dartdevice', 'pregate.json');
     fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
     fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'] }));
-    commit(repo, { 'integration_test/app_test.dart': "import 'package:integration_test/integration_test.dart';\nvoid main() { }\n" });
+    commit(repo, {
+      'integration_test/app_test.dart': "import 'package:integration_test/integration_test.dart';\nvoid main() { }\n",
+      'packages/core/integration_test/core_it_test.dart': "void main() {}\n",
+    });
     const run = () => runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], env);
     const stuck = run();
     expect(stuck.out).toContain('FAIL lanes — integration_test/app_test.dart has no test lane');
+    expect(stuck.out).toContain('FAIL lanes — packages/core/integration_test/core_it_test.dart has no test lane');
     expect(stuck.out).toContain(`under dependencies in ${userPolicy}; pregate does not run device tests`);
-    fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'], dependencies: { 'integration_test/**': [] } }));
+    fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'], dependencies: { '**/integration_test/**': [] } }));
     const declared = run();
     expect(declared.status).toBe(EXIT.ok);
     expect(declared.out).not.toContain('has no test lane');

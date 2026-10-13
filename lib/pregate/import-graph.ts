@@ -22,7 +22,7 @@ import * as path from 'node:path';
 import { matchesAny } from '../ship-policy';
 
 export const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|py|rb|sh|bash|go|rs|dart)$/;
-export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb)$|^(?!(?:.*\/)?(?:integration_test|test_driver)\/).*_test\.dart$|_spec\.rb$/;
+export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb)$|_test\.dart$|_spec\.rb$/;
 
 export interface Edge { from: string; via: 'import' | 'literal' | 'convention' | 'declared' | 'generated' }
 export interface Graph {
@@ -37,7 +37,10 @@ const QUOTED = /['"`]([A-Za-z0-9_@][A-Za-z0-9_./@-]*)['"`]/g;
 const JOIN = /\bjoin\(([^()]*)\)/g;
 const RESOLVE_EXT = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
 
-export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel); }
+/** Flutter's device-only directories: their Dart files need a device, so they are never tests here (a touched one has no lane until declared `[]`). */
+export const DEVICE_TEST_DIR = /(?:^|\/)(?:integration_test|test_driver)\//;
+export function isDeviceDart(rel: string): boolean { return rel.endsWith('.dart') && DEVICE_TEST_DIR.test(rel); }
+export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel) && !isDeviceDart(rel); }
 
 /** Dart package name → its root (`''` for the repository root), from every tracked pubspec.yaml. */
 export function dartPackages(repoRoot: string, files: Iterable<string>): Map<string, string> {
