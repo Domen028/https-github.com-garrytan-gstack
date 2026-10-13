@@ -29,7 +29,7 @@ let IMPECCABLE_HOME: string;
 
 function git(cwd: string, ...args: string[]) {
   const r = spawnSync('git', args, { cwd, encoding: 'utf-8', timeout: 30_000 });
-  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr}`);
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: status=${r.status} signal=${r.signal} error=${r.error?.message ?? ''} stderr=${r.stderr ?? ''}`);
   return r.stdout.trim();
 }
 
