@@ -138,17 +138,28 @@ On a host where the parent dispatches the reviewers itself (Capy, any
 orchestrator without a Claude Code harness), `bin/gstack-autoplan` is the
 explicit, durable state machine for the whole run. The parent never reads the
 review record; it runs a loop over two commands and reads the printed lines.
+A parent on any host reads `autoplan/DRIVER.md` (its path is printed as
+`DRIVER:` by `gstack-autoplan --help` and the first `next`) instead of
+autoplan/SKILL.md: the phase order, the artifact contract and the gate protocol
+in about a hundred lines, generated from the code.
 
 ```bash
 AP=bin/gstack-autoplan
-$AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--light] [--spend-cap <usd>]
+$AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--no-dx] [--light] [--spend-cap <usd>]
 #   PHASE: ceo snapshot=<sha> order=ceo,design,dx,eng
-#   Skipped sections: none (scope: ui=yes,dx=yes,source=detected; checklist=loaded)
+#   SCOPE: ui=yes (...) dx=yes (detected: ...) source=ui:detected,dx:detected
+#   DRIVER: <root>/autoplan/DRIVER.md
+#   Skipped sections: none (scope: ui=yes,dx=yes,source=ui:detected,dx:detected; checklist=loaded)
 #   ATTEMPT: <run>-a1 phase=ceo voice=native  prompt=<dir>/ceo-native-prompt.md  result=<dir>/ceo-native.md  model_family=...
 #   ATTEMPT: <run>-a2 phase=ceo voice=outside prompt=<dir>/ceo-outside-prompt.md result=<dir>/ceo-outside.md model_family=differs from the native reviewer
 #   SPEND: spent=0.00 reserved=0.00 unknown=0(0.00) worst_case=0.00 cap=none
 #   GSTACK_RESULT: skill=autoplan status=awaiting_result run=<dir>
 ```
+
+The first `next` prints `SCOPE: … source=ui:<flag|marker|detected>,dx:<…>`
+and, when CLI flags differ from the plan's marker, `SCOPE_PIN: add <!--
+gstack-autoplan-scope: … --> as the first line of <file>`; gstack never writes
+the plan.
 
 1. **Dispatch each `ATTEMPT:`.** The native voice is a subagent on the parent's
    own model given the prompt file; the outside voice is a subagent on another
