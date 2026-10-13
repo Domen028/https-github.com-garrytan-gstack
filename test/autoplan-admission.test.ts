@@ -59,7 +59,7 @@ describe('admission', () => {
     }
   });
 
-  test('an unattended session with the PATH Bun below the supported minimum refuses even with an ok verdict', () => {
+  test.skipIf(process.platform === 'win32')('an unattended session with the PATH Bun below the supported minimum refuses even with an ok verdict (the Capy host\'s bash bun stub cannot shadow bun.exe on Windows)', () => {
     const r = make({ launched: false });
     const { res } = first(r, 'oldbun');
     expect(res.status).toBe(3);
