@@ -701,3 +701,70 @@ describe('gstack-doctor --check', () => {
     expect(doctor(f, ['--help']).out).toContain('--check');
   });
 });
+
+// Field wave lane A: the trailer agrees with the Bun workflows run (A3), a
+// remote minimum fails the revision row (A2), and planning-only workflows do
+// not fail on a repo test-pin mismatch (A3 amendment).
+describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pins', () => {
+  const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').trim();
+  const check = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = doctor(f, ['--check', ...args], extra);
+    const lines = r.out.split('\n');
+    const rows = Object.fromEntries(lines.filter(l => /^(PASS|FAIL|SKIP) /.test(l)).map(l => {
+      const m = l.match(/^(PASS|FAIL|SKIP) ([a-z-]+)(?:\s(.*))?$/)!;
+      return [m[2], { status: m[1], rest: m[3] ?? '' }];
+    }));
+    return { status: r.status, out: r.out, rows, trailer: lines.filter(l => l.startsWith('gstack: ')).at(-1) ?? '' };
+  };
+  /** A verified Bun in $HOME/.bun/bin (off PATH) that answers --version and runs TypeScript. */
+  const verifiedBun = (f: Fixture, version = '1.4.2') =>
+    script(path.join(f.home, '.bun/bin/bun'), [`[ "$1" = --version ] && { echo "${version}"; exit 0; }`, `exec "${process.execPath}" "$@"`]);
+
+  test('PATH Bun 1.3.14 with a verified 1.4.2 off PATH: runtime FAILs naming where it was found; with the launch PATH it PASSes', () => {
+    const f = makeFixture();
+    verifiedBun(f);
+    const fresh = check(f, [], { STUB_BUN_VERSION: '1.3.14' });
+    expect(fresh.rows.runtime.status).toBe('FAIL');
+    const home = bashPath(f.home);
+    expect(fresh.rows.runtime.rest).toContain(`bun 1.4.2 found at ${home}/.bun/bin (not on PATH)`);
+    expect(fresh.rows.runtime.rest).toContain(`fix: export PATH="${home}/.bun/bin:$PATH" or prefix commands with the GSTACK_LAUNCH line`);
+    expect(fresh.rows.runtime.rest).toContain('(RUNTIME_BELOW_MINIMUM; ');
+    const launched = check(f, [], { STUB_BUN_VERSION: '1.3.14', PATH: `${f.home}/.bun/bin${path.delimiter}${f.env.PATH}` });
+    expect(launched.rows.runtime.status, launched.out).toBe('PASS');
+    expect(launched.rows.runtime.rest).toContain(`at ${home}/.bun/bin/bun`);
+  });
+
+  test('--min-revision: below FAILs with REVISION_BELOW_MINIMUM naming the upgrade command; at or above PASSes; unknown says so and never claims the minimum', () => {
+    const f = makeFixture();
+    const below = check(f, ['--min-revision', '99.0.0.0']);
+    expect(below.status).toBe(1);
+    expect(below.rows.revision.status).toBe('FAIL');
+    expect(below.rows.revision.rest).toContain(`installed ${VERSION}`);
+    expect(below.rows.revision.rest).toContain('below the supported minimum 99.0.0.0');
+    expect(below.rows.revision.rest).toContain(`${bashPath(f.root)}/bin/gstack-upgrade`);
+    expect(below.rows.revision.rest).toContain('(REVISION_BELOW_MINIMUM; ');
+    expect(below.trailer).toBe('gstack: fail revision');
+    const wrapped = check(f, ['--min-revision', '99.0.0.0'], { GSTACK_CAPY_WRAPPER_PATH: '/drive/skills/gstack/scripts/install.sh' });
+    expect(wrapped.rows.revision.rest).toContain('fix: bash /drive/skills/gstack/scripts/install.sh (fast-forwards)');
+    const at = check(f, ['--min-revision', VERSION]);
+    expect(at.rows.revision.status, at.out).toBe('PASS');
+    expect(at.rows.revision.rest).toContain(`>= supported minimum ${VERSION}`);
+    const unknown = check(f, ['--min-revision', 'unknown']);
+    expect(unknown.rows.revision.status).toBe('PASS');
+    expect(unknown.rows.revision.rest).toContain('remote minimum unknown (fetch failed)');
+    expect(unknown.rows.revision.rest).not.toContain('>= supported minimum');
+  });
+
+  test('planning-only workflows SKIP a repo test-pin mismatch; test-running workflows and --require keep pins required', () => {
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, '.bun-version'), '1.4.2\n');
+    const planning = check(f, ['--for', 'autoplan', '--project', project], { STUB_BUN_VERSION: '1.4.3' });
+    expect(planning.rows.pins.status, planning.out).toBe('SKIP');
+    expect(planning.rows.pins.rest).toMatch(/^\(planning-only; repo pins .*1\.4\.2.*, launch bun 1\.4\.3\)$/);
+    for (const args of [['--for', 'review'], ['--for', 'ship'], ['--require', 'claude']]) {
+      const tests = check(f, [...args, '--project', project], { STUB_BUN_VERSION: '1.4.3' });
+      expect(tests.rows.pins.status, args.join(' ')).toBe('FAIL');
+    }
+  });
+});

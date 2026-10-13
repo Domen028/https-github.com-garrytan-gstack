@@ -394,6 +394,7 @@ describe('gstack-skill-start behavior', () => {
       expect(out).not.toContain('UPGRADE_AVAILABLE');
       const endOut = end({ GSTACK_SESSION_KIND: 'unattended' });
       expect(endOut).toMatch(/^UPGRADE_AVAILABLE: 9\.9\.9; run \/gstack-upgrade$/m);
+      expect(endOut).toMatch(/^UPGRADE_COMMAND: \/.*\/bin\/gstack-upgrade$/m);
       expect(endOut).toMatch(/^ARTIFACTS_SYNC: skipped \(unattended session\)$/m);
       expect(fs.existsSync(log)).toBe(false);
       expect(fs.existsSync(path.join(gh, 'analytics', 'skill-usage.jsonl'))).toBe(false);
@@ -762,5 +763,112 @@ describe('gstack-skill-end', () => {
       env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome },
     });
     expect(fs.existsSync(pending)).toBe(false);
+  });
+});
+
+// Field wave lane A (item 2): an unattended or Capy-spawned workflow refuses
+// to start on an unsupported PATH Bun, and on a Capy machine (GSTACK_CAPY=1)
+// without a matching install verdict for this checkout, HEAD and workflow.
+describe('gstack-skill-start install admission', () => {
+  const { spawnSync } = require('child_process') as typeof import('child_process');
+  const { createHash } = require('crypto') as typeof import('crypto');
+  const { writeBunStub } = require('./helpers/capy-host') as typeof import('./helpers/capy-host');
+  const head = execFileSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim();
+  const real = fs.realpathSync(ROOT);
+  const scratch = () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-admit-'));
+    fs.writeFileSync(path.join(dir, 'config.yaml'), 'update_check: false\n');
+    return dir;
+  };
+  const stubDir = (version: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-bun-'));
+    writeBunStub(path.join(dir, 'bun'), version);
+    return dir;
+  };
+  const verdict = (gh: string, over: Record<string, unknown> = {}, file?: string) => {
+    const target = file ?? path.join(gh, 'install-verdicts', `${createHash('sha256').update(real).digest('hex')}.json`);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, JSON.stringify({
+      schema_version: 1, checkout: real, head, for: 'autoplan',
+      required: ['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision'],
+      pins_planning_only: false, ok: true, trailer: 'gstack: ok 1.91.95.0 for=autoplan', min_revision: '1.91.95.0', launch_path: '', time: '2026-10-12T00:00:00Z', ...over,
+    }, null, 1) + '\n');
+    return target;
+  };
+  const start = (gh: string, skill: string, env: Record<string, string>, bin = START) => spawnSync(bin, ['--skill', skill], {
+    timeout: 30_000, encoding: 'utf-8', cwd: tmpHome,
+    env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: gh, ...env },
+  });
+
+  test('unattended with Bun 1.3.14 first on PATH: the runtime row with its fix, status=refused, exit 3; interactive keeps running', () => {
+    const gh = scratch();
+    const bun = stubDir('1.3.14');
+    const PATH = `${bun}${path.delimiter}${process.env.PATH}`;
+    const r = start(gh, 'autoplan', { GSTACK_SESSION_KIND: 'unattended', PATH });
+    expect(r.status, r.stdout + r.stderr).toBe(3);
+    expect(r.stdout).toMatch(/^SESSION_KIND: unattended$/m);
+    expect(r.stdout).toContain(`INSTALL: fail runtime — bun 1.3.14 at ${bun}/bun is below the supported minimum 1.4.2`);
+    expect(r.stdout).toContain('(RUNTIME_BELOW_MINIMUM)');
+    expect(r.stdout.trim().split('\n').at(-1)).toBe('GSTACK_RESULT: skill=autoplan status=refused run=-');
+    const human = start(gh, 'autoplan', { PATH });
+    expect(human.status).toBe(0);
+    expect(human.stdout).not.toContain('status=refused');
+    const openclaw = start(gh, 'autoplan', { OPENCLAW_SESSION: '1', PATH });
+    expect(openclaw.status).toBe(0);
+    expect(openclaw.stdout).toContain('INSTALL: warn runtime');
+    const overridden = start(gh, 'autoplan', { GSTACK_SESSION_KIND: 'unattended', PATH, GSTACK_ALLOW_UNSUPPORTED_RUNTIME: '1' });
+    expect(overridden.status).toBe(0);
+    expect(overridden.stdout).toContain('INSTALL_VERDICT: overridden (GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1)');
+  });
+
+  test('GSTACK_CAPY=1: a missing, failing, other-HEAD or narrower verdict refuses; a matching one admits; other unattended hosts need no verdict', () => {
+    const gh = scratch();
+    const capy = { GSTACK_SESSION_KIND: 'unattended', GSTACK_CAPY: '1' };
+    const missing = start(gh, 'autoplan', capy);
+    expect(missing.status, missing.stdout + missing.stderr).toBe(3);
+    expect(missing.stdout).toContain('INSTALL: fail verdict — no install verdict');
+    expect(missing.stdout).toContain('(INSTALL_UNVERIFIED)');
+    expect(start(gh, 'autoplan', { GSTACK_SESSION_KIND: 'unattended' }).status).toBe(0);
+
+    verdict(gh);
+    const ok = start(gh, 'autoplan', capy);
+    expect(ok.status, ok.stdout + ok.stderr).toBe(0);
+    expect(ok.stdout).toMatch(/^INSTALL_VERDICT: ok gstack: ok 1\.91\.95\.0 for=autoplan$/m);
+    const spawned = start(gh, 'autoplan', { GSTACK_SESSION_KIND: 'spawned', GSTACK_CAPY: '1' });
+    expect(spawned.status).toBe(0);
+
+    verdict(gh, { ok: false, trailer: 'gstack: fail runtime' });
+    const failed = start(gh, 'autoplan', capy);
+    expect(failed.status).toBe(3);
+    expect(failed.stdout).toContain('gstack: fail runtime');
+    verdict(gh, { head: '0'.repeat(40) });
+    const moved = start(gh, 'autoplan', capy);
+    expect(moved.status).toBe(3);
+    expect(moved.stdout).toContain('another HEAD');
+    verdict(gh, { pins_planning_only: true });
+    expect(start(gh, 'autoplan', capy).status).toBe(0);
+    const tests = start(gh, 'review', capy);
+    expect(tests.status).toBe(3);
+    expect(tests.stdout).toContain('planning-only');
+    verdict(gh);
+    const browser = start(gh, 'qa', capy);
+    expect(browser.status).toBe(3);
+    expect(browser.stdout).toContain('browse-bundle');
+
+    const elsewhere = verdict(gh, {}, path.join(gh, 'named.json'));
+    fs.rmSync(path.join(gh, 'install-verdicts'), { recursive: true, force: true });
+    expect(start(gh, 'autoplan', { ...capy, GSTACK_INSTALL_VERDICT: elsewhere }).status).toBe(0);
+  });
+
+  test('an installed runtime root follows its .source-path to the source checkout for the verdict and HEAD', () => {
+    const gh = scratch();
+    const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-runtime-'));
+    fs.symlinkSync(path.join(ROOT, 'bin'), path.join(runtime, 'bin'));
+    fs.writeFileSync(path.join(runtime, '.source-path'), `${ROOT}\n`);
+    fs.copyFileSync(path.join(ROOT, 'VERSION'), path.join(runtime, 'VERSION'));
+    verdict(gh);
+    const r = start(gh, 'autoplan', { GSTACK_SESSION_KIND: 'unattended', GSTACK_CAPY: '1' }, path.join(runtime, 'bin/gstack-skill-start'));
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain('INSTALL_VERDICT: ok');
   });
 });

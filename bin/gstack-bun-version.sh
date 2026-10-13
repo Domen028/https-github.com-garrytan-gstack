@@ -16,17 +16,29 @@
 GSTACK_BUN_FLOOR="1.3.3"
 GSTACK_BUN_TESTED="1.4.2"
 
-# gstack_bun_archive_sha256 TARGET — the SHA-256 of
-# https://github.com/oven-sh/bun/releases/download/bun-v$GSTACK_BUN_TESTED/bun-TARGET.zip
-# from that release's SHASUMS256.txt, for the targets bin/gstack-capy-install
-# installs on Capy cloud machines (the same exact-archive recipe as
-# .github/docker/Dockerfile.ci; test/bun-version-drift.test.ts keeps them
-# equal). Prints nothing and returns 1 for a target without a verified archive.
+# gstack_bun_archive_sha256 TARGET [VERSION] — the SHA-256 of
+# https://github.com/oven-sh/bun/releases/download/bun-v$VERSION/bun-TARGET.zip
+# (VERSION defaults to $GSTACK_BUN_TESTED) from that release's SHASUMS256.txt,
+# for the targets bin/gstack-capy-install installs on Capy cloud machines (the
+# same exact-archive recipe as .github/docker/Dockerfile.ci;
+# test/bun-version-drift.test.ts keeps the $GSTACK_BUN_TESTED rows equal). A
+# newer version is listed so the installer can follow a project's exact pin
+# above the minimum. Prints nothing and returns 1 without a verified archive.
+GSTACK_BUN_VERIFIED="1.4.2 1.4.3"
 gstack_bun_archive_sha256() {
-  case "$1" in
-    linux-x64) echo 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913 ;;
-    linux-x64-baseline) echo c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f ;;
-    linux-aarch64) echo 54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7 ;;
+  case "${2:-$GSTACK_BUN_TESTED}" in
+    1.4.2) case "$1" in
+      linux-x64) echo 36368faef7527875d5ffa52e53cd48021741f2a83eb6208a8dd64068d422a913 ;;
+      linux-x64-baseline) echo c678040f14fe0440eb839d37cbd0ce4c051a32da72806ac97de6a6aab6bf728f ;;
+      linux-aarch64) echo 54328bbc2d9c8e0c9f892c544d66c57a83b84139e34909e5ee81758f1ac8fda7 ;;
+      *) return 1 ;;
+    esac ;;
+    1.4.3) case "$1" in
+      linux-x64) echo 3e730528d89775f03f87f05c06787c4df4099d0a37f3f252e7b829cb23816e18 ;;
+      linux-x64-baseline) echo 1fc2edac843102909e3a1be1d8d9802cc6071cf074e67e88231f4ffe0f8b397b ;;
+      linux-aarch64) echo efa9813da5ed72423bf847f916e8d2c47c0d776add972354026a75e10da9aa21 ;;
+      *) return 1 ;;
+    esac ;;
     *) return 1 ;;
   esac
 }
@@ -87,4 +99,30 @@ gstack_bun_incoming_hold() {
   [ "$(gstack_bun_status "$_gb_found" "$_gb_floor")" = too-old ] || return 1
   _gb_ver=$(git -C "$1" show "$2:VERSION" 2>/dev/null | head -1)
   echo "bun-too-old: found Bun $_gb_found at $(command -v bun); gstack ${_gb_ver:-update} needs $_gb_floor or newer"
+}
+
+# gstack_bun_launch_dir [exact] — the directory to put first on PATH so
+# gstack's `#!/usr/bin/env bun` bins run a supported Bun: the first of
+# $BUN_INSTALL/bin and $HOME/.bun/bin whose bun is ok (and equals <exact>
+# when given), unless the bun already first on PATH qualifies. Prints the
+# directory (callers read its version with "<dir>/bun --version"); prints
+# nothing and returns 1 when PATH's bun suffices or no candidate qualifies. Shared by
+# gstack-capy-install (the GSTACK_LAUNCH line) and gstack-doctor --check (the
+# runtime row's `found at ... (not on PATH)`).
+gstack_bun_launch_dir() {
+  _gb_path_bun=$(command -v bun 2>/dev/null || true)
+  if [ -n "$_gb_path_bun" ]; then
+    _gb_v=$(bun --version </dev/null 2>/dev/null | head -1)
+    if [ "$(gstack_bun_status "$_gb_v")" = ok ] && { [ -z "${1:-}" ] || [ "$_gb_v" = "$1" ]; }; then return 1; fi
+  fi
+  for _gb_dir in "${BUN_INSTALL:+$BUN_INSTALL/bin}" "${HOME:+$HOME/.bun/bin}"; do
+    [ -n "$_gb_dir" ] && [ -x "$_gb_dir/bun" ] || continue
+    [ "$_gb_dir/bun" = "$_gb_path_bun" ] && continue
+    _gb_v=$("$_gb_dir/bun" --version </dev/null 2>/dev/null | head -1)
+    [ "$(gstack_bun_status "$_gb_v")" = ok ] || continue
+    [ -z "${1:-}" ] || [ "$_gb_v" = "$1" ] || continue
+    printf '%s\n' "$_gb_dir"
+    return 0
+  done
+  return 1
 }

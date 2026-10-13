@@ -20,6 +20,24 @@
 - New: `lib/pregate/checks/guards.ts`, `lib/pregate/regate.ts`, `lib/pregate/runtime.ts`, `lib/sealed-guard.ts`; docs `docs/eval-calls.md`, `docs/pregate.md#regate` and `#gbrain-worked-configs`.
 - New result codes with troubleshooting anchors include `EVAL_GATE_UNPRICED`, `PREGATE_GUARD_FAILED`, `SEALED_OUTPUT_REFUSED` and `MIGRATION_COLLISION`.
 - Pregate and ship-policy validators still refuse unknown keys, so a repo should commit `guards`, `sealed`, `price_file`, `stamp_files`, `stamp_patterns`, `restamp_command` or `migrations` only after its machines run this release.
+## [1.91.96.0] - 2026-10-13
+
+**On a Capy machine, gstack now tells the truth about itself and fixes the common cases on its own. An old checkout upgrades itself at session start, the install check agrees with the Bun your workflows run, and every fix line names a command that exists.**
+
+### What this means for you
+
+- **`bin/gstack-upgrade` exists.** It fast-forwards the checkout to the remote default branch and reinstalls (on Capy it runs the installer, so the Bun preflight comes first; elsewhere `./setup --refresh-registered`, which runs migrations). It never stashes, resets or discards anything. A dirty, diverged, pinned or locked checkout is refused with `UPGRADE_REFUSED`, and an unreachable remote with `UPGRADE_FETCH_FAILED`. `--check` prints `current` or `behind <installed> -> <remote>` and changes nothing. The doctor's revision fix, the installer's `--revision` note and the unattended upgrade notice now name this command.
+- **A checkout below the supported minimum upgrades itself at session start.** The Capy skill's bootstrapper (`capy/skill/gstack/scripts/install.sh`) fetches the remote, reads `capy/support.env` from it, and, when the checkout is clean, unpinned and below `GSTACK_MIN_REVISION`, fast-forwards it under the install lock, reinstalls and rechecks. `--check` only reports `gstack: fail revision … (fast-forward available)`; install mode does the work. A setup interrupted after the fast-forward is finished by the next run. `GSTACK_CAPY_AUTO_UPGRADE=0` turns it off.
+- **Workflows refuse while the install check fails.** The installer writes a verdict file for this checkout and HEAD. Under `GSTACK_CAPY=1`, `gstack-skill-start` refuses a workflow whose verdict is missing, failed, for another HEAD or for a different workflow, and in any unattended session it refuses a PATH Bun below the minimum (`status=refused`, exit 3). `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` overrides and is recorded. Interactive sessions and other hosts' spawned sessions only warn.
+- **The install check agrees with the Bun your workflows run.** `GSTACK_LAUNCH` now carries `PATH=<verified bun dir>:$PATH`, `GSTACK_CAPY=1` and `GSTACK_INSTALL_VERDICT`, and the wrapper prints it on `--check` as well as install. A bare doctor run in a fresh shell names the off-PATH Bun (`bun 1.4.2 found at ~/.bun/bin (not on PATH)`) with the exact fix. The installer reuses a verified Bun instead of downloading it again, and installs the version a project's CI pins next to a different system Bun. Planning-only checks (`--for autoplan`, the plan reviews, office-hours) report a project test-pin mismatch as `SKIP pins (planning-only …)`; workflows that run the project's tests still require it.
+- **A stale copy of the Capy skill gets an owner action instead of a silent pass.** The canonical skill now lives in the repo at `capy/skill/gstack/`. The Drive copy is a small frozen bootstrapper that hands off to the checkout's full wrapper (`bin/gstack-capy-session`). An older copy keeps working and prints `CAPY_WRAPPER_STALE` with the copy command.
+- **Machines that never run a workflow don't pay for the install.** A warm install on the same HEAD skips setup (about 1 s). The skill installs before the first workflow rather than at every session start. `docs/capy-install.md` explains how to bake gstack into a Capy snapshot.
+- **The installed Bun follows the project's exact pin.** When the target repo pins one Bun version exactly (a CI `bun-version:`, `.bun-version`, engines) above gstack's minimum and gstack carries its verified archive (now 1.4.2 and 1.4.3), that archive is installed, so a repo moving its CI to 1.4.3 does not leave Capy machines on 1.4.2 failing `pins`. An exact pin without a verified archive stops with `RUNTIME_PIN_CONFLICT` and lists the verified versions.
+
+### For contributors
+
+- New: `bin/gstack-upgrade`, `bin/gstack-capy-session`, `bin/gstack-install-verdict.sh`, `lib/install-verdict.ts`, `capy/support.env`, `capy/skill/gstack/`. Tests `test/gstack-upgrade-bin.test.ts`, `test/capy-skill-wrapper.test.ts`, `test/install-verdict.test.ts`, and the shared simulated Capy host `test/helpers/capy-host.ts` (Bun 1.3.14 first on PATH, no Codex CLI).
+- `GSTACK_MIN_REVISION` is raised only for install-honesty or security fixes, at stamp time, never above VERSION (pinned by test).
 
 ## [1.91.95.0] - 2026-10-12
 

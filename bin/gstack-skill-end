@@ -43,7 +43,8 @@ if [ "$_SESSION_KIND" = "unattended" ]; then
   _TEL="off"
   _CACHED_UPD=$(head -1 "$_GH/last-update-check" 2>/dev/null | tr -cd 'A-Za-z0-9._ ' || true)
   case "$_CACHED_UPD" in
-    UPGRADE_AVAILABLE*) echo "UPGRADE_AVAILABLE: ${_CACHED_UPD##* }; run /gstack-upgrade" ;;
+    UPGRADE_AVAILABLE*) echo "UPGRADE_AVAILABLE: ${_CACHED_UPD##* }; run /gstack-upgrade"
+      echo "UPGRADE_COMMAND: $(cd "$_BIN/.." 2>/dev/null && pwd -P)/bin/gstack-upgrade" ;;
   esac
   echo "ARTIFACTS_SYNC: skipped (unattended session)"
 fi
