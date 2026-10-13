@@ -210,6 +210,7 @@ export const FREE_ONLY_PR_FILES = [
   'scripts/free-test-durations.json',
   'scripts/paid-test-durations.json',
   'scripts/ubicloud/**',
+  'capy/skill/**', // The vendored Capy skill (Drive bootstrapper): run by Capy agents, read by no paid case; test/capy-skill-wrapper.test.ts covers it.
   'tsconfig.test.json', // Read only by `tsc -p tsconfig.test.json` (typecheck:test); Bun's runtime reads tsconfig.json.
   '.gitignore', // Changes which untracked files git reports, never tracked content a case reads.
   '.gstack/generated.json', // gstack's own regen registry: gstack-regen/gstack-pregate read it from origin/<base> of the repo they run in; paid cases run in fixture repos.
@@ -314,6 +315,7 @@ export function packageChangeOnlyVersion(before: string, after: string): boolean
 }
 
 function isPromptFile(file: string): boolean {
+  if (FREE_ONLY_PR_FILES.some(pattern => matchGlob(file, pattern))) return false;
   return file.endsWith('.tmpl') || /(?:^|\/)SKILL\.md$/.test(file)
     || /^[^/]+\/sections\/.+\.md$/.test(file);
 }
