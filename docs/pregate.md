@@ -73,7 +73,9 @@ takes effect. A repo that keeps `.gstack/` out of git (a shared repo where gstac
 is one contributor's tool) can hold the same file at
 `<GSTACK_HOME>/projects/<slug>/pregate.json`. It is read only when the base
 carries none, it lives outside the repository so a PR still cannot reach it, and
-the record names it (`policy user <path>`). `gstack-pregate validate` / `init` cover the working-tree file.
+the record names it (`policy user <path>`). It covers `gstack-pregate run` only:
+`sealed` and `price_file` are read from the base branch's copy, so the user file
+refuses them (`PREGATE_CONFIG_INVALID`) rather than holding a policy nothing reads. `gstack-pregate validate` / `init` cover the working-tree file.
 
 ## `gstack-pregate`
 
@@ -114,7 +116,8 @@ Two stages with separate clocks, both printed:
   (static imports ∪ repo-path string literals ∪ the `bin/<name>` →
   `test/<name>*.test.ts` convention ∪ `dependencies`; Dart `import`/`export`/`part`
   directives resolve `package:<name>/x` through every tracked `pubspec.yaml`, and
-  `*_test.dart` files are tests), transitively through
+  `*_test.dart` files are tests, except under `integration_test/` and
+  `test_driver/`, which need a device: declare their lane under `dependencies`), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched file with no lane is `FAIL lanes — <file> has no test lane`, never
   a pass. Lanes and platform tiers come from `.github/workflows/*.yml`

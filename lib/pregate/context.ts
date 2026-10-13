@@ -62,7 +62,7 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   let configLoad: ConfigLoad = o.policyFrom === 'head' ? loadConfigFromHead(o.repoRoot, o.knownChecks) : loadConfigFromBase(o.repoRoot, base, o.knownChecks);
   if (o.policyFrom === 'base' && o.userConfigPath && !isConfigUnavailable(configLoad) && configLoad.kind === 'none') configLoad = loadConfigFromUser(o.userConfigPath, o.knownChecks) ?? configLoad;
   if (isConfigUnavailable(configLoad)) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: configLoad.detail } };
-  if (configLoad.errors.length) return { refused: { code: 'PREGATE_CONFIG_INVALID', message: `${configLoad.label}: ${configLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: configLoad.errors } };
+  if (configLoad.errors.length) return { refused: { code: 'PREGATE_CONFIG_INVALID', message: `${configLoad.label}: ${configLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}${configLoad.kind === 'user' ? '; edit that file directly (it lives outside the repo, so the base-branch fix below does not apply)' : ''}`, errors: configLoad.errors } };
   const registryLoad = o.policyFrom === 'head' ? loadRegistryFromHead(o.repoRoot) : loadRegistryFromBase(o.repoRoot, base);
   if (isRegistryUnavailable(registryLoad)) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: registryLoad.detail } };
   if (registryLoad.errors.length) return { refused: { code: 'REGEN_REGISTRY_INVALID', message: `${registryLoad.source.label}: ${registryLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: registryLoad.errors } };

@@ -47,11 +47,17 @@ function dartRepo(pregate: Record<string, unknown> | null = null): FixtureRepo {
   return repo;
 }
 
-/** A `dart` on PATH that reports its cwd and passes every file it is given, after `sleepS` seconds. */
-function dartShim(repo: FixtureRepo, sleepS = 0): { PATH: string } {
+function sleepCommand(sleepS: number | Record<string, number>): string {
+  if (typeof sleepS === 'number') return `sleep ${sleepS}`;
+  const { '*': other = 0, ...named } = sleepS;
+  return `case "$(basename "$PWD")" in ${Object.entries(named).map(([dir, n]) => `${dir}) sleep ${n};;`).join(' ')} *) sleep ${other};; esac`;
+}
+
+/** A `dart` and `flutter` on PATH that report its cwd and passes every file it is given, after `sleepS` seconds (per package directory name when an object). */
+function dartShim(repo: FixtureRepo, sleepS: number | Record<string, number> = 0): { PATH: string } {
   const dir = path.join(repo.root, 'shim');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'dart'), `#!/usr/bin/env bash\nshift\nsleep ${sleepS}\necho "ran in $(basename "$PWD"): $*"\necho "00:01 +$#: All tests passed!"\n`, { mode: 0o755 });
+  for (const tool of ['dart', 'flutter']) fs.writeFileSync(path.join(dir, tool), `#!/usr/bin/env bash\nshift\n${sleepCommand(sleepS)}\necho "ran in $(basename "$PWD"): $*"\necho "00:01 +$#: All tests passed!"\n`, { mode: 0o755 });
   return { PATH: `${dir}:${process.env.PATH ?? ''}` };
 }
 
@@ -61,6 +67,10 @@ describe('Dart import graph', () => {
     const g = buildGraph(repo.work);
     expect(isTestFile('test/ui/drawer_widget_test.dart')).toBe(true);
     expect(isTestFile('lib/widgets/drawer.dart')).toBe(false);
+    // Value: protects=device-only Flutter tests (integration_test/, test_driver/) are never auto-selected for a local `flutter test`;
+    //   fails_when=the exclusion is dropped and touching lib/ launches the app or fails with no device; why_new=no integration test file was classified;
+    //   seam=none; no_claim=a device run
+    for (const f of ['integration_test/app_test.dart', 'packages/core/integration_test/core_test.dart', 'test_driver/app_test.dart']) expect(isTestFile(f)).toBe(false);
     expect(testsFor(g, 'lib/theme.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'lib/widgets/drawer_parts.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'packages/core/lib/core.dart').tests).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
@@ -78,7 +88,7 @@ describe('Dart runner and summary (pure)', () => {
 
   test('without a declared runner, Dart tests group by package root; a declared runner takes every file', () => {
     const repo = dartRepo();
-    const ctx = { repoRoot: repo.work, config: DEFAULT_CONFIG } as unknown as PregateContext;
+    const ctx = { repoRoot: repo.work, config: DEFAULT_CONFIG, env: dartShim(repo) } as unknown as PregateContext;
     expect(planRuns(ctx, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual([
       { runner: 'dart test {files}', cwd: '', files: ['test/ui/drawer_widget_test.dart'] },
       { runner: 'dart test {files}', cwd: 'packages/core', files: ['test/core_test.dart'] },
@@ -90,9 +100,14 @@ describe('Dart runner and summary (pure)', () => {
       { runner: 'dart test {files}', cwd: '', files: ['test/ui/drawer_widget_test.dart'] },
       { runner: 'node --test {files}', cwd: '', files: ['test/util.test.js'] },
     ]);
-    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'spec/drawer_spec.rb'])).toBeNull();
+    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'spec/drawer_spec.rb'])).toEqual({ unclaimed: ['spec/drawer_spec.rb'], missing: [] });
+    // Value: protects=a machine without the Dart SDK gets an incomplete lane naming the missing tool, never a test failure (exit 127);
+    //   fails_when=the PATH check is dropped and the runner is planned anyway; why_new=every earlier plan had the SDK on PATH;
+    //   seam=none; no_claim=a real SDK install (an empty PATH stands in for a machine without one)
+    const noSdk = { ...ctx, env: { PATH: path.join(repo.root, 'empty-path') } } as PregateContext;
+    expect(planRuns(noSdk, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual({ unclaimed: ['test/ui/drawer_widget_test.dart', 'packages/core/test/core_test.dart'], missing: ['dart'] });
     write(repo.work, 'pubspec.yaml', 'name: app\ndependencies:\n  flutter:\n    sdk: flutter\n');
-    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart'])![0]!.runner).toBe('flutter test {files}');
+    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart'])).toMatchObject([{ runner: 'flutter test {files}' }]);
     const declared = { ...ctx, config: { ...DEFAULT_CONFIG, runner: 'bash scripts/test.sh {files}' } } as PregateContext;
     expect(planRuns(declared, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual([
       { runner: 'bash scripts/test.sh {files}', cwd: '', files: ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'] },
@@ -102,6 +117,12 @@ describe('Dart runner and summary (pure)', () => {
   test('a workflow run step names its _test.dart files; Dart root manifests are not strays', () => {
     const lanes = parseWorkflow('t.yml', 'jobs:\n  dart:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: fvm flutter test test/ui/drawer_widget_test.dart packages/core/test/core_test.dart\n');
     expect(lanes[0]!.testFiles).toEqual(['test/ui/drawer_widget_test.dart', 'packages/core/test/core_test.dart']);
+    // Value: protects=a CI job that runs only flutter/dart test is a test lane (requires-remote off its platform, clearable by local);
+    //   fails_when=flutter test / dart test drop out of TEST_COMMAND and the job silently stops being a lane; why_new=fixtures used bun lanes only;
+    //   seam=none; no_claim=a real workflow run
+    expect(lanes[0]!.runsTests).toBe(true);
+    const win = parseWorkflow('w.yml', 'jobs:\n  dart:\n    runs-on: windows-latest\n    steps:\n      - run: dart test\n', 'darwin');
+    expect(win[0]).toMatchObject({ tier: 'platform', runsTests: true });
     for (const f of ['pubspec.yaml', 'pubspec.lock', 'analysis_options.yaml', 'dart_test.yaml']) expect(ROOT_OK.test(f)).toBe(true);
     expect(ROOT_OK.test('scratch.dart')).toBe(false);
     // Value: protects=a selection manifest's *_test.dart lines join the lane's file set; fails_when=the manifest regex drops _test.dart;
@@ -137,6 +158,13 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     expect(invalid.status).toBe(EXIT.refused);
     expect(invalid.err).toContain('PREGATE_CONFIG_INVALID');
     expect(invalid.err).toContain(`user ${userPolicy}`);
+    // Value: protects=sealed in the user file is refused, since the pre-push guard never reads it (it would look active and do nothing);
+    //   fails_when=the user loader accepts sealed/price_file silently; why_new=only lane ids were validated; seam=none; no_claim=the sealed guard itself
+    fs.writeFileSync(userPolicy, JSON.stringify({ sealed: { paths: ['evals/**'] } }));
+    const sealed = run();
+    expect(sealed.status).toBe(EXIT.refused);
+    expect(sealed.err).toContain('covers gstack-pregate run only; sealed');
+    expect(sealed.err).toContain('edit that file directly');
 
     // A local lane runs here; a lane not named stays an obligation.
     fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit'] }));
@@ -193,15 +221,15 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
 
   // Value: protects=every run group shares one --timeout deadline, so the sum of runs never exceeds it and a late group is cut off (incomplete);
   //   fails_when=each group gets the full --timeout again (a 2-package repo could run 2x the budget and pass); why_new=no multi-group timeout test;
-  //   seam=none; no_claim=exact timing (3 s shim per run vs a 4.5 s deadline; 1.5 s margin either side)
+  //   seam=none; no_claim=exact timing (root run sleeps 1 s, core 5 s, deadline 5.5 s: load can only shrink core's budget, never cut the root run)
   test('run groups share the --timeout deadline: a later package past it is incomplete, never a pass', () => {
     const repo = dartRepo(null);
-    const env = { ...dartShim(repo, 3), GSTACK_PROJECT_SLUG: 'dartdeadline' };
+    const env = { ...dartShim(repo, { core: 5, '*': 1 }), GSTACK_PROJECT_SLUG: 'dartdeadline' };
     const userPolicy = path.join(repo.home, 'projects', 'dartdeadline', 'pregate.json');
     fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
     fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'] }));
     commit(repo, { 'packages/core/lib/core.dart': 'int one() => 2;\n' });
-    const r = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests', '--timeout', '4.5'], env);
+    const r = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests', '--timeout', '5.5'], env);
     expect(r.status).not.toBe(EXIT.ok);
     expect(r.out).toMatch(/^tests {6}lanes {5}incomplete .*local lane timed out/m);
     const log = fs.readFileSync(/log: (\S+)/.exec(r.out)![1]!, 'utf8');
@@ -220,7 +248,7 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     for (const dir of (process.env.PATH ?? '').split(':')) {
       let names: string[] = [];
       try { names = fs.readdirSync(dir); } catch { continue; }
-      for (const name of names) if (!['fvm', 'dart', 'flutter'].includes(name) && !fs.existsSync(path.join(bin, name))) fs.symlinkSync(path.join(dir, name), path.join(bin, name));
+      for (const name of names) if (!['fvm', 'dart', 'flutter'].includes(name) && !fs.lstatSync(path.join(bin, name), { throwIfNoEntry: false })) fs.symlinkSync(path.join(dir, name), path.join(bin, name));
     }
     const userPolicy = path.join(repo.home, 'projects', 'dartfvm', 'pregate.json');
     fs.mkdirSync(path.dirname(userPolicy), { recursive: true });

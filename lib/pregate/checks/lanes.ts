@@ -18,9 +18,8 @@ import { launchRuntime } from '../runtime';
 import { matchesAny } from '../../ship-policy';
 import type { CheckDef, CheckResult, PregateContext } from '../types';
 
-/** The test command with `{files}`; detected from the repo when the config does not name one. */
+/** The JS or Python test command with `{files}`, detected from the repo (a declared runner is applied by planRuns). */
 export function detectRunner(ctx: PregateContext, files: readonly string[]): string | null {
-  if (ctx.config.runner) return ctx.config.runner;
   const has = (f: string) => fs.existsSync(path.join(ctx.repoRoot, f));
   let pkg: { devDependencies?: Record<string, string>; dependencies?: Record<string, string>; scripts?: Record<string, string> } = {};
   try { pkg = JSON.parse(fs.readFileSync(path.join(ctx.repoRoot, 'package.json'), 'utf8')); } catch { /* no package.json */ }
@@ -37,47 +36,69 @@ export function detectRunner(ctx: PregateContext, files: readonly string[]): str
 /** One runner invocation: `files` relative to `cwd` (repo-relative, `''` for the root). */
 export interface RunGroup { runner: string; cwd: string; files: string[] }
 
-/** The nearest directory at or above `file` holding a pubspec.yaml, repo-relative; null outside any Dart package. */
-function dartRoot(repoRoot: string, file: string): string | null {
+/** The nearest directory at or above `file` holding a pubspec.yaml, repo-relative; null outside any Dart package. `seen` memoises per directory. */
+function dartRoot(repoRoot: string, file: string, seen: Map<string, string | null>): string | null {
+  const walked: string[] = [];
+  let found: string | null = null;
   for (let d = path.posix.dirname(file); ; d = path.posix.dirname(d)) {
     const rel = d === '.' ? '' : d;
-    if (fs.existsSync(path.join(repoRoot, rel, 'pubspec.yaml'))) return rel;
-    if (d === '.' || d === '/' || d === '') return null;
+    if (seen.has(rel)) { found = seen.get(rel)!; break; }
+    walked.push(rel);
+    if (fs.existsSync(path.join(repoRoot, rel, 'pubspec.yaml'))) { found = rel; break; }
+    if (d === '.' || d === '/' || d === '') break;
   }
+  for (const w of walked) seen.set(w, found);
+  return found;
 }
 
-/** `flutter test` for a package on the Flutter SDK, else `dart test`; through fvm when the repo pins one and fvm is installed. */
-export function dartRunner(repoRoot: string, root: string): string {
+/**
+ * `flutter test` for a package on the Flutter SDK, else `dart test`; through fvm
+ * when the repo pins one and fvm is on PATH. `missing` names the tool when
+ * neither fvm nor the SDK is on PATH, so the lane is incomplete rather than a
+ * test failure (exit 127).
+ */
+export function dartRunner(repoRoot: string, root: string, env: NodeJS.ProcessEnv): { runner: string } | { missing: string } {
   let pubspec = '';
   try { pubspec = fs.readFileSync(path.join(repoRoot, root, 'pubspec.yaml'), 'utf8'); } catch { /* checked by dartRoot */ }
   const tool = /^\s*sdk:\s*flutter\b/m.test(pubspec) ? 'flutter' : 'dart';
-  const fvm = (fs.existsSync(path.join(repoRoot, '.fvmrc')) || fs.existsSync(path.join(repoRoot, '.fvm', 'fvm_config.json'))) && Bun.which('fvm');
-  return `${fvm ? 'fvm ' : ''}${tool} test {files}`;
+  const onPath = (bin: string) => !!Bun.which(bin, { PATH: env.PATH ?? '' });
+  const fvm = (fs.existsSync(path.join(repoRoot, '.fvmrc')) || fs.existsSync(path.join(repoRoot, '.fvm', 'fvm_config.json'))) && onPath('fvm');
+  if (!fvm && !onPath(tool)) return { missing: tool };
+  return { runner: `${fvm ? 'fvm ' : ''}${tool} test {files}` };
 }
 
 /**
  * The invocations that run `files`. A declared runner takes every file. Otherwise
  * Dart tests run from their own package root (a sub-package's imports resolve
- * against its own pubspec), and the rest go to the detected runner; a file no
- * runner claims makes the plan null (`incomplete`, never a pass).
+ * against its own pubspec), and the rest go to the detected runner; files no
+ * runner claims are returned as `unclaimed`, with any Dart SDK missing from
+ * PATH in `missing` (`incomplete`, never a pass).
  */
-export function planRuns(ctx: PregateContext, files: readonly string[]): RunGroup[] | null {
+export function planRuns(ctx: PregateContext, files: readonly string[]): RunGroup[] | { unclaimed: string[]; missing: string[] } {
   if (ctx.config.runner) return [{ runner: ctx.config.runner, cwd: '', files: [...files] }];
   const groups: RunGroup[] = [];
   const dart = new Map<string, string[]>();
+  const seen = new Map<string, string | null>();
   const rest: string[] = [];
   for (const f of files) {
-    const root = f.endsWith('.dart') ? dartRoot(ctx.repoRoot, f) : null;
+    const root = f.endsWith('.dart') ? dartRoot(ctx.repoRoot, f, seen) : null;
     if (root === null) { rest.push(f); continue; }
-    dart.set(root, [...(dart.get(root) ?? []), root ? f.slice(root.length + 1) : f]);
+    let list = dart.get(root);
+    if (!list) dart.set(root, (list = []));
+    list.push(root ? f.slice(root.length + 1) : f);
   }
-  for (const [root, list] of [...dart].sort(([a], [b]) => a.localeCompare(b))) groups.push({ runner: dartRunner(ctx.repoRoot, root), cwd: root, files: list });
+  const unclaimed: string[] = [];
+  const missing = new Set<string>();
+  for (const [root, list] of [...dart].sort(([a], [b]) => a.localeCompare(b))) {
+    const r = dartRunner(ctx.repoRoot, root, ctx.env ?? process.env);
+    if ('missing' in r) { missing.add(r.missing); unclaimed.push(...list.map(f => (root ? `${root}/${f}` : f))); } else groups.push({ runner: r.runner, cwd: root, files: list });
+  }
   if (rest.length) {
     const runner = detectRunner(ctx, rest);
-    if (!runner) return null;
-    groups.push({ runner, cwd: '', files: rest });
+    if (runner) groups.push({ runner, cwd: '', files: rest });
+    else unclaimed.push(...rest);
   }
-  return groups;
+  return unclaimed.length ? { unclaimed, missing: [...missing].sort() } : groups;
 }
 
 export interface RunnerSummary { ran: number | null; failed: number | null }
@@ -158,7 +179,7 @@ function run(ctx: PregateContext): CheckResult {
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
   const groups = planRuns(ctx, sel.localTests);
-  if (!groups) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${sel.localTests.length} selected file(s)`, fix: 'declare `runner` (with {files}) in .gstack/pregate.json' };
+  if (!Array.isArray(groups)) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${groups.unclaimed.length} of ${sel.localTests.length} selected file(s): ${groups.unclaimed.slice(0, 8).join(' ')}${groups.unclaimed.length > 8 ? ' …' : ''}${groups.missing.length ? `; not on PATH: ${groups.missing.join(', ')}` : ''}`, fix: groups.missing.length ? `install ${groups.missing.join(' and ')} (or fvm with the repo's pin) and rerun` : 'declare `runner` (with {files}) in .gstack/pregate.json, or in <GSTACK_HOME>/projects/<slug>/pregate.json when the base carries none' };
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
   const r = runLocal(ctx, runtime.env, groups);
   const runLines = [...lines, `runtime: ${runtime.label}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];

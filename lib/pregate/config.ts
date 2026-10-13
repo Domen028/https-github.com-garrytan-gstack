@@ -204,7 +204,13 @@ export function loadConfigFromHead(repoRoot: string, knownChecks: readonly strin
 export function loadConfigFromUser(file: string, knownChecks: readonly string[] = []): ConfigLoad | null {
   let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
-  return { ...parseConfig(text, knownChecks), present: true, label: `user ${file}`, kind: 'user' };
+  const load = parseConfig(text, knownChecks);
+  // `sealed` (the pre-push guard) and `price_file` (gstack-eval-plan) read only the git copies, so in the user file they would look active and do nothing.
+  let raw: unknown = null;
+  try { raw = JSON.parse(text); } catch { /* parseConfig reported it */ }
+  const ignored = raw && typeof raw === 'object' && !Array.isArray(raw) ? ['sealed', 'price_file'].filter(k => k in (raw as object)) : [];
+  const errors = [...load.errors, ...ignored.map(k => ({ code: 'PREGATE_CONFIG_INVALID' as const, path: k, message: `the user-owned policy covers gstack-pregate run only; ${k} is read from ${PREGATE_CONFIG_PATH} on the base branch` }))];
+  return { ...load, errors, present: true, label: `user ${file}`, kind: 'user' };
 }
 
 export function isConfigUnavailable(load: ConfigLoad): load is { unavailable: true; base: string; detail: string } {
