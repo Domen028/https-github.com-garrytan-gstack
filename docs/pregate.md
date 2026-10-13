@@ -57,7 +57,7 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 
 | Key | Meaning |
 |---|---|
-| `runner` | the local test command with `{files}` (gstack: `bun test {files}`); unset, it is detected (bun, vitest, jest, pytest, `node --test`, and `flutter test`/`dart test` per Dart package root, through fvm when the repo pins it); nothing detected is `incomplete` |
+| `runner` | the local test command with `{files}` (gstack: `bun test {files}`); unset, it is detected (bun, vitest, jest, pytest, `node --test`, and `flutter test`/`dart test` per Dart package root, through fvm when that package or an ancestor pins it with `.fvmrc` or `.fvm/fvm_config.json` and fvm is on PATH); nothing detected, or a Dart SDK missing from PATH, is `incomplete` |
 | `dependencies` | glob → test files for subprocess targets, runtime reads and generated inputs the import graph cannot see; `[]` declares "no lane needed" (docs, licences) |
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
@@ -72,10 +72,13 @@ Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
 takes effect. A repo that keeps `.gstack/` out of git (a shared repo where gstack
 is one contributor's tool) can hold the same file at
 `<GSTACK_HOME>/projects/<slug>/pregate.json`. It is read only when the base
-carries none, it lives outside the repository so a PR still cannot reach it, and
-the record names it (`policy user <path>`). It covers `gstack-pregate run` only:
-`sealed` and `price_file` are read from the base branch's copy, so the user file
-refuses them (`PREGATE_CONFIG_INVALID`) rather than holding a policy nothing reads. `gstack-pregate validate` / `init` cover the working-tree file.
+carries none (never under `--policy-from head`), it lives outside the repository
+so a PR still cannot reach it, and the record names it (`policy user <path>`).
+It covers `gstack-pregate run` only: `sealed` and `price_file` are read from the
+base branch's copy, so the user file refuses them (`PREGATE_CONFIG_INVALID`)
+rather than holding a policy nothing reads. A user file that exists but cannot
+be read refuses the same way instead of falling back to defaults.
+`gstack-pregate validate` / `init` cover the working-tree file.
 
 ## `gstack-pregate`
 
@@ -116,14 +119,16 @@ Two stages with separate clocks, both printed:
   (static imports ∪ repo-path string literals ∪ the `bin/<name>` →
   `test/<name>*.test.ts` convention ∪ `dependencies`; Dart `import`/`export`/`part`
   directives resolve `package:<name>/x` through every tracked `pubspec.yaml`, and
-  `*_test.dart` files are tests, except under `integration_test/` and
+  `*_test.dart` files under a `test/` directory are tests, except under `integration_test/` and
   `test_driver/`: they need a device, so pregate never runs them, and a touched
   one has no lane until you declare `"**/integration_test/**": []` (and
   `"**/test_driver/**": []`) under `dependencies` and let CI run them), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched file with no lane is `FAIL lanes — <file> has no test lane`, never
   a pass. Lanes and platform tiers come from `.github/workflows/*.yml`
-  (`gstack-pregate lanes` prints them): local ones run through the runner under
+  (`gstack-pregate lanes` prints them; a test path a step names resolves against
+  that step's `working-directory`, else the job's or workflow's
+  `defaults.run.working-directory`): local ones run through the runner under
   `set -o pipefail`, judged on the runner's summary line (zero tests ran is a
   failure, a `| tail`-hidden exit is still an exit); a platform lane this
   machine cannot run becomes a `requires-remote` obligation naming
