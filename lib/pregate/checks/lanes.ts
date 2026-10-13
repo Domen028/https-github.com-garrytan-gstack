@@ -125,11 +125,12 @@ export function parseSummary(output: string): RunnerSummary {
   return { ran: null, failed: null };
 }
 
-interface LocalRun { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string }
+interface LocalRun { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string; zero?: string }
 
 function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, g: RunGroup, files: string[], log: string, timeoutMs: number): LocalRun {
   const quote = (f: string) => `'${f.replace(/'/g, `'\\''`)}'`;
-  const run = g.runner.replace('{files}', files.map(quote).join(' '));
+  const joined = files.map(quote).join(' ');
+  const run = g.runner.replace('{files}', () => joined);
   const command = g.cwd ? `(cd ${quote(g.cwd)} && ${run})` : run;
   if (timeoutMs <= 0) return { exit: null, ran: null, failed: null, log, tail: [`not started: the --timeout deadline passed before ${command}`], command };
   const r = spawnSync('bash', ['-c', `set -o pipefail; ${run}`], { cwd: path.join(ctx.repoRoot, g.cwd), encoding: 'utf8', timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, env: { ...env, CI: env.CI ?? '1' } });
@@ -145,7 +146,8 @@ function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, g: RunGroup, files
  * its own (a serial file shares process-wide state: a module mock, an env
  * mutation). Every run shares the --timeout deadline. The first non-zero or
  * timed-out run decides the exit; counts add up only when every run reported
- * a summary.
+ * a summary, and any run that reported 0 tests makes the whole lane zero-run
+ * (another package's count must not hide it).
  */
 function runLocal(ctx: PregateContext, env: NodeJS.ProcessEnv, groups: RunGroup[]): LocalRun & { serial: number } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-lanes-'));
@@ -161,7 +163,8 @@ function runLocal(ctx: PregateContext, env: NodeJS.ProcessEnv, groups: RunGroup[
   }
   const bad = runs.find(r => r.exit === null) ?? runs.find(r => r.exit !== 0);
   const sum = (k: 'ran' | 'failed') => (runs.some(r => r[k] === null) ? null : runs.reduce((n, r) => n + (r[k] as number), 0));
-  return { exit: bad ? bad.exit : 0, ran: sum('ran'), failed: sum('failed'), log, tail: (bad ?? runs[runs.length - 1]!).tail, command: runs.map(r => r.command).join(' && '), serial: serialCount };
+  const zero = runs.find(r => r.ran === 0);
+  return { exit: bad ? bad.exit : 0, ran: zero ? 0 : sum('ran'), zero: zero?.command, failed: sum('failed'), log, tail: (bad ?? runs[runs.length - 1]!).tail, command: runs.map(r => r.command).join(' && '), serial: serialCount };
 }
 
 function describe(sel: Selection): string[] {
@@ -192,7 +195,7 @@ function run(ctx: PregateContext): CheckResult {
   const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command), runtime: runtime.label } };
   if (r.exit === null) return { ...withRun, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `local lane timed out after ${ctx.timeoutMs} ms (${sel.localTests.length} files)`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
   if (r.exit !== 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `local lane exited ${r.exit} (${r.failed ?? '?'} failed of ${r.ran ?? '?'} ran; ${sel.localTests.length} files; pipefail)`, fix: `read ${r.log}, fix the in-branch failure, rerun gstack-pregate --stage tests` };
-  if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests for ${sel.localTests.length} selected file(s)`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
+  if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests${r.zero ? ` in ${r.zero}` : ''} (${sel.localTests.length} selected file(s))`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
   const detail = `${r.ran ?? 'count unavailable'} tests ran in ${sel.localTests.length} file(s)${r.serial ? ` (${r.serial} serial)` : ''}, exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;
   return { ...withRun, status: sel.remote.length ? 'requires-remote' : 'pass', detail };
 }

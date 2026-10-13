@@ -38,7 +38,7 @@ export interface Lane {
 }
 
 const TEST_COMMAND = /\b(?:bun test|bun run test\b|bun run test:|npm test|npm run test\b|pnpm test|yarn test|pytest|go test|cargo test|flutter test|dart test|dart run test|melos (?:run )?test|very_good test|rspec|bin\/test-lane|node --test|vitest|jest|test-(?:free|paid)-shards\.ts(?![^\n]*--(?:ci-verify|ci-plan|list)\b))\b/;
-const TEST_FILE = /(?<![\w/])((?:[\w.-]+\/)*(?:test|tests|spec|__tests__)\/[\w./-]*\.(?:test|spec)\.[a-z]+|(?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?|(?:[\w.-]+\/)*[\w.-]+_test\.dart)(?![\w/])/g;
+const TEST_FILE = /(?<![\w/])((?:[\w.-]+\/)*(?:test|tests|spec|__tests__)\/[\w./-]*\.(?:test|spec)\.[a-z]+|(?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?|(?:[\w.-]+\/)*test\/(?:[\w.-]+\/)*[\w.-]+_test\.dart)(?![\w/])/g;
 
 function indentOf(line: string): number { return line.length - line.trimStart().length; }
 

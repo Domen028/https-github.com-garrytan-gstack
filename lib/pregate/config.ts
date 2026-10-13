@@ -203,7 +203,11 @@ export function loadConfigFromHead(repoRoot: string, knownChecks: readonly strin
 /** The user-owned copy for a repo that keeps `.gstack/` out of git; the caller consults it only when the base has none. */
 export function loadConfigFromUser(file: string, knownChecks: readonly string[] = []): ConfigLoad | null {
   let text: string;
-  try { text = fs.readFileSync(file, 'utf8'); } catch { return null; }
+  try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    // An unreadable policy must refuse, never fall back to defaults (its guards would silently vanish).
+    return { ...parseConfig('{}', knownChecks), errors: [{ code: 'PREGATE_CONFIG_INVALID', path: '', message: `cannot read the user-owned policy: ${(e as Error).message}` }], present: true, label: `user ${file}`, kind: 'user' };
+  }
   const load = parseConfig(text, knownChecks);
   // `sealed` (the pre-push guard) and `price_file` (gstack-eval-plan) read only the git copies, so a non-null value in the user file would look active and do nothing.
   let raw: unknown = null;

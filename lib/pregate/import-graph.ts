@@ -22,7 +22,7 @@ import * as path from 'node:path';
 import { matchesAny } from '../ship-policy';
 
 export const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|py|rb|sh|bash|go|rs|dart)$/;
-export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb)$|_test\.dart$|_spec\.rb$/;
+export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb)$|(?:^|\/)test\/(?:.*\/)?[^/]*_test\.dart$|_spec\.rb$/;
 
 export interface Edge { from: string; via: 'import' | 'literal' | 'convention' | 'declared' | 'generated' }
 export interface Graph {

@@ -71,6 +71,11 @@ describe('Dart import graph', () => {
     //   fails_when=the exclusion is dropped and touching lib/ launches the app or fails with no device; why_new=no integration test file was classified;
     //   seam=none; no_claim=a device run
     for (const f of ['integration_test/app_test.dart', 'packages/core/integration_test/core_test.dart', 'test_driver/app_test.dart', 'test_driver/integration_test.dart']) expect(isTestFile(f)).toBe(false);
+    // Value: protects=dart test only runs files under test/, so a production lib/src/ab_test.dart is never run as a test;
+    //   fails_when=the _test.dart arm loses its test/ anchor (false PREGATE_LANE_FAILED on an app file); why_new=only device dirs were excluded;
+    //   seam=none; no_claim=none beyond protects
+    expect(isTestFile('lib/src/ab_test.dart')).toBe(false);
+    expect(isTestFile('packages/core/test/unit/core_test.dart')).toBe(true);
     expect(testsFor(g, 'lib/theme.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'lib/widgets/drawer_parts.dart').tests).toEqual(['test/ui/drawer_widget_test.dart']);
     expect(testsFor(g, 'packages/core/lib/core.dart').tests).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
@@ -170,6 +175,14 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     //   why_new=only a non-null sealed was tested; seam=none; no_claim=none beyond protects
     fs.writeFileSync(userPolicy, JSON.stringify({ price_file: null }));
     expect(run().err).not.toContain('PREGATE_CONFIG_INVALID');
+    // Value: protects=a user policy that exists but cannot be read refuses instead of running on defaults (its guards would vanish);
+    //   fails_when=every read error is treated as absent; why_new=only missing and parseable files were tested; seam=none; no_claim=EACCES specifically
+    fs.rmSync(userPolicy);
+    fs.mkdirSync(userPolicy);
+    const unreadable = run();
+    expect(unreadable.status).toBe(EXIT.refused);
+    expect(unreadable.err).toContain('cannot read the user-owned policy');
+    fs.rmdirSync(userPolicy);
 
     // A local lane runs here; a lane not named stays an obligation.
     fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit'] }));
@@ -240,6 +253,24 @@ describe('gstack-pregate on a Dart repo with no committed policy', () => {
     const log = fs.readFileSync(/log: (\S+)/.exec(r.out)![1]!, 'utf8');
     expect(log).toMatch(/ran in \S+: test\/ui\/drawer_widget_test\.dart/);
     expect(log).not.toContain('ran in core:');
+  }, 30_000);
+
+  // Value: protects=one package whose tests all skip (+0) makes the lane ZERO-RUN even when another package ran tests, and a file name
+  //   with `$&` reaches the runner verbatim; fails_when=counts are summed before the zero check, or {files} is substituted with a string
+  //   replacement; why_new=only single-group zero runs were tested; seam=none; no_claim=a real dart runner (PATH shim)
+  test('a package that ran 0 tests is ZERO-RUN even when another package ran tests', () => {
+    const repo = dartRepo(null);
+    const { PATH } = dartShim(repo);
+    const shim = path.join(repo.root, 'shim');
+    for (const tool of ['dart', 'flutter']) fs.writeFileSync(path.join(shim, tool), `#!/usr/bin/env bash\nshift\necho "ran in $(basename "$PWD"): $*"\nif [ "$(basename "$PWD")" = core ]; then echo "00:01 +0 ~1: All tests passed!"; else echo "00:01 +$#: All tests passed!"; fi\n`, { mode: 0o755 });
+    const userPolicy = path.join(repo.home, 'projects', 'dartzero', 'pregate.json');
+    fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+    fs.writeFileSync(userPolicy, JSON.stringify({ local: ['free-tests.yml/unit', 'windows.yml/windows-shard'] }));
+    commit(repo, { 'packages/core/lib/core.dart': 'int one() => 2;\n', 'test/odd$&_test.dart': "import 'package:app/theme.dart';\nvoid main() {}\n" });
+    const r = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], { PATH, GSTACK_PROJECT_SLUG: 'dartzero' });
+    expect(r.status).not.toBe(EXIT.ok);
+    expect(r.out).toMatch(/^tests {6}lanes {5}fail .*ZERO-RUN: the runner reported 0 tests in \(cd 'packages\/core'/m);
+    expect(fs.readFileSync(/log: (\S+)/.exec(r.out)![1]!, 'utf8')).toContain('test/odd$&_test.dart');
   }, 30_000);
 
   // Value: protects=a repo pinning its SDK (.fvmrc) runs Dart tests through fvm when fvm is on PATH, and without it when fvm is absent;
