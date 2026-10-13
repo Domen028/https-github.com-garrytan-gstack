@@ -51,6 +51,16 @@ describe('fast PR coverage policy', () => {
     expect(result.needsFullValidation).toBe(false);
   });
 
+  test('the vendored Capy skill (capy/skill/**) is free-only: no paid case reads it, so it needs no full validation', () => {
+    const result = select({ selectedE2E: [], selectedJudges: [], changedFiles: ['capy/skill/gstack/SKILL.md', 'capy/skill/gstack/scripts/install.sh'], derived: null });
+    expect(result.needsFullValidation).toBe(false);
+    expect(result.missingCoverage).toEqual([]);
+    expect(result.mode).toBe('pr');
+    expect(result.e2e).toEqual([]);
+    const prompt = select({ selectedE2E: [], selectedJudges: [], changedFiles: ['plan-ceo-review/SKILL.md.tmpl'], derived: null });
+    expect(prompt.needsFullValidation || prompt.deferredPromptFiles.length > 0 || prompt.e2e.length > 0).toBe(true);
+  });
+
   test('does not add unrelated short probes or drop selected quality judges', () => {
     const result = select({ selectedJudges: ['browse quality', 'plan-ceo-review/SKILL.md modes'] });
     expect(result.e2e).not.toContain('browse-smoke');
