@@ -174,6 +174,7 @@ describe('Dart runner and summary (pure)', () => {
       ['name: core\ndependencies:\n  flutter:\n    sdk: flutter\n', 'flutter'],
       ['name: core\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n', 'dart'],
       ['name: core\n# flutter: {sdk: flutter}\ndescription: "x, sdk: flutter"\n', 'dart'],
+      ['name: core\ndescription: "use flutter: {sdk: flutter} style"\n', 'dart'],
     ] as const) {
       write(repo.work, 'packages/core/pubspec.yaml', pubspec);
       expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
