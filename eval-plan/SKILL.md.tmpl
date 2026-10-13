@@ -134,10 +134,16 @@ the preregistration, when `status=budget_exhausted`, or when `verdict=exceeds`.
 ## Step 4: The approval ask
 
 Price every paid gate the plan names (a benchmark or eval command that spends) from the
-repo's call-plan file; nothing is executed (`docs/eval-calls.md` in gstack):
+repo's call-plan file; nothing is executed (`docs/eval-calls.md` in gstack). The gate
+command is free text, so it reaches the pricer only as a file:
+
+{{FREE_TEXT_FILE:GATE_FILE=gate-command}}
+
+Write the exact gate command, one line, into the printed file, then price it:
 
 ```bash
-~/.claude/skills/gstack/bin/gstack-eval-plan price-gate --gate "<exact gate command>" --cap-usd <cap-usd>
+GATE_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.gstack/tmp/<gate-file-name>"
+~/.claude/skills/gstack/bin/gstack-eval-plan price-gate --gate-file "$GATE_FILE" --cap-usd <cap-usd>
 ```
 
 Each `GATE_PRICE:` line goes into the ask. `EVAL_GATE_UNPRICED`, `EVAL_PLAN_STALE`,

@@ -47,7 +47,7 @@ function scratch(baseFiles: Record<string, string | Buffer>): Scratch {
   fs.mkdirSync(work); fs.mkdirSync(state);
   const env = { HOME: root, GSTACK_HOME: state, GSTACK_STATE_ROOT: state, GIT_CONFIG_GLOBAL: path.join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
   fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[user]\n\tname = t\n\temail = t@example.com\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n');
-  spawnSync('git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...env } });
+  spawnSync('git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...env }, timeout: 30_000 });
   sh(work, env, ['init', '-q', '-b', 'main']);
   write(work, { 'README.md': '# evals\n', ...baseFiles });
   sh(work, env, ['add', '-A']); sh(work, env, ['commit', '-q', '-m', 'base']);

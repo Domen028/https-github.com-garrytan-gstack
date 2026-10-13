@@ -138,7 +138,7 @@ describe('release-tool contract', () => {
 describe('restamp_command (field wave CD3): the repo owns the stamp inside the staging worktree', () => {
   const RESTAMP_JS = [
     "const fs = require('fs'); const { execSync } = require('child_process');",
-    "if (execSync('git status --porcelain', { encoding: 'utf8' }).trim()) { console.error('FAIL: the working tree is not clean'); process.exit(1); }",
+    "if (execSync('git status --porcelain', { encoding: 'utf8', timeout: 30000 }).trim()) { console.error('FAIL: the working tree is not clean'); process.exit(1); }",
     "const v = process.argv[2];",
     "if (!v || v !== process.env.GSTACK_RESTAMP_VERSION) { console.error('version argument and GSTACK_RESTAMP_VERSION disagree'); process.exit(2); }",
     "if (process.env.FIXTURE_FAIL) process.exit(7);",
@@ -146,7 +146,7 @@ describe('restamp_command (field wave CD3): the repo owns the stamp inside the s
     "const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8')); pkg.version = v.split('.').slice(0, 3).join('.'); fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\\n');",
     "fs.writeFileSync('generated/digest.md', '# digest v' + v + '\\nbody\\n');",
     "if (process.env.FIXTURE_STRAY) fs.writeFileSync('stray.txt', 'x\\n');",
-    "execSync('git add -A'); execSync('git -c user.name=r -c user.email=r@example.com -c commit.gpgsign=false commit -q -m restamp');",
+    "execSync('git add -A', { timeout: 30000 }); execSync('git -c user.name=r -c user.email=r@example.com -c commit.gpgsign=false commit -q -m restamp', { timeout: 30000 });",
   ].join('\n') + '\n';
   const POLICY = { ...BASE_POLICY, release_tool: null, restamp_command: 'node restamp.js' };
 

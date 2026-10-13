@@ -10,7 +10,7 @@
  *   gstack-eval-plan pilot settle --out <dir> --attempt <id> --usd <n|unknown>
  *   gstack-eval-plan pilot release --out <dir> --attempt <id>
  *   gstack-eval-plan pilot report --out <dir> --total <items> [--workers W] [--json]
- *   gstack-eval-plan price-gate --gate "<exact gate command>" [--plan-file <file>] [--base <branch>] [--cap-usd N]
+ *   gstack-eval-plan price-gate --gate-file <file> | --gate "<exact gate command>" [--plan-file <file>] [--base <branch>] [--cap-usd N]
  *                               [--smoke-cap-usd N] [--allow-unpriced "<reason>"] [--out <dir>] [--json]
  *
  * The dry run spends nothing (stub model) and prints the checklist: price-table
@@ -47,7 +47,7 @@ const HELP = `gstack-eval-plan — preregistration, priced arms, $0 dry run, pri
   pilot start --out dir --cap usd --arms m,m --dry-run dry-run.json [--n 3]
   pilot settle --out dir --attempt id --usd <n|unknown>      pilot release --out dir --attempt id
   pilot report --out dir --total items [--workers W] [--json]  spend table + extrapolation with a 95% band, then the approval ask
-  price-gate --gate "<exact gate command>" [--plan-file f] [--base b] [--cap-usd N] [--smoke-cap-usd N] [--allow-unpriced "<reason>"] [--out dir] [--json]
+  price-gate --gate-file <file> | --gate "<exact gate command>" [--plan-file f] [--base b] [--cap-usd N] [--smoke-cap-usd N] [--allow-unpriced "<reason>"] [--out dir] [--json]
                                      price a paid gate from its GSTACK_EVAL_CALLS v1 call-plan file (--plan-file, else the base
                                      policy's price_file at HEAD); checks the gate/head/input binding, executes nothing, writes a
                                      receipt (default .gstack/tmp/price-gate/); docs/eval-calls.md
@@ -150,7 +150,7 @@ function doPilot(rest: string[]): number {
   return usage(`unknown pilot command ${sub ?? ''}`);
 }
 
-const PRICE_GATE_FLAGS = new Set(['--gate', '--plan-file', '--base', '--cap-usd', '--smoke-cap-usd', '--allow-unpriced', '--out']);
+const PRICE_GATE_FLAGS = new Set(['--gate', '--gate-file', '--plan-file', '--base', '--cap-usd', '--smoke-cap-usd', '--allow-unpriced', '--out']);
 
 function doPriceGate(rest: string[]): number {
   for (let i = 0; i < rest.length; i++) {
@@ -158,8 +158,11 @@ function doPriceGate(rest: string[]): number {
     if (!PRICE_GATE_FLAGS.has(rest[i]!) || rest[i + 1] === undefined) return usage(`price-gate: unknown flag or missing value ${rest[i]}`);
     i++;
   }
-  const gate = flag(rest, '--gate');
-  if (!gate) return usage('price-gate needs --gate "<exact gate command>"');
+  const gateFile = flag(rest, '--gate-file');
+  if (gateFile && flag(rest, '--gate') !== undefined) return usage('price-gate takes --gate or --gate-file, not both');
+  if (gateFile && !fs.existsSync(gateFile)) return usage(`--gate-file ${gateFile} does not exist`);
+  const gate = gateFile ? fs.readFileSync(gateFile, 'utf8').replace(/\r?\n$/, '') : flag(rest, '--gate');
+  if (!gate?.trim()) return usage('price-gate needs the exact gate command: --gate-file <file> (written with your file-write tool) or --gate "<command>"');
   const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' });
   if (top.status !== 0) return usage('price-gate runs inside the git repository whose gate it prices');
   const repoRoot = top.stdout.trim();

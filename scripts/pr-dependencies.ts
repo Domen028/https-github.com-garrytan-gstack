@@ -201,9 +201,9 @@ export function deriveDependencies(maps: DependencyMaps, root: string): DerivedD
   };
   const closure = (entries: Iterable<string>, parents?: Map<string, string>): Set<string> => {
     const seen = new Set<string>();
-    const queue = [...entries].filter(file => trackedSet.has(file));
-    while (queue.length) {
-      const file = queue.pop()!;
+    const queue = [...entries].filter(file => trackedSet.has(file)).reverse();
+    for (let head = 0; head < queue.length; head++) {
+      const file = queue[head]!;
       if (seen.has(file)) continue;
       seen.add(file);
       for (const next of refs(file)) if (!seen.has(next) && !/\.test\.tsx?$/.test(next)) { queue.push(next); if (parents && !parents.has(next)) parents.set(next, file); }

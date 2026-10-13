@@ -77,6 +77,17 @@ describe('reference derivation on a fixture tree', () => {
     expect(referenceText('data.json', '{"a":"lib/x.ts"}')).toBe('');
   });
 
+  test('trace names the shortest chain: a template that invokes a bin directly wins over a long import path to it', () => {
+    const repo = fixtureRepo({
+      'test/skill-e2e-gamma.test.ts': '', 'gamma/SKILL.md.tmpl': 'Run bin/gstack-target.\n', 'gamma/sections/a.md.tmpl': 'See lib/one.ts.\n',
+      'lib/one.ts': "import './two';\n", 'lib/two.ts': "import './three';\n", 'lib/three.ts': "export const x = 'bin/gstack-target';\n",
+      'bin/gstack-target': '#!/bin/sh\n', 'package.json': '{}',
+    });
+    const traced = deriveDependencies({ e2eTouchfiles: { gamma: ['test/skill-e2e-gamma.test.ts', 'gamma/**'] }, judgeTouchfiles: {}, globalTouchfiles: [] }, repo);
+    expect(traced.trace('gamma', 'bin/gstack-target')).toEqual(['gamma/SKILL.md.tmpl', 'bin/gstack-target']);
+    expect(traced.trace('gamma', 'lib/three.ts')).toEqual(['gamma/sections/a.md.tmpl', 'lib/one.ts', 'lib/two.ts', 'lib/three.ts']);
+  });
+
   test('a host config feeds only cases whose test names the host', () => {
     const named = deriveDependencies({ ...maps, e2eTouchfiles: { ...maps.e2eTouchfiles, beta: ['test/skill-e2e-beta.test.ts'] } },
       fixtureRepo({ 'test/skill-e2e-beta.test.ts': "run({ host: 'acme' });\n", 'hosts/acme.ts': '', 'hosts/zeta.ts': '', 'scripts/build.sh': '', 'scripts/resolvers/index.ts': '', 'package.json': '{}' }));

@@ -11,8 +11,12 @@ that it still describes what is being approved, prices it from
 (`docs/designs/GSTACK_FIELD_WAVE_2026_10_12.md`, gate decision d5b as amended).
 
 ```bash
-gstack-eval-plan price-gate --gate "<exact gate command>" --cap-usd 20 [--smoke-cap-usd 2] [--plan-file <file>]
+gstack-eval-plan price-gate --gate-file <file> --cap-usd 20 [--smoke-cap-usd 2] [--plan-file <file>]
 ```
+
+`--gate-file` reads the exact gate command from a file (one trailing newline is
+dropped), so a command with quotes or `$` never passes through a shell string;
+`--gate "<command>"` takes it inline. Give one of the two.
 
 ## Where the file comes from
 
