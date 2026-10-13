@@ -98,7 +98,7 @@ describe('gstack-pregate (bin)', () => {
     const repo = fixture();
     const help = runBin(repo, 'gstack-pregate', ['--help']);
     expect(help.out).toContain('Exit codes: 0 ok · 1 fail · 2 usage · 3 refused or needs a flag');
-    expect(help.out).toContain('stage 1 mechanical preflight (regen, secrets, strays, literals)');
+    expect(help.out).toContain('stage 1 mechanical preflight (regen, secrets, strays, literals, guards)');
     expect(help.out).toContain('stage 2 test execution (lanes)');
     expect(runBin(repo, 'gstack-pregate', ['bogus']).status).toBe(EXIT.usage);
     expect(pregate(repo, ['--only', 'hermetic']).status).toBe(EXIT.usage);
@@ -113,6 +113,7 @@ describe('gstack-pregate (bin)', () => {
     expect(r.out).toMatch(/^preflight {2}secrets {3}pass /m);
     expect(r.out).toMatch(/^preflight {2}strays {4}pass /m);
     expect(r.out).toMatch(/^preflight {2}literals {2}pass /m);
+    expect(r.out).toMatch(/^preflight {2}guards {4}pass .*no guards declared/m);
     expect(r.out).toMatch(/^tests {6}lanes {5}pass .*1 tests ran in 1 file\(s\), exit 0/m);
     expect(r.out).toMatch(/^stage 1 \(mechanical preflight\): \d+ ms$/m);
     expect(r.out).toMatch(/^stage 2 \(test execution\): \d+ ms$/m);
@@ -121,7 +122,7 @@ describe('gstack-pregate (bin)', () => {
     const out = readOut(repo);
     expect(out.schema_version).toBe(1);
     expect(out.tree).toMatch(/^[0-9a-f]{40}$/);
-    expect(out.checks.map((c: any) => [c.id, c.status, c.stage])).toEqual([['regen', 'pass', 'preflight'], ['secrets', 'pass', 'preflight'], ['strays', 'pass', 'preflight'], ['literals', 'pass', 'preflight'], ['lanes', 'pass', 'tests']]);
+    expect(out.checks.map((c: any) => [c.id, c.status, c.stage])).toEqual([['regen', 'pass', 'preflight'], ['secrets', 'pass', 'preflight'], ['strays', 'pass', 'preflight'], ['literals', 'pass', 'preflight'], ['guards', 'pass', 'preflight'], ['lanes', 'pass', 'tests']]);
     for (const c of out.checks) { expect(c.inputs.tree).toBe(out.tree); expect(typeof c.ms).toBe('number'); }
     expect(check(repo, 'lanes').inputs.command).toMatch(/^[0-9a-f]{64}$/);
     expect(out.verdict).toBe('pass');

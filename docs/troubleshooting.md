@@ -2464,3 +2464,19 @@ it failed, `git checkout -- . && ./setup` in the checkout discards local edits
 and rewrites every file. Use your install directory if it is not
 `~/.claude/skills/gstack` (`./setup --status` prints it). Expected result: the
 next `./setup` prints no CRLF warning.
+
+## Field wave lane CD: pregate guards, regate, sealed output
+
+<a id="pregate-guard-failed"></a>
+### `PREGATE_GUARD_FAILED`
+
+**Meaning.** A guard from the base branch's `.gstack/pregate.json` (a repo
+command such as a serial-test manifest check or a CLI golden test) matched a
+file the branch touched and exited non-zero. Guards cover what the import graph
+cannot see: manifests, subprocess goldens, registries. They cannot be
+downgraded to warn.
+
+**Fix.** Read the guard's lines in the table (exit code, output tail, log path)
+and do what its `fix` line says, commit, then rerun
+`gstack-pregate run --allow-repo-commands`. A lane reports done only after this
+passes and carries the `PREGATE:` line in its handoff.

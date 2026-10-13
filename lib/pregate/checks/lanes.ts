@@ -14,6 +14,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { baseInputs, sha256 } from '../context';
 import { selectLanes, type Selection } from '../lane-selection';
+import { launchRuntime } from '../runtime';
+import { matchesAny } from '../../ship-policy';
 import type { CheckDef, CheckResult, PregateContext } from '../types';
 
 /** The test command with `{files}`; detected from the repo when the config does not name one. */
@@ -47,15 +49,32 @@ export function parseSummary(output: string): RunnerSummary {
   return { ran: null, failed: null };
 }
 
-function runLocal(ctx: PregateContext, runner: string, files: string[]): { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string } {
+interface LocalRun { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string }
+
+function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[], log: string): LocalRun {
   const command = runner.replace('{files}', files.map(f => `'${f.replace(/'/g, `'\\''`)}'`).join(' '));
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-lanes-'));
-  const log = path.join(dir, 'lanes.log');
-  const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: ctx.timeoutMs, maxBuffer: 256 * 1024 * 1024, env: { ...ctx.env, CI: ctx.env.CI ?? '1' } });
+  const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: ctx.timeoutMs, maxBuffer: 256 * 1024 * 1024, env: { ...env, CI: env.CI ?? '1' } });
   const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
-  fs.writeFileSync(log, `$ ${command}\n${output}`);
+  fs.appendFileSync(log, `$ ${command}\n${output}\n`);
   const summary = parseSummary(output);
   return { exit: r.status, ...summary, log, tail: output.trim().split('\n').slice(-25), command };
+}
+
+/**
+ * Unit files in one runner process, then each serial-pattern file in its
+ * own (a serial file shares process-wide state: a module mock, an env
+ * mutation). The first non-zero or timed-out run decides the exit; counts
+ * add up only when every run reported a summary.
+ */
+function runLocal(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[]): LocalRun & { serial: number } {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-lanes-'));
+  const log = path.join(dir, 'lanes.log');
+  const serial = files.filter(f => matchesAny(ctx.config.serial_patterns, f));
+  const unit = files.filter(f => !serial.includes(f));
+  const runs = [...(unit.length ? [unit] : []), ...serial.map(f => [f])].map(group => runOnce(ctx, env, runner, group, log));
+  const bad = runs.find(r => r.exit === null) ?? runs.find(r => r.exit !== 0);
+  const sum = (k: 'ran' | 'failed') => (runs.some(r => r[k] === null) ? null : runs.reduce((n, r) => n + (r[k] as number), 0));
+  return { exit: bad ? bad.exit : 0, ran: sum('ran'), failed: sum('failed'), log, tail: (bad ?? runs[runs.length - 1]!).tail, command: runs.map(r => r.command).join(' && '), serial: serial.length };
 }
 
 function describe(sel: Selection): string[] {
@@ -80,13 +99,14 @@ function run(ctx: PregateContext): CheckResult {
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
   const runner = detectRunner(ctx, sel.localTests);
   if (!runner) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${sel.localTests.length} selected file(s)`, fix: 'declare `runner` (with {files}) in .gstack/pregate.json' };
-  const r = runLocal(ctx, runner, sel.localTests);
-  const runLines = [...lines, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
-  const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command) } };
+  const runtime = launchRuntime(ctx.repoRoot, ctx.env);
+  const r = runLocal(ctx, runtime.env, runner, sel.localTests);
+  const runLines = [...lines, `runtime: ${runtime.label}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
+  const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command), runtime: runtime.label } };
   if (r.exit === null) return { ...withRun, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `local lane timed out after ${ctx.timeoutMs} ms (${sel.localTests.length} files)`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
   if (r.exit !== 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `local lane exited ${r.exit} (${r.failed ?? '?'} failed of ${r.ran ?? '?'} ran; ${sel.localTests.length} files; pipefail)`, fix: `read ${r.log}, fix the in-branch failure, rerun gstack-pregate --stage tests` };
   if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests for ${sel.localTests.length} selected file(s)`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
-  const detail = `${r.ran ?? 'count unavailable'} tests ran in ${sel.localTests.length} file(s), exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;
+  const detail = `${r.ran ?? 'count unavailable'} tests ran in ${sel.localTests.length} file(s)${r.serial ? ` (${r.serial} serial)` : ''}, exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;
   return { ...withRun, status: sel.remote.length ? 'requires-remote' : 'pass', detail };
 }
 

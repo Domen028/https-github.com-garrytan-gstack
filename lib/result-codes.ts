@@ -466,6 +466,11 @@ export const RESULT_CODES = {
     summary: 'a `draft direction stands until the owner decides` line names a decision that is still pending',
     fix: 'answer the gate (`gstack-autoplan answer`) before closing; the close rewrites only decided lines',
   },
+  PREGATE_GUARD_FAILED: {
+    anchor: 'pregate-guard-failed',
+    summary: 'a repo guard from .gstack/pregate.json whose files the branch touched exited non-zero',
+    fix: 'run the guard command printed in the table, apply the guard\'s fix line, commit, then rerun `gstack-pregate run --allow-repo-commands`',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

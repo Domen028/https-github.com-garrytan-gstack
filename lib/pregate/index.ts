@@ -6,13 +6,15 @@
  * execution: lanes, …) has its own clock and is never folded into the first.
  * A failing check blocks; `.gstack/pregate.json` downgrades a named check to
  * warn except `secrets` and the required-lane verdicts; timeout or a missing
- * tool is `incomplete`, never `pass`. Tier 2 checks (guards, ratchets, lint,
- * links, hermetic, patches, integrator) register here as they land.
+ * tool is `incomplete`, never `pass`. Tier 2 checks register here as they
+ * land: `guards` (field wave CD1); ratchets, lint, links, hermetic, patches
+ * and integrator later.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ARTIFACT_SCHEMAS, checkSchema, type PregateFile, type PregateRemote, type ValidationError } from '../headless-artifacts';
 import { wtreeFingerprint } from '../regen';
+import { guardsCheck } from './checks/guards';
 import { lanesCheck } from './checks/lanes';
 import { literalsCheck } from './checks/literals';
 import { regenCheck } from './checks/regen';
@@ -22,10 +24,10 @@ import { NON_DOWNGRADABLE } from './config';
 import { withFingerprint } from './context';
 import type { CheckDef, CheckResult, PregateContext, Stage } from './types';
 
-export const CHECKS: readonly CheckDef[] = [regenCheck, secretsCheck, straysCheck, literalsCheck, lanesCheck];
+export const CHECKS: readonly CheckDef[] = [regenCheck, secretsCheck, straysCheck, literalsCheck, guardsCheck, lanesCheck];
 export const CHECK_IDS = CHECKS.map(c => c.id);
 export const PREGATE_OUT_REL = '.gstack/tmp/pregate.json';
-export const PREGATE_TIER2 = ['guards', 'ratchets', 'lint', 'links', 'hermetic', 'patches', 'integrator'] as const;
+export const PREGATE_TIER2 = ['ratchets', 'lint', 'links', 'hermetic', 'patches', 'integrator'] as const;
 
 export interface RunOptions { stage: Stage | 'all'; only?: string[]; run?: string }
 

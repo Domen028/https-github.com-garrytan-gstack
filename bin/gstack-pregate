@@ -53,6 +53,31 @@ obligations publication needs receipts for. Ends with GSTACK_RESULT: skill=prega
 ${exitTableHelp()}`;
 
 function flag(args: string[], name: string): string | undefined { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; }
+
+/** Flags each verb accepts: `[flags that take a value, bare flags]`. Anything else is usage (exit 2), never a silent default run. */
+const VERB_FLAGS: Record<string, [string[], string[]]> = {
+  run: [['--stage', '--only', '--base', '--policy-from', '--out', '--timeout', '--run'], ['--allow-repo-commands', '--explain', '--json']],
+  verify: [['--out'], ['--json']],
+  clear: [['--remote', '--run-url', '--bundle-lane', '--out'], []],
+  lanes: [[], ['--explain', '--json']],
+  validate: [[], ['--json']],
+  init: [[], ['--explain', '--force']],
+};
+const HINTS: Record<string, string> = { '--sealed': 'the sealed-output guard is the verb `gstack-pregate sealed`' };
+
+function flagError(cmd: string, rest: string[]): string | null {
+  const spec = VERB_FLAGS[cmd];
+  if (!spec) return null;
+  const [valued, bare] = spec;
+  for (let i = 0; i < rest.length; i++) {
+    const a = rest[i]!;
+    if (valued.includes(a)) { if (rest[i + 1] === undefined || rest[i + 1]!.startsWith('--')) return `${a} needs a value`; i += 1; continue; }
+    if (bare.includes(a)) continue;
+    if (a.startsWith('-')) return `unknown flag ${a} for \`${cmd}\`${HINTS[a] ? ` (${HINTS[a]})` : ''}`;
+    return `unexpected argument ${JSON.stringify(a)} for \`${cmd}\``;
+  }
+  return null;
+}
 function repoRoot(): string | null {
   const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 15_000 });
   return r.status === 0 && r.stdout.trim() ? r.stdout.trim() : null;
@@ -132,6 +157,8 @@ function main(argv: string[]): number {
   const rest = argv[0] && !argv[0].startsWith('--') ? argv.slice(1) : argv;
   const json = rest.includes('--json');
   if (argv.includes('--help') || argv.includes('-h') || cmd === 'help') { process.stdout.write(HELP + '\n'); return EXIT.ok; }
+  const bad = flagError(cmd, rest);
+  if (bad) { process.stderr.write(`gstack-pregate: ${bad}; see gstack-pregate --help\n`); return EXIT.usage; }
   const root = repoRoot();
   if (!root) { process.stderr.write('gstack-pregate: not inside a git repository\n'); return EXIT.usage; }
   if (cmd === 'run') return cmdRun(root, rest, json);

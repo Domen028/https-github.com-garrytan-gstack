@@ -62,7 +62,9 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
-| `price_command` | one command that prints the paid gate's call plan (`GSTACK_EVAL_CALLS v1` lines) without calling a provider; `gstack-eval-plan gate` prices from it ([docs/eval-calls.md](eval-calls.md)) |
+| `guards` | `[{ id, when: [globs], command, fix?, timeout_s? }]`: repo commands a lane must pass when a touched file matches `when` (manifest checks, subprocess goldens the import graph cannot see); see [guards](#guards) |
+| `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
+| `price_file` | repo-relative path of the paid gate's call-plan data file (`GSTACK_EVAL_CALLS v1`); `gstack-eval-plan price-gate` prices from it and never executes anything ([docs/eval-calls.md](eval-calls.md)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
 takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
@@ -91,6 +93,15 @@ Two stages with separate clocks, both printed:
   searched for the old value; a consumer the branch did not update fails with
   `file:line`.
 
+- `guards`: each guard in `.gstack/pregate.json` whose `when` globs match a
+  touched file (renames included) runs its `command` in its own process, under
+  the verified launch Bun, with its own `timeout_s` (default `--timeout`). A
+  non-zero exit fails pregate naming the guard and its `fix`
+  (`PREGATE_GUARD_FAILED`); a timeout is `incomplete`; without
+  `--allow-repo-commands` the selected guards are listed and the check is
+  `incomplete`. Guards are read from the base branch's copy and cannot be
+  downgraded to warn. See [guards](#guards).
+
 **Stage 2, test execution:**
 
 - `lanes`: touched files map to tests through `lib/pregate/import-graph.ts`
@@ -105,7 +116,12 @@ Two stages with separate clocks, both printed:
   machine cannot run becomes a `requires-remote` obligation naming
   `workflow.yml/job`. `--explain` prints each test's provenance and every
   uncertain mapping (a planner-computed matrix without a `selection` manifest
-  selects conservatively).
+  selects conservatively). Test files matching `serial_patterns` (default
+  `**/*.serial.test.*`) run one process per file after the unit files. The
+  runner and every guard run with the verified launch Bun first on PATH: the
+  first of `$BUN_INSTALL/bin` and `~/.bun/bin` whose Bun satisfies gstack's and
+  the project's `engines.bun` (the row prints `runtime: bun <v> from <dir>`),
+  so a Capy host's older image Bun cannot flip the verdict.
 
 Every check records the input identity it ran against (the working-tree
 fingerprint before and after, the selection, the command hash); a tree that
@@ -121,8 +137,31 @@ The record is `.gstack/tmp/pregate.json` (`gstack-artifact validate --as pregate
 receipt then carries `pregate` and `requires_remote`. `gstack-pregate verify`
 runs the same check standalone.
 
-Tier 2 checks (`guards`, `ratchets`, `lint`, `links`, `hermetic`, `patches`,
-`integrator`) are named in `--only`'s help and land in a follow-up pre-gate PR.
+Unknown flags exit 2 with usage on every verb (an agent told to run a flag this
+gstack lacks never gets a green it did not ask for). Tier 2 checks still to come
+(`ratchets`, `lint`, `links`, `hermetic`, `patches`, `integrator`) are named in
+`--only`'s help.
+
+<a id="guards"></a>
+## Guards and the lane-done rule
+
+A lane runs `gstack-pregate run --allow-repo-commands` on its branch before it
+reports done, and its handoff carries the `PREGATE:` line (the coordinator
+contract says so word for word). The unit tier covers the changed files'
+tests; guards cover the repo's mechanical gates the import graph cannot see:
+
+```json
+{ "guards": [
+    { "id": "serial-manifest", "when": ["test/**/*.serial.test.ts", "scripts/serial-files.tsv"],
+      "command": "bun test test/scripts/serial-files.test.ts",
+      "fix": "add the file's row to scripts/serial-files.tsv" } ] }
+```
+
+`dependencies` still maps globs to extra *tests* the lanes check selects; a
+guard is a *command* with its own fix line. Older gstack refuses unknown keys
+(`PREGATE_CONFIG_INVALID`), so a repo commits `guards` only after the gstack
+that reads them ships. The worked gbrain configuration is in
+[gbrain worked configs](#gbrain-worked-configs).
 
 <a id="issue-links"></a>
 ## `gstack-issue-links`

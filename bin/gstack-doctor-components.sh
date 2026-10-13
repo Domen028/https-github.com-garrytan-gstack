@@ -166,6 +166,7 @@ gstack_result_anchor() {
     CONTRIBUTOR_SOURCE_UNAVAILABLE) printf '%s' 'contributor-source-unavailable' ;;
     BRIEF_INPUT_MISSING) printf '%s' 'brief-input-missing' ;;
     DRAFT_DIRECTION_UNRESOLVED) printf '%s' 'draft-direction-unresolved' ;;
+    PREGATE_GUARD_FAILED) printf '%s' 'pregate-guard-failed' ;;
     *) return 1 ;;
   esac
 }
