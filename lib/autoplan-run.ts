@@ -14,6 +14,7 @@
  * EXECUTION_UNKNOWN, never redispatching them on its own. Thin bin:
  * bin/gstack-autoplan.
  */
+import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -31,28 +32,35 @@ import { outsideConsent } from './outside-consent';
 import { familyConflict, modelFamily } from './outside-voice-runner';
 import { renderSpend, reserve, settle, summarize, readLedger } from './spend-ledger';
 
+/** An unreadable run.lock younger than this is a lock some other gstack is still writing, never a stale one. */
+const LOCK_WRITE_GRACE_MS = 30_000;
+
 /** Exclusive ownership for one command: a lock whose pid is alive is never stolen; a dead pid's lock is reclaimed. */
 export function withRunLock<T>(out: string, fn: () => T, opts: { steal?: boolean } = {}): T {
   fs.mkdirSync(out, { recursive: true });
   const lock = path.join(out, FILES.lock);
   const mine = JSON.stringify({ pid: process.pid, host: os.hostname(), at: now() });
+  const staged = `${lock}.${process.pid}.${crypto.randomBytes(4).toString('hex')}`;
+  fs.writeFileSync(staged, mine);
   for (let i = 0; ; i++) {
     try {
-      const fd = fs.openSync(lock, 'wx');
-      fs.writeSync(fd, mine);
-      fs.closeSync(fd);
+      fs.linkSync(staged, lock);
+      fs.unlinkSync(staged);
       break;
     } catch (e: any) {
-      if (e.code !== 'EEXIST') throw e;
+      if (e.code !== 'EEXIST') { fs.rmSync(staged, { force: true }); throw e; }
       let owner: { pid?: number; host?: string; at?: string } = {};
-      try { owner = JSON.parse(fs.readFileSync(lock, 'utf8')); } catch { /* unreadable: treat as stale below */ }
+      let unreadable = false;
+      try { owner = JSON.parse(fs.readFileSync(lock, 'utf8')); } catch { unreadable = true; }
       let alive = false;
-      if (owner.host === os.hostname() && typeof owner.pid === 'number') {
+      if (unreadable) {
+        try { alive = Date.now() - fs.statSync(lock).mtimeMs < LOCK_WRITE_GRACE_MS; } catch { /* gone: retry the link */ }
+      } else if (owner.host === os.hostname() && typeof owner.pid === 'number') {
         try { process.kill(owner.pid, 0); alive = true; } catch (k: any) { alive = k.code === 'EPERM'; }
       } else if (owner.host && owner.host !== os.hostname()) alive = !opts.steal;
-      if (alive) throw new RunError('RUN_LOCKED', `pid ${owner.pid} on ${owner.host} since ${owner.at}`, 3);
+      if (alive) { fs.rmSync(staged, { force: true }); throw new RunError('RUN_LOCKED', unreadable ? `${lock} is being written by another command` : `pid ${owner.pid} on ${owner.host} since ${owner.at}`, 3); }
       try { fs.unlinkSync(lock); } catch { /* raced with its owner's exit */ }
-      if (i > 50) throw new RunError('RUN_LOCKED', `could not reclaim ${lock}`, 3);
+      if (i > 50) { fs.rmSync(staged, { force: true }); throw new RunError('RUN_LOCKED', `could not reclaim ${lock}`, 3); }
     }
   }
   try { return fn(); } finally { try { if (fs.readFileSync(lock, 'utf8') === mine) fs.unlinkSync(lock); } catch { /* already gone */ } }

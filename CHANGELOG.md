@@ -18,6 +18,8 @@
 - **PLAN_REALITY wants a receipt per measured number and the rule itself.** Each clause stating a measured quantity (seconds, %, $, tokens, MB) needs its own file:line, script or command receipt (`unreceipted_numbers=<n>` plus one `NUMBER_UNRECEIPTED:` line each), and a line claiming a decision rule must quote or link it (`unquoted=<n>`). Receipts on dot paths such as `.gstack/ship-policy.json:1` count. `submit` records the check for each plan revision; it never refuses a submit.
 - **`autoplan/DRIVER.md` is the compact driver.** About a hundred lines generated from the code: the phase order, the artifact contract, the gate protocol and the coordinator contract, with no hook prose. `gstack-autoplan --help` and the first `next` print its path, and any host can read it instead of the full autoplan skill.
 
+- **Six submits at once bind once.** `run.lock` is now created with its owner already written (a staged file linked into place), and an unreadable lock younger than 30 seconds counts as held, so a command that reads another's lock between create and write no longer deletes it and runs alongside it.
+
 ### For contributors
 
 - New modules: `lib/autoplan-revise.ts`, `lib/autoplan-migrate.ts`, `lib/autoplan-plan-text.ts`, `lib/autoplan-admission.ts`, `lib/autoplan-scope.ts`, `lib/source-root.ts`, `scripts/resolvers/autoplan-driver.ts`.
