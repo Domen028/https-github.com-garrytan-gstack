@@ -26,7 +26,7 @@
     "test/helpers/e2e-helpers.ts": {"blob":"2d4a2a53063cfc1f003db366d2c861ab1e379e6e","since":4},
     "test/helpers/eval-budgets.ts": {"blob":"667d0e09b20fe5d7366f57b77b5fb9b04baa37ef","since":4},
     "test/helpers/eval-store.ts": {"blob":"609c6d099108ff2696eb014b47aa318a618dd2af","since":4},
-    "test/helpers/hermetic-env.ts": {"blob":"6473f78285384f4420f48cbe5928658919078e0b","since":4},
+    "test/helpers/hermetic-env.ts": {"blob":"cc072895461dc52ea317d1beff72121342420d30","since":4,"nonBehavioral":"hermeticChildEnv adds GSTACK_LEASE_DIR=<runRoot>/gstack-leases so a spawned gstack bin writes its workflow lease under the hermetic run root instead of the developer checkout's .git; the lease is read only by gstack-upgrade, which no eval case runs, so no verdict can change"},
     "test/helpers/llm-judge.ts": {"blob":"54e3306b494fb5d7f132ccdaaae5c680465028f9","since":4},
     "test/helpers/paid-test-set.ts": {"blob":"ff9bfe43c43ec2bdd11114f7b8ec7c5736116f75","since":4},
     "test/helpers/pty-screen.ts": {"blob":"4f77569f9ce11f9cee9f347216e468cd7c956820","since":4},
