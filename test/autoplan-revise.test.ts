@@ -12,6 +12,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { RESULT_CODES } from '../lib/result-codes';
 import { SMALL_PLAN } from './helpers/autoplan-run-fixture';
 import { capyRunner, phaseVia, readJsonl, readRunJson, writePlan } from './helpers/autoplan-capy';
 
@@ -131,6 +132,7 @@ describe('revise', () => {
       const res = r.ap(['revise', '--out', s.out, ...args]);
       expect(res.status).toBe(3);
       expect(res.stderr).toMatch(/d1b is not a pending amendment \(pending: none\).*\(AMENDMENT_UNKNOWN\)$/m);
+      expect(res.stderr).toContain(`; fix: ${RESULT_CODES.AMENDMENT_UNKNOWN.fix} (AMENDMENT_UNKNOWN)`);
       expect(res.stderr).not.toContain('PLAN_AMEND_PENDING');
       expect(res.stderr).not.toContain('edit the plan');
     }

@@ -11,6 +11,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { RESULT_CODES } from '../lib/result-codes';
 import { ROOT, SMALL_PLAN } from './helpers/autoplan-run-fixture';
 import { capyRunner, phaseVia, readJsonl, readRunJson, writePlan, type CapyRunner } from './helpers/autoplan-capy';
 
@@ -151,7 +152,9 @@ describe('conformance: one run through every mechanism', () => {
     expect(ok(c.ap(['answer', '--out', s.out, '--gate-rev', '1', '--reply', `${accept}b`])).stdout).toMatch(/^GATE_PENDING: p1/m);
     const full = ok(c.ap(['answer', '--out', s.out, '--gate-rev', '1', '--reply', 'all']));
     expect(full.stdout).toMatch(new RegExp(`^APPLY: ${run}-${accept} `, 'm'));
-    expect(c.ap(['next', '--out', s.out]).stderr).toMatch(/\(PLAN_AMEND_PENDING\)$/m);
+    const pendingNext = c.ap(['next', '--out', s.out]).stderr;
+    expect(pendingNext).toMatch(/\(PLAN_AMEND_PENDING\)$/m);
+    expect(pendingNext).toContain(`; fix: ${RESULT_CODES.PLAN_AMEND_PENDING.fix} (PLAN_AMEND_PENDING)`);
     const v2 = path.join(s.dir, 'plan-v2.md');
     fs.writeFileSync(v2, SMALL_PLAN.replace('Tests cover', 'Ship behind RETRY_BACKOFF=1, default off. Tests cover'));
     expect(ok(c.ap(['revise', '--out', s.out, '--plan', v2, '--incorporates', `${run}-${accept}`])).stdout).toMatch(/^AMENDMENTS: pending=none$/m);

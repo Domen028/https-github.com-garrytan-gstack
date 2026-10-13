@@ -11,6 +11,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { RESULT_CODES } from '../lib/result-codes';
 import { ROOT } from './helpers/autoplan-run-fixture';
 import { HEAD, capyRunner, readRunJson, writePlan } from './helpers/autoplan-capy';
 
@@ -29,6 +30,7 @@ describe('admission', () => {
     const { out, res } = first(r, 'none');
     expect(res.status).toBe(3);
     expect(res.stderr).toMatch(/no install verdict at .*\(INSTALL_UNVERIFIED\)$/m);
+    expect(res.stderr).toContain(`; fix: ${RESULT_CODES.INSTALL_UNVERIFIED.fix} (INSTALL_UNVERIFIED)`);
     expect(res.stdout).toContain('GSTACK_RESULT: skill=autoplan status=refused');
     expect(fs.existsSync(path.join(out, 'run.json'))).toBe(false);
   });

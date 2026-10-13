@@ -12,6 +12,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { RESULT_CODES } from '../lib/result-codes';
 import { capyRunner, readJsonl, readRunJson, writePlan } from './helpers/autoplan-capy';
 
 const r = capyRunner();
@@ -92,6 +93,7 @@ describe('submit --record', () => {
     const prose = submit(`INPUT: ceo ${snapshotOf(out)}\n\nThe plan looks fine overall but I have concerns.\n`);
     expect(prose.status).toBe(1);
     expect(prose.stderr).toMatch(/table.*list.*No findings\..*\(RESULT_FINDINGS_MISSING\)$/m);
+    expect(prose.stderr).toContain(`; fix: ${RESULT_CODES.RESULT_FINDINGS_MISSING.fix} (RESULT_FINDINGS_MISSING)`);
     const two = submit(`${list(snapshotOf(out))}\n${TABLE}`);
     expect(two.status).toBe(1);
     expect(two.stderr).toMatch(/more than one findings shape.*\(RESULT_FINDINGS_MISSING\)$/m);
