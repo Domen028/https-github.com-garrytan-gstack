@@ -2570,6 +2570,18 @@ not change; an id you do not name stays pending. To drop an accepted change
 instead, `gstack-autoplan revise --out <dir> --withdraw <decision id>` records
 the withdrawal in the journal.
 
+<a id="amendment-unknown"></a>
+### `AMENDMENT_UNKNOWN`
+
+**Meaning.** `gstack-autoplan revise --incorporates` or `--withdraw` named a
+decision id that is not a pending amendment: the owner never accepted it as a
+plan change at the gate (for example a gate answered before gstack recorded
+amendments), or it was already incorporated or withdrawn. Nothing was changed.
+
+**Fix.** Name only the ids the refusal lists after `pending:`. With none
+pending, revise without `--incorporates`:
+`gstack-autoplan revise --out <dir> --plan <file>`.
+
 <a id="gstack-version-changed"></a>
 ### `GSTACK_VERSION_CHANGED`
 

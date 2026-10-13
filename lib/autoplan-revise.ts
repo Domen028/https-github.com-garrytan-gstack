@@ -56,7 +56,7 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   if (['complete', 'incomplete', 'refused'].includes(state.status)) throw new RunError('PHASE_NOT_AWAITING', `run is ${state.status}; revise works on a running or gated run`, 3);
   const pending = pendingAmendments(state).map(a => a.decision);
   for (const id of [...(o.incorporates ?? []), ...(o.withdraw ?? [])]) {
-    if (!pending.includes(id)) throw new RunError('PLAN_AMEND_PENDING', `${id} is not a pending amendment (pending: ${pending.join(', ') || 'none'})`, 3);
+    if (!pending.includes(id)) throw new RunError('AMENDMENT_UNKNOWN', `${id} is not a pending amendment (pending: ${pending.join(', ') || 'none'})`, 3);
   }
   const at = now();
   if (!o.plan) {

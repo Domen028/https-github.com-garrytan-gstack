@@ -476,6 +476,11 @@ export const RESULT_CODES = {
     summary: 'the owner accepted plan changes at the gate that the plan has not absorbed yet',
     fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`',
   },
+  AMENDMENT_UNKNOWN: {
+    anchor: 'amendment-unknown',
+    summary: '`revise --incorporates` or `--withdraw` named a decision that is not a pending amendment (never accepted as a plan change, or already incorporated or withdrawn)',
+    fix: 'name only the ids the refusal lists after `pending:`; with none pending, drop --incorporates and run `gstack-autoplan revise --out <dir> --plan <file>`',
+  },
   GSTACK_VERSION_CHANGED: {
     anchor: 'gstack-version-changed',
     summary: 'the run directory was written by a different gstack version',

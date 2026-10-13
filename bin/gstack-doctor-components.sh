@@ -176,6 +176,7 @@ gstack_result_anchor() {
     DRAFT_DIRECTION_UNRESOLVED) printf '%s' 'draft-direction-unresolved' ;;
     PLAN_SECTIONS_INVALID) printf '%s' 'plan-sections-invalid' ;;
     PLAN_AMEND_PENDING) printf '%s' 'plan-amend-pending' ;;
+    AMENDMENT_UNKNOWN) printf '%s' 'amendment-unknown' ;;
     GSTACK_VERSION_CHANGED) printf '%s' 'gstack-version-changed' ;;
     ARTIFACT_GATE_UNSETTLED) printf '%s' 'artifact-gate-unsettled' ;;
     UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;

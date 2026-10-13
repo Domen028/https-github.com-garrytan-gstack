@@ -124,6 +124,18 @@ describe('revise', () => {
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/revised after .*dispatched.*\(RESULT_RECEIPT_MISSING\)$/m);
   });
+  test('naming a decision that is not a pending amendment refuses with AMENDMENT_UNKNOWN and never asks for the edit just made', () => {
+    const s = start();
+    const before = fs.readFileSync(path.join(s.out, 'run.json'), 'utf8');
+    for (const args of [['--plan', v2File(s.dir), '--incorporates', 'd1b'], ['--withdraw', 'd1b']]) {
+      const res = r.ap(['revise', '--out', s.out, ...args]);
+      expect(res.status).toBe(3);
+      expect(res.stderr).toMatch(/d1b is not a pending amendment \(pending: none\).*\(AMENDMENT_UNKNOWN\)$/m);
+      expect(res.stderr).not.toContain('PLAN_AMEND_PENDING');
+      expect(res.stderr).not.toContain('edit the plan');
+    }
+    expect(fs.readFileSync(path.join(s.out, 'run.json'), 'utf8')).toBe(before);
+  });
 });
 
 describe('drift hints', () => {
