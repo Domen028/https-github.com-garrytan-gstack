@@ -158,7 +158,7 @@ if printf '%s\n' "$PINS_OUT" | grep -q '^PINS_VERDICT: '; then
 $(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN: bun \([^ ]*\) exact \([^ ]*\) lane=[a-z]*$/\1 \2/p')
 EOF_PINS
     pins_ok "$WANT" || stop RUNTIME_PIN_CONFLICT "Bun conflict: gstack needs >=$WANT, $PROJECT pins $(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN_SUMMARY: //p' | grep '^bun' | tr '\n' ';' | sed 's/;$//')" "raise the project's pin to $WANT or newer, or install gstack on a machine the project accepts"
-    if [ "$LD_VER" = "$WANT" ]; then reuse_ld; else install_bun "bun ${HAVE:-absent} does not satisfy the project pins (or gstack's minimum $WANT)"; fi
+    if [ "$LD_VER" = "$WANT" ]; then reuse_ld; else install_bun "bun ${HAVE:-absent} does not satisfy the project pins (bun $WANT) or gstack's minimum $GSTACK_BUN_TESTED"; fi
   fi
 else
   # No pin report (no project, or a Bun that cannot run the parser): the
