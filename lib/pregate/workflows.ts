@@ -77,11 +77,12 @@ function find(blocks: Block[], key: string): Block | undefined { return blocks.f
 function defaultDir(parent: Block[]): string | null {
   return find(find(find(parent, 'defaults')?.children ?? [], 'run')?.children ?? [], 'working-directory')?.value ?? null;
 }
-/** A test path named in a run step, made repo-relative by the step's working directory (an expression directory is left unresolved). */
+/** A test path named in a run step, made repo-relative by the step's working directory (an expression, absolute or `..` directory is left unresolved). */
 function underDir(dir: string | null, file: string): string {
-  const d = (dir ?? '').replace(/^['"]|['"]$/g, '');
-  if (!d || /\$\{\{/.test(d)) return file;
-  return path.posix.normalize(path.posix.join(d, file)).replace(/^\.\//, '');
+  const d = (dir ?? '').replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
+  if (!d || /\$\{\{/.test(d) || path.posix.isAbsolute(d)) return file;
+  const joined = path.posix.normalize(path.posix.join(d, file)).replace(/^\.\//, '');
+  return joined.startsWith('..') ? file : joined;
 }
 function deepValues(blocks: Block[], key: string, out: string[] = []): string[] {
   for (const b of blocks) { if (b.key === key && b.value) out.push(b.value); deepValues(b.children, key, out); }

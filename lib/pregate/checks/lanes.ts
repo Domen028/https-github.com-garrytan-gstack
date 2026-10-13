@@ -76,8 +76,8 @@ function fvmPinnedFor(repoRoot: string, files: readonly string[]): boolean {
  */
 export function dartRunner(repoRoot: string, root: string, env: NodeJS.ProcessEnv): { runner: string } | { missing: string } {
   const pubspec = readRepoFile(repoRoot, path.posix.join(root, 'pubspec.yaml')) ?? '';
-  // Block style (`flutter:` / `  sdk: flutter`) or flow style (`flutter: {sdk: flutter}`).
-  const tool = /(?:^|[{,])[ \t]*sdk:[ \t]*['"]?flutter\b/m.test(pubspec) ? 'flutter' : 'dart';
+  // Block style (`flutter:` / `  sdk: flutter`) or flow style (`flutter: {sdk: flutter}`), comments stripped.
+  const tool = /^[ \t]*sdk:[ \t]*['"]?flutter\b|flutter:[ \t]*\{[^}\n]*\bsdk:[ \t]*['"]?flutter\b/m.test(pubspec.replace(/(^|\s)#.*$/gm, '$1')) ? 'flutter' : 'dart';
   const onPath = (bin: string) => !!Bun.which(bin, { PATH: env.PATH ?? '' });
   const fvm = fvmPinned(repoRoot, root) && onPath('fvm');
   if (!fvm && !onPath(tool)) return { missing: tool };

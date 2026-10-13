@@ -173,6 +173,7 @@ describe('Dart runner and summary (pure)', () => {
       ['name: core\ndependencies:\n  flutter: { sdk: flutter }\n', 'flutter'],
       ['name: core\ndependencies:\n  flutter:\n    sdk: flutter\n', 'flutter'],
       ['name: core\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n', 'dart'],
+      ['name: core\n# flutter: {sdk: flutter}\ndescription: "x, sdk: flutter"\n', 'dart'],
     ] as const) {
       write(repo.work, 'packages/core/pubspec.yaml', pubspec);
       expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
@@ -191,9 +192,14 @@ describe('Dart runner and summary (pure)', () => {
       '      - name: root', '        working-directory: .', '        run: dart test test/ui/drawer_widget_test.dart',
       '  job:', '    runs-on: windows-latest', '    defaults:', '      run:', '        working-directory: packages/core',
       '    steps:', '      - run: dart test test/core_test.dart',
-      '  top:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/app_test.dart', '',
+      '  top:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/app_test.dart',
+      '  cmt:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: packages/core # the package',
+      '  abs:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: /home/runner/work/pkg', '',
     ].join('\n');
-    const [step, job, top] = parseWorkflow('w.yml', wf, 'darwin');
+    const [step, job, top, cmt, abs] = parseWorkflow('w.yml', wf, 'darwin');
+    // A trailing YAML comment is not part of the directory; an absolute directory stays unresolved (as before) rather than unmatchable.
+    expect(cmt!.testFiles).toEqual(['packages/core/test/core_test.dart']);
+    expect(abs!.testFiles).toEqual(['test/a_test.dart']);
     expect(step!.testFiles).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
     expect(step!.commands).toEqual(['dart test test/core_test.dart', 'dart test test/ui/drawer_widget_test.dart']);
     expect(job).toMatchObject({ tier: 'platform', testFiles: ['packages/core/test/core_test.dart'] });
