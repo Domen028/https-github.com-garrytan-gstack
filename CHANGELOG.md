@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.91.100.0] - 2026-10-13
+
+**A gbrain LongMemEval call plan now prices in full.** gbrain's `eval longmemeval --call-plan` (gbrain#6638) writes a `GSTACK_EVAL_CALLS` file for every lane of the run. `gstack-eval-plan price-gate` verified its binding but stopped at `EVAL_PRICE_MISSING` with the total unknown: it had no row for the judge (`gpt-4o`) or the reranker (`rerank-2.5`), and it did not recognize the dated Claude id gbrain resolves (`claude-haiku-4-5-20251001`). On the gbrain fixture plan (`--mode tokenmax --judge`) all seven lanes now price, for a total of $0.447.
+
+### What this means for you
+
+- **Dated Claude snapshots bill at their alias's price.** `claude-<name>-YYYYMMDD`, with or without a provider prefix, resolves to the `claude-<name>` row. Dated OpenAI snapshots are not folded, because some (`gpt-4o-2024-05-13`) have their own price.
+- **New rows, sourced and dated in `lib/pricing.ts`:** `gpt-4o` ($2.50 in, $10 out, $1.25 cached per million tokens) and the Voyage rerankers `rerank-2.5` ($0.05) and `rerank-2.5-lite` ($0.02 per million processed tokens: query tokens × documents, plus document tokens).
+
+### For contributors
+
+- `test/pricing-eval-plan.test.ts` checks every model a gbrain call plan names. It failed before the change.
+
 ## [1.91.99.0] - 2026-10-13
 
 **A Bun pin mismatch on Capy now names the one command that fixes it, and the skill says to run it.** After gbrain pinned Bun 1.4.3 in CI, a session-start check on a gbrain checkout ended `gstack: fail pins` with a fix line that offered two choices and no command, and the skill's repair step only covered `revision` and `runtime`, so an agent following the skill left the machine failing. The same bootstrapper run without `--check` already installs the pinned Bun (a verified 1.4.3 in about 4 s) and ends `gstack: ok`.
