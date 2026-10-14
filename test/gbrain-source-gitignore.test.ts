@@ -10,6 +10,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, rmSync, chmodSync, statSync } from "fs";
+import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 
@@ -79,6 +80,18 @@ describe("ensureGbrainSourceGitignored", () => {
     const lines = readFileSync(gitignorePath, "utf-8").split("\n");
     const hits = lines.filter((line) => line.trim() === ".gbrain-source");
     expect(hits.length).toBe(1);
+  });
+
+  it("does not append when git already ignores the pin", () => {
+    const gitignorePath = join(root, ".gitignore");
+    const canonical = "# gstack-artifacts sync: ignore-everything base.\n*\n";
+    writeFileSync(gitignorePath, canonical);
+    const init = spawnSync("git", ["init", "-q"], { cwd: root });
+    expect(init.status).toBe(0);
+
+    ensureGbrainSourceGitignored(root);
+
+    expect(readFileSync(gitignorePath, "utf-8")).toBe(canonical);
   });
 
   it("does not throw when the .gitignore is read-only", () => {
