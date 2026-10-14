@@ -20,7 +20,7 @@ const POLICY = path.join(ROOT, 'bin', 'gstack-gbrain-repo-policy');
 let tmp: string, home: string, legacy: string, resolved: string, env: Record<string, string>;
 
 beforeEach(() => {
-  tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-merge-'));
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "gstack merge's-"));
   home = path.join(tmp, 'home');
   legacy = path.join(home, '.gstack');
   resolved = path.join(tmp, 'custom');
@@ -70,7 +70,7 @@ describe('merged config keys', () => {
     expect(r.stderr).toContain(`gstack-config: set codex_reviews in ${resolved}/config.yaml, but codex_reviews is still 'disabled': ${legacy}/config.yaml sets that more restrictive value`);
     expect(r.stderr).toContain('docs/state-root.md');
     const fix = r.stderr.split('\n').find((l) => l.startsWith('fix: '))!;
-    expect(fix).toContain(`GSTACK_STATE_ROOT='${legacy}'`);
+    expect(fix).toStartWith('fix: GSTACK_STATE_ROOT=');
     const command = fix.slice('fix: '.length).replace(/ \(https:.*\)$/, '');
     expect(spawnSync('bash', ['-c', command], { env, encoding: 'utf-8', timeout: 20_000 }).status).toBe(0);
     expect(config(['get', 'codex_reviews']).stdout).toBe('enabled');
@@ -83,13 +83,15 @@ describe('merged config keys', () => {
     expect(r.stderr).toBe('');
   });
 
-  test('list shows the winning root for merged keys and a disagreement line when root variables differ', () => {
+  test('list shows the winning root for merged keys and a disagreement line only when root variables name different directories', () => {
     fs.writeFileSync(path.join(legacy, 'config.yaml'), 'telemetry: off\n');
     fs.writeFileSync(path.join(resolved, 'config.yaml'), 'telemetry: community\nproactive: false\n');
     const plain = config(['list']).stdout;
     expect(plain).toContain(`telemetry:               off (set, ${legacy})`);
     expect(plain).toContain('proactive:               false (set)');
     expect(plain).not.toContain('root-selecting variables disagree');
+    // Two variables naming the same directory agree, even when the path contains spaces.
+    expect(config(['list'], { GSTACK_STATE_ROOT: resolved }).stdout).not.toContain('root-selecting variables disagree');
     const other = path.join(tmp, 'other');
     const disagree = config(['list'], { GSTACK_STATE_DIR: other }).stdout;
     expect(disagree).toContain(`# note: root-selecting variables disagree: GSTACK_HOME=${resolved} GSTACK_STATE_DIR=${other}; using ${resolved} (GSTACK_HOME wins).`);
