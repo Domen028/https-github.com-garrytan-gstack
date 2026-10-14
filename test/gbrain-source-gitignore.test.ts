@@ -94,6 +94,17 @@ describe("ensureGbrainSourceGitignored", () => {
     expect(readFileSync(gitignorePath, "utf-8")).toBe(canonical);
   });
 
+  it("still appends in a git repo whose patterns do not ignore the pin", () => {
+    const gitignorePath = join(root, ".gitignore");
+    writeFileSync(gitignorePath, "node_modules\n");
+    const init = spawnSync("git", ["init", "-q"], { cwd: root });
+    expect(init.status).toBe(0);
+
+    ensureGbrainSourceGitignored(root);
+
+    expect(readFileSync(gitignorePath, "utf-8")).toBe("node_modules\n.gbrain-source\n");
+  });
+
   it("does not throw when the .gitignore is read-only", () => {
     const gitignorePath = join(root, ".gitignore");
     writeFileSync(gitignorePath, "node_modules\n");

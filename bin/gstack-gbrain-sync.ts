@@ -1474,13 +1474,22 @@ async function runCodeImport(args: CliArgs): Promise<StageResult> {
 }
 
 /**
- * Ensure `.gbrain-source` is listed in the consumer repo's `.gitignore`.
+ * Ensure `.gbrain-source` is ignored in the consumer repo.
  *
- * Idempotent: only appends when the entry is not already present (matched on
- * trimmed lines so a leading/trailing whitespace difference doesn't add a
- * second copy). Wraps writes in try/catch so a read-only checkout or weird
+ * Idempotent. A trimmed `.gbrain-source` line is enough, and so is any
+ * pattern `git check-ignore` already applies (an ignore-everything `*`
+ * covers the pin). Appending a second line would dirty a tracked
+ * `.gitignore`. Wraps writes in try/catch so a read-only checkout or weird
  * perms logs a warning and lets the rest of the sync continue.
  */
+function gitAlreadyIgnoresGbrainSource(root: string): boolean {
+  const result = spawnSync("git", ["-C", root, "check-ignore", "-q", "--", ".gbrain-source"], {
+    timeout: 5_000,
+    stdio: "ignore",
+  });
+  return result.status === 0;
+}
+
 export function ensureGbrainSourceGitignored(root: string): void {
   const gitignorePath = join(root, ".gitignore");
   try {
@@ -1493,7 +1502,7 @@ export function ensureGbrainSourceGitignored(root: string): void {
     const alreadyIgnored = existing
       .split("\n")
       .some((line) => line.trim() === ".gbrain-source");
-    if (alreadyIgnored) {
+    if (alreadyIgnored || gitAlreadyIgnoresGbrainSource(root)) {
       return;
     }
     const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
