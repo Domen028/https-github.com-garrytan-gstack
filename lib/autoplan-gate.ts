@@ -28,6 +28,7 @@ import { ANSWERED_BY_RE, applyReply, decisionId, decisionRows, keepDirection, pa
 import type { FindingRow } from './headless-artifacts';
 import { readJsonl } from './headless-artifacts';
 import { closeDraftDirectionsFile, loadBriefInputs } from './owner-brief';
+import { vaguePlanTerms } from './plan-reality';
 import { settle } from './spend-ledger';
 
 export function loadOverrides(file: string | undefined): ReconciliationOverride[] {
@@ -140,7 +141,9 @@ export function buildGate(state: RunState, gateRev: number): GateList {
     }
   }
   const changes = items.filter(i => i.options.find(o => o.key === i.recommended)?.changes_plan).map(i => `${i.id}${i.recommended}`);
-  items.push({ id: 'p1', title: 'Plan approval', kind: 'approval', recommended: changes.length ? 'b' : 'a',
+  const planFile = fs.existsSync(state.plan_source) ? state.plan_source : state.active_plan;
+  const flags = vaguePlanTerms(fs.readFileSync(planFile, 'utf8')).map(v => `PLAN_REALITY ${JSON.stringify(v.phrase)} has no number, arm list or rule body (${path.basename(state.plan_input ?? planFile)}:${v.line}: ${v.text.length > 120 ? `${v.text.slice(0, 117)}...` : v.text}) (report only)`);
+  items.push({ id: 'p1', title: 'Plan approval', kind: 'approval', recommended: changes.length ? 'b' : 'a', ...(flags.length ? { flags } : {}),
     options: [{ key: 'a', text: 'approve as-is' }, { key: 'b', text: changes.length ? `approve with the recommended changes: ${changes.join(', ')}` : 'approve with the overrides above' },
       { key: 'c', text: 'interrogate (ask questions; stays pending)' },
       { key: 'd', text: `rerun every phase on the current plan, Eng last (to review an edited plan instead: gstack-autoplan revise --out ${state.out} --plan <file>)` }, { key: 'e', text: 'reject' }] });

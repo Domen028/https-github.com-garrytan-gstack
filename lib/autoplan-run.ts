@@ -21,7 +21,7 @@ import * as path from 'node:path';
 import { canonicalRows, parseReceipt, parseRecordFindings, parseReviewResult, type CanonicalFinding } from './autoplan-reconcile';
 import { closePhase, finishGate } from './autoplan-gate';
 import { GSTACK_VERSION } from './autoplan-migrate';
-import { driftLine, reviewHash, scaffold } from './autoplan-plan-text';
+import { driftLine, normalizeFindingFile, reviewHash, scaffold } from './autoplan-plan-text';
 import { PHASES, SNAPSHOT_TOOL, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
 import { recoverRevise } from './autoplan-revise';
 import { FILES, RunError, journal, now, pendingAmendments, readDecisions, readJournal, readState, voiceTerminal, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
@@ -314,14 +314,17 @@ export function submitResult(o: SubmitOptions): SubmitResult {
   const tmp = `${bound}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, text);
   fs.renameSync(tmp, bound);
-  const rows = canonicalRows(bind.findings, { run: state.run, phase, voice: o.voice, model });
+  const planFiles = [ps.snapshot_path, ps.snapshot_path && path.join(path.dirname(ps.snapshot_path), 'source-implementation.md'), state.active_plan].filter((p): p is string => !!p);
+  const pathCtx = { cwd: o.cwd, planFiles, planSource: state.plan_source, planName: path.basename(state.plan_input ?? state.plan_source) };
+  const rows = canonicalRows(bind.findings.map(f => { const { file, line, ...rest } = f; return { ...rest, ...normalizeFindingFile({ file, line }, pathCtx) }; }), { run: state.run, phase, voice: o.voice, model });
   fs.writeFileSync(`${bound}.findings.jsonl`, rows.map(r => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
   const sha = sha256File(bound);
+  const provider = o.runner ?? 'host-subagent';
   const receipt = { receipt: bind.receipt, findings_source: bind.source, reviewed_sha256: ps.snapshot, ...(bind.receipt === 'attested' ? { attest_reason: o.attest } : {}) };
-  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: bound, result_sha256: sha, model, runner: o.runner ?? null, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
+  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: bound, result_sha256: sha, model, runner: provider, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
   settle(path.join(state.out, FILES.spend), open.attempt, o.usageUsd ?? 'unknown');
   open.state = 'submitted'; open.terminal_at = now();
-  Object.assign(v, { status: 'completed', model, provider: o.runner ?? (o.voice === 'native' ? 'host-subagent' : 'unknown'), output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: open.attempt, usage: { usd: o.usageUsd ?? 'unknown' }, ...receipt } satisfies Partial<VoiceState>);
+  Object.assign(v, { status: 'completed', model, provider, output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: open.attempt, usage: { usd: o.usageUsd ?? 'unknown' }, ...receipt } satisfies Partial<VoiceState>);
   if (bind.receipt === 'attested') (state.deviations ??= []).push(`receipt attested: ${phase} ${o.voice} ${open.attempt} bound from a hand-run record without a reviewer receipt (snapshot ${ps.snapshot.slice(0, 12)}; reason: ${o.attest})`);
   state.artifacts[path.basename(bound)] = { path: path.basename(bound), sha256: sha };
   if (o.voice === 'native') state.native_model = model; else state.outside_model = model;
@@ -436,6 +439,10 @@ export function statusLines(state: RunState): string[] {
     if (ps.skipped) { lines.push(`PHASE: ${p} skipped (${ps.skipped})`); continue; }
     const v = (voice: Voice) => { const s = ps[voice]; return `${voice}=${s?.status ?? 'pending'}${s?.model ? `:${s.model}` : ''}${s?.attempt ? `@${s.attempt}` : ''}`; };
     lines.push(`PHASE: ${p} ${ps.closed_at ? 'closed' : ps.snapshot ? 'open' : 'pending'} ${v('native')} ${v('outside')}${ps.consensus ? ` confirmed=${(ps.consensus as any).confirmed} disagree=${(ps.consensus as any).disagree} new=${(ps.consensus as any).new}` : ''}`);
+  }
+  for (const p of state.phase_order) for (const voice of ['native', 'outside'] as const) {
+    const open = state.phases[p]?.[voice] && openAttempt(state.phases[p]![voice]!);
+    if (open) lines.push(`PENDING: ${open.attempt} phase=${p} voice=${voice} result=${open.result}`);
   }
   if (fs.existsSync(path.join(state.out, FILES.spend))) lines.push(renderSpend(summarize(readLedger(path.join(state.out, FILES.spend)))));
   return lines;

@@ -67,9 +67,9 @@ export function parseReceipt(text: string, expected: { phase: string; sha256: st
 function parseFences(text: string, errors: string[]): { findings: CanonicalFinding[]; fenceFound: boolean } {
   const findings: CanonicalFinding[] = [];
   let fenceFound = false;
-  for (const fence of text.matchAll(/^[ \t]*(`{3,}|~{3,})gstack-findings[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*$/gm)) {
+  for (const fence of text.matchAll(/^[ \t]*(`{3,}|~{3,})gstack-findings[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??[ \t]*\1[ \t]*$/gm)) {
     fenceFound = true;
-    fence[2]!.split('\n').forEach((raw, i) => {
+    (fence[2] ?? '').split('\n').forEach((raw, i) => {
       const line = raw.trim();
       if (!line) return;
       let row: any;

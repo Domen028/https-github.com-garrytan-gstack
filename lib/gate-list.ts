@@ -28,6 +28,8 @@ export interface GateItem {
   recommended_basis?: string; changes?: string;
   /** Stable carry-forward identity (phase, finding ids, phase close, snapshot, option text). */
   origin?: string;
+  /** Advisory lines rendered under the item (PLAN_REALITY: a plan term with no number, arm list or rule body). */
+  flags?: string[];
   /** Answered at an earlier revision on an unchanged proposal from a phase that did not rerun. */
   carried?: { from: string; chosen: string; gate_rev: number };
 }
@@ -103,9 +105,10 @@ export function renderGate(list: GateList, page = 1, pageSize = PAGE_SIZE): stri
     if (item.carried) lines.push(`   decided at gate_rev ${item.carried.gate_rev}: ${item.id}${item.carried.chosen} (carried forward; name it again to change it)`);
     for (const o of item.options) lines.push(`   ${item.id}${o.key}) ${o.text}${o.key === item.recommended ? ' (recommended)' : ''}`);
     if (item.cost) lines.push(`   cost: ${item.cost}`);
+    for (const flag of item.flags ?? []) lines.push(`   flagged: ${flag}`);
   });
   lines.push('');
-  if (pages > 1) lines.push(`Ids are stable across pages; render page N with \`gstack-gate render <file> --page N\`.`);
+  if (pages > 1) lines.push(`Ids are stable across pages; render page N with \`gstack-gate render <file> --page N\`, or every page with \`--all\`. Relay every page.`);
   lines.push('Reply with exactly one of: `all` · `<id><option>` tokens, e.g. `' + exampleTokens(list) + '` · `all except <tokens>` · `all as-is` (keep every direction).');
   lines.push('Items marked auto take their recommendation if unanswered; approval items stay pending until answered. Bare yes/no is not accepted.');
   for (const held of list.items.filter(heldFromAll)) lines.push(`\`all\` does not answer ${held.id} (recommended ${held.recommended} changes the plan); reply ${held.options.map(o => `${held.id}${o.key}`).join(' or ')} yourself.`);

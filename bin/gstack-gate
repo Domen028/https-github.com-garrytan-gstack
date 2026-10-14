@@ -2,7 +2,7 @@
 /**
  * gstack-gate — render and parse the one gate list (plan B9).
  *
- *   gstack-gate render <gate.json> [--page N]
+ *   gstack-gate render <gate.json> [--page N | --all]
  *   gstack-gate parse <gate.json> --reply "<text>" --gate-rev N [--json]
  *   gstack-gate decisions <gate.json> [--reply "<text>" --gate-rev N] [--answered-at ISO]
  *
@@ -15,7 +15,8 @@ import { resultLine } from '../lib/result-codes';
 
 const HELP = `gstack-gate — one gate list, one reply grammar
 
-  render <gate.json> [--page N]                         numbered items with stable ids, auto/approval, the reply shape
+  render <gate.json> [--page N | --all]                 numbered items with stable ids, auto/approval, the reply shape;
+                                                        --all prints every item on one page (relay every page)
   parse <gate.json> --reply "<text>" --gate-rev N [--json]
                                                         resolved choices as JSON; unparsed tokens are listed, never guessed
   decisions <gate.json> [--reply "<text>" --gate-rev N] [--answered-at ISO]
@@ -67,14 +68,15 @@ function parseWith(list: GateList, rest: string[], json: boolean) {
 function main(argv: string[]): number {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') { process.stdout.write(HELP + '\n'); return cmd ? EXIT.ok : EXIT.usage; }
-  const positional = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1]!.startsWith('--') && rest[i - 1] !== '--json'));
+  const positional = rest.filter((a, i) => !a.startsWith('--') && !(i > 0 && rest[i - 1]!.startsWith('--') && !['--json', '--all'].includes(rest[i - 1]!)));
   const list = loadList(positional[0]);
   if (typeof list === 'number') return list;
 
   if (cmd === 'render') {
     const page = flag(rest, '--page');
     if (page !== undefined && !/^[0-9]+$/.test(page)) return usage('--page needs a number');
-    process.stdout.write(renderGate(list, page ? Number(page) : 1));
+    if (page !== undefined && rest.includes('--all')) return usage('--page and --all are exclusive');
+    process.stdout.write(rest.includes('--all') ? renderGate(list, 1, list.items.length) : renderGate(list, page ? Number(page) : 1));
     return EXIT.ok;
   }
   if (cmd === 'parse') {
