@@ -79,7 +79,7 @@ jobs:
         run: node --test \${{ matrix.files }}
 `;
 
-export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | null; pregate?: Record<string, unknown> | null; prefix?: string } = {}): FixtureRepo {
+export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | null; pregate?: Record<string, unknown> | null; prefix?: string; baseFiles?: Record<string, string> } = {}): FixtureRepo {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix ?? 'gstack-pregate-fx-'));
   const origin = path.join(root, 'origin.git');
   const work = path.join(root, 'work');
@@ -122,6 +122,7 @@ export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | nul
   write(work, '.github/workflows/windows.yml', WORKFLOW_WINDOWS);
   if (opts.registry !== null) write(work, '.gstack/generated.json', JSON.stringify(opts.registry ?? BASE_REGISTRY, null, 2) + '\n');
   if (opts.pregate !== null) write(work, '.gstack/pregate.json', JSON.stringify(opts.pregate ?? BASE_PREGATE, null, 2) + '\n');
+  for (const [rel, text] of Object.entries(opts.baseFiles ?? {})) write(work, rel, text);
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
   git('remote', 'add', 'origin', origin);

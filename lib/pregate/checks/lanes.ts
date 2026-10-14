@@ -36,8 +36,17 @@ export function detectRunner(ctx: PregateContext, files: readonly string[]): str
 
 export interface RunnerSummary { ran: number | null; failed: number | null }
 
-/** The runner's own summary line: bun, node --test, vitest, jest, pytest. null when not recognised. */
-export function parseSummary(output: string): RunnerSummary {
+/** bats: the pretty `N tests, M failures` line or the TAP plan `1..N`. */
+function parseBats(output: string): RunnerSummary | null {
+  let m: RegExpExecArray | null;
+  if ((m = /^\s*(\d+)\s+tests?,\s+(\d+)\s+failures?/m.exec(output))) return { ran: Number(m[1]), failed: Number(m[2]) };
+  if ((m = /^1\.\.(\d+)\s*$/m.exec(output))) return { ran: Number(m[1]), failed: (output.match(/^not ok\b/gm) ?? []).length };
+  return null;
+}
+
+/** The runner's own summary line: bun, node --test, vitest, jest, pytest, bats. A bats runner's summary is tried first; for any other runner bats output is a last resort. `ran: null` when not recognised. */
+export function parseSummary(output: string, runner = ''): RunnerSummary {
+  if (/(?<![\w-])bats(?![\w-])/.test(runner)) { const b = parseBats(output); if (b) return b; }
   let m: RegExpExecArray | null;
   if ((m = /^\s*(?:#|ℹ)\s*tests\s+(\d+)/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(?:#|ℹ)\s*fail\s+(\d+)/m.exec(output)?.[1] ?? 0) };
   if ((m = /Ran\s+(\d+)\s+tests?\s+across/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(\d+)\s+fail\b/m.exec(output)?.[1] ?? 0) };
@@ -46,7 +55,7 @@ export function parseSummary(output: string): RunnerSummary {
   if ((m = /Tests\s+(?:(\d+)\s+failed\s*\|\s*)?(\d+)\s+passed/.exec(output))) return { ran: Number(m[2]) + Number(m[1] ?? 0), failed: Number(m[1] ?? 0) };
   if (/no tests ran/.test(output) || /No tests found/i.test(output)) return { ran: 0, failed: 0 };
   if ((m = /(?:(\d+)\s+failed,?\s*)?(\d+)\s+passed/.exec(output))) return { ran: Number(m[2]) + Number(m[1] ?? 0), failed: Number(m[1] ?? 0) };
-  return { ran: null, failed: null };
+  return parseBats(output) ?? { ran: null, failed: null };
 }
 
 interface LocalRun { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string }
@@ -56,7 +65,7 @@ function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, fi
   const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: ctx.timeoutMs, maxBuffer: 256 * 1024 * 1024, env: { ...env, CI: env.CI ?? '1' } });
   const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
   fs.appendFileSync(log, `$ ${command}\n${output}\n`);
-  const summary = parseSummary(output);
+  const summary = parseSummary(output, runner);
   return { exit: r.status, ...summary, log, tail: output.trim().split('\n').slice(-25), command };
 }
 
