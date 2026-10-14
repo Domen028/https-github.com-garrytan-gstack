@@ -709,7 +709,7 @@ Step 4 is read-only: defer charters, setup and probes to Step 4.7.
 - If the caller directory is prefixed `gstack-review`, use `../gstack-qa/sections/exploratory.md` instead and read it in full.
 - If neither layout applies, report an unresolved QA installation as a setup blocker; do not guess another path.
 Use this host's installation, never the product tree. If missing or unreadable, report a QA setup blocker and its affected probes as blocked; continue other safe probes (independent functional/static checks). Missing/unreadable assets block required QA.
-2. Then Read `sections/scope.md` beside it in full; pick surfaces.
+2. Then Read QA's `sections/scope.md` in full; pick surfaces.
 3. Then Read each listed method in full; the entrypoint alone completes nothing.
 
 QA's `sections/...` and `templates/...` paths resolve from installed QA SKILL.md, not caller/product.

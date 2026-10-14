@@ -231,7 +231,7 @@ export function generateQAReviewPreflight(ctx: TemplateContext): string {
   return `> **STOP.** Before any probe, including plan checks, complete the ordered scope/method Reads in earlier responses. Never batch a probe (capture, guard start, plan check) with a Read.
 ${ctx.skillName === 'review' ? 'Step 4 is read-only: defer charters, setup and probes to Step 4.7.\n' : ''}
 1. {{QA_RESOURCE:exploratory}}
-2. Then Read \`sections/scope.md\` beside it in full; pick surfaces.
+2. Then Read QA's \`sections/scope.md\` in full; pick surfaces.
 3. Then Read each listed method in full; the entrypoint alone completes nothing.
 
 QA's \`sections/...\` and \`templates/...\` paths resolve from installed QA SKILL.md, not caller/product.`;
