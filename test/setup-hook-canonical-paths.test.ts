@@ -23,6 +23,8 @@
 import { describe, test, expect } from 'bun:test';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
+import { spawnSync } from 'child_process';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const setupSrc = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
@@ -34,6 +36,72 @@ describe('setup: canonical-only hook paths', () => {
     expect(setupSrc).toContain(
       'CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"',
     );
+  });
+
+  describe('CANONICAL_GSTACK_ROOT resolution', () => {
+    const start = setupSrc.indexOf('CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR');
+    const end = setupSrc.indexOf('\n  fi\nfi\n', start);
+    const block = setupSrc.slice(start, end + '\n  fi\nfi\n'.length);
+
+    function installAt(root: string) {
+      const bin = path.join(root, 'bin');
+      fs.mkdirSync(bin, { recursive: true });
+      fs.writeFileSync(path.join(bin, 'gstack-session-update'), '#!/bin/sh\n', { mode: 0o755 });
+    }
+
+    function resolve(home: string, configDir?: string): string {
+      const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home };
+      if (configDir !== undefined) env.CLAUDE_CONFIG_DIR = configDir;
+      const r = spawnSync('bash', ['-c', `${block}printf '%s' "$CANONICAL_GSTACK_ROOT"`], { env, encoding: 'utf-8' });
+      expect(r.status).toBe(0);
+      return r.stdout;
+    }
+
+    function withHome(fn: (home: string) => void) {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-canon-'));
+      try {
+        installAt(path.join(home, '.claude', 'skills', 'gstack'));
+        fn(home);
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
+    }
+
+    test('the extracted block is the whole guard', () => {
+      expect(start).toBeGreaterThan(-1);
+      expect(end).toBeGreaterThan(start);
+    });
+
+    test('no CLAUDE_CONFIG_DIR resolves to the $HOME install', () => {
+      withHome((home) => {
+        expect(resolve(home)).toBe(path.join(home, '.claude', 'skills', 'gstack'));
+      });
+    });
+
+    test('a per-session config dir linking back to the $HOME install resolves to the $HOME spelling', () => {
+      withHome((home) => {
+        const session = path.join(home, 'session-1234');
+        fs.mkdirSync(session);
+        fs.symlinkSync(path.join(home, '.claude', 'skills'), path.join(session, 'skills'));
+        expect(resolve(home, session)).toBe(path.join(home, '.claude', 'skills', 'gstack'));
+      });
+    });
+
+    test('a config dir with its own install keeps that install', () => {
+      withHome((home) => {
+        const other = path.join(home, 'other-config');
+        installAt(path.join(other, 'skills', 'gstack'));
+        expect(resolve(home, other)).toBe(path.join(other, 'skills', 'gstack'));
+      });
+    });
+
+    test('a config dir with no install falls back to the $HOME install', () => {
+      withHome((home) => {
+        const empty = path.join(home, 'empty-config');
+        fs.mkdirSync(empty);
+        expect(resolve(home, empty)).toBe(path.join(home, '.claude', 'skills', 'gstack'));
+      });
+    });
   });
 
   test('_hook_command_path body never references the running tree', () => {
