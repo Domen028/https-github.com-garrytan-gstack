@@ -3947,9 +3947,15 @@ CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"
 # (setup:1601 TODO), so a CLAUDE_CONFIG_DIR override can name a root that was
 # never installed. Fall back to where the install actually lives — both are
 # stable, neither is the running tree, so canonical-only still holds.
-if [ ! -x "$CANONICAL_GSTACK_ROOT/bin/gstack-session-update" ] \
-   && [ -x "$HOME/.claude/skills/gstack/bin/gstack-session-update" ]; then
-  CANONICAL_GSTACK_ROOT="$HOME/.claude/skills/gstack"
+# The same fallback applies when CLAUDE_CONFIG_DIR is a per-session directory
+# whose skills link back to the $HOME install: both resolve to one tree, and
+# only the $HOME spelling outlives the session.
+_HOME_GSTACK_ROOT="$HOME/.claude/skills/gstack"
+if [ -x "$_HOME_GSTACK_ROOT/bin/gstack-session-update" ]; then
+  if [ ! -x "$CANONICAL_GSTACK_ROOT/bin/gstack-session-update" ] \
+     || [ "$(cd "$CANONICAL_GSTACK_ROOT" && pwd -P)" = "$(cd "$_HOME_GSTACK_ROOT" && pwd -P)" ]; then
+    CANONICAL_GSTACK_ROOT="$_HOME_GSTACK_ROOT"
+  fi
 fi
 
 # Echo the canonical path for a hook (repo-relative arg); fails when the hook
