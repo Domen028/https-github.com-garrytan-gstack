@@ -228,12 +228,13 @@ ${setup ? 'Read `sections/browser-setup.md` in full unless already completed;\n'
 
 export function generateQAReviewPreflight(ctx: TemplateContext): string {
   sectionPath(ctx, 'qa', 'exploratory');
-  return `> **STOP.** Before any probe, including plan checks, complete the ordered scope/method Reads below in earlier responses. Never batch a probe (capture included) with its prerequisite Read; templates cannot replace Reads.
+  return `> **STOP.** Before any probe, including plan checks, complete the ordered scope/method Reads in earlier responses. Never batch a probe (capture, guard start, plan check) with a Read.
 ${ctx.skillName === 'review' ? 'Step 4 is read-only: defer charters, setup and probes to Step 4.7.\n' : ''}
-{{QA_RESOURCE:exploratory}}
-After exploratory returns, Read scope then selected methods in order; it is only the entrypoint.
+1. {{QA_RESOURCE:exploratory}}
+2. Then Read \`sections/scope.md\` beside it in full; pick surfaces.
+3. Then Read each listed method in full; the entrypoint alone completes nothing.
 
-QA's \`sections/...\` and \`templates/...\` paths resolve from installed QA SKILL.md, not the caller or product directory.`;
+QA's \`sections/...\` and \`templates/...\` paths resolve from installed QA SKILL.md, not caller/product.`;
 }
 
 export function generateQAReview(ctx: TemplateContext): string {

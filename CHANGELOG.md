@@ -13,6 +13,8 @@
 - **Capy sessions stay at the tip, not at the floor.** `GSTACK_MIN_REVISION` is the floor below which the trailer fails and the frozen bootstrapper fast-forwards. Above it, `bin/gstack-capy-session` fast-forwards any clean, unpinned checkout behind origin at install-mode session start (`SELF_UPGRADE: done <old> -> <new>`, then installs from the new revision); a refusal prints `SELF_UPGRADE: skipped (<reason>)` and the session continues on the installed revision. `--check` never moves the checkout and reports `gstack-capy-session: behind origin/<branch>: … fix: …`. `GSTACK_CAPY_SELF_UPGRADE=off` disables only this fast-forward; `GSTACK_CAPY_AUTO_UPGRADE=0` disables every one.
 - **gstack's own tools run on the Bun that launched them.** `lib/autoplan-prompts.ts`, `lib/restamp.ts` and `bin/gstack-gbrain-sync.ts` spawn `process.execPath` instead of whatever `bun` the PATH resolves, so a Capy machine whose PATH lacks `~/.bun/bin` no longer fails mid-workflow (`lib/autoplan-admission.ts` keeps probing the PATH Bun on purpose; that probe is the point).
 
+- **`/ship` and `/review` load the QA methods as three awaited steps.** The exploratory preflight is now an ordered list (entrypoint, then `scope.md`, then each listed method, each in its own response) and names the smoke guard start, every capture and every plan check as probes that wait for them; the entrypoint alone completes nothing.
+
 ### For contributors
 
 - `test/autoplan-residuals.test.ts` pins the `all` rule, the carried consensus, the `process.execPath` rule under `lib/` and `bin/*.ts`, and `--by`; `test/gstack-lease.test.ts` covers the lease; `test/gstack-upgrade-bin.test.ts` and `test/capy-skill-wrapper.test.ts` cover `UPGRADE_BUSY` and `SELF_UPGRADE:`.
