@@ -222,7 +222,7 @@ jobs:
             || echo "- Receipt recovery crashed; reuse stays off this run" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Hand the receipt store to plan-slices
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: receipt-store
           path: /tmp/gstack-eval-input-cache
@@ -291,7 +291,7 @@ jobs:
       - name: Download this PR's receipt store
         if: github.event_name == 'pull_request' || inputs.pr_receipts != ''
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: receipt-store
           path: /tmp/gstack-eval-input-cache
@@ -329,7 +329,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: mkdir -p /tmp/paid-plan/store && cp -a /tmp/gstack-eval-input-cache/. /tmp/paid-plan/store/
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: paid-plan
           path: |
@@ -404,7 +404,7 @@ jobs:
       - name: Register gstack skills for PTY smokes
         uses: ./.github/actions/register-gstack-skills
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: paid-plan
           path: /tmp/paid-plan
@@ -460,7 +460,7 @@ jobs:
       # attempt and never replace (or collide with) the first attempt's.
       - name: Upload slice results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: paid-slice-${{ matrix.slice }}-a${{ github.run_attempt }}
           path: /tmp/paid-slice-results
@@ -468,7 +468,7 @@ jobs:
 
       - name: Upload native capture evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: native-captures-${{ env.EVALS_RUN_ID }}
           include-hidden-files: true
@@ -486,7 +486,7 @@ jobs:
       # longer reds its runner, but its full log is the diagnosis evidence.
       - name: Upload shard logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: paid-logs-slice-${{ matrix.slice }}-a${{ github.run_attempt }}
           include-hidden-files: true
@@ -528,7 +528,7 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: paid-plan
           path: /tmp/paid-report
@@ -536,7 +536,7 @@ jobs:
       # One directory per attempt-scoped slice artifact (no merge): shard
       # records can never overwrite each other, and the report keeps the
       # first attempt's verdict.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: paid-slice-*
           path: /tmp/paid-report
@@ -583,7 +583,7 @@ jobs:
 
       - name: Upload reconciliation output for the comment job
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: report-verdict-a${{ github.run_attempt }}
           path: |
@@ -596,7 +596,7 @@ jobs:
 
       - name: Upload trial outcomes for pass-rate history
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: trial-outcomes-pr-a${{ github.run_attempt }}
           path: /tmp/paid-report/trial-outcomes.jsonl
@@ -622,12 +622,12 @@ jobs:
       # `issues` permission, not `pull-requests` (#1802 CI fix).
       issues: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: paid-plan
           path: /tmp/paid-report
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: report-verdict-a${{ github.run_attempt }}
           path: /tmp/verdict
