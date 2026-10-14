@@ -540,6 +540,12 @@ export async function runProcess(
     redaction?: 'withhold' | 'splice';
     /** Allows PREPARATION_COMMAND_TIMEOUT_MS; only preparation dependency commands set it. */
     preparationCommand?: true;
+    /**
+     * The name the child sees as argv[0]. `executable()` returns the canonical
+     * path, and a multicall binary (OrbStack's docker -> docker-tools) dispatches
+     * on argv[0], so callers pass the command name they resolved.
+     */
+    argv0?: string;
   },
 ): Promise<ProcessResult> {
   if (!isAbsolute(file) || !isAbsolute(opts.cwd) || !existsSync(opts.cwd))
@@ -549,11 +555,14 @@ export async function runProcess(
     );
   if (!args.every((a) => typeof a === 'string' && !a.includes('\0')))
     throw new CsoError('INVALID_ARGUMENT', 'Invalid child argument');
+  if (opts.argv0 !== undefined && !/^[a-zA-Z0-9._-]+$/.test(opts.argv0))
+    throw new CsoError('INVALID_ARGUMENT', 'Invalid child argv0');
   const hardened = hardenGit(file, args);
   args = hardened.args;
   const cap = Math.min(opts.maxBytes ?? MAX_OUTPUT, opts.raw ? RAW_OUTPUT_LIMIT : MAX_OUTPUT);
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, {
+      argv0: opts.argv0,
       cwd: opts.cwd,
       env: opts.env,
       stdio: ['pipe', 'pipe', 'pipe'],
