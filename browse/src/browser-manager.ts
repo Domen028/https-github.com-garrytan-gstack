@@ -406,6 +406,7 @@ export class BrowserManager {
   private xvfb: XvfbHandle | null = null;
   private displayAllocation: Promise<void> | null = null;
   private handoffPending: Promise<string> | null = null;
+  private activeTabRecovery: Promise<void> | null = null;
   private closing = false;
   private handoffPrevious: { browser: Browser; pages: Map<number, Page>; tabSessions: Map<number, TabSession>; activeTabId: number } | null = null;
 
@@ -1312,6 +1313,28 @@ export class BrowserManager {
   }
 
   // ─── Session Access ────────────────────────────────────────
+  /**
+   * Restore an active tab when every page was closed outside the CLI (for
+   * example, the user closed the headed window). The page 'close' handler is
+   * synchronous and cannot open a replacement, which left activeTabId at 0 and
+   * every later command, including status and stop, failing with "No active
+   * page". closeTab() already opens a blank tab for the last-tab case; this
+   * covers the external path. Concurrent callers share one recovery.
+   */
+  async ensureActiveTab(): Promise<void> {
+    if (this.tabSessions.has(this.activeTabId)) return;
+    const remaining = [...this.tabSessions.keys()];
+    if (remaining.length > 0) {
+      this.activeTabId = remaining[remaining.length - 1]!;
+      return;
+    }
+    if (!this.context) return;
+    this.activeTabRecovery ??= this.newTab()
+      .then(() => {})
+      .finally(() => { this.activeTabRecovery = null; });
+    await this.activeTabRecovery;
+  }
+
   /** Get the TabSession for the active tab. */
   getActiveSession(): TabSession {
     const session = this.tabSessions.get(this.activeTabId);

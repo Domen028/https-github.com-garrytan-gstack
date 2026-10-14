@@ -1120,6 +1120,7 @@ async function handleCommandInternalImpl(
   try {
     let result: string;
 
+    await browserManager.ensureActiveTab();
     const session = browserManager.getActiveSession();
 
     // Per-request warnings collected during hidden-element detection,
