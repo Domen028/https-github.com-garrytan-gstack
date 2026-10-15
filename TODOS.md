@@ -5439,3 +5439,17 @@ Garry for each; revisit 2026-10-29 unless a date says otherwise.
   denial log follows the inherited state root, not its fake `HOME`) fail 30/30
   in diagnostic mode while passing in the normal suite. Ledger shards that hold
   them can never report `passed = n`. **Effort:** S. **Priority:** P2.
+- **`test/plan-seed-submission.test.ts` reads its fake CLI's events after a
+  fixed 50 ms sleep** — "actual PTY launcher carries placeholder styling into
+  owned seed submission: xterm-256color" sends `/plan-eng-review\r`, sleeps
+  50 ms and expects the `slash` event already in `events.jsonl`; under the
+  16-worker duration recording on 2026-10-15 the event had not landed
+  (`['paste', 'enter', 'end_turn']`). Wait for the CLI's own write instead of a
+  timer (docs/TESTING_INTERNALS.md#flake-ledger). **Effort:** S. **Priority:** P2.
+- **Split the free files the 2026-10-15 seed put over 60 s** —
+  `test/setup-install-registry.test.ts` (82 s), `test/host-renders-prune.test.ts`
+  (64 s) and `test/setup-codex-scope.test.ts` (60.4 s) are allowlisted with this
+  todo in `scripts/free-test-seed-allowlist.json`; `test/brain-sync.test.ts`
+  (57 s) and `test/setup-codex-scope-namespaces.test.ts` (57 s) are next. Split
+  each by describe block, rerun `bun run test:ubicloud --record-durations` and
+  delete the entries. **Effort:** S each. **Priority:** P2.
