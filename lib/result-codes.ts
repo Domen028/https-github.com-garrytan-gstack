@@ -411,8 +411,8 @@ export const RESULT_CODES = {
   },
   ISSUE_LOOKUP_FAILED: {
     anchor: 'issue-lookup-failed',
-    summary: 'gstack-issue-links could not read the repository, the open PRs closing a fixed issue, or the flake issues naming a CI run, so those Related or Flake lines may be missing',
-    fix: 'check `gh auth status` and the repository (`--repo <owner/repo>`), then rerun gstack-issue-links; report the gap in the handoff if it still fails',
+    summary: 'gstack-issue-links could not read the repository, this PR\'s author, the open PRs closing a fixed issue, or the flake issues naming a CI run, so Related or Flake lines may be missing or list the owner\'s own PRs',
+    fix: 'check `gh auth status` and the repository (`--repo <owner/repo>`), pass `--author <login>` when gh runs as an app, then rerun gstack-issue-links; report the gap in the handoff if it still fails',
   },
   ISSUE_LINKS_MISSING: {
     anchor: 'issue-links-missing',

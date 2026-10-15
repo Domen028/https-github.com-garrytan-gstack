@@ -37,7 +37,8 @@ const HELP = `gstack-issue-links — Fixes only on explicit closure intent; ever
   --supersedes <pr>   owner confirmed this PR supersedes a Related PR: Supersedes #N (repeatable)
   --credit <pr>       owner confirmed crediting a Related PR's author: Contributed by @author (repeatable)
   --no-auto-links     no Related lookup (open PRs by other authors closing a fixed issue)
-  --author <login>    this PR's author for that lookup (default: the gh viewer; pass it when gh runs as an app)
+  --author <login>    this PR's author for that lookup (default: the gh viewer; for an app viewer, the HEAD commit's
+                      GitHub user, else a user-owned repository's owner)
   --repo <owner/repo> repository for gh (default: the current remote)
   --out <file>        write the issues object (fixes, refs, flakes, related) for gstack-ship-receipt write --issues @file
   --json              JSON only on stdout
@@ -101,6 +102,28 @@ function closingPrs(gh: ReturnType<typeof ghLookups>, repo: string, fixes: numbe
   return { closing, viewer };
 }
 
+const AUTHOR_QUERY = 'query($owner:String!,$name:String!,$head:String!){repository(owner:$owner,name:$name){owner{__typename login} object(expression:$head){... on Commit{author{user{login}}}}}}';
+type AuthorReply = { data?: { repository?: { owner?: { __typename?: string; login?: string }; object?: { author?: { user?: { login?: string } | null } } | null } } };
+
+/**
+ * Whose PRs are not "other authors": --author, else the gh viewer unless it is
+ * an app (`…[bot]`), in which case the HEAD commit's GitHub user, else the
+ * owner of a user-owned repository. With none, the app viewer stays and the
+ * gap is reported, since the owner's own PRs would then be listed as Related.
+ */
+function prAuthor(gh: ReturnType<typeof ghLookups>, repo: string, viewer: string, explicit: string | undefined, head: string | undefined): { login: string; source: string } {
+  if (explicit) return { login: explicit, source: '--author' };
+  if (!/\[bot\]$/.test(viewer)) return { login: viewer, source: 'gh viewer' };
+  const [owner, name] = repo.split('/');
+  const res = head ? gh.json<AuthorReply>('this PR\'s author', ['api', 'graphql', '-f', `query=${AUTHOR_QUERY}`, '-f', `owner=${owner}`, '-f', `name=${name}`, '-f', `head=${head}`]) : undefined;
+  const commitUser = res?.data?.repository?.object?.author?.user?.login;
+  if (commitUser) return { login: commitUser, source: 'HEAD commit author' };
+  const repoOwner = res?.data?.repository?.owner;
+  if (repoOwner?.__typename === 'User' && repoOwner.login) return { login: repoOwner.login, source: 'repository owner' };
+  if (res) gh.failed('this PR\'s author', `gh runs as ${viewer} and neither the HEAD commit nor the repository owner names a user; pass --author <login>`);
+  return { login: viewer, source: 'gh viewer' };
+}
+
 function main(argv: string[]): number {
   if (argv.includes('--help') || argv.includes('-h')) { process.stdout.write(HELP + '\n'); return EXIT.ok; }
   const json = argv.includes('--json');
@@ -145,8 +168,9 @@ function main(argv: string[]): number {
   }
   const links = resolveLinks(mentions, explicit, readable, flakes);
   const found = autoLinks && repo && links.fixes.length ? closingPrs(gh, repo, links.fixes) : undefined;
-  if (found) {
-    const related = relatedPrs(found.closing, { repo: repo!, viewer: flags(argv, '--author')[0] ?? found.viewer, branch: git(['branch', '--show-current'], repoRoot)?.trim() || undefined });
+  const author = found ? prAuthor(gh, repo!, found.viewer, flags(argv, '--author')[0], git(['rev-parse', 'HEAD'], repoRoot)?.trim()) : undefined;
+  if (found && author) {
+    const related = relatedPrs(found.closing, { repo: repo!, viewer: author.login, branch: git(['branch', '--show-current'], repoRoot)?.trim() || undefined });
     if (related.length) links.related = related;
   }
   for (const [kind, list] of Object.entries(confirmed)) {
@@ -161,13 +185,14 @@ function main(argv: string[]): number {
   const lines = renderIssueLines(links);
   const out = flags(argv, '--out')[0];
   if (out) { fs.mkdirSync(path.dirname(out), { recursive: true }); fs.writeFileSync(out, JSON.stringify(receiptIssues(links), null, 2) + '\n'); }
-  if (json) process.stdout.write(JSON.stringify({ ...receiptIssues(links), cross: links.cross, unreadable: links.unreadable, candidates, flake_tests: links.flakes, rejected_flakes: rejectedFlakes, unavailable: gh.unavailable, lines }) + '\n');
+  if (json) process.stdout.write(JSON.stringify({ ...receiptIssues(links), cross: links.cross, unreadable: links.unreadable, candidates, flake_tests: links.flakes, rejected_flakes: rejectedFlakes, ...(author ? { author } : {}), unavailable: gh.unavailable, lines }) + '\n');
   else {
     process.stdout.write(lines.length ? lines.join('\n') + '\n' : 'ISSUE_LINKS: none\n');
     for (const m of mentions) {
       const promote = candidates.some(c => c.issue === m.issue) && m.intent === 'refs' && !m.repo ? ` (promote: fix #${m.issue})` : '';
       process.stderr.write(`  ${m.intent === 'fixes' ? 'closure' : 'reference'} ${m.repo ? `${m.repo}#` : '#'}${m.issue} ← ${m.source}${promote}\n`);
     }
+    if (author && author.source !== 'gh viewer') process.stderr.write(`  Related excludes @${author.login} (${author.source})\n`);
     for (const line of lineSources(links)) process.stderr.write(`  ${line}\n`);
     for (const r of rejectedFlakes) process.stderr.write(`  not a flake link: #${r.issue} (run ${r.run}) ← ${r.reason}\n`);
   }

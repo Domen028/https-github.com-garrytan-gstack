@@ -50,8 +50,7 @@ then return here for a new lookup and a fresh body before publishing.
 ### Issue links
 
 Run `~/.claude/skills/gstack/bin/gstack-issue-links --base <base> --out .gstack/tmp/issues.json`, adding
-`--issue <n>` per issue the user named as fixed, `--ci-run <id>` per failing CI run and
-`--author <login>` when `gh` runs as an app (Capy). Interactive:
+`--issue <n>` per issue the user named as fixed and `--ci-run <id>` per failing CI run. Interactive:
 ask once about its `(promote: fix #N)` references (each `fix #<n>` reply adds `--issue <n>`), and add
 `--supersedes <n>`/`--credit <n>` for a `Related:` PR only when the owner confirms; rerun after any change.
 The completion message lists unpromoted candidates, `Related:` lines and any `ISSUE_LOOKUP_FAILED`.

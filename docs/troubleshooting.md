@@ -2474,13 +2474,16 @@ rendered as `Refs #N`, never `Fixes`.
 ### `ISSUE_LOOKUP_FAILED`
 
 **Meaning.** `gstack-issue-links` could not resolve the repository, list the open
-PRs that close an issue this PR fixes, or search the flake issues naming a
-`--ci-run` id. The closure and reference lines are still printed; the
-`Related:` or `Flake:` lines that lookup would have added may be missing, and
-`--json` lists each failure under `unavailable`.
+PRs that close an issue this PR fixes, search the flake issues naming a
+`--ci-run` id, or tell this PR's author: `gh` runs as an app (`…[bot]`) and
+neither the HEAD commit (unpushed, or not linked to a GitHub user) nor a
+user-owned repository names one, so the owner's own open PRs stay in the
+`Related:` lines. The closure and reference lines are still printed; `--json`
+lists each failure under `unavailable`.
 
-**Fix.** Check `gh auth status` and pass `--repo <owner/repo>` when the remote
-is not a GitHub repository, then rerun. If it still fails, say in the handoff
+**Fix.** Check `gh auth status`, pass `--repo <owner/repo>` when the remote
+is not a GitHub repository and `--author <login>` when `gh` runs as an app,
+then rerun. If it still fails, say in the handoff
 which lookup is missing; never present the body as complete.
 
 <a id="issue-links-missing"></a>
