@@ -28,6 +28,10 @@ export interface Graph {
   tests: Set<string>;
   /** dependency → dependents with the kind of edge. */
   reverse: Map<string, Edge[]>;
+  /** Test file → import specifiers that looked like repo paths but resolved nowhere (for the no-lane explanation). */
+  unresolved?: Map<string, string[]>;
+  /** tsconfig/jsconfig `extends` hops that were not followed (for the no-lane explanation). */
+  aliasNotes?: string[];
 }
 
 const scanner = new Bun.Transpiler({ loader: 'tsx' });
@@ -47,72 +51,138 @@ export function listRepoFiles(repoRoot: string): string[] {
 
 function normalize(p: string): string { return path.posix.normalize(p.replace(/\\/g, '/')).replace(/^\.\//, ''); }
 
-/** One tsconfig/jsconfig `compilerOptions.paths` entry: `@/*` → [`./*`], already joined to baseUrl. */
+/** One tsconfig/jsconfig `compilerOptions.paths` entry: `@/*` → [`./*`], already joined to its base. */
 export interface PathAlias { prefix: string; suffix: string; wildcard: boolean; targets: string[] }
+/** The effective `paths` of the root config, its `baseUrl` (repo-relative, or null) and what could not be read. */
+export interface PathAliases { aliases: PathAlias[]; baseUrl: string | null; notes: string[] }
 
-/** JSONC → JSON: drop comments and trailing commas outside strings (tsconfig allows both). */
+/** How many relative `extends` hops are followed from the root tsconfig/jsconfig. */
+export const MAX_TSCONFIG_EXTENDS = 4;
+
+/** JSONC → JSON: drop comments, and a comma whose next token closes an object or array, outside strings. */
 function stripJsonc(text: string): string {
+  const skipTrivia = (from: number): number => {
+    let j = from;
+    while (j < text.length) {
+      if (/\s/.test(text[j]!)) { j++; continue; }
+      if (text.startsWith('//', j)) { const e = text.indexOf('\n', j); j = e < 0 ? text.length : e; continue; }
+      if (text.startsWith('/*', j)) { const e = text.indexOf('*/', j + 2); j = e < 0 ? text.length : e + 2; continue; }
+      break;
+    }
+    return j;
+  };
   let out = '';
   for (let i = 0; i < text.length; i++) {
     const c = text[i]!;
     if (c === '"') { const end = /"(?:[^"\\]|\\.)*"/y; end.lastIndex = i; const m = end.exec(text); const s = m ? m[0] : text.slice(i); out += s; i += s.length - 1; continue; }
     if (c === '/' && text[i + 1] === '/') { while (i < text.length && text[i] !== '\n') i++; out += '\n'; continue; }
     if (c === '/' && text[i + 1] === '*') { const e = text.indexOf('*/', i + 2); i = e < 0 ? text.length : e + 1; continue; }
+    if (c === ',' && (text[skipTrivia(i + 1)] === '}' || text[skipTrivia(i + 1)] === ']')) continue;
     out += c;
   }
-  return out.replace(/,(\s*[}\]])/g, '$1');
+  return out;
+}
+
+interface Located<T> { value: T; dir: string }
+interface ConfigOptions { baseUrl?: Located<string>; paths?: Located<Record<string, unknown>> }
+
+/** `baseUrl` and `paths` of one config after its relative `extends` chain (later entries and the config itself override). */
+function effectiveOptions(repoRoot: string, rel: string, depth: number, seen: Set<string>, notes: string[]): ConfigOptions | null {
+  let json: { extends?: unknown; compilerOptions?: { baseUrl?: unknown; paths?: unknown } };
+  try { json = JSON.parse(stripJsonc(fs.readFileSync(path.join(repoRoot, rel), 'utf8'))) ?? {}; } catch { return null; }
+  const dir = path.posix.dirname(rel);
+  let options: ConfigOptions = {};
+  const parents = typeof json.extends === 'string' ? [json.extends] : Array.isArray(json.extends) ? json.extends.filter((e): e is string => typeof e === 'string') : [];
+  for (const parent of parents) {
+    if (!parent.startsWith('./') && !parent.startsWith('../')) { notes.push(`${rel} extends ${parent}: not a relative path, not followed`); continue; }
+    if (depth >= MAX_TSCONFIG_EXTENDS) { notes.push(`${rel} extends ${parent}: not followed (tsconfig extends depth limit ${MAX_TSCONFIG_EXTENDS})`); continue; }
+    let target = normalize(path.posix.join(dir, parent));
+    if (!target.endsWith('.json') && !fs.existsSync(path.join(repoRoot, target))) target += '.json';
+    if (target.startsWith('../') || seen.has(target)) { notes.push(`${rel} extends ${parent}: outside the repo or a cycle, not followed`); continue; }
+    const inherited = effectiveOptions(repoRoot, target, depth + 1, new Set([...seen, target]), notes);
+    if (inherited) options = { ...options, ...inherited };
+    else notes.push(`${rel} extends ${parent}: unreadable`);
+  }
+  const own = json.compilerOptions ?? {};
+  if (typeof own.baseUrl === 'string') options.baseUrl = { value: own.baseUrl, dir };
+  if (own.paths && typeof own.paths === 'object') options.paths = { value: own.paths as Record<string, unknown>, dir };
+  return options;
 }
 
 /**
- * The root tsconfig.json (else jsconfig.json) `paths`, relative to the repo.
- * `extends` is not followed: a missing alias leaves the old behaviour (no
- * edge, so `no lane`), never a wrong one.
+ * The root tsconfig.json (else jsconfig.json) `paths`, relative to the repo,
+ * following relative `extends` up to MAX_TSCONFIG_EXTENDS hops. Targets join
+ * `baseUrl` when one is set, else the directory of the config declaring
+ * `paths`. What is not followed is recorded in `notes` for the no-lane
+ * explanation; a missing alias leaves no edge (so `no lane`), never a wrong one.
  */
-export function readPathAliases(repoRoot: string): PathAlias[] {
+export function readPathAliases(repoRoot: string): PathAliases {
   for (const name of ['tsconfig.json', 'jsconfig.json']) {
-    let opts: { baseUrl?: unknown; paths?: unknown };
-    try { opts = (JSON.parse(stripJsonc(fs.readFileSync(path.join(repoRoot, name), 'utf8'))) ?? {}).compilerOptions ?? {}; } catch { continue; }
-    const base = typeof opts.baseUrl === 'string' ? opts.baseUrl : '.';
+    const notes: string[] = [];
+    const options = effectiveOptions(repoRoot, name, 0, new Set([name]), notes);
+    if (!options) continue;
+    const baseUrl = options.baseUrl ? normalize(path.posix.join(options.baseUrl.dir, options.baseUrl.value)) : null;
+    const base = baseUrl ?? options.paths?.dir ?? '.';
     const aliases: PathAlias[] = [];
-    for (const [pattern, targets] of Object.entries(opts.paths && typeof opts.paths === 'object' ? opts.paths as Record<string, unknown> : {})) {
+    for (const [pattern, targets] of Object.entries(options.paths?.value ?? {})) {
       if (!Array.isArray(targets)) continue;
       const star = pattern.indexOf('*');
       const resolved = targets.filter((t): t is string => typeof t === 'string').map(t => normalize(path.posix.join(base, t)));
       aliases.push(star < 0 ? { prefix: pattern, suffix: '', wildcard: false, targets: resolved } : { prefix: pattern.slice(0, star), suffix: pattern.slice(star + 1), wildcard: true, targets: resolved });
     }
-    return aliases;
+    return { aliases, baseUrl, notes };
   }
-  return [];
+  return { aliases: [], baseUrl: null, notes: [] };
 }
 
-/** The repo paths an aliased specifier can name, in tsconfig order. */
-function expandAlias(aliases: readonly PathAlias[], ref: string): string[] {
-  const out: string[] = [];
-  for (const a of aliases) {
-    if (!a.wildcard) { if (ref === a.prefix) out.push(...a.targets); continue; }
-    if (!ref.startsWith(a.prefix) || !ref.endsWith(a.suffix) || ref.length < a.prefix.length + a.suffix.length) continue;
-    const middle = ref.slice(a.prefix.length, ref.length - a.suffix.length);
-    for (const t of a.targets) out.push(normalize(t.replace('*', middle)));
-  }
-  return out;
+const NO_ALIASES: PathAliases = { aliases: [], baseUrl: null, notes: [] };
+
+/**
+ * TypeScript's pattern choice: an exact pattern, else the matching wildcard
+ * with the longest prefix. `chosen` is that pattern's expanded targets in
+ * order; `others` are the other matching patterns' targets.
+ */
+function matchAliases(aliases: readonly PathAlias[], ref: string): { chosen: string[] | null; others: string[] } {
+  const expand = (a: PathAlias) => a.wildcard ? a.targets.map(t => normalize(t.replace('*', ref.slice(a.prefix.length, ref.length - a.suffix.length)))) : a.targets;
+  const matching = aliases.filter(a => a.wildcard ? ref.startsWith(a.prefix) && ref.endsWith(a.suffix) && ref.length >= a.prefix.length + a.suffix.length : ref === a.prefix);
+  if (matching.length === 0) return { chosen: null, others: [] };
+  const best = matching.find(a => !a.wildcard) ?? matching.reduce((a, b) => (b.prefix.length > a.prefix.length ? b : a));
+  return { chosen: expand(best), others: matching.filter(a => a !== best).flatMap(expand) };
 }
 
-/** A module specifier or literal → the repo file it names, or a directory → `dir/**`, or null. */
-function resolveRef(files: Set<string>, dirs: Set<string>, fromFile: string, ref: string, literal = false, aliases: readonly PathAlias[] = []): string | null {
-  if (!ref || ref.startsWith('node:') || ref.startsWith('bun:')) return null;
-  const candidates: string[] = ref.startsWith('.') ? [] : expandAlias(aliases, ref);
-  if (ref.startsWith('@') && !ref.includes('/') && candidates.length === 0) return null;
-  if (ref.startsWith('.')) candidates.push(normalize(path.posix.join(path.posix.dirname(fromFile), ref)));
-  else candidates.push(normalize(ref));
-  for (const c of candidates) {
-    if (c.startsWith('../') || c === '..' || c === '.' || c === '') continue;
-    for (const ext of RESOLVE_EXT) if (files.has(c + ext)) return c + ext;
-    // A directory literal needs two segments (`test/fixtures/x`): a bare word is a name, not a path.
-    if (dirs.has(c) && (!literal || c.includes('/'))) return `${c}/**`;
-    // A bare bin name in a test (spawned through PATH or a helper's bin dir) names bin/<name>.
-    if (literal && !c.includes('/') && files.has(`bin/${c}`)) return `bin/${c}`;
-  }
+/** One candidate repo path → the file it names (trying extensions), `dir/**`, a bare bin, or null. */
+function resolveCandidate(files: Set<string>, dirs: Set<string>, c: string, literal: boolean): string | null {
+  if (c.startsWith('../') || c === '..' || c === '.' || c === '') return null;
+  for (const ext of RESOLVE_EXT) if (files.has(c + ext)) return c + ext;
+  // A directory literal needs two segments (`test/fixtures/x`): a bare word is a name, not a path.
+  if (dirs.has(c) && (!literal || c.includes('/'))) return `${c}/**`;
+  // A bare bin name in a test (spawned through PATH or a helper's bin dir) names bin/<name>.
+  if (literal && !c.includes('/') && files.has(`bin/${c}`)) return `bin/${c}`;
   return null;
+}
+
+/**
+ * A module specifier or literal → the repo files it names. A relative ref
+ * and an alias whose chosen pattern has a target that exists name one file
+ * (targets tried in order). Otherwise no single target is established, so
+ * every plausible reading (other matching patterns, `baseUrl`, the repo
+ * root) contributes: uncertainty selects more tests, never fewer.
+ */
+function resolveRefs(files: Set<string>, dirs: Set<string>, fromFile: string, ref: string, literal = false, config: PathAliases = NO_ALIASES): string[] {
+  if (!ref || ref.startsWith('node:') || ref.startsWith('bun:')) return [];
+  if (ref.startsWith('.')) { const t = resolveCandidate(files, dirs, normalize(path.posix.join(path.posix.dirname(fromFile), ref)), literal); return t ? [t] : []; }
+  const { chosen, others } = matchAliases(config.aliases, ref);
+  for (const c of chosen ?? []) { const t = resolveCandidate(files, dirs, c, literal); if (t) return [t]; }
+  if (!chosen && others.length === 0 && ref.startsWith('@') && !ref.includes('/')) return [];
+  const plausible = [...others, ...(config.baseUrl ? [normalize(path.posix.join(config.baseUrl, ref))] : []), normalize(ref)];
+  return [...new Set(plausible.map(c => resolveCandidate(files, dirs, c, literal)).filter((t): t is string => t !== null))];
+}
+
+/** A specifier worth naming when it resolves nowhere: relative, aliased, or alias-shaped (`@/`, `~`, `#`); never a package. */
+function pathLike(config: PathAliases, ref: string): boolean {
+  if (ref.startsWith('.') || /^(?:@\/|~|#)/.test(ref)) return true;
+  const { chosen, others } = matchAliases(config.aliases, ref);
+  return chosen !== null || others.length > 0;
 }
 
 function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge['via']): void {
@@ -121,27 +191,36 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
   if (!list.some(e => e.from === dependent && e.via === via)) { list.push({ from: dependent, via }); graph.reverse.set(dependency, list); }
 }
 
-/** Every dependency reference one source file makes: imports, requires, quoted repo paths and join() segment runs. */
-export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, aliases: readonly PathAlias[] = []): Array<{ target: string; via: Edge['via'] }> {
+/**
+ * Every dependency reference one source file makes: imports, requires, quoted
+ * repo paths and join() segment runs. Import specifiers that resolve nowhere
+ * and look like repo paths go to `unresolved` when given.
+ */
+export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, config: PathAliases = NO_ALIASES, unresolved?: string[]): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
+  const importOf = (spec: string) => {
+    const targets = resolveRefs(files, dirs, rel, spec, false, config);
+    for (const target of targets) out.push({ target, via: 'import' });
+    if (targets.length === 0 && unresolved && pathLike(config, spec) && !unresolved.includes(spec)) unresolved.push(spec);
+  };
   if (/\.[cm]?[jt]sx?$/.test(rel)) {
     let imports: Array<{ path: string }> = [];
     try { imports = scanner.scanImports(source); } catch { imports = []; }
-    for (const { path: spec } of imports) { const t = resolveRef(files, dirs, rel, spec, false, aliases); if (t) out.push({ target: t, via: 'import' }); }
+    for (const { path: spec } of imports) importOf(spec);
     // The transpiler erases type-only imports; a types module still binds its importers' contracts.
-    for (const m of source.matchAll(/^\s*(?:import|export)\s+type\b[^;'"]*?\bfrom\s+['"]([^'"]+)['"]/gm)) { const t = resolveRef(files, dirs, rel, m[1]!, false, aliases); if (t) out.push({ target: t, via: 'import' }); }
+    for (const m of source.matchAll(/^\s*(?:import|export)\s+type\b[^;'"]*?\bfrom\s+['"]([^'"]+)['"]/gm)) importOf(m[1]!);
   }
   // Literals carry dependencies only from the test tree and from bin/ and shell
   // sources (a test spawns a bin; a bash bin calls a sibling). Prose and
   // manifests name everything and would make every file a hub.
   if (!scansLiterals(rel)) return out;
-  for (const m of source.matchAll(QUOTED)) { const t = resolveRef(files, dirs, rel, m[1]!, true, aliases); if (t) out.push({ target: t, via: 'literal' }); }
+  for (const m of source.matchAll(QUOTED)) for (const target of resolveRefs(files, dirs, rel, m[1]!, true, config)) out.push({ target, via: 'literal' });
   for (const m of source.matchAll(JOIN)) {
     const segments = [...m[1]!.matchAll(/['"`]([^'"`]+)['"`]/g)].map(s => s[1]!);
     if (segments.length < 2) continue;
     const joined = segments.join('/');
-    const t = resolveRef(files, dirs, rel, joined, true) ?? resolveRef(files, dirs, rel, './' + joined, true);
-    if (t) out.push({ target: t, via: 'literal' });
+    const direct = resolveRefs(files, dirs, rel, joined, true);
+    for (const target of direct.length ? direct : resolveRefs(files, dirs, rel, './' + joined, true)) out.push({ target, via: 'literal' });
   }
   return out;
 }
@@ -163,14 +242,16 @@ export function buildGraph(repoRoot: string, opts: BuildOptions = {}): Graph {
   const files = new Set([...all, ...(opts.extraFiles ?? [])]);
   const dirs = new Set<string>();
   for (const f of all) { let d = path.posix.dirname(f); while (d && d !== '.') { dirs.add(d); d = path.posix.dirname(d); } }
-  const graph: Graph = { files, tests: new Set(all.filter(isTestFile)), reverse: new Map() };
+  const config = readPathAliases(repoRoot);
+  const graph: Graph = { files, tests: new Set(all.filter(isTestFile)), reverse: new Map(), unresolved: new Map(), aliasNotes: config.notes };
   const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
-  const aliases = readPathAliases(repoRoot);
   for (const rel of all) {
     if (!SOURCE_EXT.test(rel) && !rel.startsWith('bin/')) continue;
     let source: string;
     try { const st = fs.statSync(path.join(repoRoot, rel)); if (!st.isFile() || st.size > maxBytes) continue; source = fs.readFileSync(path.join(repoRoot, rel), 'utf8'); } catch { continue; }
-    for (const { target, via } of referencesIn(files, dirs, rel, source, aliases)) addEdge(graph, target, rel, via);
+    const unresolved: string[] = [];
+    for (const { target, via } of referencesIn(files, dirs, rel, source, config, graph.tests.has(rel) ? unresolved : undefined)) addEdge(graph, target, rel, via);
+    if (unresolved.length) graph.unresolved!.set(rel, unresolved);
   }
   for (const test of graph.tests) {
     const m = /^(?:[\w.-]+\/)*?test\/([\w-]+)\.(?:test|spec)\./.exec(test);
@@ -216,5 +297,18 @@ export function testsFor(graph: Graph, file: string, declarations: Record<string
   if (graph.tests.has(file)) { tests.add(file); provenance.push(`${file} (itself a test)`); }
   const declaredNone = tests.size === 0 && Object.entries(declarations).some(([glob, list]) => list.length === 0 && matchesAny([glob], file));
   if (declaredNone) provenance.push(`${file}: declared no lane needed (.gstack/pregate.json dependencies)`);
+  if (tests.size === 0 && !declaredNone) provenance.push(...noLaneExplanation(graph, file));
   return { file, tests: [...tests].sort(), provenance, declaredNone };
+}
+
+/** Why the graph may have missed a file's tests: unresolved repo-path specifiers in test files and unfollowed `extends`. */
+function noLaneExplanation(graph: Graph, file: string): string[] {
+  const seen = [...(graph.unresolved ?? new Map<string, string[]>())].sort(([a], [b]) => a.localeCompare(b));
+  const notes = graph.aliasNotes ?? [];
+  if (seen.length === 0 && notes.length === 0) return [];
+  const lines = notes.map(n => `${file}: path aliases may be incomplete: ${n}`);
+  const shown = seen.slice(0, 10).map(([test, specs]) => `${test}: ${specs.slice(0, 5).map(s => `'${s}'`).join(' ')}${specs.length > 5 ? ' …' : ''}`);
+  if (shown.length) lines.push(`${file}: no lane; specifiers in test files that resolve to no repo file: ${shown.join('; ')}${seen.length > 10 ? `; +${seen.length - 10} more test file(s)` : ''}`);
+  lines.push(`${file}: if a test covers it, declare the file under dependencies in .gstack/pregate.json, or report the resolver gap`);
+  return lines;
 }

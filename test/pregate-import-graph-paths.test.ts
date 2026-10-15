@@ -8,7 +8,7 @@
  *     — `@/…` was resolved as a repo path, so it never matched a file.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { buildGraph, testsFor } from '../lib/pregate/import-graph';
+import { MAX_TSCONFIG_EXTENDS, buildGraph, testsFor } from '../lib/pregate/import-graph';
 import { cleanup, commit, makeFixtureRepo, type FixtureRepo } from './helpers/pregate-fixture';
 
 const repos: FixtureRepo[] = [];
@@ -61,5 +61,103 @@ describe('import graph: route-group / dynamic-segment paths and tsconfig path al
       'test/scoped.test.ts': "import { x } from '@scope/plan';\nx;\n",
     });
     expect(testsFor(buildGraph(repo.work), 'lib/plan.ts').tests).toEqual([]);
+  });
+});
+
+describe('import graph: alias precedence, extends and the no-lane explanation', () => {
+  const twoAliases = (specificFirst: boolean) => {
+    const specific = '"@/lib/*": ["src/lib/*"]';
+    const broad = '"@/*": ["./*"]';
+    return `{ "compilerOptions": { "paths": { ${specificFirst ? `${specific}, ${broad}` : `${broad}, ${specific}`} } } }\n`;
+  };
+
+  for (const specificFirst of [true, false]) {
+    test(`overlapping aliases pick the most specific pattern when both targets exist (${specificFirst ? 'specific' : 'broad'} key first)`, () => {
+      const repo = fixture();
+      commit(repo, {
+        'tsconfig.json': twoAliases(specificFirst),
+        'lib/x.ts': 'export const x = "root";\n',
+        'src/lib/x.ts': 'export const x = "src";\n',
+        'test/x.test.ts': "import { x } from '@/lib/x';\nx;\n",
+      });
+      const g = buildGraph(repo.work);
+      expect(testsFor(g, 'src/lib/x.ts').tests).toEqual(['test/x.test.ts']);
+      expect(testsFor(g, 'lib/x.ts').tests).toEqual([]);
+    });
+  }
+
+  test('an exact alias wins over a wildcard that also matches', () => {
+    const repo = fixture();
+    commit(repo, {
+      'tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["./*"], "@/env": ["src/env.ts"] } } }\n',
+      'env.ts': 'export const env = 1;\n',
+      'src/env.ts': 'export const env = 2;\n',
+      'test/env.test.ts': "import { env } from '@/env';\nenv;\n",
+    });
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'src/env.ts').tests).toEqual(['test/env.test.ts']);
+    expect(testsFor(g, 'env.ts').tests).toEqual([]);
+  });
+
+  test('a later target is the fallback when the first target does not exist', () => {
+    const repo = fixture();
+    commit(repo, {
+      'tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["src/*", "generated/*"] } } }\n',
+      'generated/api.ts': 'export const api = 1;\n',
+      'test/api.test.ts': "import { api } from '@/api';\napi;\n",
+    });
+    expect(testsFor(buildGraph(repo.work), 'generated/api.ts').tests).toEqual(['test/api.test.ts']);
+  });
+
+  test('when the chosen alias resolves nothing, every plausible reading gains the edge (uncertainty selects more)', () => {
+    const repo = fixture();
+    commit(repo, {
+      'tsconfig.json': '{ "compilerOptions": { "paths": { "@/ui/*": ["packages/ui/*"], "@/*": ["src/*"] } } }\n',
+      'src/ui/button.ts': 'export const b = 1;\n',
+      'test/button.test.ts': "import { b } from '@/ui/button';\nb;\n",
+    });
+    expect(testsFor(buildGraph(repo.work), 'src/ui/button.ts').tests).toEqual(['test/button.test.ts']);
+  });
+
+  test('a relative extends chain supplies paths and baseUrl relative to the config that declares them', () => {
+    const repo = fixture();
+    commit(repo, {
+      'tsconfig.json': '{ "extends": "./config/tsconfig.base", "compilerOptions": { "strict": true } }\n',
+      'config/tsconfig.base.json': '{ "extends": "./tsconfig.paths.json" }\n',
+      'config/tsconfig.paths.json': '{ "compilerOptions": { "baseUrl": "..", "paths": { "#lib/*": ["lib/*"] } } }\n',
+      'lib/plan.ts': 'export const plan = 1;\n',
+      'test/plan.test.ts': "import { plan } from '#lib/plan';\nplan;\n",
+    });
+    expect(testsFor(buildGraph(repo.work), 'lib/plan.ts').tests).toEqual(['test/plan.test.ts']);
+  });
+
+  test('trailing commas are dropped by the tokenizer, never inside a string', () => {
+    const repo = fixture();
+    commit(repo, {
+      'tsconfig.json': '{ "compilerOptions": { "paths": { "~a,]/*": ["lib/*",], }, }, }\n',
+      'lib/plan.ts': 'export const plan = 1;\n',
+      'test/plan.test.ts': "import { plan } from '~a,]/plan';\nplan;\n",
+    });
+    expect(testsFor(buildGraph(repo.work), 'lib/plan.ts').tests).toEqual(['test/plan.test.ts']);
+  });
+
+  test('an extends chain past the depth limit is named in the no-lane explanation, with the unresolved specifiers', () => {
+    const repo = fixture();
+    const files: Record<string, string> = {
+      'tsconfig.json': '{ "extends": "./c1.json" }\n',
+      'lib/plan.ts': 'export const plan = 1;\n',
+      'test/plan.test.ts': "import { plan } from '#lib/plan';\nimport { gone } from '../lib/gone';\nimport { expect } from 'bun:test';\nimport React from 'react';\nplan; gone; expect; React;\n",
+    };
+    for (let i = 1; i <= MAX_TSCONFIG_EXTENDS; i++) files[`c${i}.json`] = `{ "extends": "./c${i + 1}.json" }\n`;
+    files[`c${MAX_TSCONFIG_EXTENDS + 1}.json`] = '{ "compilerOptions": { "paths": { "#lib/*": ["lib/*"] } } }\n';
+    commit(repo, files);
+    const m = testsFor(buildGraph(repo.work), 'lib/plan.ts');
+    expect(m.tests).toEqual([]);
+    const text = m.provenance.join('\n');
+    expect(text).toContain(`tsconfig extends depth limit ${MAX_TSCONFIG_EXTENDS}`);
+    expect(text).toContain("test/plan.test.ts: '#lib/plan' '../lib/gone'");
+    expect(text).not.toContain("'react'");
+    expect(text).not.toContain("'bun:test'");
+    expect(text).toContain('declare the file under dependencies in .gstack/pregate.json, or report the resolver gap');
   });
 });
