@@ -33,7 +33,7 @@ function gatedRun(name: string): string {
   const ids = attemptsOf(out, 'ceo');
   expect(autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]).status).toBe(0);
   const close = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', resultOf(out, 'ceo', 'outside'), '--model', 'gpt-5.5', '--attempt', ids.outside]);
-  expect(close.stdout).toMatch(/PHASE_CLOSED: ceo confirmed=1 disagree=1 new=1/);
+  expect(close.stdout).toMatch(/PHASE_CLOSED: ceo confirmed=0 unverified=1 disagree=1 new=1/);
   const eng = runPhase(out, 'eng');
   expect(eng.outside.stdout).toContain('status=gate_pending');
   return out;

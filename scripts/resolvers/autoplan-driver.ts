@@ -29,7 +29,7 @@ export const AUTOPLAN_DRIVER_COMMANDS: Array<{ cmd: string; does: string }> = [
   { cmd: 'gstack-autoplan revise --out <dir> --withdraw <decision id>', does: 'drop a pending amendment instead of applying it' },
   { cmd: 'gstack-autoplan export --out <dir>', does: 'write the artifact set; then `gstack-artifact validate <dir>/run.json`' },
   { cmd: 'gstack-autoplan status|resume --out <dir>', does: 'read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts)' },
-  { cmd: 'gstack-autoplan resume --out <new dir> --from <checkpoint>', does: 'restore a hash-verified checkpoint (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership' },
+  { cmd: 'gstack-autoplan resume --out <new dir> --from <checkpoint>', does: 'restore the newest valid checkpoint generation (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership; `checkpoints --from <dir>` lists them' },
 ];
 
 /** The reply grammar `gstack-gate` parses, one form per line. */

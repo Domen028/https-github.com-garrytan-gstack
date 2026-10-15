@@ -1,8 +1,9 @@
 /**
  * Pairing negative control (next-wave B2/B-a): finding pairs copied verbatim
  * from a real autoplan run. File:line proximity associates findings but never
- * confirms them; only a title match or the parent's override does, and `b`
- * needs one shared proposal or the same remedy.
+ * confirms them, and neither does a title match alone: a title match with
+ * the same remedy confirms, opposite remedies disagree, different remedies stay
+ * unverified; the parent's override with one shared proposal also confirms.
  */
 import { describe, expect, test } from 'bun:test';
 import fixture from './fixtures/autoplan-pairing/run-20261014-pairs.json';
@@ -35,5 +36,28 @@ describe('pairing negative control from a real run', () => {
     expect(reconcile(p.native, p.outside).rows[0]).toMatchObject({ disposition: 'new', native_id: null });
     const [row] = reconcile(p.native, p.outside, [{ outside_id: p.outside[0].id, native_id: p.native[0].id, disposition: 'confirmed', resolution: 'both: a recommendation edit changes what a seen reply resolves to' }]).rows;
     expect(challengeDefault(row!, challenge(p.native, 'scope')[0], challenge(p.outside, 'scope')[0])).toMatchObject({ recommended: 'a', basis: 'plan direction; remedies differ; no shared proposal' });
+  });
+
+  test('the same title with opposite remedies disagrees, as an ordinary finding and as a user challenge; never b', () => {
+    const p = pair('constructed same title, opposite');
+    const [row] = reconcile(p.native, p.outside).rows;
+    expect(row).toMatchObject({ disposition: 'disagree', basis: 'title' });
+    expect(row!.resolution).toStartWith('remedies conflict (same title): native "move attempts into a new retry_attempts table"');
+    const [n] = challenge(p.native, 'scope'), [o] = challenge(p.outside, 'scope');
+    const [crow] = reconcile([n], [o]).rows;
+    expect(crow!.disposition).toBe('disagree');
+    expect(challengeDefault(crow!, n, o)).toMatchObject({ recommended: 'a', basis: 'plan direction; voices disagree' });
+  });
+
+  test('the same title with different remedies is only associated; the same remedy confirms and recommends b', () => {
+    const differ = pair('constructed same title, different');
+    const [row] = reconcile(differ.native, differ.outside).rows;
+    expect(row).toMatchObject({ disposition: 'unverified' });
+    expect(row!.resolution).toStartWith('same title, remedies differ');
+    expect(challengeDefault(row!, challenge(differ.native, 'scope')[0], challenge(differ.outside, 'scope')[0])).toMatchObject({ recommended: 'a', basis: 'plan direction; remedies differ; no shared proposal' });
+    const same = pair('constructed same title, same remedy');
+    const [ok] = reconcile(same.native, same.outside).rows;
+    expect(ok).toMatchObject({ disposition: 'confirmed', basis: 'title' });
+    expect(challengeDefault(ok!, challenge(same.native, 'scope')[0], challenge(same.outside, 'scope')[0])).toMatchObject({ recommended: 'b', basis: 'both voices; same remedy' });
   });
 });

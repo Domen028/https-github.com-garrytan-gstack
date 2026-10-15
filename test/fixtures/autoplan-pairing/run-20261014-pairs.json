@@ -89,6 +89,93 @@
           "resolution": "Hash the rendered recommendations into the relay (for example rec_hash in the render's resolution line). Make answer reject a rec whose hash no longer matches (re-render and re-relay). Make recommend refuse after a render has been relayed unless it bumps to a fresh render. Test recommend-after-relay, then rec."
         }
       ]
+    },
+    {
+      "name": "constructed same title, opposite remedies",
+      "expect": "negative",
+      "source": "constructed (integration review, 2026-10-15): the same title associates two findings whose remedies are opposite",
+      "outside": [
+        {
+          "phase": "eng",
+          "severity": "High",
+          "title": "Persist retry attempts in their own table",
+          "file": "lib/worker.ts",
+          "id": "r-eng-outside-9",
+          "voice": "outside",
+          "line": 40,
+          "resolution": "keep attempts in the existing jobs column; do not add a table"
+        }
+      ],
+      "native": [
+        {
+          "phase": "eng",
+          "severity": "High",
+          "title": "Persist retry attempts in their own table",
+          "file": "lib/worker.ts",
+          "id": "r-eng-native-9",
+          "voice": "native",
+          "line": 90,
+          "resolution": "move attempts into a new retry_attempts table"
+        }
+      ]
+    },
+    {
+      "name": "constructed same title, different remedies",
+      "expect": "negative",
+      "source": "constructed: the same title with two different, non-opposite remedies is associated, not confirmed",
+      "outside": [
+        {
+          "phase": "eng",
+          "severity": "High",
+          "title": "Persist retry attempts in their own table",
+          "file": "lib/worker.ts",
+          "id": "r-eng-outside-10",
+          "voice": "outside",
+          "line": 40,
+          "resolution": "index the attempts by tenant"
+        }
+      ],
+      "native": [
+        {
+          "phase": "eng",
+          "severity": "High",
+          "title": "Persist retry attempts in their own table",
+          "file": "lib/worker.ts",
+          "id": "r-eng-native-10",
+          "voice": "native",
+          "line": 90,
+          "resolution": "partition the attempts table by month"
+        }
+      ]
+    },
+    {
+      "name": "constructed same title, same remedy",
+      "expect": "positive",
+      "source": "constructed: the same title and the same remedy (case and punctuation aside) confirm",
+      "outside": [
+        {
+          "phase": "eng",
+          "severity": "High",
+          "title": "Persist retry attempts in their own table",
+          "file": "lib/worker.ts",
+          "id": "r-eng-outside-11",
+          "voice": "outside",
+          "line": 40,
+          "resolution": "Move attempts into a new retry_attempts table."
+        }
+      ],
+      "native": [
+        {
+          "phase": "eng",
+          "severity": "High",
+          "title": "Persist retry attempts in their own table",
+          "file": "lib/worker.ts",
+          "id": "r-eng-native-11",
+          "voice": "native",
+          "line": 90,
+          "resolution": "move attempts into a new retry_attempts table"
+        }
+      ]
     }
   ]
 }

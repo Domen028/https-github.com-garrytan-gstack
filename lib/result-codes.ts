@@ -533,18 +533,23 @@ export const RESULT_CODES = {
   },
   AMENDMENT_NOT_SETTLEABLE: {
     anchor: 'amendment-not-settleable',
-    summary: '`revise --settle` named an accepted change that needs a plan edit (its item changes scope, cost or direction, or names no packaging/ordering change), or the reviewed plan changed since the gate',
-    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`; settle only packaging or ordering changes on an unchanged plan',
+    summary: '`revise --settle` named an accepted change that needs a plan edit (its item changes scope, cost or direction, or names no packaging/ordering change), or the plan has edits no revise has recorded',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>` (add `--settle <id>` to settle packaging/ordering changes in the same call); settle alone only on the plan the run already reviews',
   },
   GATE_REC_STALE: {
     anchor: 'gate-rec-stale',
-    summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes',
+    summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes, or the gate predates `rec` (a gate.json without rec_rev, rendered when `all` left changes pending)',
     fix: 'render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`',
   },
   CHECKPOINT_INVALID: {
     anchor: 'checkpoint-invalid',
-    summary: 'the autoplan checkpoint cannot be restored: its manifest is unreadable, a listed file is missing, escapes the checkpoint or does not match its sha256',
-    fix: 'restore from an intact copy of `<GSTACK_AUTOPLAN_CHECKPOINT_DIR>/<run>/` (its `restore.md` names the command); nothing was written to --out',
+    summary: 'no autoplan checkpoint generation can be restored: a manifest is unreadable, a listed file is missing, escapes the generation (by path or symlink) or does not match its sha256, or the staged run does not validate',
+    fix: 'run `gstack-autoplan checkpoints --from <dir>` to see each generation\'s hash status and restore an intact one; nothing was written to --out',
+  },
+  CHECKPOINT_OVERLAP: {
+    anchor: 'checkpoint-overlap',
+    summary: 'the checkpoint directory and the run directory (or the restore target) are the same directory or one contains the other, symlinks resolved',
+    fix: 'point GSTACK_AUTOPLAN_CHECKPOINT_DIR (or --from / --out) at a directory outside the run; nothing was moved or deleted',
   },
   CHECKPOINT_TARGET_EXISTS: {
     anchor: 'checkpoint-target-exists',

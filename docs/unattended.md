@@ -239,8 +239,14 @@ the plan.
    consumption steps above apply unchanged. `$AP status --out <dir>` and
    `resume` work after the run directory moves (paths are re-rooted; journal
    paths are run-relative). With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set, a run
-   at rest is copied, hash-listed, to `<dir>/<run>/`; `$AP resume --out <new
-   dir> --from <dir>/<run>` verifies and restores it (`CHECKPOINT_INVALID`).
+   at rest publishes an immutable, hash-listed generation under
+   `<dir>/<run>/generations/` and switches `current.json` to it (the previous
+   generation is kept; a stale copy never replaces a newer one; a directory
+   overlapping the run is refused with `CHECKPOINT_OVERLAP`; a failure is a
+   `CHECKPOINT: failed` warning that leaves the command's exit code alone).
+   `$AP checkpoints --from <dir>` lists generations with their hash status, and
+   `$AP resume --out <new dir> --from <dir>/<run>` restores the newest valid
+   one after validating the staged run (`CHECKPOINT_INVALID`).
 
 Concurrency and recovery: every state write is a locked read-modify-write
 (`run.lock`; a second writer sees `RUN_LOCKED`), attempts are journaled to

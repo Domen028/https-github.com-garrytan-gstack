@@ -57,28 +57,34 @@ function resolveIds(state: RunState, ids: string[]): string[] {
 }
 
 /**
- * `--settle` evidence: a packaging/ordering change on a plan whose reviewed Implementation plan is unchanged (the
- * active plan and the owner's plan file both hash to the snapshot the phases reviewed). A real change never settles.
+ * `--settle` evidence: a packaging/ordering change settles on the plan the run already reviews, never on an
+ * unrevised edit. Alone, the owner's plan file must hash to the active plan, and the active plan must be the one
+ * the owner accepted the change on or one a later `revise` recorded (plan_revised). With `--plan` (beside
+ * `--incorporates`), it settles on that revision's hash, which the reopened phases then review.
  */
-function settleEvidence(state: RunState, ids: string[]): { plan_sha256: string; changes: Record<string, string> } {
-  const reviewed = state.phase_order.map(p => state.phases[p]?.snapshot).find(Boolean);
+function settleEvidence(state: RunState, ids: string[], revised?: string): { plan_sha256: string; changes: Record<string, string> } {
   const active = reviewHash(fs.readFileSync(state.active_plan, 'utf8'));
-  let input = active;
-  try { if (state.plan_input && fs.existsSync(state.plan_input)) input = reviewHash(revisionText(state, state.plan_input)); } catch { input = ''; }
   const changes: Record<string, string> = {};
   for (const id of ids) {
     const a = pendingAmendments(state).find(x => x.decision === id)!;
     if (!a.changes || !SETTLEABLE_CHANGES.includes(a.changes)) throw new RunError('AMENDMENT_NOT_SETTLEABLE', `${id} changes ${a.changes ?? 'nothing named'}; only packaging or ordering changes settle without a plan edit`, 3);
     changes[id] = a.changes;
+    if (revised || !a.plan_sha256) continue;
+    const recorded = [a.plan_sha256, ...readJournal(state.out).filter(r => r.event === 'plan_revised' && r.ts >= a.at).map(r => r.new_plan_sha256 as string)];
+    if (!recorded.includes(active)) throw new RunError('AMENDMENT_NOT_SETTLEABLE', `the active plan ${active.slice(0, 12)} is neither the plan ${id} was accepted on (${a.plan_sha256.slice(0, 12)}) nor one revise recorded; revise --plan instead`, 3);
   }
-  if (!reviewed || active !== reviewed || input !== reviewed) throw new RunError('AMENDMENT_NOT_SETTLEABLE', `the reviewed plan changed (reviewed ${String(reviewed).slice(0, 12)}, active ${active.slice(0, 12)}, plan file ${input.slice(0, 12) || 'unreadable'}); revise --plan instead`, 3);
-  return { plan_sha256: reviewed, changes };
+  if (revised) return { plan_sha256: revised, changes };
+  let input = '';
+  try { input = state.plan_input && fs.existsSync(state.plan_input) ? reviewHash(revisionText(state, state.plan_input)) : active; } catch { /* unreadable: refused below */ }
+  if (input !== active) throw new RunError('AMENDMENT_NOT_SETTLEABLE', `the plan file has edits the run has not reviewed (active ${active.slice(0, 12)}, plan file ${input.slice(0, 12) || 'unreadable'}); revise --plan <file> --incorporates <ids> --settle ${ids.join(',')} instead`, 3);
+  return { plan_sha256: active, changes };
 }
 
-/** Every accepted change is discharged and nothing reopened: the answered gate stands and the run is complete. */
+/** Every accepted change is discharged: the answered gate stands (complete) unless a revise reopened phases still to rerun. */
 function finishAmendments(state: RunState, at: string): string[] {
   if (state.status !== 'amend_pending' || pendingAmendments(state).length) return [];
   journal(state.out, { event: 'amendments_settled', gate_rev: state.gate_rev ?? null });
+  if (state.phase_order.some(p => !state.phases[p]?.closed_at)) { state.status = 'running'; return []; }
   return [...approve(state, at), `APPROVED: gate_rev=${state.gate_rev} (every accepted change is in the plan or settled)`];
 }
 
@@ -92,9 +98,9 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   for (const id of [...incorporates, ...withdraw, ...settle]) {
     if (!pending.includes(id)) throw new RunError('AMENDMENT_UNKNOWN', `${id} is not a pending amendment (pending: ${pending.join(', ') || 'none'})`, 3);
   }
-  const evidence = settle.length ? settleEvidence(state, settle) : undefined;
   const at = now();
   if (!o.plan) {
+    const evidence = settle.length ? settleEvidence(state, settle) : undefined;
     for (const row of settleAmendments(state, withdraw, 'withdrawn', at, { by: 'owner' })) journal(out, row);
     for (const row of settleAmendments(state, settle, 'settled', at, { plan_sha256: evidence?.plan_sha256 })) journal(out, { ...row, changes: evidence!.changes[row.decision as string] });
     const lines = [...settle.map(id => `SETTLED: ${id} (${evidence!.changes[id]}; plan ${evidence!.plan_sha256.slice(0, 12)} unchanged; nothing reopens)`), amendmentLine(state), ...finishAmendments(state, at)];
@@ -109,7 +115,8 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   if (incorporates.length && newHash === oldHash) {
     throw new RunError('PLAN_AMEND_PENDING', `the Implementation plan did not change (${oldHash.slice(0, 12)}); incorporating ${incorporates.join(', ')} needs the edit in ${file}`, 3);
   }
-  if (settle.length && newHash !== oldHash) throw new RunError('AMENDMENT_NOT_SETTLEABLE', `the revised plan changes the Implementation plan (${oldHash.slice(0, 12)} -> ${newHash.slice(0, 12)}); incorporate ${settle.join(', ')} instead of settling`, 3);
+  if (settle.length && newHash !== oldHash && !incorporates.length) throw new RunError('AMENDMENT_NOT_SETTLEABLE', `the revised plan changes the Implementation plan (${oldHash.slice(0, 12)} -> ${newHash.slice(0, 12)}) and incorporates nothing; incorporate ${settle.join(', ')} instead of settling`, 3);
+  const evidence = settle.length ? settleEvidence(state, settle, newHash) : undefined;
   const k = (state.plan_revision ?? 0) + 1;
   const staging = path.join(out, `.revise-v${k}`);
   fs.rmSync(staging, { recursive: true, force: true });

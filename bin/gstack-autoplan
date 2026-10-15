@@ -16,6 +16,7 @@
  *   gstack-autoplan status  --out <dir> [--json]        query: the manifest, no GSTACK_RESULT line
  *   gstack-autoplan export  --out <dir> [--json]        rewrite plan.md, review-record.md, findings/tasks.jsonl and run.json hashes
  *   gstack-autoplan release --out <dir> --attempt <id>  drop a reservation for an attempt that never ran
+ *   gstack-autoplan checkpoints --from <dir>            list checkpoint generations, newest first, with hash ok|bad
  *   gstack-autoplan contract                            print the coordinator contract every lane prompt inherits (plan E2)
  *
  * Logic: lib/autoplan-run.ts (next/submit/resume), lib/autoplan-gate.ts (close, gate, answer),
@@ -26,8 +27,8 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { answerGate, applyGuidance, recommendGate } from '../lib/autoplan-gate';
-import { checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
+import { amendmentSteps, answerGate, recommendGate } from '../lib/autoplan-gate';
+import { checkpointLines, checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
 import { migrateRun } from '../lib/autoplan-migrate';
@@ -69,7 +70,9 @@ DRIVER: ${driverFile()}
   recommend --out <dir> --gate-rev <n> --item <id> --option <k> --basis "<why>" [--by <who>]
           set one item's recommendation before relay (provenance recorded, p1 follows); re-render and relay afterwards
   resume  --out <dir> [--from <checkpoint>] [--json]   --from restores a hash-verified checkpoint into an empty --out first
-          (GSTACK_AUTOPLAN_CHECKPOINT_DIR set: every command leaving the run at rest writes <dir>/<run>/ and prints CHECKPOINT:)
+          (a collection or root restores its newest valid generation; GSTACK_AUTOPLAN_CHECKPOINT_DIR set: every command
+          leaving the run at rest publishes a generation under <dir>/<run>/ and prints CHECKPOINT: on stderr)
+  checkpoints --from <dir>          list checkpoint generations, newest first: run, gate_rev, time, hash ok|bad, current
   status  --out <dir> [--json]      export  --out <dir>      release --out <dir> --attempt <id>
   contract                          print lib/coordinator-contract.ts (the block every lane and reviewer prompt inherits word for word)
 
@@ -98,11 +101,7 @@ const resultLineFor = (status: string, out: string) => `GSTACK_RESULT: skill=aut
 const listFlag = (args: string[], name: string) => args.flatMap((a, i) => (a === name && args[i + 1] ? args[i + 1]!.split(',').map(x => x.trim()).filter(Boolean) : []));
 /** The NEXT line after an answer or revise: per pending change, settle it or edit the plan and revise; else next. */
 function nextLine(state: RunState, out: string): string {
-  const pending = pendingAmendments(state);
-  const settle = pending.filter(a => applyGuidance(a).startsWith('no plan edit')).map(a => a.item ?? a.decision);
-  const edit = pending.filter(a => !applyGuidance(a).startsWith('no plan edit')).map(a => a.decision);
-  if (!pending.length) return `NEXT: gstack-autoplan next --out ${out}`;
-  return `NEXT: ${[edit.length ? `edit the plan, then gstack-autoplan revise --out ${out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${edit.join(',')}` : '', settle.length ? `gstack-autoplan revise --out ${out} --settle ${settle.join(',')}` : ''].filter(Boolean).join('; ')}`;
+  return pendingAmendments(state).length ? `NEXT: ${amendmentSteps(state, out)}` : `NEXT: gstack-autoplan next --out ${out}`;
 }
 
 /**
@@ -128,10 +127,19 @@ function mutating(out: string, json: boolean, fn: () => number): number {
     if (notices.length) (json ? process.stderr : process.stdout).write(notices.join('\n') + '\n');
     const code = fn();
     if (admission.deviation && fs.existsSync(path.join(out, FILES.run))) { const state = readState(out); if (record(state)) writeState(state); }
-    const checkpoint = code === EXIT.ok ? checkpointRun(out) : undefined;
-    if (checkpoint) process.stderr.write(checkpoint + '\n');
+    if (code === EXIT.ok) checkpointQuietly(out);
     return code;
   });
+}
+
+/** A checkpoint never changes a committed command's outcome: a failure is a stderr warning, the exit code stands. */
+function checkpointQuietly(out: string): void {
+  try {
+    const line = checkpointRun(out);
+    if (line) process.stderr.write(line + '\n');
+  } catch (e: any) {
+    process.stderr.write(`CHECKPOINT: failed for ${out}: ${e instanceof RunError ? `${e.detail} (${e.code})` : e?.message ?? e}; the command's result stands, the previous checkpoint stays current\n`);
+  }
 }
 
 function emit(json: boolean, lines: string[], payload: Record<string, unknown>): void {
@@ -238,6 +246,12 @@ async function main(argv: string[]): Promise<number> {
   const json = rest.includes('--json');
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') { process.stdout.write(HELP + '\n'); return cmd ? EXIT.ok : EXIT.usage; }
   if (cmd === 'contract') { process.stdout.write(COORDINATOR_CONTRACT + '\n'); return EXIT.ok; }
+  if (cmd === 'checkpoints') {
+    const from = flag(rest, '--from');
+    if (!from) return usage('checkpoints needs --from <checkpoint dir>');
+    try { process.stdout.write(checkpointLines(from).join('\n') + '\n'); return EXIT.ok; }
+    catch (e: any) { if (!(e instanceof RunError)) throw e; process.stderr.write(resultLine('gstack-autoplan checkpoints', e.code, e.detail) + '\n'); return EXIT.refused; }
+  }
   const outFlag = flag(rest, '--out');
   if (!outFlag) return usage(`${cmd} needs --out <dir>`);
   const out = path.resolve(outFlag);
@@ -256,8 +270,7 @@ async function main(argv: string[]): Promise<number> {
       const restored = from !== undefined ? restoreCheckpoint(from, out) : [];
       return withRunLock(out, () => {
         const r = resumeRun(out);
-        const checkpoint = checkpointRun(out);
-        if (checkpoint) process.stderr.write(checkpoint + '\n');
+        checkpointQuietly(out);
         const lines = [...restored, ...r.lines, resultLineFor(r.state.status, out)];
         emit(json, lines, { run: r.state.run, status: r.state.status, execution_unknown: r.unknown, rebound: r.rebound, out });
         return EXIT.ok;

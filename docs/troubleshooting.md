@@ -2813,14 +2813,18 @@ pending, revise without `--incorporates`:
 
 **Meaning.** `gstack-autoplan revise --settle <id>` discharges an accepted change
 without a plan edit, which is honest only for a packaging or ordering change
-(the gate item's `changes` is `packaging` or `ordering`) on a plan nobody has
-edited since it was reviewed. The named change alters scope, cost or direction,
-names no `changes` value, or the plan file's Implementation plan no longer
-matches the reviewed snapshot. Nothing was changed.
+(the gate item's `changes` is `packaging` or `ordering`) on the plan the run
+already reviews: the plan the owner accepted it on, or one a later `revise`
+recorded. The named change alters scope, cost or direction, names no `changes`
+value, the plan file has edits no `revise` has recorded, or `--settle` came with
+a `--plan` that changes the Implementation plan while incorporating nothing.
+Nothing was changed.
 
 **Fix.** Edit the plan, then
-`gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`.
-The `APPLY:` line for each change says which path it takes.
+`gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`,
+adding `--settle <id>` to settle packaging or ordering changes in the same call
+(or settle them after the revise). The `APPLY:` line for each change says which
+path it takes, and `NEXT:` lists the settle step first.
 
 <a id="gate-rec-stale"></a>
 ### `GATE_REC_STALE`
@@ -2829,24 +2833,44 @@ The `APPLY:` line for each change says which path it takes.
 was rendered, so a `rec` (or `all`) reply the owner gave to the earlier render
 would take recommendations they never saw. Every render prints
 `rec_hash=<h>`; once `recommend` has run, a `rec` answer must name the hash of
-the render the owner answered.
+the render the owner answered. The same refusal meets a `rec`/`all` reply to a
+gate written before `rec` existed (a `gate.json` with no `rec_rev`, from
+1.91.101.0 or earlier): that render told the owner `all` leaves items
+recommended `b` pending, and `all` now takes them.
 
 **Fix.** Render again (`gstack-gate render <dir>/gate.json --all`), relay it,
-and answer with `--rec-hash <h>` from that render.
+and answer with `--rec-hash <h>` from that render. Explicit `<id><option>`
+tokens are never refused.
 
 <a id="checkpoint-invalid"></a>
 ### `CHECKPOINT_INVALID`
 
-**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` refused
-the checkpoint: `checkpoint.json` is unreadable or not a schema_version 1
-checkpoint, or a listed file is missing, is not a regular file, escapes the
-checkpoint directory, or does not match its recorded sha256. Nothing was
-written to `--out`.
+**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` found no
+generation it can restore: a `checkpoint.json` is unreadable or not a
+schema_version 1 checkpoint, a listed file is missing, is not a regular file,
+escapes the generation (an `..` path or a symlinked directory), or does not
+match its recorded sha256; or the staged run does not pass
+`gstack-artifact validate`. `--from` naming a run's collection restores the
+newest generation that verifies, skipping corrupt newer ones; a root holding
+several runs must name one. Nothing was written to `--out`.
 
-**Fix.** Restore from an intact copy. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR`
-set, every command that leaves the run at rest rewrites
-`<dir>/<run>/` (its `restore.md` names the exact command); a copy that was
-edited or partially synced fails here by design.
+**Fix.** `gstack-autoplan checkpoints --from <dir>` lists every generation
+with `hash=ok` or `hash=bad (<reason>)`; restore an intact one by passing its
+directory. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set, every command that
+leaves the run at rest publishes a new generation and keeps the previous one.
+
+<a id="checkpoint-overlap"></a>
+### `CHECKPOINT_OVERLAP`
+
+**Meaning.** The checkpoint directory for this run and the run directory (or,
+on restore, the checkpoint and `--out` or its staging directory) are the same
+directory or one contains the other, after resolving symlinks. Copying one
+into the other would replace or delete the live run, so nothing was touched.
+A checkpoint refusal after a committed command prints `CHECKPOINT: failed …`
+on stderr and leaves that command's exit code alone.
+
+**Fix.** Point `GSTACK_AUTOPLAN_CHECKPOINT_DIR` (or `--from` / `--out`) at a
+directory outside the run, for example the private project-user Drive folder.
 
 <a id="checkpoint-target-exists"></a>
 ### `CHECKPOINT_TARGET_EXISTS`

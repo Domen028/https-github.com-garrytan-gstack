@@ -209,13 +209,26 @@ function jaccard(a: Set<string>, b: Set<string>): number {
   return inter / (a.size + b.size - inter);
 }
 const level = (s: Severity) => SEVERITIES.indexOf(s);
+/** A remedy compared as words: case, punctuation and spacing ignored. */
+export const remedyKey = (text: string | undefined) => (text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const NEGATING = /\b(keep|leave|retain|not|no|never|without|avoid|remove|drop|revert|skip)\b|n't\b/;
+/** Opposite remedies: they name the same thing and exactly one of them keeps, drops or negates it. */
+function contradictory(a: string, b: string): boolean {
+  const ka = remedyKey(a), kb = remedyKey(b);
+  if (NEGATING.test(ka) === NEGATING.test(kb)) return false;
+  const words = (k: string) => new Set(k.split(' ').filter(t => t.length > 3 && !NEGATING.test(t)));
+  const wb = words(kb);
+  return [...words(ka)].some(t => wb.has(t));
+}
 
 /**
  * Structural reconciliation. Findings associate by a title overlap of at least
- * half the words, or by file:line (±3 lines). A title association is
- * `confirmed` unless severities differ by two or more levels (`disagree`); a
- * location-only association is `unverified` (same location, agreement
- * unverified: two findings near one line are not one finding); else `new`.
+ * half the words, or by file:line (±3 lines). Association alone never
+ * confirms: a title association is `confirmed` only when both voices state the
+ * same remedy, `disagree` when severities differ by two or more levels or the
+ * remedies contradict (one keeps, drops or negates what the other changes),
+ * and otherwise `unverified` (remedies differ or one is missing); a
+ * location-only association is `unverified`; else `new`.
  * Each native finding is matched at most once. Overrides (the parent's
  * semantic reconciliation, with an optional shared `proposal`) replace the
  * structural row for their outside id and must name ids from these two lists.
@@ -263,12 +276,13 @@ export function reconcile(native: FindingRow[], outside: FindingRow[], overrides
       rows.push({ outside_id: o.id, native_id: match.id, disposition: 'unverified', resolution: `same location, agreement unverified (${where}): ${match.title}`, basis, severity: { outside: o.severity, native: match.severity } });
       continue;
     }
-    const delta = Math.abs(level(match.severity) - level(o.severity));
-    rows.push({
-      outside_id: o.id, native_id: match.id, disposition: delta >= 2 ? 'disagree' : 'confirmed',
-      resolution: delta >= 2 ? `severity: native ${match.severity}, outside ${o.severity} (${where})` : `both voices (${where}): ${match.title}`,
-      basis, severity: { outside: o.severity, native: match.severity },
-    });
+    const severity = { outside: o.severity, native: match.severity };
+    const pair = (disposition: ReconciliationDisposition, resolution: string) => rows.push({ outside_id: o.id, native_id: match!.id, disposition, resolution, basis, severity });
+    if (Math.abs(level(match.severity) - level(o.severity)) >= 2) { pair('disagree', `severity: native ${match.severity}, outside ${o.severity} (${where})`); continue; }
+    if (!match.resolution || !o.resolution) { pair('unverified', `same title, a remedy is missing (${where}): ${match.title}`); continue; }
+    if (contradictory(match.resolution, o.resolution)) { pair('disagree', `remedies conflict (${where}): native "${match.resolution}", outside "${o.resolution}"`); continue; }
+    if (remedyKey(match.resolution) !== remedyKey(o.resolution)) { pair('unverified', `same title, remedies differ (${where}): ${match.title}`); continue; }
+    pair('confirmed', `both voices, same remedy (${where}): ${match.title}`);
   }
   return { rows, native_only: native.filter(n => !used.has(n.id)).map(n => n.id), errors };
 }

@@ -204,6 +204,50 @@ describe('record-only changes settle without a plan edit', () => {
   });
 });
 
+describe('mixed amendments: a scope change and a packaging change', () => {
+  const SCOPE_SAME = { native: [{ ...SAME.native[0], title: 'Ship the backoff behind a flag first', fix: 'gate the change behind RETRY_BACKOFF=1' }], outside: [{ ...SAME.outside[0], title: 'Ship the backoff behind a flag first', fix: 'gate the change behind RETRY_BACKOFF=1' }] };
+  const v2 = (dir: string) => v(dir, SMALL_PLAN.replace('cap 30 s', 'cap 30 s, behind RETRY_BACKOFF=1'));
+  const mixed = () => {
+    const g = gated(SCOPE_SAME, PACKAGING);
+    const items = gate(g.out).items.filter((i: any) => i.id.startsWith('uc'));
+    expect(items.map((i: any) => `${i.id}:${i.recommended}:${i.changes}`)).toEqual(['uc1:b:scope', 'uc2:b:packaging']);
+    const res = answer(g.out, 1, 'rec');
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toMatch(new RegExp(`^NEXT: gstack-autoplan revise --out ${esc(g.out)} --settle uc2; then edit the plan, then gstack-autoplan revise --out ${esc(g.out)} --plan ${esc(g.plan)} --incorporates ${esc(g.run)}-uc1$`, 'm'));
+    return g;
+  };
+  test('incorporate first, then settle: the settle binds to the revised plan, the reopened phases rerun, and the run completes', () => {
+    const g = mixed();
+    const inc = r.ap(['revise', '--out', g.out, '--plan', v2(g.dir), '--incorporates', 'uc1']);
+    expect(inc.status, inc.stderr).toBe(0);
+    expect(inc.stdout).toMatch(/^REVISED: plan=[0-9a-f]{12} reopened=ceo,eng$/m);
+    const settled = r.ap(['revise', '--out', g.out, '--settle', 'uc2']);
+    expect(settled.status, settled.stderr).toBe(0);
+    expect(settled.stdout).toMatch(new RegExp(`^SETTLED: ${esc(g.run)}-uc2 \\(packaging; plan [0-9a-f]{12} unchanged; nothing reopens\\)$`, 'm'));
+    expect(settled.stdout).not.toMatch(/^APPROVED:/m);
+    expect(settled.stdout).toMatch(new RegExp(`^NEXT: gstack-autoplan next --out ${esc(g.out)}$`, 'm'));
+    expect(readRunJson(g.out).status).toBe('running');
+    phaseVia(r, g.out, 'ceo');
+    expect(phaseVia(r, g.out, 'eng').outside.stdout).toContain('status=gate_pending');
+    expect(answer(g.out, 2, 'rec').stdout).toContain('status=complete');
+    expect(r.validate(g.out).status).toBe(0);
+  });
+  test('settle and incorporate in one revise; settling alone on an unreviewed plan edit is refused', () => {
+    const g = mixed();
+    fs.writeFileSync(g.plan, SMALL_PLAN.replace('cap 30 s', 'cap 30 s, behind RETRY_BACKOFF=1'));
+    const early = r.ap(['revise', '--out', g.out, '--settle', 'uc2']);
+    expect(early.status).toBe(3);
+    expect(early.stderr).toMatch(/the plan file has edits the run has not reviewed.*\(AMENDMENT_NOT_SETTLEABLE\)$/m);
+    const both = r.ap(['revise', '--out', g.out, '--plan', g.plan, '--incorporates', 'uc1', '--settle', 'uc2']);
+    expect(both.status, both.stderr).toBe(0);
+    expect(both.stdout).toMatch(/^AMENDMENTS: pending=none$/m);
+    const run = readRunJson(g.out);
+    expect(run.status).toBe('running');
+    expect(run.amendments.map((a: any) => `${a.item}:${a.status}`)).toEqual(['uc1:incorporated', 'uc2:settled']);
+    expect(r.ap(['next', '--out', g.out]).status).toBe(0);
+  });
+});
+
 describe('partial replies resolve against persisted decisions', () => {
   test('a later `all` never overwrites an earlier override, and p1 alone with approvals unanswered keeps the gate', () => {
     const g = gated({}, {});

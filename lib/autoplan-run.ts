@@ -19,7 +19,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { canonicalRows, parseReceipt, parseRecordFindings, parseReviewResult, type CanonicalFinding } from './autoplan-reconcile';
-import { applyGuidance, closePhase, finishGate } from './autoplan-gate';
+import { amendmentSteps, applyGuidance, closePhase, finishGate } from './autoplan-gate';
 import { GSTACK_VERSION } from './autoplan-migrate';
 import { driftLine, normalizeFindingFile, reviewHash, scaffold } from './autoplan-plan-text';
 import { PHASES, SNAPSHOT_TOOL, attemptFile, bindPromptResult, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
@@ -179,7 +179,7 @@ export function nextStep(o: NextOptions): NextResult {
   const pending = pendingAmendments(state).map(a => a.decision);
   if (pending.length) {
     const each = pendingAmendments(state).map(a => `APPLY ${a.item ?? a.decision}: ${applyGuidance(a)}`).join('; ');
-    throw new RunError('PLAN_AMEND_PENDING', `accepted at the gate but not in the plan: ${pending.join(', ')} (${each}); edit the plan, then gstack-autoplan revise --out ${state.out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${pending.join(',')} (or --settle <id> for a packaging/ordering change, --withdraw <id>)`, 3);
+    throw new RunError('PLAN_AMEND_PENDING', `accepted at the gate but not in the plan: ${pending.join(', ')} (${each}); ${amendmentSteps(state, state.out)} (or --withdraw <id>)`, 3);
   }
   const phase = currentPhase(state);
   if (!phase) { finishGate(state); writeState(state); return result; }
