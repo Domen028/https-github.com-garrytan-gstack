@@ -270,7 +270,6 @@ describe('docs and registration', () => {
     const lists: [string, string][] = [
       ['AGENTS.md', '| `/test-audit` |'],
       ['README.md', '| `/test-audit` | **Test Auditor** |'],
-      ['README.md', '/deslop-shared-libs, /test-audit, /ship'],
       ['docs/skills.md', '| [`/test-audit`](#test-audit) |'],
       ['docs/skills.md', '## `/test-audit`'],
       ['gstack/llms.txt', '[/test-audit](test-audit/SKILL.md)'],
@@ -280,7 +279,7 @@ describe('docs and registration', () => {
       ['test/helpers/touchfiles-data.ts', "'test-audit-report-only': ['test-audit/**'"],
     ];
     expect(lists.filter(([file, text]) => !read(file).includes(text)).map(([file, text]) => `${file}: ${text}`)).toEqual([]);
-    expect(read('README.md').split('/deslop-shared-libs, /test-audit, /ship').length - 1).toBe(2);
+    expect(read('README.md').split('/deslop-shared-libs, /test-audit, /ship').length - 1).toBe(0);
   });
 });
 
