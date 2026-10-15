@@ -36,7 +36,8 @@ _dc_has() { case " $1 " in *" $2 "*) return 0 ;; *) return 1 ;; esac; }
 # _dc_url CODE — the (CODE; docs anchor) suffix for a FAIL row.
 _dc_url() { printf '(%s; %s#%s)' "$1" "$DOCS" "$(gstack_result_anchor "$1")"; }
 
-# _dc_row STATUS ID DETAIL [FIX] [CODE] — record and (in text mode) print one row.
+# _dc_row STATUS ID DETAIL [FIX] [CODE] — record and (in text mode) print one
+# row. WARN is an owner action that never fails the run.
 _dc_row() {
   local status="$1" id="$2" detail="$3" fix="${4:-}" code="${5:-}"
   _dc_rows="$_dc_rows$status	$id	$detail	$fix	$code
@@ -46,6 +47,7 @@ _dc_row() {
   case "$status" in
     PASS) printf 'PASS %s%s\n' "$id" "${detail:+ $detail}" ;;
     SKIP) printf 'SKIP %s (%s)\n' "$id" "$detail" ;;
+    WARN) printf 'WARN %s — %s; owner action: %s %s\n' "$id" "$detail" "$fix" "$(_dc_url "$code")" ;;
     FAIL) printf 'FAIL %s — %s; fix: %s %s\n' "$id" "$detail" "$fix" "$(_dc_url "$code")" ;;
   esac
 }
@@ -234,31 +236,50 @@ _dc_check_cso() {
 }
 
 # _dc_launch_note — when a supported Bun sits off PATH (gstack-capy-install
-# leaves one in $BUN_INSTALL/bin), sets _dc_ln_dir/_dc_ln_ver/_dc_ln_note and
-# _dc_ln_fix so a fresh shell's FAIL says where it is and how to launch with it.
+# keeps verified ones in the runtime store), sets _dc_ln_dir/_dc_ln_ver/_dc_ln_note
+# and _dc_ln_fix so a fresh shell's FAIL says where it is and how to launch with it.
 _dc_launch_note() {
-  _dc_ln_dir=$(gstack_bun_launch_dir 2>/dev/null) || _dc_ln_dir=""
-  _dc_ln_ver="" _dc_ln_note="" _dc_ln_fix=""
-  [ -n "$_dc_ln_dir" ] || return 1
-  _dc_ln_ver=$("$_dc_ln_dir/bun" --version </dev/null 2>/dev/null | clamp 'A-Za-z0-9.+-' 40)
+  _dc_ln_dir="" _dc_ln_ver="" _dc_ln_note="" _dc_ln_fix=""
+  gstack_bun_resolve "$(gstack_bun_store "$STATE_ROOT")" 2>/dev/null || return 1
+  [ "$_gb_bin" != "$(gstack_realpath "$(command -v bun 2>/dev/null || echo /nonexistent)" 2>/dev/null)" ] || return 1
+  _dc_ln_dir=$(dirname "$_gb_bin") _dc_ln_ver="$_gb_ver"
   _dc_ln_note="; verified bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH)"
   _dc_ln_fix="export PATH=\"$_dc_ln_dir:\$PATH\" or prefix commands with the GSTACK_LAUNCH line"
 }
 
+# _dc_shim_note — the per-directory bun shim in ~/.local/bin: gstack's (the
+# marker line) and where it resolves from here, or a foreign file left alone.
+_dc_shim_note() {
+  local shim="$HOME/.local/bin/bun" target
+  [ -e "$shim" ] || [ -L "$shim" ] || return 0
+  if _gstack_bun_is_shim "$shim"; then
+    target=$(GSTACK_BUN_SHIM_EXPLAIN=1 "$shim" --version 2>&1 >/dev/null </dev/null | sed -n 's/.* chose=\([^ ]*\).*/\1/p' | head -1)
+    printf '; shim %s -> %s' "$shim" "${target:-nothing (no eligible bun)}"
+  else
+    printf '; %s is not gstack'"'"'s shim (no marker), left untouched: launch with the GSTACK_LAUNCH line' "$shim"
+  fi
+}
+
 _dc_check_runtime() {
-  local where found fix="install Bun $GSTACK_BUN_TESTED with the checksum-verified recipe in $SRC/bin/gstack-capy-install (or: bun upgrade), then cd $SRC && ./setup"
+  local where found fix="install Bun $GSTACK_BUN_TESTED with the checksum-verified recipe in $SRC/bin/gstack-capy-install (or: bun upgrade), then cd $SRC && ./setup" extra
   _dc_launch_note && fix="$_dc_ln_fix"
+  if [ -n "${GSTACK_DOCTOR_RUNTIME_DRIFT:-}" ]; then
+    _dc_row FAIL runtime "bun resolution drifted: $GSTACK_DOCTOR_RUNTIME_DRIFT" "${GSTACK_DOCTOR_RUNTIME_DRIFT_FIX:-re-run the Capy skill installer}" BUN_RESOLUTION_DRIFT
+    return
+  fi
   if ! where=$(command -v bun 2>/dev/null); then
     _dc_row FAIL runtime "bun not found on PATH (gstack needs $GSTACK_BUN_TESTED; floor $GSTACK_BUN_FLOOR)$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM
     return
   fi
   found=$(bun --version </dev/null 2>/dev/null | clamp 'A-Za-z0-9.+-' 40)
   _dc_bun="$found"
+  extra="$(_dc_shim_note)"
+  [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && extra="$extra; install version $GSTACK_BUN_INSTALL_VERSION (GSTACK_BUN_INSTALL_VERSION)"
   case "$(gstack_bun_status "$found")" in
-    ok) _dc_row PASS runtime "bun $found at $where (floor $GSTACK_BUN_FLOOR, supported minimum $GSTACK_BUN_TESTED)" ;;
-    untested) _dc_row FAIL runtime "bun $found at $where is below the supported minimum $GSTACK_BUN_TESTED (above the security floor $GSTACK_BUN_FLOOR)$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM ;;
-    too-old) _dc_row FAIL runtime "bun $found at $where is below the security floor $GSTACK_BUN_FLOOR (supported minimum $GSTACK_BUN_TESTED)$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM ;;
-    *) _dc_row FAIL runtime "could not read the version of $where$_dc_ln_note" "$fix" RUNTIME_BELOW_MINIMUM ;;
+    ok) _dc_row PASS runtime "bun $found at $where (floor $GSTACK_BUN_FLOOR, supported minimum $GSTACK_BUN_TESTED)$extra" ;;
+    untested) _dc_row FAIL runtime "bun $found at $where is below the supported minimum $GSTACK_BUN_TESTED (above the security floor $GSTACK_BUN_FLOOR)$_dc_ln_note$extra" "$fix" RUNTIME_BELOW_MINIMUM ;;
+    too-old) _dc_row FAIL runtime "bun $found at $where is below the security floor $GSTACK_BUN_FLOOR (supported minimum $GSTACK_BUN_TESTED)$_dc_ln_note$extra" "$fix" RUNTIME_BELOW_MINIMUM ;;
+    *) _dc_row FAIL runtime "could not read the version of $where$_dc_ln_note$extra" "$fix" RUNTIME_BELOW_MINIMUM ;;
   esac
 }
 
@@ -401,6 +422,54 @@ _dc_check_revision() {
   _dc_row FAIL revision "installed ${installed:-unknown}${head:+ at $head} (requested $want)" "cd $SRC && git fetch origin && git checkout $want && ./setup, or run $SRC/bin/gstack-upgrade to move to the latest release (interactive: /gstack-upgrade)" REVISION_UNMET
 }
 
+# _dc_wrapper_rev FILE — the GSTACK_CAPY_WRAPPER revision a Capy skill copy
+# declares; 0 for a copy without one (the pre-bootstrapper wrapper).
+_dc_wrapper_rev() {
+  local rev
+  rev=$(sed -n 's/^GSTACK_CAPY_WRAPPER=\([0-9][0-9]*\).*/\1/p' "$1" 2>/dev/null | head -1)
+  printf '%s' "${rev:-0}"
+}
+
+# _dc_check_wrapper — the Capy skill copy. The active wrapper's provenance
+# (GSTACK_CAPY_WRAPPER_REV/PATH, exported by the bootstrapper) decides: current
+# passes, and a stale Drive copy elsewhere is a WARN for the owner. Without
+# provenance (a direct doctor run, or a wrapper too old to export it) the Drive
+# copies decide: GSTACK_CAPY_WRAPPER_PATH when it names one, else every
+# ~/.capy/drive/*/skills/gstack/scripts/install.sh, failing only when each is
+# stale. The workaround runs the checkout's own copy, which certifies.
+_dc_check_wrapper() {
+  local min copy rev stale="" current="" active="${GSTACK_CAPY_WRAPPER_PATH:-}" workaround owner
+  min=$(sed -n 's/^GSTACK_CAPY_MIN_WRAPPER=\([0-9][0-9]*\)[[:space:]]*$/\1/p' "$SRC/capy/support.env" 2>/dev/null | head -1); min="${min:-1}"
+  workaround="bash $SRC/capy/skill/gstack/scripts/install.sh --check${CHECK_FOR:+ --for $CHECK_FOR} (this session)"
+  owner="copy $SRC/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes"
+  for copy in "$HOME"/.capy/drive/*/skills/gstack/scripts/install.sh; do
+    [ -f "$copy" ] || continue
+    [ -n "${GSTACK_CAPY_WRAPPER_REV:-}" ] && [ "$copy" = "$active" ] && continue
+    [ -z "${GSTACK_CAPY_WRAPPER_REV:-}" ] && [ -n "$active" ] && [ -f "$active" ] && [ "$copy" != "$active" ] && continue
+    rev=$(_dc_wrapper_rev "$copy")
+    if [ "$rev" -lt "$min" ] 2>/dev/null; then stale="${stale:+$stale, }$copy (wrapper $rev)"; else current="${current:+$current, }$copy (wrapper $rev)"; fi
+  done
+  if [ -z "${GSTACK_CAPY_WRAPPER_REV:-}" ] && [ -n "$active" ] && [ -f "$active" ] && [ -z "$stale$current" ]; then
+    rev=$(_dc_wrapper_rev "$active")
+    if [ "$rev" -lt "$min" ] 2>/dev/null; then stale="$active (wrapper $rev)"; else current="$active (wrapper $rev)"; fi
+  fi
+  if [ -n "${GSTACK_CAPY_WRAPPER_REV:-}" ]; then
+    if [ "$GSTACK_CAPY_WRAPPER_REV" -lt "$min" ] 2>/dev/null; then
+      _dc_row FAIL wrapper "the active Capy skill copy ${active:-<unknown>} is wrapper $GSTACK_CAPY_WRAPPER_REV, minimum $min" "$workaround; owner: $owner" CAPY_WRAPPER_STALE
+    elif [ -n "$stale" ]; then
+      _dc_row WARN wrapper "active wrapper $GSTACK_CAPY_WRAPPER_REV (${active:-unknown path}) is current; stale Drive copies (minimum $min): $stale" "$owner" CAPY_WRAPPER_STALE
+    else
+      _dc_row PASS wrapper "$GSTACK_CAPY_WRAPPER_REV (${active:-unknown path}; minimum $min)"
+    fi
+  elif [ -n "$current" ]; then
+    _dc_row PASS wrapper "Drive copy $current (minimum $min)${stale:+; stale copies: $stale}"
+  elif [ -n "$stale" ]; then
+    _dc_row FAIL wrapper "every Capy skill copy is stale (minimum wrapper $min): $stale" "$workaround; owner: $owner" CAPY_WRAPPER_STALE
+  else
+    _dc_row SKIP wrapper "no Capy skill copy in ~/.capy/drive and no active wrapper (not a Capy machine)"
+  fi
+}
+
 _dc_print_json() {
   local status id detail fix code first=1 ok=false
   [ -z "$_dc_failed" ] && ok=true
@@ -453,6 +522,7 @@ gstack_doctor_check() {
       privacy) _dc_check_privacy ;;
       cores) _dc_check_cores ;;
       revision) _dc_check_revision ;;
+      wrapper) _dc_check_wrapper ;;
       *) _dc_row FAIL "$id" "no check implemented for component '$id'" "report this gstack bug" COMPONENT_MISSING ;;
     esac
   done

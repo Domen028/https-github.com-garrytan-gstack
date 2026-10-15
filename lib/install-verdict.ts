@@ -4,15 +4,21 @@
  * install-admission rule gstack-skill-start (Bash) and gstack-autoplan's
  * mutating verbs share. test/install-verdict.test.ts pins both sides.
  *
- * Verdict file: <state root>/install-verdicts/<sha256(source checkout realpath)>.json,
- * or the path the GSTACK_LAUNCH line names as GSTACK_INSTALL_VERDICT.
+ * Verdict file: <state root>/install-verdicts/<sha256(checkout realpath)>/<sha256(project realpath | "none")>.json,
+ * then the path the GSTACK_LAUNCH line names as GSTACK_INSTALL_VERDICT, then
+ * the schema 1 file keyed by the checkout alone (<sha256(checkout)>.json).
+ * The project is the working directory's git toplevel unless that is the
+ * checkout itself. It is the one record the bun shim, the Bash twin,
+ * lib/pregate/runtime.ts and admission read.
  *
  * Admission: applies to unattended and spawned sessions. It refuses (exit 3,
  * `status=refused`) in unattended sessions and explicit
  * GSTACK_SESSION_KIND=spawned sessions with GSTACK_CAPY=1 when the running Bun
  * is below gstack's supported minimum and, with GSTACK_CAPY=1 only, when the
- * verdict is missing, failing, for another checkout or HEAD, or narrower than
- * the workflow. Other spawned sessions only warn.
+ * verdict is missing, failing, for another checkout or HEAD, narrower than
+ * the workflow, for another project when the workflow runs the repo's tests,
+ * or records a Bun other than the one running (BUN_RESOLUTION_DRIFT). Other
+ * spawned sessions only warn.
  * GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1 admits and sets `overridden` (the caller
  * records it as a run deviation).
  */
@@ -25,7 +31,7 @@ import type { ResultCodeName } from './result-codes';
 import { resolveStateRoot } from './state-root';
 
 export interface InstallVerdict {
-  schema_version: 1;
+  schema_version: 1 | 2;
   checkout: string;
   head: string;
   for: string;
@@ -36,6 +42,13 @@ export interface InstallVerdict {
   min_revision: string;
   launch_path: string;
   time: string;
+  /** Schema 2: the project realpath ('' for none) and the Bun resolution recorded for it. */
+  project?: string;
+  pin?: string;
+  bun_path?: string;
+  bun_version?: string;
+  bun_rule?: string;
+  bun_install?: string;
 }
 
 export interface InstallAdmission {
@@ -67,14 +80,40 @@ export function sourceRoot(gstackRoot: string): string {
   return fs.realpathSync(src);
 }
 
-export function installVerdictPath(checkout: string, stateRoot: string): string {
-  return path.join(stateRoot, 'install-verdicts', `${createHash('sha256').update(checkout).digest('hex')}.json`);
+const sha256 = (text: string) => createHash('sha256').update(text).digest('hex');
+
+/** The verdict for (checkout, project); `project` null or '' is "none". */
+export function installVerdictPath(checkout: string, stateRoot: string, project: string | null = null): string {
+  return path.join(stateRoot, 'install-verdicts', sha256(checkout), `${sha256(project || 'none')}.json`);
+}
+
+/** The schema 1 verdict keyed by the checkout alone (read-only fallback). */
+export function legacyInstallVerdictPath(checkout: string, stateRoot: string): string {
+  return path.join(stateRoot, 'install-verdicts', `${sha256(checkout)}.json`);
+}
+
+/** The project a verdict is keyed by for `cwd`: its git toplevel realpath, null outside a repo or inside the checkout. */
+export function installProject(checkout: string, cwd: string = process.cwd()): string | null {
+  const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd, encoding: 'utf8', timeout: 10_000 });
+  const top = r.status === 0 ? (r.stdout ?? '').trim() : '';
+  if (!top) return null;
+  try { const real = fs.realpathSync(top); return real === checkout ? null : real; } catch { return null; }
+}
+
+/** The verdict file admission reads: (checkout, project), then GSTACK_INSTALL_VERDICT, then the schema 1 file. */
+export function findInstallVerdict(checkout: string, project: string | null, env: Env): string {
+  const stateRoot = resolveStateRoot(env);
+  const keyed = installVerdictPath(checkout, stateRoot, project);
+  if (fs.existsSync(keyed)) return keyed;
+  if (env.GSTACK_INSTALL_VERDICT && fs.existsSync(env.GSTACK_INSTALL_VERDICT)) return env.GSTACK_INSTALL_VERDICT;
+  const legacy = legacyInstallVerdictPath(checkout, stateRoot);
+  return fs.existsSync(legacy) ? legacy : keyed;
 }
 
 export function readInstallVerdict(file: string): InstallVerdict | null {
   try {
     const v = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return v && v.schema_version === 1 ? v as InstallVerdict : null;
+    return v && (v.schema_version === 1 || v.schema_version === 2) ? v as InstallVerdict : null;
   } catch {
     return null;
   }
@@ -91,18 +130,36 @@ function supportedBun(gstackRoot: string): string {
   return text.match(/^GSTACK_BUN_TESTED="([0-9.]+)"/m)?.[1] ?? '0.0.0';
 }
 
-function verdictProblem(skill: string, gstackRoot: string, env: Env): string {
+interface VerdictProblem { detail: string; code: ResultCodeName; fix?: string }
+
+function verdictProblem(skill: string, gstackRoot: string, env: Env, bunPath: string, bunVersion: string, cwd?: string): VerdictProblem | null {
   const src = sourceRoot(gstackRoot);
-  const file = env.GSTACK_INSTALL_VERDICT || installVerdictPath(src, resolveStateRoot(env));
+  const project = installProject(src, cwd);
+  const file = findInstallVerdict(src, project, env);
   const v = readInstallVerdict(file);
-  if (!v) return `no install verdict at ${file} for ${src}`;
-  if (!v.ok) return `the install verdict says: ${v.trailer}`;
-  if (v.checkout !== src) return `the install verdict is for checkout ${v.checkout}, not ${src}`;
-  const head = spawnSync('git', ['-C', src, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).stdout?.trim() ?? '';
-  if (!head || v.head !== head) return `the install verdict is for another HEAD (${v.head.slice(0, 12)}; ${src} is at ${head.slice(0, 12)})`;
-  if (v.pins_planning_only && !PINS_ADVISORY_SKILLS.includes(skill)) return `the install verdict is planning-only (pins skipped for ${v.for}) and ${skill} runs the repo's tests`;
+  const problem = (detail: string): VerdictProblem => ({ detail, code: 'INSTALL_UNVERIFIED' });
+  if (!v) return problem(`no install verdict at ${file} for ${src}`);
+  if (!v.ok) return problem(`the install verdict says: ${v.trailer}`);
+  if (v.checkout !== src) return problem(`the install verdict is for checkout ${v.checkout}, not ${src}`);
+  const head = spawnSync('git', ['-C', src, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 }).stdout?.trim() ?? '';
+  if (!head || v.head !== head) return problem(`the install verdict is for another HEAD (${v.head.slice(0, 12)}; ${src} is at ${head.slice(0, 12)})`);
+  const advisory = PINS_ADVISORY_SKILLS.includes(skill);
+  if (v.pins_planning_only && !advisory) return problem(`the install verdict is planning-only (pins skipped for ${v.for}) and ${skill} runs the repo's tests`);
+  if (v.schema_version !== 1 && !advisory && (v.project ?? '') !== (project ?? '')) {
+    return { ...problem(`the install verdict checked ${v.project || 'no project'}, not ${project ?? 'this directory (no project)'}, and ${skill} runs the repo's tests`),
+      fix: `run the Capy skill installer (scripts/install.sh --for ${skill}) from ${project ?? 'this directory'}, then launch with the GSTACK_LAUNCH line it prints` };
+  }
   const missing = (SKILL_REQUIREMENTS[skill]?.requires ?? []).find(id => !v.required.includes(id));
-  return missing ? `the install verdict certified for=${v.for}, which does not cover ${missing} that ${skill} needs` : '';
+  if (missing) return problem(`the install verdict certified for=${v.for}, which does not cover ${missing} that ${skill} needs`);
+  if (v.bun_path && bunPath && bunPath !== v.bun_path) {
+    return { detail: `bun ${bunVersion} at ${bunPath} is running, but the install verdict recorded bun ${v.bun_version} at ${v.bun_path}`, code: 'BUN_RESOLUTION_DRIFT',
+      fix: `launch with the GSTACK_LAUNCH line (PATH=${path.dirname(v.bun_path)}:$PATH), or re-run the Capy skill installer with --check (scripts/install.sh --check --for ${skill}) to see what changed` };
+  }
+  return null;
+}
+
+function realBunPath(): string {
+  try { return fs.realpathSync(process.execPath); } catch { return process.execPath; }
 }
 
 /**
@@ -110,7 +167,7 @@ function verdictProblem(skill: string, gstackRoot: string, env: Env): string {
  * `gstackRoot` (the directory holding bin/). `bunVersion` defaults to the Bun
  * running this process; `env` to process.env.
  */
-export function checkInstallAdmission(opts: { skill: string; gstackRoot: string; env?: Env; bunVersion?: string }): InstallAdmission {
+export function checkInstallAdmission(opts: { skill: string; gstackRoot: string; env?: Env; bunVersion?: string; bunPath?: string; cwd?: string }): InstallAdmission {
   const env = opts.env ?? process.env;
   const kind = env.GSTACK_SESSION_KIND === 'unattended' || env.GSTACK_SESSION_KIND === 'spawned' ? env.GSTACK_SESSION_KIND
     : env.OPENCLAW_SESSION ? 'spawned' : 'other';
@@ -126,10 +183,10 @@ export function checkInstallAdmission(opts: { skill: string; gstackRoot: string;
     detail = `bun ${bun} is below the supported minimum ${minimum}`;
     fix = `run the Capy skill installer (scripts/install.sh --for ${opts.skill}), then launch with its GSTACK_LAUNCH line`;
   } else if (capy) {
-    detail = verdictProblem(opts.skill, opts.gstackRoot, env);
-    if (detail) {
-      status = 'verdict'; code = 'INSTALL_UNVERIFIED';
-      fix = `run the Capy skill installer (scripts/install.sh --for ${opts.skill}) on this machine, then launch with the GSTACK_LAUNCH line it prints`;
+    const p = verdictProblem(opts.skill, opts.gstackRoot, env, opts.bunPath ?? (opts.bunVersion ? '' : realBunPath()), bun, opts.cwd);
+    if (p) {
+      status = p.code === 'BUN_RESOLUTION_DRIFT' ? 'runtime' : 'verdict'; code = p.code; detail = p.detail;
+      fix = p.fix ?? `run the Capy skill installer (scripts/install.sh --for ${opts.skill}) on this machine, then launch with the GSTACK_LAUNCH line it prints`;
     }
   }
   const base = { ...none, applies: true, status, detail, code };

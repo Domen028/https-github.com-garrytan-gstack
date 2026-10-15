@@ -549,8 +549,18 @@ export const RESULT_CODES = {
   },
   CAPY_WRAPPER_STALE: {
     anchor: 'capy-wrapper-stale',
-    summary: 'the Capy skill copy that ran is older than the checkout\'s GSTACK_CAPY_MIN_WRAPPER',
-    fix: 'ask the owner to copy <checkout>/capy/skill/gstack/ over the Drive skill folder; the checkout wrapper keeps working meanwhile',
+    summary: 'the Capy skill copy that ran (or, without provenance, every Drive copy) is older than the checkout\'s GSTACK_CAPY_MIN_WRAPPER',
+    fix: 'this session: run <checkout>/capy/skill/gstack/scripts/install.sh, which certifies; owner: copy <checkout>/capy/skill/gstack/ over the Drive skill folder (it recurs every session until the copy changes)',
+  },
+  BUN_RESOLUTION_DRIFT: {
+    anchor: 'bun-resolution-drift',
+    summary: 'the Bun the resolution contract picks now (or the Bun running) is not the one the install verdict recorded for this checkout and project',
+    fix: 'run the fix the row prints: re-run the installer when the current Bun satisfies the pins, else restore the recorded binary or the variable that changed',
+  },
+  BUN_INSTALL_VERSION_INVALID: {
+    anchor: 'bun-install-version-invalid',
+    summary: 'GSTACK_BUN_INSTALL_VERSION names a Bun without a verified archive, or one below gstack\'s supported minimum',
+    fix: 'unset GSTACK_BUN_INSTALL_VERSION, or set it to a version listed in GSTACK_BUN_VERIFIED (bin/gstack-bun-version.sh)',
   },
   INSTALL_UNVERIFIED: {
     anchor: 'install-unverified',

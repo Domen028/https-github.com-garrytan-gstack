@@ -162,7 +162,7 @@ describe('lanes runtime and serial files (CD1)', () => {
     expect(r.status).toBe(EXIT.ok);
     expect(r.out).toContain('lanes:   bun=1.4.2');
     expect(r.out).not.toContain('bun=1.3.14');
-    expect(r.out).toContain(`lanes: runtime: bun 1.4.2 from ${host.bunInstallBin}`);
+    expect(r.out).toContain(`lanes: runtime: bun 1.4.2 at ${fs.realpathSync(host.bunInstallBin)}/bun (resolved: `);
   });
 
   test('serial-pattern test files run in their own process, apart from the unit files', () => {

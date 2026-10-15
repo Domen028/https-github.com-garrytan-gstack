@@ -11,8 +11,10 @@
  *
  * Row semantics (printed as `PASS | FAIL | SKIP <id>`):
  *   core      always evaluated and always required (runtime, pins, state root,
- *             privacy, cores, revision). `pins` and `state-root` SKIP with a
- *             reason when they cannot be evaluated; a SKIP never fails a run.
+ *             privacy, cores, revision, wrapper). `pins`, `state-root` and
+ *             `wrapper` SKIP with a reason when they cannot be evaluated; a
+ *             SKIP never fails a run. `wrapper` WARNs (an owner action, never
+ *             a failure) for a stale Capy skill copy the run did not use.
  *   host      a host profile. Required when `--for`/`--require` names it, or by
  *             default when it is installed from this checkout. With no flag and
  *             no host installed, `claude` (setup's default host) is required so
@@ -47,6 +49,7 @@ export const DOCTOR_COMPONENTS: readonly DoctorComponent[] = [
   { id: 'privacy', title: 'privacy', kind: 'core' },
   { id: 'cores', title: 'cores', kind: 'core' },
   { id: 'revision', title: 'revision', kind: 'core' },
+  { id: 'wrapper', title: 'Capy skill copy (bootstrapper revision)', kind: 'core' },
 ] as const;
 
 export type ComponentId = (typeof DOCTOR_COMPONENTS)[number]['id'];

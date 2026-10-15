@@ -473,10 +473,12 @@ describe('gstack-doctor --check', () => {
     installCodex(f);
     const r = row(f, []);
     expect(r.status, r.out).toBe(0);
-    expect(r.required).toEqual(['claude', 'codex', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
-    for (const id of r.required.filter(x => x !== 'pins')) expect(r.rows[id]?.status, `${id}\n${r.out}`).toBe('PASS');
+    expect(r.required).toEqual(['claude', 'codex', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
+    for (const id of r.required.filter(x => x !== 'pins' && x !== 'wrapper')) expect(r.rows[id]?.status, `${id}\n${r.out}`).toBe('PASS');
     // The work dir is not a git repository, so there is no project to read pins from: SKIP with the reason, never silent.
     expect(r.rows.pins).toEqual({ status: 'SKIP', rest: expect.stringContaining('no project') });
+    // No ~/.capy/drive skill copy and no active wrapper: not a Capy machine.
+    expect(r.rows.wrapper).toEqual({ status: 'SKIP', rest: expect.stringContaining('not a Capy machine') });
     expect(r.rows.patch.status).toBe('PASS');
     expect(r.rows['codex-cli'].status).toBe('PASS');
     expect(r.rows.browser).toEqual({ status: 'SKIP', rest: '(lazy; gstack-browser-ensure installs on first use)' });
@@ -495,7 +497,7 @@ describe('gstack-doctor --check', () => {
     fs.rmSync(path.join(f.stub, 'codex'));
     const r = row(f, ['--for', 'autoplan']);
     expect(r.status, r.out).toBe(0);
-    expect(r.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
+    expect(r.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
     expect(r.rows.patch).toEqual({ status: 'PASS', rest: 'gpt-6-astra (gstack-review/SKILL.md)' });
     expect(r.rows['codex-cli'].status).toBe('SKIP');
     expect(r.rows['codex-cli'].rest).toContain('optional');
@@ -694,8 +696,8 @@ describe('gstack-doctor --check', () => {
     expect(json.for).toBe('autoplan');
     expect(json.ok).toBe(false);
     expect(json.failed).toEqual(['runtime']);
-    expect(json.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
-    expect(json.rows.map((x: { id: string }) => x.id)).toEqual(['claude', 'codex', 'patch', 'codex-cli', 'browse-bundle', 'browser', 'cso', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
+    expect(json.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
+    expect(json.rows.map((x: { id: string }) => x.id)).toEqual(['claude', 'codex', 'patch', 'codex-cli', 'browse-bundle', 'browser', 'cso', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
     const runtime = json.rows.find((x: { id: string }) => x.id === 'runtime');
     expect(runtime.status).toBe('FAIL');
     expect(runtime.code).toBe('RUNTIME_BELOW_MINIMUM');
@@ -782,5 +784,73 @@ describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pi
       const tests = check(f, [...args, '--project', project], { STUB_BUN_VERSION: '1.4.3' });
       expect(tests.rows.pins.status, args.join(' ')).toBe('FAIL');
     }
+  });
+});
+
+// Plan A8/A-h: the Capy skill copy. Active-wrapper provenance decides; without
+// it the Drive copies do, failing only when every copy is stale. The printed
+// workaround (the checkout's own wrapper) certifies with the stale Drive copy
+// left unchanged. Plan A5: a drifted resolution is a runtime FAIL.
+describe('gstack-doctor --check: wrapper and runtime drift', () => {
+  const PRE_BOOTSTRAPPER = '#!/usr/bin/env bash\n# gstack Capy skill installer (pre-bootstrapper)\nset -u\nroot="${GSTACK_CAPY_ROOT:-$HOME/.local/share/gstack}"\nexec "$root/bin/gstack-capy-install" "$@"\n';
+  const parse = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = doctor(f, ['--check', ...args], extra);
+    const line = (id: string) => r.out.split('\n').find(l => new RegExp(`^(PASS|FAIL|SKIP|WARN) ${id}\\b`).test(l)) ?? '';
+    return { status: r.status, out: r.out, line, trailer: r.out.split('\n').filter(l => l.startsWith('gstack: ')).at(-1) ?? '' };
+  };
+  const drive = (f: Fixture, scope: string, text: string) => { const file = path.join(f.home, '.capy/drive', scope, 'skills/gstack/scripts/install.sh'); write(file, text); return file; };
+  const withSupport = (f: Fixture, min = 1) => write(path.join(f.root, 'capy/support.env'), `GSTACK_MIN_REVISION=1.0.0.0\nGSTACK_CAPY_MIN_WRAPPER=${min}\n`);
+  const current = fs.readFileSync(path.join(REPO, 'capy/skill/gstack/scripts/install.sh'), 'utf8');
+
+  test('direct doctor run: a pre-bootstrapper Drive copy (no revision line) fails wrapper with both fixes; a current copy is not flagged', () => {
+    const f = makeFixture();
+    withSupport(f);
+    const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
+    const r = parse(f, []);
+    expect(r.status).toBe(1);
+    expect(r.trailer).toBe('gstack: fail wrapper');
+    const row = r.line('wrapper');
+    expect(row).toContain(`FAIL wrapper — every Capy skill copy is stale (minimum wrapper 1): ${stale} (wrapper 0); fix: bash ${f.root}/capy/skill/gstack/scripts/install.sh --check (this session); owner: copy ${f.root}/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes`);
+    expect(row).toContain('(CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)');
+    write(stale, current);
+    const fresh = parse(f, []);
+    expect(fresh.line('wrapper')).toBe(`PASS wrapper Drive copy ${stale} (wrapper 1) (minimum 1)`);
+    expect(fresh.status, fresh.out).toBe(0);
+  });
+
+  test('two Drive copies, one current: PASS naming the stale one; GSTACK_CAPY_WRAPPER_PATH alone decides when set without a revision', () => {
+    const f = makeFixture();
+    withSupport(f);
+    const stale = drive(f, 'org', PRE_BOOTSTRAPPER);
+    const good = drive(f, 'user', current);
+    const r = parse(f, []);
+    expect(r.line('wrapper')).toBe(`PASS wrapper Drive copy ${good} (wrapper 1) (minimum 1); stale copies: ${stale} (wrapper 0)`);
+    expect(parse(f, [], { GSTACK_CAPY_WRAPPER_PATH: stale }).trailer).toBe('gstack: fail wrapper');
+  });
+
+  test('the printed workaround certifies: a current active wrapper passes with the stale Drive copy unchanged (WARN, owner action); a stale active wrapper fails', () => {
+    const f = makeFixture();
+    withSupport(f);
+    const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
+    const checkoutCopy = path.join(f.root, 'capy/skill/gstack/scripts/install.sh');
+    const r = parse(f, [], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: checkoutCopy });
+    expect(r.status, r.out).toBe(0);
+    expect(r.trailer).toMatch(/^gstack: ok /);
+    expect(r.line('wrapper')).toBe(`WARN wrapper — active wrapper 1 (${checkoutCopy}) is current; stale Drive copies (minimum 1): ${stale} (wrapper 0); owner action: copy ${f.root}/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes (CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)`);
+    expect(fs.readFileSync(stale, 'utf8')).toBe(PRE_BOOTSTRAPPER);
+    const json = JSON.parse(doctor(f, ['--check', '--json'], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: checkoutCopy }).out);
+    expect(json.ok).toBe(true);
+    expect(json.rows.find((x: { id: string }) => x.id === 'wrapper')).toMatchObject({ status: 'WARN', code: 'CAPY_WRAPPER_STALE' });
+    withSupport(f, 2);
+    const old = parse(f, [], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: stale });
+    expect(old.trailer).toBe('gstack: fail wrapper');
+    expect(old.line('wrapper')).toContain(`FAIL wrapper — the active Capy skill copy ${stale} is wrapper 1, minimum 2`);
+  });
+
+  test('a drifted Bun resolution is a runtime FAIL carrying the installer\'s detail, fix and BUN_RESOLUTION_DRIFT', () => {
+    const f = makeFixture();
+    const r = parse(f, [], { GSTACK_DOCTOR_RUNTIME_DRIFT: 'recorded bun 1.4.3 at /s/bun (home), now no eligible bun; changed: the recorded binary is gone', GSTACK_DOCTOR_RUNTIME_DRIFT_FIX: 'bash /d/install.sh --for review' });
+    expect(r.trailer).toBe('gstack: fail runtime');
+    expect(r.line('runtime')).toBe('FAIL runtime — bun resolution drifted: recorded bun 1.4.3 at /s/bun (home), now no eligible bun; changed: the recorded binary is gone; fix: bash /d/install.sh --for review (BUN_RESOLUTION_DRIFT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bun-resolution-drift)');
   });
 });

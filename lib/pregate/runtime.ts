@@ -1,38 +1,164 @@
 /**
- * pregate/runtime — the Bun a repo command runs under (field wave CD1, the
- * TypeScript side of `gstack_bun_launch_dir` in bin/gstack-bun-version.sh).
- * On a Capy cloud host the image's Bun is first on PATH and older than both
- * gstack's minimum and most project pins, while the verified Bun the
- * installer left in `$BUN_INSTALL/bin` or `~/.bun/bin` is off PATH; the same
- * tree then passes or fails its lanes depending on the shell. The launch dir
- * is the first of those two holding a Bun that satisfies gstack's own
- * `engines.bun` and the project's `engines.bun`; when there is one, the
- * lanes runner and every guard run with it first on PATH.
+ * pregate/runtime — the Bun a repo command runs under, and the TypeScript twin
+ * of the one Bun resolution contract (`gstack_bun_resolve` in
+ * bin/gstack-bun-version.sh; test/bun-resolve.test.ts runs both on one
+ * layout). Candidates, first eligible wins: the project's exact pin and
+ * gstack's install default in the versioned runtime store
+ * (`<state root>/runtimes/bun/<version>/bun`), `$BUN_INSTALL/bin`,
+ * `~/.bun/bin`, then every `bun` on PATH. Eligible: it runs, is at or above
+ * gstack's supported minimum, and satisfies gstack's own `engines.bun` and
+ * every project pin (lib/runtime-pins.ts); a file carrying the bun shim's
+ * marker is never a candidate.
+ *
+ * The install verdict for (checkout, project) is the one record install,
+ * the shim and admission share. Under the admission condition (GSTACK_CAPY=1,
+ * or a verdict exists for this checkout and project) the lanes run the Bun it
+ * recorded, and a recorded Bun that is gone or changed is reported as drift;
+ * otherwise the verdict check is skipped with an explain line (contributors, CI).
  */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { satisfies } from '../runtime-pins';
+import { findInstallVerdict, readInstallVerdict, sourceRoot } from '../install-verdict';
+import { resultCodeSuffix } from '../result-codes';
+import { collectPins, evaluatePins, parseVersion, satisfies } from '../runtime-pins';
+import { resolveStateRoot } from '../state-root';
 
-const GSTACK_PACKAGE = path.resolve(import.meta.dir, '..', '..', 'package.json');
+type Env = NodeJS.ProcessEnv;
+
+const GSTACK_ROOT = path.resolve(import.meta.dir, '..', '..');
+const VERSIONS = fs.readFileSync(path.join(GSTACK_ROOT, 'bin/gstack-bun-version.sh'), 'utf8');
+const shellValue = (name: string) => VERSIONS.match(new RegExp(`^${name}="([^"]*)"`, 'm'))?.[1] ?? '';
+
+export const BUN_TESTED = shellValue('GSTACK_BUN_TESTED');
+export const BUN_DEFAULT = shellValue('GSTACK_BUN_DEFAULT');
+export const BUN_VERIFIED = shellValue('GSTACK_BUN_VERIFIED').split(/\s+/).filter(Boolean);
+export const BUN_SHIM_MARKER = shellValue('GSTACK_BUN_SHIM_MARKER');
+
+/** `gstack_bun_status <v> = ok`: parseable and not below the supported minimum (a prerelease of it is below). */
+export function bunStatusOk(version: string): boolean {
+  const m = version.replace(/^v/, '').replace(/\+.*$/, '').match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+  const min = BUN_TESTED.split('.').map(Number);
+  if (!m) return false;
+  for (let i = 0; i < 3; i++) if (Number(m[i + 1]) !== min[i]) return Number(m[i + 1]) > min[i];
+  return !m[4];
+}
+
+/** `gstack_bun_install_version`: GSTACK_BUN_INSTALL_VERSION or the default; null when not a verified Bun at or above the minimum. */
+export function bunInstallVersion(env: Env): string | null {
+  const v = env.GSTACK_BUN_INSTALL_VERSION || BUN_DEFAULT;
+  return BUN_VERIFIED.includes(v) && bunStatusOk(v) ? v : null;
+}
+
+export const bunStore = (stateRoot: string) => path.join(stateRoot, 'runtimes', 'bun');
+
+export type BunRule = 'pin' | 'default' | 'BUN_INSTALL' | 'home' | 'PATH';
+export interface BunResolution { bin: string; version: string; rule: BunRule }
+
+function isShim(file: string): boolean {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(512);
+    const n = fs.readSync(fd, buf, 0, 512, 0);
+    fs.closeSync(fd);
+    return buf.subarray(0, n).toString('latin1').includes(BUN_SHIM_MARKER);
+  } catch { return false; }
+}
+
+function bunVersionOf(bin: string, env: Env): string {
+  const r = spawnSync(bin, ['--version'], { encoding: 'utf8', timeout: 15_000, env });
+  return r.status === 0 ? (r.stdout ?? '').split('\n')[0].replace(/[^A-Za-z0-9.+-]/g, '') : '';
+}
+
+/**
+ * The resolution contract. `accept` is the caller's project-pin check;
+ * `judged` lists the candidates that ran and were refused.
+ */
+export function resolveBun(opts: { store: string; env: Env; pinExact?: string | null; accept?: (version: string, bin: string) => boolean }): { resolution: BunResolution | null; judged: string[] } {
+  const { store, env } = opts;
+  const installVersion = bunInstallVersion(env);
+  const candidates: [BunRule, string][] = [];
+  if (opts.pinExact) candidates.push(['pin', path.join(store, opts.pinExact, 'bun')]);
+  if (installVersion) candidates.push(['default', path.join(store, installVersion, 'bun')]);
+  if (env.BUN_INSTALL) candidates.push(['BUN_INSTALL', path.join(env.BUN_INSTALL, 'bin', 'bun')]);
+  if (env.HOME) candidates.push(['home', path.join(env.HOME, '.bun', 'bin', 'bun')]);
+  for (const dir of (env.PATH ?? '').split(':')) if (dir) candidates.push(['PATH', path.join(dir, 'bun')]);
+  const seen = new Set<string>();
+  const judged: string[] = [];
+  for (const [rule, file] of candidates) {
+    let real: string;
+    try {
+      if (!fs.statSync(file).isFile()) continue;
+      fs.accessSync(file, fs.constants.X_OK);
+      if (isShim(file)) continue;
+      real = fs.realpathSync(file);
+    } catch { continue; }
+    if (seen.has(real)) continue;
+    seen.add(real);
+    const version = bunVersionOf(real, env);
+    if (!bunStatusOk(version) || (opts.accept && !opts.accept(version, real))) { judged.push(`bun ${version || 'unknown'} at ${real} (${rule})`); continue; }
+    return { resolution: { bin: real, version, rule }, judged };
+  }
+  return { resolution: null, judged };
+}
 
 function enginesBun(file: string): string | null {
   try { const v = JSON.parse(fs.readFileSync(file, 'utf8'))?.engines?.bun; return typeof v === 'string' && v.trim() ? v.trim() : null; } catch { return null; }
 }
 
-export interface LaunchRuntime { dir: string | null; version: string | null; env: NodeJS.ProcessEnv; label: string }
+const PLATFORM_LANE: Record<string, string> = { linux: 'linux', darwin: 'macos', win32: 'windows' };
 
-/** The launch dir and the env with it first on PATH; the env is unchanged when no candidate qualifies. */
+/** The project's pins as the resolver's eligibility hook, and its one applicable exact Bun pin. */
+export function projectBunPins(repoRoot: string | null): { pinExact: string | null; accept: (version: string) => boolean } {
+  const gstackPin = enginesBun(path.join(GSTACK_ROOT, 'package.json'));
+  const pins = repoRoot ? collectPins(repoRoot).filter(p => p.tool === 'bun') : [];
+  const here = PLATFORM_LANE[process.platform] ?? 'any';
+  const exact = [...new Set(pins.filter(p => p.kind === 'exact' && (p.lane === 'any' || p.lane === here)).map(p => p.constraint.replace(/^v/, '')))];
+  return {
+    pinExact: exact.length === 1 && parseVersion(exact[0]) ? exact[0] : null,
+    accept: (version: string) => (!gstackPin || satisfies(version, gstackPin) === true) && evaluatePins(pins, { bun: version }).failures.length === 0,
+  };
+}
+
+export interface LaunchRuntime {
+  dir: string | null;
+  version: string | null;
+  env: NodeJS.ProcessEnv;
+  label: string;
+  /** The install-verdict check: ok, drift (recorded Bun gone or changed), missing (GSTACK_CAPY=1 without one) or skipped. */
+  verdict: 'ok' | 'drift' | 'missing' | 'skipped';
+  verdictLine: string;
+}
+
+/** The Bun the lanes and guards run under, its dir first on PATH; the env is unchanged when nothing qualifies. */
 export function launchRuntime(repoRoot: string, env: NodeJS.ProcessEnv): LaunchRuntime {
-  const pins = [enginesBun(GSTACK_PACKAGE), enginesBun(path.join(repoRoot, 'package.json'))].filter((p): p is string => !!p);
-  const candidates = [env.BUN_INSTALL ? path.join(env.BUN_INSTALL, 'bin') : null, env.HOME ? path.join(env.HOME, '.bun', 'bin') : null].filter((d): d is string => !!d);
-  for (const dir of [...new Set(candidates)]) {
-    const bun = path.join(dir, 'bun');
-    try { fs.accessSync(bun, fs.constants.X_OK); } catch { continue; }
-    const r = spawnSync(bun, ['--version'], { encoding: 'utf8', timeout: 15_000, env });
-    const version = r.status === 0 ? (r.stdout ?? '').trim() : '';
-    if (!version || pins.some(pin => satisfies(version, pin) !== true)) continue;
-    return { dir, version, env: { ...env, PATH: [dir, env.PATH ?? ''].filter(Boolean).join(path.delimiter) }, label: `bun ${version} from ${dir}` };
+  let project: string | null = null;
+  try { project = fs.realpathSync(repoRoot); } catch { /* unresolvable: no project */ }
+  const checkout = sourceRoot(GSTACK_ROOT);
+  const file = findInstallVerdict(checkout, project, env);
+  const recorded = readInstallVerdict(file);
+  const bound = recorded && (recorded.schema_version === 1 || (recorded.project ?? '') === (project ?? '')) ? recorded : null;
+  const launch = (bin: string, version: string, why: string, verdict: LaunchRuntime['verdict'], verdictLine: string): LaunchRuntime => {
+    const dir = path.dirname(bin);
+    return { dir, version, env: { ...env, PATH: [dir, env.PATH ?? ''].filter(Boolean).join(path.delimiter) }, label: `bun ${version} at ${bin} (${why})${verdictLine ? `; ${verdictLine}` : ''}`, verdict, verdictLine };
+  };
+  let verdict: LaunchRuntime['verdict'] = 'skipped';
+  let verdictLine = '';
+  if (env.GSTACK_CAPY !== '1' && !bound) {
+    verdictLine = 'install verdict: not checked (no GSTACK_CAPY=1 and no verdict for this checkout and project)';
+  } else if (!bound) {
+    verdict = 'missing';
+    verdictLine = `install verdict: none for ${project ?? 'this directory'} at ${file}; fix: run the Capy skill installer (scripts/install.sh --check --for review) here ${resultCodeSuffix('INSTALL_UNVERIFIED')}`;
+  } else if (bound.bun_path) {
+    const now = fs.existsSync(bound.bun_path) ? bunVersionOf(bound.bun_path, env) : '';
+    if (now && now === bound.bun_version) return launch(bound.bun_path, now, 'recorded by the install verdict', 'ok', '');
+    verdict = 'drift';
+    verdictLine = `install verdict: recorded bun ${bound.bun_version} at ${bound.bun_path} ${now ? `now reports ${now}` : 'is gone'}; fix: re-run the Capy skill installer with --check (scripts/install.sh --check --for review) ${resultCodeSuffix('BUN_RESOLUTION_DRIFT')}`;
+  } else {
+    verdict = 'ok';
   }
-  return { dir: null, version: null, env, label: 'PATH (no verified Bun in $BUN_INSTALL/bin or ~/.bun/bin)' };
+  const { pinExact, accept } = projectBunPins(project);
+  const { resolution } = resolveBun({ store: bunStore(resolveStateRoot(env)), env, pinExact, accept });
+  if (resolution) return launch(resolution.bin, resolution.version, `resolved: ${resolution.rule}`, verdict, verdictLine);
+  return { dir: null, version: null, env, label: `PATH (no eligible Bun in the runtime store, $BUN_INSTALL/bin, ~/.bun/bin or PATH)${verdictLine ? `; ${verdictLine}` : ''}`, verdict, verdictLine };
 }

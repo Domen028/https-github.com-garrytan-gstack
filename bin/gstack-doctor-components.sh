@@ -4,8 +4,8 @@
 # freshness test is test/doctor-components.test.ts. Sourced by
 # bin/gstack-doctor-check.sh; Bash 3.2 builtins only.
 
-GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision"
-GSTACK_DOCTOR_CORE="runtime pins state-root privacy cores revision"
+GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision wrapper"
+GSTACK_DOCTOR_CORE="runtime pins state-root privacy cores revision wrapper"
 GSTACK_DOCTOR_HOSTS="claude codex"
 GSTACK_DOCTOR_OPTIONAL="codex-cli cso"
 GSTACK_DOCTOR_SKILLS="autoplan plan-ceo-review plan-eng-review plan-design-review plan-devex-review plan-tune office-hours spec review ship investigate codex cso browse qa qa-only design-review design-consultation design-html devex-review scrape skillify canary benchmark make-pdf diagram pair-agent open-gstack-browser setup-browser-cookies connect-chrome land-and-deploy benchmark-models careful claude-code context-restore context-save design-shotgun deslop-shared-libs document-generate document-release eval-plan freeze gstack-upgrade guard health ios-clean ios-design-review ios-fix ios-qa ios-sync landing-report learn retro setup-deploy setup-gbrain sync-gbrain test-audit unfreeze"
@@ -27,6 +27,7 @@ gstack_doctor_component_title() {
     privacy) printf '%s' 'privacy' ;;
     cores) printf '%s' 'cores' ;;
     revision) printf '%s' 'revision' ;;
+    wrapper) printf '%s' 'Capy skill copy (bootstrapper revision)' ;;
     *) return 1 ;;
   esac
 }
@@ -47,6 +48,7 @@ gstack_doctor_component_kind() {
     privacy) printf '%s' 'core' ;;
     cores) printf '%s' 'core' ;;
     revision) printf '%s' 'core' ;;
+    wrapper) printf '%s' 'core' ;;
     *) return 1 ;;
   esac
 }
@@ -191,6 +193,8 @@ gstack_result_anchor() {
     UPGRADE_FETCH_FAILED) printf '%s' 'upgrade-fetch-failed' ;;
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
     CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;
+    BUN_RESOLUTION_DRIFT) printf '%s' 'bun-resolution-drift' ;;
+    BUN_INSTALL_VERSION_INVALID) printf '%s' 'bun-install-version-invalid' ;;
     INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
     *) return 1 ;;
   esac
