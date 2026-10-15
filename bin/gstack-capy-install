@@ -233,7 +233,7 @@ else
     [ "$PINS_MODE" = parser ] || read_pins "$STORE/$WANT/bun"
     resolve || conflict "bun $WANT in $STORE does not satisfy $PROJECT's pins $(pins_text) (judged: ${_gb_judged:-none})"
   fi
-  [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && say "install version $INSTALL_VERSION (GSTACK_BUN_INSTALL_VERSION; default $GSTACK_BUN_DEFAULT)"
+  [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && say "install version $INSTALL_VERSION from GSTACK_BUN_INSTALL_VERSION (default $GSTACK_BUN_DEFAULT)"
   say "bun $RES_VER at $RES_BIN ($(gstack_bun_rule_text "$RES_RULE"); satisfies gstack's supported minimum $GSTACK_BUN_TESTED${PIN_EXACT:+ and the project pin $PIN_EXACT}$([ -z "$PIN_EXACT" ] && [ -n "$PIN" ] && printf ' and the project pin %s' "$PIN")$([ -z "$PIN_EXACT" ] && [ "$PINS_MODE" = parser ] && printf ' and the project pins'))"
 fi
 if [ -n "$RES_BIN" ] && [ "$(gstack_realpath "$(command -v bun 2>/dev/null || echo /nonexistent)" 2>/dev/null)" != "$RES_BIN" ]; then

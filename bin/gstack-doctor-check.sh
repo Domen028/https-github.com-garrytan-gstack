@@ -274,7 +274,7 @@ _dc_check_runtime() {
   found=$(bun --version </dev/null 2>/dev/null | clamp 'A-Za-z0-9.+-' 40)
   _dc_bun="$found"
   extra="$(_dc_shim_note)"
-  [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && extra="$extra; install version $GSTACK_BUN_INSTALL_VERSION (GSTACK_BUN_INSTALL_VERSION)"
+  [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && extra="$extra; install version $GSTACK_BUN_INSTALL_VERSION from GSTACK_BUN_INSTALL_VERSION"
   case "$(gstack_bun_status "$found")" in
     ok) _dc_row PASS runtime "bun $found at $where (floor $GSTACK_BUN_FLOOR, supported minimum $GSTACK_BUN_TESTED)$extra" ;;
     untested) _dc_row FAIL runtime "bun $found at $where is below the supported minimum $GSTACK_BUN_TESTED (above the security floor $GSTACK_BUN_FLOOR)$_dc_ln_note$extra" "$fix" RUNTIME_BELOW_MINIMUM ;;

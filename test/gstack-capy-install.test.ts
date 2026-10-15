@@ -481,7 +481,7 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     expect(f.calls().some(l => l.startsWith('curl ') || l.startsWith('setup '))).toBe(false);
     const r = run(f, ['--for', 'autoplan'], { GSTACK_BUN_INSTALL_VERSION: '1.4.2', STUB_CURL_ZIP: zipFor(f, '1.4.2') });
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(r.stdout).toContain('install version 1.4.2 (GSTACK_BUN_INSTALL_VERSION; default 1.4.3)');
+    expect(r.stdout).toContain('install version 1.4.2 from GSTACK_BUN_INSTALL_VERSION (default 1.4.3)');
     expect(r.stdout).toContain(`bun 1.4.2 at ${store(f, '1.4.2')}/bun (gstack's install default, from gstack's runtime store;`);
   });
 

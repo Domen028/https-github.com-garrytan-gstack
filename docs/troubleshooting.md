@@ -1243,15 +1243,60 @@ revision at or above the minimum. An interrupted install after the
 fast-forward leaves the trailer `fail`; the next install run completes it.
 
 <a id="capy-wrapper-stale"></a>
-### `gstack-capy-skill: owner action — Drive copy is wrapper <n>, minimum <m>; copy <root>/capy/skill/gstack/ (CAPY_WRAPPER_STALE)`
+### `FAIL wrapper — ... (CAPY_WRAPPER_STALE)` / `WARN wrapper — ...; owner action: ...` / `gstack-capy-skill: owner action — Drive copy is wrapper <n>, minimum <m>; ...`
 
-**Meaning.** The Capy skill folder that ran (the bootstrapper's
-`GSTACK_CAPY_WRAPPER`) is older than the checkout's `GSTACK_CAPY_MIN_WRAPPER`.
-The run continues through the checkout's own wrapper (`bin/gstack-capy-session`);
-only a checkout with no such wrapper refuses (`gstack: fail wrapper`).
+**Meaning.** The Capy skill folder is older than the checkout's
+`GSTACK_CAPY_MIN_WRAPPER` (`capy/support.env`). The doctor's `wrapper` row
+decides by the active wrapper's provenance (`GSTACK_CAPY_WRAPPER_REV` and
+`GSTACK_CAPY_WRAPPER_PATH`, exported by the bootstrapper): a current active
+wrapper passes, and a stale Drive copy elsewhere is a `WARN` row, an owner
+action that never fails the run. Without provenance (a direct
+`gstack-doctor --check`, or a pre-bootstrapper copy with no
+`GSTACK_CAPY_WRAPPER=` line, which reads as wrapper 0) it reads the Drive
+copies (`~/.capy/drive/*/skills/gstack/scripts/install.sh`, or only
+`GSTACK_CAPY_WRAPPER_PATH` when set) and fails only when every copy is stale,
+listing each with its revision. A stale active wrapper also fails.
 
-**Fix.** The owner copies `<checkout>/capy/skill/gstack/` over the skill folder
-(on Capy, the user-scope Drive `skills/gstack/`). Agents never write it.
+**Fix.** This session: run the checkout's own copy,
+`bash <checkout>/capy/skill/gstack/scripts/install.sh --check --for <skill>`;
+it carries current provenance, so it certifies with the stale Drive copy left
+unchanged. Owner: copy `<checkout>/capy/skill/gstack/` over the Drive skill
+folder (on Capy, the user-scope Drive `skills/gstack/`), or have Capy re-sync
+it. The message recurs every session until the Drive copy changes. Agents never
+write the skill folder.
+
+<a id="bun-resolution-drift"></a>
+### `FAIL runtime — bun resolution drifted: recorded bun <v> at <path> (<rule>), now <current>; changed: <what>; fix: ... (BUN_RESOLUTION_DRIFT)`
+
+**Meaning.** Install and `--check` resolve Bun through one contract
+(`gstack_bun_resolve` in `bin/gstack-bun-version.sh`, twinned by `resolveBun`
+in `lib/pregate/runtime.ts`): the project's exact pin and gstack's install
+default in the runtime store (`<state root>/runtimes/bun/<version>/bun`),
+`$BUN_INSTALL/bin`, `~/.bun/bin`, then PATH; the first Bun that satisfies
+gstack's minimum and every project pin wins. Install records the pick in the
+install verdict for this checkout and project (`bun_path`, `bun_version`,
+`bun_rule`). `--check` resolved a different Bun: the recorded binary was
+deleted or replaced, `BUN_INSTALL` or PATH changed, or a new candidate (a store
+Bun) now resolves first. The same code refuses a workflow start
+(`INSTALL: fail runtime — bun <v> at <path> is running, but the install
+verdict recorded ...`) when the Bun running is not the recorded one.
+
+**Fix.** Run the row's fix. When the current pick satisfies the pins it is the
+installer (it records the new resolution); otherwise it names the variable to
+restore (`export BUN_INSTALL=<recorded>`), the directory to put back on PATH,
+or the installer that re-downloads the recorded version into the store. The
+next `--check` passes.
+
+<a id="bun-install-version-invalid"></a>
+### `gstack-capy-install: GSTACK_BUN_INSTALL_VERSION=<v> is not a verified Bun at or above gstack's supported minimum ...; fix: ... (BUN_INSTALL_VERSION_INVALID)`
+
+**Meaning.** `GSTACK_BUN_INSTALL_VERSION` overrides the Bun the installer
+downloads when no exact project pin decides (`GSTACK_BUN_DEFAULT`, 1.4.3). It
+must be listed in `GSTACK_BUN_VERIFIED` (a SHA-256-verified archive) and sit at
+or above the supported minimum (`GSTACK_BUN_TESTED`). Nothing was installed.
+
+**Fix.** Unset the variable, or set it to one of the verified versions the
+message lists.
 
 <a id="install-unverified"></a>
 ### `INSTALL: fail verdict — <detail>; fix: ... (INSTALL_UNVERIFIED)`
