@@ -65,9 +65,15 @@ describe('lanes: a bracketed route test in a platform-only lane keeps its remote
       { cwd: repo.work, encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...repo.env } });
     const r = { out: run.stdout ?? '', err: `${run.stderr ?? ''}${run.error ? `\n${run.error.message}` : ''}` };
     expect(r.out, r.err).toContain('lane windows.yml/windows-shard: 2 files from manifest `node scripts/windows-list.js`');
+    const host = process.platform === 'win32' ? 'windows' : process.platform === 'darwin' ? 'macos' : 'linux';
+    const owed = [
+      { lane: 'free-tests.yml/unit', platform: 'linux', workflow: 'free-tests.yml', job: 'unit', tests: [route], receipt: null },
+      { lane: 'windows.yml/windows-shard', platform: 'windows', workflow: 'windows.yml', job: 'windows-shard', tests: [route], receipt: null },
+    ].filter((o) => o.platform !== host);
     const out = JSON.parse(fs.readFileSync(path.join(repo.work, '.gstack/tmp/pregate.json'), 'utf8'));
-    expect(out.requires_remote).toEqual([{ lane: 'windows.yml/windows-shard', platform: 'windows', workflow: 'windows.yml', job: 'windows-shard', tests: [route], receipt: null }]);
-    expect(r.out).toContain(`requires-remote windows.yml/windows-shard (windows): 1 test(s) — ${route}`);
+    expect(out.requires_remote).toEqual(owed);
+    for (const o of owed) expect(r.out).toContain(`requires-remote ${o.lane} (${o.platform}): 1 test(s) — ${route}`);
+    if (host === 'windows') expect(r.out, r.err).toContain(`ran: node --test '${route}'`);
     expect(BASE_PREGATE.selection['windows.yml/windows-shard']).toBe('node scripts/windows-list.js');
   });
 });
