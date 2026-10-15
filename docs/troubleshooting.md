@@ -795,6 +795,30 @@ auto-updater running its first update cannot make this check.)
 **Fix.** `bun upgrade`; the next session start resumes the update. To update
 now: `bun upgrade && cd <gstack checkout> && git pull --ff-only && ./setup`.
 
+<a id="bun-version-unreadable"></a>
+### `bun-version-unreadable: could not read the version of Bun at <path> (bun --version printed '<output>'); gstack <version> needs <floor> or newer (BUN_VERSION_UNREADABLE)`
+
+**Meaning.** Before moving the checkout, the auto-updater and `/gstack-upgrade`
+compare the Bun that setup would run with the incoming release's security
+floor. `bun --version` printed something that is not a version (shown, with
+control characters removed), so the comparison could not run and the update was
+held: nothing was installed or changed. `/gstack-upgrade` prints the same text
+after `BUN_VERSION_UNREADABLE:`. Earlier releases read an unreadable version,
+and every version under zsh, as "not below the floor" and went ahead (#3195).
+
+**Fix.** Reinstall Bun; `bun upgrade` may not run on a broken install. In Git
+Bash or a macOS/Linux terminal:
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+bun --version
+```
+
+**Expected result.** `bun --version` prints a version such as `1.4.2`, and the
+next session start (or `/gstack-upgrade`) updates.
+
+**Fixed in.** The first release after v1.91.101.0 (#3195).
+
 <a id="auto-update-incomplete"></a>
 ### `gstack auto-update: setup did not finish (<reason>); installed skills may be out of date. gstack retries automatically. Fix now: cd <dir> && ./setup`
 

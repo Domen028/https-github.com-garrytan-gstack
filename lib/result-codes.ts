@@ -557,6 +557,12 @@ export const RESULT_CODES = {
     summary: 'a Capy session (GSTACK_CAPY=1) has no passing install verdict for this checkout, HEAD and workflow, so the workflow refused to start',
     fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
   },
+  // Fix wave 2026-10-15, PR 1a (items 7 and 11).
+  BUN_VERSION_UNREADABLE: {
+    anchor: 'bun-version-unreadable',
+    summary: 'bun --version did not print a version gstack can compare with the incoming release\'s Bun floor, so the update was held and nothing was changed',
+    fix: 'reinstall Bun from https://bun.sh (bun upgrade may not run on a broken install), check that bun --version prints a version such as 1.4.2, then update again',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;
