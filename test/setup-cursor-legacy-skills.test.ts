@@ -50,6 +50,31 @@ describe.skipIf(process.platform === 'win32')('setup --host cursor removes 1.31-
     expect(existsSync(join(skills, 'gstack/SKILL.md'))).toBe(true);
   }, 120_000);
 
+  test('reviewer: only gstack-proven folders go and setup names them; user links outside any gstack checkout stay', () => {
+    const f = makeFixture();
+    const src = makeSource(f, join(f.home, '.claude/skills/gstack'));
+    const skills = join(f.home, '.cursor/skills');
+    legacy(skills, 'autoplan', join(src, 'autoplan/SKILL.md'));
+    // A real dir whose SKILL.md links into gstack, next to the user's own notes: only gstack's link goes.
+    legacy(skills, 'ship', join(src, 'ship/SKILL.md'));
+    put(join(skills, 'ship/my-notes.md'), 'mine\n');
+    // A sibling repo whose name only starts with gstack, a relative link, and a dangling link: none is gstack's.
+    put(join(f.home, 'tools/gstack-fork/fork-skill/SKILL.md'), '---\nname: fork-skill\n---\n');
+    legacy(skills, 'fork-skill', join(f.home, 'tools/gstack-fork/fork-skill/SKILL.md'));
+    put(join(f.home, 'dotfiles/rel/SKILL.md'), '---\nname: rel\n---\n');
+    legacy(skills, 'rel', '../../../dotfiles/rel/SKILL.md');
+    legacy(skills, 'gone', join(f.home, 'old-skills/gone/SKILL.md'));
+    const kept = Object.fromEntries(['fork-skill', 'rel', 'gone'].map(name => [name, tree(join(skills, name))]));
+
+    const r = runSetup(f, join(src, 'setup'), ['--host', 'cursor']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(lstatSync(join(skills, 'autoplan'), { throwIfNoEntry: false })).toBeUndefined();
+    expect(lstatSync(join(skills, 'ship/SKILL.md'), { throwIfNoEntry: false })).toBeUndefined();
+    expect(readFileSync(join(skills, 'ship/my-notes.md'), 'utf8')).toBe('mine\n');
+    for (const [name, before] of Object.entries(kept)) expect(tree(join(skills, name)), name).toEqual(before);
+    expect(r.stdout).toContain(`cleaned up old entries: autoplan ship (removed from ${skills})`);
+  }, 120_000);
+
   test('control: an install that fails before its new links exist keeps the legacy folders', () => {
     const f = makeFixture();
     const src = makeSource(f, join(f.home, '.claude/skills/gstack'));

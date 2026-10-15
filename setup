@@ -2655,7 +2655,7 @@ cleanup_old_claude_symlinks() {
     done
   fi
   if [ ${#removed[@]} -gt 0 ]; then
-    echo "  cleaned up old entries: ${removed[*]}"
+    echo "  cleaned up old entries: ${removed[*]} (removed from $skills_dir)"
   fi
 }
 
