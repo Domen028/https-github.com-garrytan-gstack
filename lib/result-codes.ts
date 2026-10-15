@@ -579,6 +579,12 @@ export const RESULT_CODES = {
     summary: 'no Git Bash found to run gstack\'s bash scripts on Windows',
     fix: 'install Git for Windows (winget install --id Git.Git -e), or set GSTACK_GIT_BASH to its bash.exe for good: in PowerShell, [Environment]::SetEnvironmentVariable(\'GSTACK_GIT_BASH\', \'C:\\Program Files\\Git\\bin\\bash.exe\', \'User\') and restart Claude Code, or add it to the "env" block of ~/.claude/settings.json',
   },
+  // Fix wave 2026-10-15, PR 3 (item 23, #1796).
+  IOS_LAUNCH_ENV_INVALID: {
+    anchor: 'ios-launch-env-invalid',
+    summary: 'GSTACK_IOS_LAUNCH_ENV is set but is not a JSON object of string to string, or sets a GSTACK_ variable the debug bridge reserves, so the app was not launched',
+    fix: 'set it to a JSON object such as GSTACK_IOS_LAUNCH_ENV=\'{"DEBUG_BRIDGE":"1"}\' (string values, no GSTACK_ keys), or unset it, then restart gstack-ios-qa-daemon',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

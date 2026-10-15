@@ -2698,7 +2698,12 @@ string literals, the `bin/<name>` → `test/<name>*.test.ts` convention or a
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
 for files with no behaviour, such as docs) in `.gstack/pregate.json`. `--explain`
-prints every mapping and why.
+prints every mapping and why. For a file with no lane it also prints the import
+specifiers in test files that resolved to no repo file (for example a
+`tsconfig.json` `paths` alias such as `@/lib/x` whose target is missing) and any
+`extends` hop that was not followed (only relative `extends`, at most 4 hops). If
+a test does cover the file, declare it under `dependencies`; if the resolver
+should have found it, report the specifier as a resolver gap.
 
 <a id="pregate-lane-failed"></a>
 ### `PREGATE_LANE_FAILED`
@@ -3077,3 +3082,26 @@ writes that state; it comes from a hand edit or an older runner.
 
 **Fix.** Answer the gate with `gstack-autoplan answer` until no approval is
 pending, and `revise --incorporates` or `--withdraw` each pending amendment.
+
+<a id="ios-launch-env-invalid"></a>
+### `ios-qa launch: GSTACK_IOS_LAUNCH_ENV ... so the app was not launched (<detail>); fix: ... (IOS_LAUNCH_ENV_INVALID)`
+
+**Meaning.** `gstack-ios-qa-daemon` forwards `GSTACK_IOS_LAUNCH_ENV` to
+`xcrun devicectl device process launch --environment-variables` whenever it
+launches the app under test. The value must be a JSON object whose keys are
+environment variable names and whose values are strings, and it may not set a
+`GSTACK_` variable (that namespace belongs to the debug bridge). Anything else
+(invalid JSON, an array, a number value, a `GSTACK_` key) refuses the launch,
+because launching without the variables an env-gated debug bridge needs would
+look like a working app with no bridge. The detail names the key and its type,
+never a value. Added in the release after v1.91.101.0.
+
+**Fix.** In the shell that starts the daemon (macOS Terminal or Claude Code on
+the Mac with the device):
+
+```bash
+export GSTACK_IOS_LAUNCH_ENV='{"DEBUG_BRIDGE":"1"}'
+```
+
+or `unset GSTACK_IOS_LAUNCH_ENV`, then restart `gstack-ios-qa-daemon`.
+
