@@ -47,6 +47,16 @@ if (-not $bash -or -not (Test-Path -LiteralPath $bash -PathType Leaf)) {
 # Arguments travel NUL-separated in a private file, never on the native command
 # line: PowerShell's native-argument quoting splits or merges arguments that
 # contain double quotes, so bash reads them back as an exact array instead.
+# The bash -c script itself holds no double quote either: Windows PowerShell
+# 5.1 passes native arguments the legacy way and strips them (#3130). It reads
+# the array with IFS empty and globbing off, which drops an empty argument, so
+# an empty argument is refused here before anything runs.
+for ($i = 0; $i -lt $args.Count; $i++) {
+    if ([string]$args[$i] -eq '') {
+        Write-Host ('setup.ps1: argument {0} is empty; setup takes no empty arguments. Nothing was installed or changed. (SETUP_PS1_EMPTY_ARGUMENT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#setup-ps1-empty-argument)' -f ($i + 1))
+        exit 2
+    }
+}
 $argFile = [System.IO.Path]::GetTempFileName()
 $writer = New-Object System.IO.StreamWriter($argFile, $false, (New-Object System.Text.UTF8Encoding($false)))
 try {
@@ -56,7 +66,7 @@ try {
 }
 Push-Location -LiteralPath $PSScriptRoot
 try {
-    & $bash -c 'mapfile -d "" -t argv < "$1"; rm -f "$1"; exec ./setup "${argv[@]}"' setup $argFile
+    & $bash -c 'set -f; IFS=; mapfile -d '''' -t argv < $1; rm -f -- $1; exec ./setup ${argv[@]}' setup $argFile
     $code = $LASTEXITCODE
 } finally {
     Pop-Location

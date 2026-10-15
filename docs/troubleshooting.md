@@ -1662,6 +1662,36 @@ Windows allows the binaries, re-run `./setup`; the message goes away.
 **Expected result.** setup prints no "Windows blocked" line, and
 `gstack-doctor` shows `ok` for `browse bundle` and `binaries`.
 
+<a id="setup-ps1-unexpected-eof"></a>
+### `setup: -c: line 1: unexpected EOF while looking for matching '"'` / `setup: -c: line 2: syntax error: unexpected end of file` from `.\setup.ps1`
+
+**Meaning.** Windows PowerShell 5.1 (`powershell.exe`, the default PowerShell
+on Windows) passes arguments to native programs the legacy way and strips
+the double quotes inside them. Until the release that fixed #3130,
+`setup.ps1` handed Git Bash a `bash -c` script with double quotes in it, so
+bash read a broken script and nothing was installed. PowerShell 7.3 and newer
+were not affected.
+
+**Fix.** Update gstack (in Git Bash: `cd ~/.claude/skills/gstack && git pull
+--ff-only`), then run `.\setup.ps1` again: its script no longer holds a
+double quote. Until then, run `./setup` from Git Bash, or `.\setup.ps1` from
+PowerShell 7 (`pwsh`).
+
+<a id="setup-ps1-empty-argument"></a>
+### `setup.ps1: argument N is empty; setup takes no empty arguments. Nothing was installed or changed. (SETUP_PS1_EMPTY_ARGUMENT; ...)`
+
+**Meaning.** One of the arguments you gave `.\setup.ps1` is an empty string
+(for example `''` or an unset variable such as `$hostName`). setup takes no
+empty arguments, and the way `setup.ps1` hands arguments to Git Bash under
+Windows PowerShell 5.1 cannot carry one, so it refuses before running
+anything.
+
+**Fix.** Drop the empty argument, or give it a value:
+
+```powershell
+.\setup.ps1 --host codex
+```
+
 ---
 
 ## Memory and gbrain

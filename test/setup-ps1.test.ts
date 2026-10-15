@@ -2,7 +2,11 @@
  * setup.ps1: the Windows entry point checks Git for Windows, Bun and Node.js,
  * then runs ./setup in Git Bash with every argument passed as its own argv
  * entry, never pasted into shell source. The behavioral cases copy the script
- * next to a stub ./setup that prints its argv and run it under pwsh.
+ * next to a stub ./setup that prints its argv and run it under pwsh, and
+ * under Windows PowerShell 5.1's legacy native-argument passing: pwsh with
+ * $PSNativeCommandArgumentPassing = 'Legacy' here, powershell.exe on Windows
+ * (#3130: the 5.1 legacy mode stripped the double quotes inside the bash -c
+ * script, and bash failed with "unexpected EOF").
  */
 import { describe, test, expect, afterEach } from 'bun:test';
 import * as fs from 'fs';
@@ -28,6 +32,28 @@ function stubCheckout(): string {
   return dir;
 }
 
+const IS_WIN = process.platform === 'win32';
+/** Windows PowerShell 5.1 itself on Windows; elsewhere pwsh in Legacy argument mode. */
+function runPs1Legacy(dir: string, args: string[], env: Record<string, string | undefined> = {}) {
+  let cmd: string;
+  let argv: string[];
+  if (IS_WIN) {
+    cmd = 'powershell.exe';
+    argv = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(dir, 'setup.ps1'), ...args];
+  } else {
+    fs.writeFileSync(path.join(dir, 'legacy.ps1'), "$PSNativeCommandArgumentPassing = 'Legacy'\n& (Join-Path $PSScriptRoot 'setup.ps1') @args\nexit $LASTEXITCODE\n");
+    cmd = PWSH!;
+    argv = ['-NoProfile', '-NonInteractive', '-File', path.join(dir, 'legacy.ps1'), ...args];
+  }
+  const r = spawnSync(cmd, argv, {
+    cwd: os.tmpdir(),
+    encoding: 'utf-8',
+    env: { ...process.env, ...(IS_WIN ? {} : { GSTACK_GIT_BASH: BASH! }), ...env },
+    timeout: 60_000,
+  });
+  return { code: r.status, out: (r.stdout || '') + (r.stderr || '') };
+}
+
 function runPs1(dir: string, args: string[], env: Record<string, string | undefined> = {}) {
   const r = spawnSync(PWSH!, ['-NoProfile', '-NonInteractive', '-File', path.join(dir, 'setup.ps1'), ...args], {
     cwd: os.tmpdir(),
@@ -40,7 +66,9 @@ function runPs1(dir: string, args: string[], env: Record<string, string | undefi
 
 describe('setup.ps1', () => {
   test('passes arguments NUL-separated through a private file to a constant bash script', () => {
-    expect(SOURCE).toContain(`& $bash -c 'mapfile -d "" -t argv < "$1"; rm -f "$1"; exec ./setup "\${argv[@]}"' setup $argFile`);
+    expect(SOURCE).toContain(`& $bash -c 'set -f; IFS=; mapfile -d '''' -t argv < $1; rm -f -- $1; exec ./setup \${argv[@]}' setup $argFile`);
+    const script = SOURCE.match(/& \$bash -c '((?:[^']|'')*)' setup \$argFile/)![1]!;
+    expect(script).not.toContain('"');
     expect(SOURCE).toContain('foreach ($arg in $args) { $writer.Write([string]$arg); $writer.Write([char]0) }');
     expect(SOURCE).not.toMatch(/-join|Invoke-Expression|\biex\b|git-bash\.exe/);
     expect([...SOURCE].every((c) => c.charCodeAt(0) < 128)).toBe(true);
@@ -72,5 +100,34 @@ describe('setup.ps1', () => {
     expect(out).toContain('Bun: winget install --id Oven-sh.Bun -e');
     expect(out).not.toContain('Git for Windows:');
     expect(out).not.toContain('arg=[');
+  });
+
+  // Arguments Node cannot hand to powershell.exe intact are left out on Windows:
+  // there the command line is parsed before setup.ps1 sees it.
+  const ADVERSARIAL = ['--host', 'codex', 'two words', '$(touch PWNED)', "it's", ';echo injected', '`whoami`', '*',
+    ...(IS_WIN ? [] : ['"quoted"', 'a\\"b\\'])];
+
+  test.skipIf((!PWSH && !IS_WIN) || !BASH)('Windows PowerShell 5.1 (legacy argument passing): forwards every argument literally, with a space in TMPDIR', () => {
+    const dir = stubCheckout();
+    const tmp = path.join(dir, 'temp with space');
+    fs.mkdirSync(tmp);
+    const { code, out } = runPs1Legacy(dir, ADVERSARIAL, { TMPDIR: tmp, TEMP: tmp, TMP: tmp });
+    expect(out).not.toContain('unexpected EOF');
+    expect(code, out).toBe(7);
+    expect(out.split(/\r?\n/).filter((l) => l.startsWith('arg=['))).toEqual(ADVERSARIAL.map((a) => `arg=[${a}]`));
+    expect(out).not.toContain('injected\n');
+    expect(fs.existsSync(path.join(dir, 'PWNED'))).toBe(false);
+    expect(fs.existsSync(path.join(os.tmpdir(), 'PWNED'))).toBe(false);
+    expect(fs.readdirSync(tmp)).toEqual([]);
+  });
+
+  test.skipIf((!PWSH && !IS_WIN) || !BASH)('an empty argument is refused before anything runs', () => {
+    const dir = stubCheckout();
+    for (const run of [runPs1Legacy, ...(PWSH ? [runPs1] : [])]) {
+      const { code, out } = run(dir, ['--host', '', 'codex']);
+      expect(code, out).toBe(2);
+      expect(out).toContain('setup.ps1: argument 2 is empty; setup takes no empty arguments. Nothing was installed or changed. (SETUP_PS1_EMPTY_ARGUMENT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#setup-ps1-empty-argument)');
+      expect(out).not.toContain('arg=[');
+    }
   });
 });
