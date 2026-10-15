@@ -276,6 +276,9 @@ jobs:
       - name: Build trusted CSO helper used by free contract tests
         run: bun run build:cso
       - name: Run the quick free tier on the install-default Bun
+        env:
+          GSTACK_FREE_RETRY_FLAKY: "1"
+          GSTACK_FLAKE_LEDGER: ${{ runner.temp }}/flake-ledger.jsonl
         run: xvfb-run -a bun run test:quick
 
   free-suite:

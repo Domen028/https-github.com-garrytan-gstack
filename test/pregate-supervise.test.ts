@@ -105,10 +105,12 @@ describe('supervise: per-file progress adapters', () => {
     fs.writeFileSync(path.join(dir, 'a.test.ts'), bunTest("test('a', () => expect(1).toBe(1));"));
     fs.writeFileSync(path.join(dir, 'b.test.ts'), bunTest("test('b', () => expect(1).toBe(2));"));
     const files = ['a.test.ts', 'b.test.ts'];
-    const r = await run(dir, `${process.execPath} test ${files.join(' ')}`, { files, adapter: 'bun' });
-    expect(r.exit).toBe(1);
-    const events = r.lines.filter(l => l.startsWith('PREGATE_TEST:')).map(l => l.replace(/ \d+\.\d$/, ''));
-    expect(events).toEqual(['PREGATE_TEST: 1/2 a.test.ts start', 'PREGATE_TEST: 1/2 a.test.ts pass', 'PREGATE_TEST: 2/2 b.test.ts start', 'PREGATE_TEST: 2/2 b.test.ts fail']);
+    for (const ci of ['', 'true']) {
+      const r = await run(dir, `GITHUB_ACTIONS=${ci} ${process.execPath} test ${files.join(' ')}`, { files, adapter: 'bun' });
+      expect(r.exit).toBe(1);
+      const events = r.lines.filter(l => l.startsWith('PREGATE_TEST:')).map(l => l.replace(/ \d+\.\d$/, ''));
+      expect(events).toEqual(['PREGATE_TEST: 1/2 a.test.ts start', 'PREGATE_TEST: 1/2 a.test.ts pass', 'PREGATE_TEST: 2/2 b.test.ts start', 'PREGATE_TEST: 2/2 b.test.ts fail']);
+    }
     const unsupported = await run(dir, 'echo "test a.test.ts ok"; echo "test b.test.ts ok"', { files, adapter: null });
     expect(unsupported.lines.some(l => l.startsWith('PREGATE_TEST:'))).toBe(false);
   });

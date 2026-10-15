@@ -123,7 +123,7 @@ export function supervise(o: SuperviseOptions): Promise<Supervised> {
     const lines = text.split('\n');
     partial = lines.pop() ?? '';
     for (const line of lines) {
-      const header = /^(\S.*):$/.exec(line);
+      const header = /^(?:::group::)?(\S.*):$/.exec(line);
       if (header && files.has(header[1]!)) { finishFile(); startFile(header[1]!); continue; }
       if (/^\s*\d+\s+pass$/.test(line) || /^Ran \d+ tests? across/.test(line) || /^\s*\d+\s+tests? failed:?$/.test(line)) { finishFile(); continue; }
       if (current && /^\(fail\)\s/.test(line)) current.failed = true;
