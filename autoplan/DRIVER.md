@@ -74,7 +74,7 @@ line yourself; gstack never writes the plan.
 - `gstack-autoplan status|resume --out <dir>`
   read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts).
 - `gstack-autoplan resume --out <new dir> --from <checkpoint>`
-  restore a hash-verified checkpoint (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership.
+  restore the newest valid checkpoint generation (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership; `checkpoints --from <dir>` lists them.
 
 ## Reviewer result format
 
@@ -128,7 +128,7 @@ is the completion check. Copy the whole directory, never single files.
 - `GATE_OWNER_REPLY_MISMATCH`: relay exactly what the owner chose (or their reply itself, e.g. `--reply rec`); ask the owner when their words and the tokens disagree
 - `PLAN_AMEND_PENDING`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; settle a packaging or ordering change with `gstack-autoplan revise --out <dir> --settle <id>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`
 - `AMENDMENT_NOT_SETTLEABLE`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>` (add `--settle <id>` to settle packaging/ordering changes in the same call); settle alone only on the plan the run already reviews
-- `CHECKPOINT_INVALID`: restore from an intact copy of `<GSTACK_AUTOPLAN_CHECKPOINT_DIR>/<run>/` (its `restore.md` names the command); nothing was written to --out
+- `CHECKPOINT_INVALID`: run `gstack-autoplan checkpoints --from <dir>` to see each generation's hash status and restore an intact one; nothing was written to --out
 - `GSTACK_VERSION_CHANGED`: nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade
 
 ## Coordinator contract (inherited by every lane)

@@ -543,8 +543,13 @@ export const RESULT_CODES = {
   },
   CHECKPOINT_INVALID: {
     anchor: 'checkpoint-invalid',
-    summary: 'the autoplan checkpoint cannot be restored: its manifest is unreadable, a listed file is missing, escapes the checkpoint or does not match its sha256',
-    fix: 'restore from an intact copy of `<GSTACK_AUTOPLAN_CHECKPOINT_DIR>/<run>/` (its `restore.md` names the command); nothing was written to --out',
+    summary: 'no autoplan checkpoint generation can be restored: a manifest is unreadable, a listed file is missing, escapes the generation (by path or symlink) or does not match its sha256, or the staged run does not validate',
+    fix: 'run `gstack-autoplan checkpoints --from <dir>` to see each generation\'s hash status and restore an intact one; nothing was written to --out',
+  },
+  CHECKPOINT_OVERLAP: {
+    anchor: 'checkpoint-overlap',
+    summary: 'the checkpoint directory and the run directory (or the restore target) are the same directory or one contains the other, symlinks resolved',
+    fix: 'point GSTACK_AUTOPLAN_CHECKPOINT_DIR (or --from / --out) at a directory outside the run; nothing was moved or deleted',
   },
   CHECKPOINT_TARGET_EXISTS: {
     anchor: 'checkpoint-target-exists',

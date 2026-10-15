@@ -83,7 +83,7 @@ export function readState(out: string): RunState {
   state.out = path.resolve(out);
   if (previous && previous !== state.out) {
     const reroot = (p: string | undefined) => (p && p.startsWith(previous + path.sep) ? path.join(state.out, path.relative(previous, p)) : p);
-    state.active_plan = reroot(state.active_plan)!; state.restore = reroot(state.restore)!;
+    state.active_plan = reroot(state.active_plan)!; state.restore = reroot(state.restore)!; state.plan_source = reroot(state.plan_source)!; state.plan_input = reroot(state.plan_input);
     for (const ps of Object.values(state.phases)) {
       ps.snapshot_dir = reroot(ps.snapshot_dir); ps.snapshot_path = reroot(ps.snapshot_path); ps.methodology = reroot(ps.methodology);
       if (ps.prompts) for (const k of Object.keys(ps.prompts) as Array<keyof typeof ps.prompts>) ps.prompts[k] = reroot(ps.prompts[k])!;

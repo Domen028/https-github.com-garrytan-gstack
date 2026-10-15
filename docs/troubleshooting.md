@@ -2841,16 +2841,32 @@ tokens are never refused.
 <a id="checkpoint-invalid"></a>
 ### `CHECKPOINT_INVALID`
 
-**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` refused
-the checkpoint: `checkpoint.json` is unreadable or not a schema_version 1
-checkpoint, or a listed file is missing, is not a regular file, escapes the
-checkpoint directory, or does not match its recorded sha256. Nothing was
-written to `--out`.
+**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` found no
+generation it can restore: a `checkpoint.json` is unreadable or not a
+schema_version 1 checkpoint, a listed file is missing, is not a regular file,
+escapes the generation (an `..` path or a symlinked directory), or does not
+match its recorded sha256; or the staged run does not pass
+`gstack-artifact validate`. `--from` naming a run's collection restores the
+newest generation that verifies, skipping corrupt newer ones; a root holding
+several runs must name one. Nothing was written to `--out`.
 
-**Fix.** Restore from an intact copy. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR`
-set, every command that leaves the run at rest rewrites
-`<dir>/<run>/` (its `restore.md` names the exact command); a copy that was
-edited or partially synced fails here by design.
+**Fix.** `gstack-autoplan checkpoints --from <dir>` lists every generation
+with `hash=ok` or `hash=bad (<reason>)`; restore an intact one by passing its
+directory. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set, every command that
+leaves the run at rest publishes a new generation and keeps the previous one.
+
+<a id="checkpoint-overlap"></a>
+### `CHECKPOINT_OVERLAP`
+
+**Meaning.** The checkpoint directory for this run and the run directory (or,
+on restore, the checkpoint and `--out` or its staging directory) are the same
+directory or one contains the other, after resolving symlinks. Copying one
+into the other would replace or delete the live run, so nothing was touched.
+A checkpoint refusal after a committed command prints `CHECKPOINT: failed …`
+on stderr and leaves that command's exit code alone.
+
+**Fix.** Point `GSTACK_AUTOPLAN_CHECKPOINT_DIR` (or `--from` / `--out`) at a
+directory outside the run, for example the private project-user Drive folder.
 
 <a id="checkpoint-target-exists"></a>
 ### `CHECKPOINT_TARGET_EXISTS`
