@@ -148,7 +148,7 @@ describe.skipIf(process.platform === 'win32')('gstack-session-update stages (B11
     expireThrottle(fx);
     const second = runHook(fx);
     expect(second.stdout.trim().split('\n')).toEqual([
-      `gstack auto-update: setup did not finish (./setup exited 1: error: could not build browse); installed skills may be out of date. gstack retries automatically. Fix now: cd ${fx.install} && ./setup`,
+      `gstack auto-update: setup did not finish (./setup exited 1: error: could not build browse); installed skills may be out of date. gstack retries automatically. Fix now: cd '${fx.install}' && ./setup`,
     ]);
     await waitFor(fx, /PENDING_BACKOFF stages=setup/);
     expect(setupRuns(fx)).toBe(1);
@@ -194,7 +194,7 @@ describe.skipIf(process.platform === 'win32')('gstack-session-update stages (B11
     expect(fs.existsSync(marker(fx))).toBe(false);
     expect(setupRuns(fx)).toBe(0);
     expireThrottle(fx);
-    expect(runHook(fx, { noBun: true }).stdout).toContain(`(bun not found on PATH); installed skills may be out of date. gstack retries automatically. Fix now: install Bun (https://bun.sh), then cd ${fx.install} && ./setup`);
+    expect(runHook(fx, { noBun: true }).stdout).toContain(`(bun not found on PATH); installed skills may be out of date. gstack retries automatically. Fix now: install Bun (https://bun.sh), then cd '${fx.install}' && ./setup`);
   });
 
   test('a failed migration is its own stage', async () => {
@@ -242,7 +242,7 @@ describe.skipIf(process.platform === 'win32')('gstack-session-update Bun floor (
 
     expireThrottle(fx);
     expect(runHook(fx, { bun: '1.3.2' }).stdout.trim()).toBe(
-      `gstack auto-update: update held (bun-too-old: found Bun 1.3.2 at ${stub}; gstack 1.1.0 needs 1.3.3 or newer); nothing was installed or changed. Fix now: bun upgrade && cd ${fx.install} && git pull --ff-only && ./setup`,
+      `gstack auto-update: update held (bun-too-old: found Bun 1.3.2 at ${stub}; gstack 1.1.0 needs 1.3.3 or newer); nothing was installed or changed. Fix now (in a terminal; Git Bash on Windows): bun upgrade && cd '${fx.install}' && git fetch origin && bash bin/gstack-ff-update . '@{upstream}' && ./setup`,
     );
     await waitFor(fx, /HELD bun-too-old/, 2);
     expect(head(fx)).toBe(before);

@@ -919,17 +919,174 @@ cannot be checked before the pull; setup then refuses the broken hook (see the
 entry above).
 
 <a id="auto-update-hook-check-unavailable"></a>
-### `gstack auto-update: update held (hook-check-unavailable: <reason>); nothing was installed or changed, and your current hooks keep running. ... Fix now: cd <dir> && git pull --ff-only --autostash && ./setup ...`
+### `gstack auto-update: update held (hook-check-unavailable: <reason>); nothing was installed or changed, and your current hooks keep running. ... Fix now (in a terminal; Git Bash on Windows): cd '<dir>' && git fetch origin && bash bin/gstack-ff-update . '@{upstream}' && ./setup ...`
 
 **Meaning.** Neither the incoming release's hook checker nor your installed
 one gave a verified report on the incoming hooks (a crash, no output, an
-unreadable report, or no Bun to bundle the TypeScript hooks), so the
-auto-updater cannot tell whether moving your checkout would break Claude Code
-tool calls. It left your checkout, skills and hooks at the current revision.
-The `<reason>` names what each checker did.
+unreadable report, or no Bun to bundle the TypeScript hooks), or the incoming
+revision could not be extracted for the check (`cannot extract the incoming
+revision: <git's error>`), so the auto-updater cannot tell whether moving your
+checkout would break Claude Code tool calls. It left your checkout, skills and
+hooks at the current revision. The `<reason>` names what each checker did.
 
-**Fix.** Run the printed command. Setup checks every hook it registers and
-says what is wrong (for example that Bun is missing).
+**Fix.** Run the printed command. `bin/gstack-ff-update` moves the checkout
+without losing a local edit (see
+[shelved edits](#auto-update-rescued-edits)), and setup checks every hook it
+registers and says what is wrong (for example that Bun is missing).
+
+On Windows, if the reason is `git archive of the incoming revision failed`,
+your updater predates the fix for #3184: see
+[the held-install recovery](#auto-update-held-install-recovery).
+
+<a id="auto-update-held-install-recovery"></a>
+### `HELD hook-check-unavailable: git archive of the incoming revision failed` / `gstack auto-update: update held (hook-check-unavailable: git archive of the incoming revision failed) ...` / `gstack auto-update: setup did not finish (bun not found on PATH) ...` on Windows
+
+**Meaning.** From 1.91.89.0 to the release that fixed #3184, the auto-updater
+extracted each incoming release with `git archive | tar` before checking its
+hooks. Git for Windows' MSYS `tar` cannot create the `connect-chrome` symlink
+because it comes before its target in the archive, so every release was held
+(`~/.gstack/analytics/session-update.log` shows the `HELD` line), and a stale
+`setup did not finish (bun not found on PATH)` line could hide the hold. Your
+installed updater cannot deliver its own fix, and the old `/gstack-upgrade`
+can leave conflict markers when a local edit conflicts. The recovery fetches
+the new `bin/gstack-ff-update` from the new revision into a private temp
+directory and runs it. It works on a clean install, an install with local
+edits that conflict, an install that already has unmerged files, and a
+prefix-mode install: regenerable `SKILL.md` and `sections/*.md` edits are
+re-rendered by setup, and every other edit is kept in a rescue ref (the
+command prints it; see [shelved edits](#auto-update-rescued-edits)).
+
+**Fix, in Git Bash** (use your install directory if it is not
+`~/.claude/skills/gstack`):
+
+<!-- form:recovery-gitbash -->
+```bash
+cd ~/.claude/skills/gstack && git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > "$d/gstack-ff-update" && bash "$d/gstack-ff-update" . FETCH_HEAD; s=$?; rm -rf "$d"; [ "$s" = 0 ] && ./setup
+```
+
+**Fix, in Windows PowerShell 5.1** (it runs the same script through Git's
+`bash.exe`, then `.\setup.ps1`):
+
+<!-- form:recovery-powershell -->
+```powershell
+Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; IFS=; git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > $d/gstack-ff-update && bash $d/gstack-ff-update . FETCH_HEAD; s=$?; rm -rf -- $d; exit $s'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }
+```
+
+**In Claude Code**, ask it to run the Git Bash form above.
+
+**Expected result.** The script prints `ok <old> <new>` or
+`rescued <old> <new> refs/gstack/rescue/<oid> unmerged=<0|1>`, setup
+finishes with exit 0, the next session start prints no held line, and later
+updates install on their own.
+
+**Trying an unreleased fix, and going back.** A fix branch can be tried
+before it ships; auto-update pauses while a detached revision is checked out.
+Replace `<branch>` with the branch named in the issue.
+
+<!-- form:trial-gitbash -->
+```bash
+cd ~/.claude/skills/gstack && git checkout -- 'SKILL.md' '*/SKILL.md' '*/sections/*.md' && git fetch origin <branch> && git checkout --detach FETCH_HEAD && ./setup
+```
+
+<!-- form:trial-powershell -->
+```powershell
+Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; git checkout -- SKILL.md */SKILL.md */sections/*.md && git fetch origin <branch> && git checkout --detach FETCH_HEAD'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }
+```
+
+To go back to the released version (this also resumes auto-update):
+
+<!-- form:goback-gitbash -->
+```bash
+cd ~/.claude/skills/gstack && git checkout -- 'SKILL.md' '*/SKILL.md' '*/sections/*.md' && git checkout main && ./setup
+```
+
+<!-- form:goback-powershell -->
+```powershell
+Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; git checkout -- SKILL.md */SKILL.md */sections/*.md && git checkout main'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }
+```
+
+<a id="auto-update-unmerged-files"></a>
+### `gstack auto-update: update held (unmerged-files: <n> unmerged file(s) in the install (first: <path>)); an earlier merge, rebase or stash pop left conflicts in the install, and an update would bury them. Fix now (...): cd '<dir>' && git fetch origin && bash bin/gstack-ff-update . '@{upstream}' && ./setup ...`
+
+**Meaning.** Your gstack checkout has unmerged files: conflict markers from a
+merge, rebase or `git stash pop` of your own, or from an auto-updater older
+than the fix for this (its `merge --autostash` left markers in place when a
+local edit conflicted). The background updater never moves a checkout with
+unmerged files, and it prints no "setup did not finish" fix while they exist,
+because setup would run over the markers.
+
+**Fix.** Run the printed command. It saves everything first, the unmerged
+files included, in a rescue ref labelled "needs manual resolution", then
+moves the checkout to the release and runs setup. Read the rescue with the
+commands under [shelved edits](#auto-update-rescued-edits). To resolve the
+conflict yourself instead, finish or abort your merge (`git -C '<dir>' merge
+--abort`, `git -C '<dir>' checkout -- <file>`); gstack retries at the next
+check.
+
+<a id="auto-update-autostash-unrecoverable"></a>
+### `gstack auto-update: update held (autostash-unrecoverable: <reason>); your local edits are where they were and nothing was installed. Look first: git -C '<dir>' status --short. Fix now (...)` / `autostash-unrecoverable: <reason>`
+
+**Meaning.** `bin/gstack-ff-update` refused to move the checkout and changed
+nothing. The `<reason>` says why: an untracked file is where the release
+puts a tracked one (`git refused to update ...: would be overwritten`), a
+file changed while the update ran, another git command held the index lock
+(`index.lock exists`), or a rescue ref of that name already names another
+commit.
+
+**Fix.** Run the `status` command the line prints, move the listed untracked
+file out of the way (or wait for the other git command to finish), then run
+the printed `Fix now` command. Nothing needs restoring: your edits are still
+in the working tree.
+
+<a id="auto-update-rescued-edits"></a>
+### `gstack auto-update: your local edits in the install (<files>) conflicted with an update, so they were saved in refs/gstack/rescue/<oid> and the install runs the update. ...` / `rescued <old> <new> refs/gstack/rescue/<oid> unmerged=<0|1>`
+
+**Meaning.** You had edited tracked files in your gstack checkout, and the
+release changed the same lines (or you had staged changes or unmerged files).
+Instead of leaving conflict markers in the checkout Claude Code runs hooks
+from, `bin/gstack-ff-update` saved your edits as one commit,
+`refs/gstack/rescue/<oid>`, and moved the checkout to the release. The
+rescue's first parent is the revision you had, so it holds only your changes;
+its second parent holds what you had staged. Edits that did not conflict stay
+in place, and regenerable `SKILL.md` and `sections/*.md` edits (skill prefix,
+gbrain blocks) are re-rendered by setup instead of being rescued. The
+session-start line repeats once a day until you delete the ref.
+
+**Fix.** Inspect first:
+
+```bash
+git -C ~/.claude/skills/gstack show --stat 'refs/gstack/rescue/<oid>'
+```
+
+To keep your edits, export only your changes and apply them in a scratch
+checkout (never with `stash apply` in the install):
+
+```bash
+git -C ~/.claude/skills/gstack diff 'refs/gstack/rescue/<oid>^' 'refs/gstack/rescue/<oid>' > ~/gstack-local-edits.patch
+git clone https://github.com/garrytan/gstack.git ~/gstack-scratch && cd ~/gstack-scratch && git apply -3 ~/gstack-local-edits.patch
+```
+
+A rescue labelled "needs manual resolution" holds files that were already
+unmerged: their content can contain conflict markers to resolve. Delete the
+ref when you are done (this also stops the daily line):
+
+```bash
+git -C ~/.claude/skills/gstack update-ref -d 'refs/gstack/rescue/<oid>'
+```
+
+<a id="auto-update-bun-version-unreadable"></a>
+### `gstack auto-update: update held (bun-version-unreadable: <detail>); nothing was installed or changed. gstack could not read the version of the Bun that setup runs ...`
+
+**Meaning.** The auto-updater checks the Bun that setup will run against the
+incoming release's Bun floor before it moves your checkout. That Bun's
+`--version` printed something that is not a version, so the floor cannot be
+checked and the update is held rather than risk setup running on a Bun below
+it.
+
+**Fix.** Reinstall Bun from https://bun.sh (or with your package manager),
+open a new terminal and check that `bun --version` prints a version such as
+`1.4.2`. `bun upgrade` uses the same unreadable binary, so it is not the fix.
+gstack retries at the next check.
 
 <a id="setup-runtime-root-contains-checkout"></a>
 ### `gstack setup: refusing to replace <root> for <host>: this runtime directory contains the source checkout setup runs from (<checkout>), so replacing it would delete the checkout. Nothing was changed.`
