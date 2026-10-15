@@ -9,6 +9,11 @@ import { PTY_SHUTDOWN_GRACE_MS } from '../src/terminal-pty-lifecycle';
 const AGENT_SCRIPT = path.join(import.meta.dir, '../src/terminal-agent.ts');
 const EXT_ORIGIN = `chrome-extension://${GSTACK_EXTENSION_ID}`;
 const linux = process.platform === 'linux';
+// The agent's graceful shutdown is its SIGTERM/SIGINT handler (terminal-agent.ts
+// cleanup). On Windows, Bun's subprocess.kill('SIGTERM') is TerminateProcess, so
+// that handler never runs, and the PTY fixture is a bash shebang script that
+// CreateProcess cannot launch: the signal-driven tests are POSIX-scoped.
+const posixSignals = process.platform !== 'win32';
 
 function waitForFile(file: string, timeoutMs = 5000): string {
   const deadline = Date.now() + timeoutMs;
@@ -103,7 +108,7 @@ async function allDeadBy(pids: number[], deadline: number): Promise<boolean> {
 const HUP_IMMUNE_GRANDCHILD = `( trap '' INT TERM HUP; echo "$BASHPID" > "$GSTACK_TEST_PID_DIR/grandchild.pid"; while :; do sleep 1; done ) &`;
 
 describe('terminal-agent shutdown reaps its PTY process groups (#3147)', () => {
-  test('SIGTERM reaps every active PTY child before terminal-agent exits', async () => {
+  test.skipIf(!posixSignals)('SIGTERM reaps every active PTY child before terminal-agent exits', async () => {
     await withAgent([
       'echo "$$" > "$GSTACK_TEST_PID_DIR/pty-child.pid"',
       "trap '' INT TERM HUP",
