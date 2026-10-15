@@ -154,6 +154,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/redact-diagram/**': ['test/redact-context-exemptions.test.ts'],
   'test/fixtures/remote-identity-vectors.json': ['test/bin-context-windows-slug.test.ts', 'test/gstack-slug-parity.test.ts', 'test/remote-identity-vectors.test.ts'],
   'test/fixtures/review-design-lite-reports-ci-36633323521.json': ['test/review-finalization-budget.test.ts'],
+  'test/fixtures/session-update-heartbeat.sh': ['test/session-update-heartbeat.test.ts'],
   'test/fixtures/shard-cli-parity/**': ['test/shard-cli-parity.test.ts'],
   'test/fixtures/shard-equivalence/**': ['test/shard-engine-equivalence.test.ts'],
   'test/fixtures/shared-libs-no-change-ci-public.json': ['test/shared-libs-fixture.test.ts'],
