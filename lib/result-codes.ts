@@ -389,6 +389,11 @@ export const RESULT_CODES = {
     summary: 'a check timed out, its tool is unavailable, or the tree changed while it ran; the result is incomplete, never pass',
     fix: 'install the named tool or raise --timeout, keep the tree still during the run, then rerun the check',
   },
+  PREGATE_STALLED: {
+    anchor: 'pregate-stalled',
+    summary: 'a test command printed nothing for the stall timeout, so its process group was killed; the check is incomplete, never pass',
+    fix: 'read the lane log for the last file started, fix the hang, or raise `--stall-timeout` (`stall_timeout_s`; 0 disables) for a test that is quiet for longer, then rerun `gstack-pregate --stage tests`',
+  },
   PREGATE_STALE: {
     anchor: 'pregate-stale',
     summary: 'pregate.json was recorded against a different tree than the one being published',

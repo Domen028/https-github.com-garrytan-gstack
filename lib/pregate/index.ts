@@ -40,16 +40,18 @@ export function applyDowngrades(ctx: PregateContext, result: CheckResult, def: C
   return { ...result, status: 'warn', detail: `${result.detail} (downgraded to warn by ${ctx.configLabel})` };
 }
 
-export function runPregate(ctx: PregateContext, o: RunOptions): PregateFile {
+export async function runPregate(ctx: PregateContext, o: RunOptions): Promise<PregateFile> {
   const selected = CHECKS.filter(c => (o.stage === 'all' || c.stage === o.stage) && (!o.only || o.only.includes(c.id)));
   const checks: CheckResult[] = [];
   const clocks: Record<Stage, number> = { preflight: 0, tests: 0 };
   for (const def of selected) {
     const started = Date.now();
-    const result = applyDowngrades(ctx, withFingerprint(ctx, def.id, def.stage, () => def.run(ctx)), def);
+    const result = applyDowngrades(ctx, await withFingerprint(ctx, def.id, def.stage, () => def.run(ctx)), def);
     clocks[def.stage] += Date.now() - started;
     checks.push({ ...result, stage: def.stage });
   }
+  const tests = checks.filter(c => c.stage === 'tests');
+  if (tests.length) ctx.progress(`PREGATE: tests ${verdictOf({ schema_version: 1, tree: ctx.wtree, checks: tests, requires_remote: tests.flatMap(c => c.remote ?? []) })} in ${(clocks.tests / 1000).toFixed(1)}s — ${tests.map(c => `${c.id}: ${c.detail ?? c.status}`).join('; ')}`);
   const remote: PregateRemote[] = checks.flatMap(c => c.remote ?? []).map(r => ({ ...r }));
   const file: PregateFile = {
     schema_version: 1, tree: ctx.wtree, head: ctx.head, base: `${ctx.baseRef}@${ctx.baseSha.slice(0, 12)}`, generated_at: new Date().toISOString(),
@@ -82,7 +84,10 @@ export function renderTable(file: PregateFile, opts: { lines?: boolean } = { lin
     file.stage1_ms !== undefined ? `stage 1 (mechanical preflight): ${file.stage1_ms} ms` : null,
     file.stage2_ms !== undefined ? `stage 2 (test execution): ${file.stage2_ms} ms` : null,
   ].filter(Boolean);
-  const remote = (file.requires_remote ?? []).map(r => `requires-remote: ${r.lane} (${r.platform}) ${r.tests.length} test(s) — ${r.receipt ? `cleared by ${r.receipt}` : 'uncleared; clear with gstack-pregate clear --remote ' + r.lane + ' --run-url <url>'}`);
+  const remote = (file.requires_remote ?? []).map(r => {
+    const run = r.command ? `run ${r.command.length > 200 ? `${r.command.slice(0, 200)}… (full command in pregate.json)` : r.command}, then ` : '';
+    return `requires-remote: ${r.lane} (${r.platform}) ${r.tests.length} test(s) — ${r.receipt ? `cleared by ${r.receipt}` : `uncleared; ${run}clear with gstack-pregate clear --remote ${r.lane} --run-url <url>`}`;
+  });
   return [
     `stage      check     status            time  detail`,
     ...rows, ...body, ...clocks, ...remote,
