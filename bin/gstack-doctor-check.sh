@@ -432,7 +432,8 @@ _dc_wrapper_rev() {
 
 # _dc_check_wrapper — the Capy skill copy. The active wrapper's provenance
 # (GSTACK_CAPY_WRAPPER_REV/PATH, exported by the bootstrapper) decides: current
-# passes, and a stale Drive copy elsewhere is a WARN for the owner. Without
+# passes; an active copy below the minimum, or a stale Drive copy elsewhere, is
+# a WARN for the owner (an older copy still works, capy/support.env). Without
 # provenance (a direct doctor run, or a wrapper too old to export it) the Drive
 # copies decide: GSTACK_CAPY_WRAPPER_PATH when it names one, else every
 # ~/.capy/drive/*/skills/gstack/scripts/install.sh, failing only when each is
@@ -455,7 +456,7 @@ _dc_check_wrapper() {
   fi
   if [ -n "${GSTACK_CAPY_WRAPPER_REV:-}" ]; then
     if [ "$GSTACK_CAPY_WRAPPER_REV" -lt "$min" ] 2>/dev/null; then
-      _dc_row FAIL wrapper "the active Capy skill copy ${active:-<unknown>} is wrapper $GSTACK_CAPY_WRAPPER_REV, minimum $min" "$workaround; owner: $owner" CAPY_WRAPPER_STALE
+      _dc_row WARN wrapper "the active Capy skill copy ${active:-<unknown>} is wrapper $GSTACK_CAPY_WRAPPER_REV, minimum $min (it still works)" "$owner" CAPY_WRAPPER_STALE
     elif [ -n "$stale" ]; then
       _dc_row WARN wrapper "active wrapper $GSTACK_CAPY_WRAPPER_REV (${active:-unknown path}) is current; stale Drive copies (minimum $min): $stale" "$owner" CAPY_WRAPPER_STALE
     else

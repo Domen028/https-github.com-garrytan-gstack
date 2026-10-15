@@ -238,8 +238,12 @@ describe('gstack-upgrade', () => {
     'echo "capy-install $* cwd=$(pwd -P)" >> "$UPGRADE_LOG"',
     'case " $* " in *" --project "*)',
     '  [ -n "${STUB_PIN_CONFLICT:-}" ] && { echo "gstack-capy-install: Bun conflict: gstack needs >=1.4.2 (verified archives: 1.4.2 1.4.3), $2/package.json pins exactly 1.3.14; fix: raise the project\'s pin (RUNTIME_PIN_CONFLICT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-install-runtime-conflict)" >&2; exit 3; }',
-    '  [ -n "${STUB_PINS_FAIL:-}" ] && { echo "FAIL pins — bun 1.4.2 outside CI 1.4.3; fix: x (PROJECT_PIN_MISMATCH; d)"; echo "gstack: fail pins"; exit 1; } ;;',
+    '  [ -n "${STUB_PINS_FAIL:-}" ] && { echo "FAIL pins — bun 1.4.2 outside CI 1.4.3; fix: x (PROJECT_PIN_MISMATCH; d)"; echo "gstack: fail pins"; exit 1; }',
+    '  [ -n "${STUB_PROJECT_STOP:-}" ] && { echo "gstack-capy-install: preflight: jq not found; fix: install jq (INSTALL_PREFLIGHT_FAILED; d)" >&2; exit 3; } ;;',
     'esac',
+    'echo "wrapper-env rev=${GSTACK_CAPY_WRAPPER_REV:-} path=${GSTACK_CAPY_WRAPPER_PATH:-}" >> "$UPGRADE_LOG.env"',
+    '[ -n "${STUB_STOP:-}" ] && { echo "gstack-capy-install: preflight: curl not found; fix: install curl (INSTALL_PREFLIGHT_FAILED; d)" >&2; exit 3; }',
+    '[ -n "${STUB_WRAPPER_FAIL:-}" ] && { echo "FAIL wrapper — every Capy skill copy is stale; fix: x (CAPY_WRAPPER_STALE; d)"; echo "gstack: fail wrapper"; exit 1; }',
     '[ -f "${STUB_FAIL_ONCE:-/nonexistent}" ] && { rm -f "$STUB_FAIL_ONCE"; echo "gstack: fail setup — ./setup failed"; exit 1; }',
     'echo "gstack: ok $(cat "$(dirname "$0")/../VERSION") for=autoplan"',
   ].join('\n') + '\n';
@@ -303,6 +307,35 @@ describe('gstack-upgrade', () => {
     expect(resumed.stdout).toContain('gstack-upgrade: current 1.0.1; reinstall pending from 1.0.0');
     expect(fs.existsSync(f.pending)).toBe(false);
     expect(f.calls().at(-1)).toBe(`capy-install --project ${f.project} cwd=${f.project}`);
+  });
+
+  // Integration items 2 and 9: the wrapper row is never a reinstall failure,
+  // and every installer stop line becomes a trailer.
+  test('a reinstall whose only failing row is wrapper leaves no pending marker; the installer runs with the checkout copy as the active wrapper', () => {
+    const f = capyFixture();
+    write(path.join(f.root, 'capy/skill/gstack/scripts/install.sh'), 'GSTACK_CAPY_WRAPPER=7\n');
+    const r = f.from(fs.realpathSync(f.host.base), [], { STUB_WRAPPER_FAIL: '1' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('gstack: fail wrapper');
+    expect(r.stdout).toContain('only the wrapper row failed (an owner action on the Drive copy, CAPY_WRAPPER_STALE), so no reinstall is pending');
+    expect(r.stderr).not.toContain('completes the pending reinstall');
+    expect(fs.existsSync(f.pending)).toBe(false);
+    const again = f.from(fs.realpathSync(f.host.base));
+    expect(again.stdout).not.toContain('reinstall pending');
+    expect(fs.readFileSync(path.join(f.host.base, 'calls.log.env'), 'utf8')).toContain(`rev=7 path=${f.root}/capy/skill/gstack/scripts/install.sh`);
+  });
+
+  test('an installer stop line maps to `gstack: fail runtime — <msg>`: in the caller-project check (no pending) and in the reinstall (pending kept)', () => {
+    const f = capyFixture();
+    const cert = f.from(f.project, [], { STUB_PROJECT_STOP: '1' });
+    expect(cert.status).toBe(1);
+    expect(cert.stdout.trim().split('\n').at(-1)).toBe('gstack: fail runtime — preflight: jq not found; fix: install jq (INSTALL_PREFLIGHT_FAILED; d)');
+    expect(fs.existsSync(f.pending)).toBe(false);
+    const g = capyFixture();
+    const re = g.from(g.project, [], { STUB_STOP: '1' });
+    expect(re.status).toBe(1);
+    expect(re.stdout.trim().split('\n').at(-1)).toBe('gstack: fail runtime — preflight: curl not found; fix: install curl (INSTALL_PREFLIGHT_FAILED; d)');
+    expect(fs.existsSync(g.pending)).toBe(true);
   });
 
   test('off Capy the caller\'s project is certified by the doctor\'s runtime and pins rows', () => {

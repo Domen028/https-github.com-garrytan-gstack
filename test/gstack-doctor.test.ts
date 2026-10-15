@@ -829,7 +829,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(parse(f, [], { GSTACK_CAPY_WRAPPER_PATH: stale }).trailer).toBe('gstack: fail wrapper');
   });
 
-  test('the printed workaround certifies: a current active wrapper passes with the stale Drive copy unchanged (WARN, owner action); a stale active wrapper fails', () => {
+  test('the printed workaround certifies: a current active wrapper passes with the stale Drive copy unchanged (WARN, owner action); a stale active wrapper is a WARN too', () => {
     const f = makeFixture();
     withSupport(f);
     const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
@@ -844,8 +844,11 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(json.rows.find((x: { id: string }) => x.id === 'wrapper')).toMatchObject({ status: 'WARN', code: 'CAPY_WRAPPER_STALE' });
     withSupport(f, 2);
     const old = parse(f, [], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: stale });
-    expect(old.trailer).toBe('gstack: fail wrapper');
-    expect(old.line('wrapper')).toContain(`FAIL wrapper — the active Capy skill copy ${stale} is wrapper 1, minimum 2`);
+    // Integration item 2: an active copy below the minimum still works, so it
+    // is an owner-action WARN and the trailer stays ok.
+    expect(old.status, old.out).toBe(0);
+    expect(old.trailer).toMatch(/^gstack: ok /);
+    expect(old.line('wrapper')).toBe(`WARN wrapper — the active Capy skill copy ${stale} is wrapper 1, minimum 2 (it still works); owner action: copy ${f.root}/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes (CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)`);
   });
 
   test('a drifted Bun resolution is a runtime FAIL carrying the installer\'s detail, fix and BUN_RESOLUTION_DRIFT', () => {

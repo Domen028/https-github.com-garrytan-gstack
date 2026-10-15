@@ -77,6 +77,23 @@ REMOTE_VER=$(git -C "$ROOT" show FETCH_HEAD:VERSION 2>/dev/null | head -1)
 PENDING="$(git -C "$ROOT" rev-parse --absolute-git-dir)/gstack-upgrade.pending"
 CAPY=0
 [ -f "$(git -C "$ROOT" rev-parse --absolute-git-dir)/gstack-capy-install.state" ] && [ -x "$ROOT/bin/gstack-capy-install" ] && CAPY=1
+# Run outside a Capy session, the installer this script starts is the
+# checkout's own; say so, so the doctor's wrapper row judges that copy.
+if [ "$CAPY" -eq 1 ] && [ -z "${GSTACK_CAPY_WRAPPER_REV:-}" ] && [ -f "$ROOT/capy/skill/gstack/scripts/install.sh" ]; then
+  GSTACK_CAPY_WRAPPER_REV=$(sed -n 's/^GSTACK_CAPY_WRAPPER=\([0-9][0-9]*\).*/\1/p' "$ROOT/capy/skill/gstack/scripts/install.sh" | head -1)
+  [ -n "$GSTACK_CAPY_WRAPPER_REV" ] && export GSTACK_CAPY_WRAPPER_REV GSTACK_CAPY_WRAPPER_PATH="$ROOT/capy/skill/gstack/scripts/install.sh"
+fi
+# stop_trailer ERRFILE — an installer stop line (exit 3, before ./setup) as a
+# trailer: a RUNTIME_PIN_CONFLICT is `gstack: fail pins`, any other stop
+# `gstack: fail runtime`.
+stop_trailer() {
+  _stop=$(grep -E '^gstack-capy-install: .*\([A-Z][A-Z_]*;' "$1" | tail -1)
+  case "$_stop" in
+    '') ;;
+    *'(RUNTIME_PIN_CONFLICT;'*) echo "gstack: fail pins — ${_stop#gstack-capy-install: }" ;;
+    *) echo "gstack: fail runtime — ${_stop#gstack-capy-install: }" ;;
+  esac
+}
 # certify — the caller's project (see the header); exits with its outcome.
 certify() {
   [ -n "$CALLER_PROJECT" ] && [ "$REINSTALL" -eq 1 ] || exit 0
@@ -84,10 +101,10 @@ certify() {
     _err=$(mktemp "${TMPDIR:-/tmp}/gstack-upgrade.XXXXXX")
     (cd "$CALLER" && "$ROOT/bin/gstack-capy-install" --project "$CALLER_PROJECT" </dev/null 2>"$_err")
     _rc=$?
-    _conflict=$(grep '(RUNTIME_PIN_CONFLICT;' "$_err" | tail -1)
-    cat "$_err" >&2; rm -f "$_err"
-    [ "$_rc" -eq 0 ] && exit 0
-    [ -n "$_conflict" ] && echo "gstack: fail pins — ${_conflict#gstack-capy-install: }"
+    cat "$_err" >&2
+    [ "$_rc" -eq 0 ] && { rm -f "$_err"; exit 0; }
+    [ "$_rc" -eq 3 ] && stop_trailer "$_err"
+    rm -f "$_err"
     exit 1
   fi
   (cd "$CALLER" && "$ROOT/bin/gstack-doctor" --check --require runtime,pins --project "$CALLER_PROJECT" </dev/null) && exit 0
@@ -97,19 +114,32 @@ reinstall() { # FROM — run the install step; a pending marker survives a failu
   # With a project to certify next, the installer's own trailer is held back
   # (printed only when the reinstall fails), so no ok precedes a pins failure.
   printf '%s\n' "$1" > "$PENDING"
-  _held=$(mktemp "${TMPDIR:-/tmp}/gstack-upgrade.XXXXXX")
+  _held=$(mktemp "${TMPDIR:-/tmp}/gstack-upgrade.XXXXXX") _ierr=$(mktemp "${TMPDIR:-/tmp}/gstack-upgrade.XXXXXX")
   if [ "$CAPY" -eq 1 ]; then
-    (cd "$ROOT" && GSTACK_CAPY_UPGRADED_FROM="$1" "$ROOT/bin/gstack-capy-install" </dev/null) | while IFS= read -r _line; do
-      case "$_line" in "gstack: "*) [ -n "$CALLER_PROJECT" ] && { printf '%s\n' "$_line" > "$_held"; continue; } ;; esac
+    (cd "$ROOT" && GSTACK_CAPY_UPGRADED_FROM="$1" "$ROOT/bin/gstack-capy-install" </dev/null 2>"$_ierr") | while IFS= read -r _line; do
+      case "$_line" in "gstack: "*) printf '%s\n' "$_line" > "$_held"; continue ;; esac
       printf '%s\n' "$_line"
     done
     _rc=${PIPESTATUS[0]}
+    cat "$_ierr" >&2
   else
     (cd "$ROOT" && ./setup --refresh-registered </dev/null)
     _rc=$?
   fi
-  if [ "$_rc" -eq 0 ]; then rm -f "$PENDING" "$_held"; certify; fi
-  cat "$_held"; rm -f "$_held"
+  # The wrapper row is an owner action on the Drive copy, never a reinstall
+  # failure: no pending marker for it.
+  if [ "$_rc" -ne 0 ] && [ "$(cat "$_held")" = "gstack: fail wrapper" ]; then
+    rm -f "$PENDING"
+    echo "gstack-upgrade: reinstalled $(head -1 "$ROOT/VERSION"); only the wrapper row failed (an owner action on the Drive copy, CAPY_WRAPPER_STALE), so no reinstall is pending"
+  fi
+  if [ "$_rc" -eq 0 ]; then
+    [ -n "$CALLER_PROJECT" ] || cat "$_held"
+    rm -f "$PENDING" "$_held" "$_ierr"; certify
+  fi
+  [ -s "$_held" ] && cat "$_held"
+  [ "$_rc" -eq 3 ] && [ ! -s "$_held" ] && stop_trailer "$_ierr"
+  rm -f "$_held" "$_ierr"
+  [ -f "$PENDING" ] || exit 1
   echo "gstack-upgrade: the checkout is at $(head -1 "$ROOT/VERSION") but its reinstall failed (exit $_rc); fix: re-run $ROOT/bin/gstack-upgrade (it completes the pending reinstall)" >&2
   exit 1
 }
