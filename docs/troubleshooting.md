@@ -3105,3 +3105,29 @@ export GSTACK_IOS_LAUNCH_ENV='{"DEBUG_BRIDGE":"1"}'
 
 or `unset GSTACK_IOS_LAUNCH_ENV`, then restart `gstack-ios-qa-daemon`.
 
+<a id="outside-voice-unavailable"></a>
+### `Outside voice unavailable: <cause>. Fix: <fix>. Continuing to ... (OUTSIDE_VOICE_UNAVAILABLE)`
+
+**Meaning.** `/plan-ceo-review`, `/plan-eng-review` or `/plan-devex-review` ran
+without a second opinion. The outside provider (Codex, or Claude Code under the
+Codex host) did not run or failed, and the native fallback could not supply a
+bounded review either. That fallback dispatches the built-in Plan subagent in
+the background next to a five-minute background timer, and stops whichever is
+still running when the other ends. The cause names which part was missing:
+`Plan agent type not offered`, `TaskStop not offered`, `background tasks
+unavailable`, `no complete report within five minutes`, or a failed status.
+The review-log row carries the same cause as `unavailable_reason`. Claude Code
+2.1.277 removed the TaskOutput tool the fallback used before, so on older
+gstack every native fallback on current Claude Code ended here.
+
+**What is kept.** The native plan review itself is complete. The row is
+recorded with `status: unavailable`, never as a clean review; a late or partial
+reviewer result is not counted.
+
+**Fix.** Repair the provider the line names: install it, or run `codex login`
+(in your terminal or Git Bash). For the native fallback, run Claude Code 2.1.277
+or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`
+unset, not in bare mode). Then re-run the review.
+
+**Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
+review — outside voice)` when the provider runs.

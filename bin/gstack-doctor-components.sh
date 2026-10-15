@@ -197,6 +197,7 @@ gstack_result_anchor() {
     BUN_VERSION_UNREADABLE) printf '%s' 'bun-version-unreadable' ;;
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
+    OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
     *) return 1 ;;
   esac
 }

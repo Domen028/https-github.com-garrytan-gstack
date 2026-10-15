@@ -585,6 +585,12 @@ export const RESULT_CODES = {
     summary: 'GSTACK_IOS_LAUNCH_ENV is set but is not a JSON object of string to string, or sets a GSTACK_ variable the debug bridge reserves, so the app was not launched',
     fix: 'set it to a JSON object such as GSTACK_IOS_LAUNCH_ENV=\'{"DEBUG_BRIDGE":"1"}\' (string values, no GSTACK_ keys), or unset it, then restart gstack-ios-qa-daemon',
   },
+  // Fix wave 2026-10-15, PR 4 (item 17, #3182).
+  OUTSIDE_VOICE_UNAVAILABLE: {
+    anchor: 'outside-voice-unavailable',
+    summary: 'a plan review ran without its second opinion: the outside provider did not run or failed, and the bounded native Plan reviewer was not offered or did not finish within five minutes',
+    fix: 'repair the provider the line names (install it, or log in with `codex login`); for the native fallback use Claude Code 2.1.277 or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` unset), then re-run the review',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;
