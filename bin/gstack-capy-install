@@ -212,13 +212,19 @@ install_bun() { # VERSION REASON — download, verify and publish Bun VERSION at
     TMP=$(mktemp -d "$STORE/.tmp.XXXXXX") || stop INSTALL_PREFLIGHT_FAILED "cannot create a temp dir in $STORE" "set GSTACK_STATE_ROOT to a writable directory"
     curl --retry 3 -fsSL "https://github.com/oven-sh/bun/releases/download/bun-v$WANT/bun-$TARGET.zip" -o "$TMP/bun.zip" || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "could not download bun-v$WANT/bun-$TARGET.zip" "check network access to github.com, then re-run"; }
     echo "$SHA  $TMP/bun.zip" | sha256sum -c - >/dev/null 2>&1 || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "bun-$TARGET.zip SHA-256 mismatch (expected $SHA); nothing installed" "update gstack_bun_archive_sha256 in bin/gstack-bun-version.sh only after checking the release's SHASUMS256.txt"; }
-    mkdir "$TMP/pub" && (cd "$TMP" && unzip -qo bun.zip) && install -m 0755 "$TMP/bun-$TARGET/bun" "$TMP/pub/bun" || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "could not unpack bun into $STORE" "install unzip, or set GSTACK_STATE_ROOT to a writable directory"; }
+    mkdir "$TMP/pub" && (cd "$TMP" && unzip -qo bun.zip) && install -m 0755 "$TMP/bun-$TARGET/bun" "$TMP/pub/bun" && ln -s bun "$TMP/pub/bunx" || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "could not unpack bun into $STORE" "install unzip, or set GSTACK_STATE_ROOT to a writable directory"; }
     _got=$("$TMP/pub/bun" --version 2>/dev/null | head -1)
     [ "$_got" = "$WANT" ] || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "the downloaded bun reports $_got, expected $WANT; nothing installed" "re-run; report it if it repeats"; }
-    [ -e "$STORE/$WANT" ] && mv -T "$STORE/$WANT" "$TMP/replaced"
-    mv -T "$TMP/pub" "$STORE/$WANT" || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "could not publish $STORE/$WANT" "check $STORE, then re-run"; }
+    # Publish without a window: a new version directory is renamed into
+    # place; in an existing one each file is renamed over its predecessor.
+    if [ -d "$STORE/$WANT" ] && [ ! -L "$STORE/$WANT" ]; then
+      mv -fT "$TMP/pub/bun" "$STORE/$WANT/bun" && mv -fT "$TMP/pub/bunx" "$STORE/$WANT/bunx"
+    else
+      rm -f "$STORE/$WANT" && mv -T "$TMP/pub" "$STORE/$WANT"
+    fi || { rm -rf "$TMP"; stop INSTALL_PREFLIGHT_FAILED "could not publish $STORE/$WANT" "check $STORE, then re-run"; }
     rm -rf "$TMP"
   fi
+  [ -e "$STORE/$WANT/bunx" ] || [ -L "$STORE/$WANT/bunx" ] || ln -s bun "$STORE/$WANT/bunx" 2>/dev/null || true
   exec 8>&-
   say "bun $WANT installed at $STORE/$WANT/bun"
 }
@@ -338,11 +344,13 @@ fi
 # The store, verdict directory, checkout and install default are baked in, so
 # a fresh shell needs no environment; rewritten when they change. Only a
 # missing file or one carrying the marker is replaced.
+shq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 write_shim() {
-  local dir="$HOME/.local/bin" name tmp
+  local dir="$HOME/.local/bin" name tmp STORE_REAL
   [ "${GSTACK_BUN_SHIM:-1}" != 0 ] || return 0
   [ -n "${CAPY_MACHINE_CONFIG:-}" ] || [ -d "$HOME/.capy/system" ] || return 0
-  mkdir -p "$dir" || { say "could not create $dir; no bun shim written"; return 0; }
+  mkdir -p "$dir" "$STORE" || { say "could not create $dir or $STORE; no bun shim written"; return 0; }
+  STORE_REAL=$(cd -P "$STORE" && pwd -P) || return 0
   exec 8>"$HOME/.gstack-runtime.lock"
   command -v flock >/dev/null 2>&1 && flock -w 60 8
   for name in bun bunx; do
@@ -352,57 +360,96 @@ write_shim() {
     fi
     tmp="$dir/.$name.gstack.$$"
     if [ "$name" = bunx ]; then
-      printf '#!/bin/sh\n%s\n# The Capy bunx shim: bun x through the bun shim beside it (docs/capy-install.md).\nexec %s x "$@"\n' "$GSTACK_BUN_SHIM_MARKER" "'$dir/bun'" > "$tmp"
+      printf '#!/bin/sh\n%s\n# The Capy bunx shim: bun x through the bun shim beside it (docs/capy-install.md).\nexec %s x "$@"\n' "$GSTACK_BUN_SHIM_MARKER" "$(shq "$dir/bun")" > "$tmp"
     else
-      cat > "$tmp" <<EOF_SHIM
-#!/bin/sh
-$GSTACK_BUN_SHIM_MARKER
-# The Capy bun shim, written by $ROOT/bin/gstack-capy-install: runs the Bun
-# recorded for the project around the working directory (docs/capy-install.md).
+      {
+        printf '#!/bin/sh\n%s\n' "$GSTACK_BUN_SHIM_MARKER"
+        printf '# The Capy bun shim, written by %s.\n' "$(printf '%s' "$ROOT/bin/gstack-capy-install" | tr -d '\n')"
+        printf 'store=%s\n' "$(shq "$STORE_REAL")"
+        printf 'verdicts=%s\n' "$(shq "$(dirname "$(gstack_install_verdict_path "$GSTACK_STATE_ROOT" "$ROOT_REAL" "")")")"
+        printf 'checkout=%s\n' "$(shq "$ROOT_REAL")"
+        printf 'default=%s\nminimum=%s\nfloor=%s\n' "$(shq "$INSTALL_VERSION")" "$(shq "$GSTACK_BUN_TESTED")" "$(shq "$GSTACK_BUN_FLOOR")"
+        printf 'marker=%s\n' "$(shq "$GSTACK_BUN_SHIM_MARKER")"
+        printf 'fix=%s\n' "$(shq "${GSTACK_CAPY_WRAPPER_PATH:+bash }${GSTACK_CAPY_WRAPPER_PATH:-$ROOT/bin/gstack-capy-install} --check")"
+        cat <<'EOF_SHIM'
+# Runs the Bun recorded for the project around the working directory, or the
+# 'none' record outside a project and inside the gstack checkout; else the
+# resolver's order: the store copy of an exact project pin, the store default,
+# $BUN_INSTALL/bin, ~/.bun/bin, then PATH, first at or above the supported
+# minimum, then at or above the security floor (docs/capy-install.md).
 # GSTACK_BUN_SHIM_EXPLAIN=1 prints the project root, record, choice and rule.
-store='$STORE'
-verdicts='$(dirname "$(gstack_install_verdict_path "$GSTACK_STATE_ROOT" "$ROOT_REAL" "")")'
-checkout='$ROOT_REAL'
-default='$INSTALL_VERSION'
-marker='$GSTACK_BUN_SHIM_MARKER'
-sha() { if command -v sha256sum >/dev/null 2>&1; then printf '%s' "\$1" | sha256sum | cut -d' ' -f1; else printf '%s' "\$1" | shasum -a 256 | cut -d' ' -f1; fi; }
-root="" record="" chose="" rule=""
-dir=\$(pwd -P 2>/dev/null) || dir=""
-while [ -n "\$dir" ]; do
-  [ -e "\$dir/.git" ] && { root=\$dir; break; }
-  [ "\$dir" = / ] && break
-  dir=\${dir%/*}; [ -n "\$dir" ] || dir=/
+set -f
+explain() { [ "${GSTACK_BUN_SHIM_EXPLAIN:-}" = 1 ] && echo "gstack bun shim: $*" >&2; return 0; }
+sha() { if command -v sha256sum >/dev/null 2>&1; then printf '%s' "$1" | sha256sum | cut -d' ' -f1; else printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; fi; }
+is_shim() { head -c 512 "$1" 2>/dev/null | grep -aqF "$marker"; }
+ge() { # A B: version A is at or above B (a prerelease sorts below its release)
+  case "$1" in *-*) pre=1 ;; *) pre=0 ;; esac
+  gifs=$IFS; IFS=.; set -- ${1%%[-+]*} $2; IFS=$gifs
+  [ $# -eq 6 ] || return 1
+  for n in "$@"; do case "$n" in ''|*[!0-9]*) return 1 ;; esac; done
+  [ "$1" -ne "$4" ] && { [ "$1" -gt "$4" ]; return; }
+  [ "$2" -ne "$5" ] && { [ "$2" -gt "$5" ]; return; }
+  [ "$3" -ne "$6" ] && { [ "$3" -gt "$6" ]; return; }
+  [ "$pre" = 0 ]
+}
+in_store() { # VERSION: the store's VERSION/bun when VERSION is x.y.z and the file is a real binary inside the store
+  printf '%s\n' "$1" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+' || return 1
+  d=$(cd -P "$store/$1" 2>/dev/null && pwd -P) || return 1
+  [ "$d" = "$store/$1" ] && [ -f "$d/bun" ] && [ ! -L "$d/bun" ] && [ -x "$d/bun" ] && ! is_shim "$d/bun" && printf '%s/bun' "$d"
+}
+root="" record="" chose="" rule="" pin=""
+dir=$(pwd -P 2>/dev/null) || dir=""
+while [ -n "$dir" ]; do
+  [ -e "$dir/.git" ] && { root=$dir; break; }
+  [ "$dir" = / ] && break
+  dir=${dir%/*}; [ -n "$dir" ] || dir=/
 done
-if [ -n "\$root" ]; then
-  key=\$root; [ "\$root" = "\$checkout" ] && key=none
-  record="\$verdicts/\$(sha "\$key").json"
-  if [ -f "\$record" ]; then
-    b=\$(sed -n 's/^ "bun_path": "\(.*\)",\$/\1/p' "\$record" | head -1)
-    [ -n "\$b" ] && [ -x "\$b" ] && chose=\$b rule=record
-  else
-    record="" pin=""
-    [ -f "\$root/.bun-version" ] && pin=\$(head -1 "\$root/.bun-version" | tr -d ' v\r')
-    [ -n "\$pin" ] || pin=\$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9.]*\)".*/\1/p' "\$root/package.json" 2>/dev/null | head -1)
-    [ -n "\$pin" ] || pin=\$(sed -n 's/.*"bun"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "\$root/package.json" 2>/dev/null | head -1)
-    if [ -n "\$pin" ] && [ -x "\$store/\$pin/bun" ]; then chose="\$store/\$pin/bun" rule=pin
-    else echo "gstack bun shim: \$root has no recorded Bun; run ${GSTACK_CAPY_WRAPPER_PATH:+bash }${GSTACK_CAPY_WRAPPER_PATH:-$ROOT/bin/gstack-capy-install} --check here" >&2
+key=${root:-none}; [ "$root" = "$checkout" ] && key=none
+record="$verdicts/$(sha "$key").json"
+if [ -f "$record" ]; then
+  b=$(sed -n 's/^ "bun_path": "\(.*\)",$/\1/p' "$record" | head -1)
+  [ -n "$b" ] && [ -f "$b" ] && [ -x "$b" ] && ! is_shim "$b" && chose=$b rule=record
+else
+  record=""
+fi
+if [ -z "$chose" ] && [ "$key" != none ]; then
+  [ -f "$root/.bun-version" ] && pin=$(head -1 "$root/.bun-version" | tr -d ' v\r')
+  [ -n "$pin" ] || pin=$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([^"]*\)".*/\1/p' "$root/package.json" 2>/dev/null | head -1)
+  [ -n "$pin" ] || pin=$(sed -n 's/.*"bun"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "$root/package.json" 2>/dev/null | head -1)
+  if [ -n "$pin" ]; then
+    if b=$(in_store "$pin"); then chose=$b rule=pin
+    else echo "gstack bun shim: $root pins bun $pin, which is not in gstack's runtime store; run $fix here" >&2
     fi
+  else
+    explain "$root has no recorded Bun and no exact pin; run $fix here to record one"
   fi
 fi
-[ -n "\$chose" ] || { [ -x "\$store/\$default/bun" ] && chose="\$store/\$default/bun" rule=default; }
-if [ -z "\$chose" ]; then
-  set -f; ifs=\$IFS; IFS=:
-  for d in \$PATH; do
-    [ -n "\$d" ] && [ -f "\$d/bun" ] && [ -x "\$d/bun" ] || continue
-    head -c 512 "\$d/bun" 2>/dev/null | grep -aqF "\$marker" && continue
-    chose="\$d/bun" rule=PATH; break
+[ -n "$chose" ] || { b=$(in_store "$default") && chose=$b rule=default; }
+if [ -z "$chose" ]; then
+  cands="BUN_INSTALL:${BUN_INSTALL:+$BUN_INSTALL/bin/bun}
+home:${HOME:+$HOME/.bun/bin/bun}"
+  oifs=$IFS; IFS=:
+  for d in $PATH; do [ -n "$d" ] && cands="$cands
+PATH:$d/bun"; done
+  IFS=$oifs
+  for want in "$minimum" "$floor"; do
+    nl='
+'
+    oifs=$IFS; IFS=$nl
+    for cand in $cands; do
+      r=${cand%%:*} f=${cand#*:}
+      [ -n "$f" ] && [ -f "$f" ] && [ -x "$f" ] && ! is_shim "$f" || continue
+      ge "$("$f" --version 2>/dev/null | head -1)" "$want" && { chose=$f rule=$r; break 2; }
+    done
+    IFS=$oifs
   done
-  IFS=\$ifs; set +f
+  IFS=$oifs
 fi
-[ "\${GSTACK_BUN_SHIM_EXPLAIN:-}" = 1 ] && echo "gstack bun shim: project=\${root:-none} record=\${record:-none} chose=\${chose:-none} rule=\${rule:-none}" >&2
-[ -n "\$chose" ] || { echo "gstack bun shim: no bun found (store \$store, then PATH)" >&2; exit 127; }
-exec "\$chose" "\$@"
+explain "project=${root:-none} record=${record:-none} chose=${chose:-none} rule=${rule:-none}"
+[ -n "$chose" ] || { echo "gstack bun shim: no bun at or above $floor found (store $store, \$BUN_INSTALL/bin, ~/.bun/bin, PATH)" >&2; exit 127; }
+exec "$chose" "$@"
 EOF_SHIM
+      } > "$tmp"
     fi
     chmod 0755 "$tmp" && if cmp -s "$tmp" "$dir/$name"; then rm -f "$tmp"; else mv -f "$tmp" "$dir/$name"; fi
   done

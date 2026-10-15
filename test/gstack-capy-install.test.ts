@@ -484,9 +484,24 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     expect(r.stdout).toContain(`no installed Bun satisfies gstack's supported minimum 1.4.2 and the project pins bun >=1.4.0 (engines.bun, package.json:1); bun 1.4.3 (CI linux lane, ci.yml:7) (judged: bun 1.4.2 at ${bi}/bin/bun (BUN_INSTALL), bun 1.3.14 at ${f.stub}/bun (PATH)); installing bun 1.4.3`);
     expect(r.stdout).not.toContain(`bun 1.3.14 at ${f.stub}/bun does not satisfy`);
     expect(r.stdout).toContain(`bun 1.4.3 at ${store(f, '1.4.3')}/bun (the project's exact pin, from gstack's runtime store;`);
+    expect(fs.readlinkSync(path.join(store(f, '1.4.3'), 'bunx'))).toBe('bun');
     expect(sh(`"${bi}/bin/bun" --version`).stdout.trim()).toBe('1.4.2');
     const c = run(f, ['--check', '--for', 'review'], { BUN_INSTALL: bi }, project);
     expect(c.status, c.stdout + c.stderr).toBe(0);
+  });
+
+  test('a broken store entry is repaired in place: the version directory is never moved aside, bun is renamed over its predecessor and bunx is published', () => {
+    const f = fixture({ bun: '1.3.14' });
+    withPins(f);
+    const dir = store(f, '1.4.3');
+    realBun(path.join(dir, 'bun'), '1.4.0');
+    const inode = fs.statSync(dir).ino;
+    const r = run(f, ['--for', 'autoplan'], { BUN_INSTALL: '', STUB_CURL_ZIP: zipFor(f, '1.4.3') }, f.base);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(fs.statSync(dir).ino).toBe(inode);
+    expect(sh(`"${dir}/bun" --version`).stdout.trim()).toBe('1.4.3');
+    expect(fs.readlinkSync(path.join(dir, 'bunx'))).toBe('bun');
+    expect(fs.readdirSync(path.dirname(dir)).filter(n => n.startsWith('.tmp'))).toEqual([]);
   });
 
   test('drift: a deleted recorded Bun fails --check with BUN_RESOLUTION_DRIFT, and following the printed fix makes the next --check pass', () => {
@@ -600,9 +615,78 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: the per-dire
     const d = fresh(f, unrecordedPinned, 'bun --version');
     expect([d.stdout.trim(), d.stderr]).toEqual(['1.4.2', '']);
     const unrecorded = repo(f, 'e');
+    // Integration item 6: an unrecorded, unpinned repo falls through quietly;
+    // only GSTACK_BUN_SHIM_EXPLAIN=1 names the missing record.
     const e = fresh(f, unrecorded, 'bun --version');
-    expect(e.stdout.trim()).toBe('1.4.3');
-    expect(e.stderr).toBe(`gstack bun shim: ${unrecorded} has no recorded Bun; run ${f.root}/bin/gstack-capy-install --check here\n`);
+    expect([e.stdout.trim(), e.stderr]).toEqual(['1.4.3', '']);
+    expect(fresh(f, unrecorded, 'bun --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' }).stderr).toContain(`gstack bun shim: ${unrecorded} has no recorded Bun and no exact pin; run ${f.root}/bin/gstack-capy-install --check here to record one\n`);
+  });
+
+  // Integration item 3: a repo's pin never steers the shim outside the store.
+  test('the generated shim rejects a traversal pin, a store entry that is a symlink escape, and a marker-carrying store binary; none of them runs', () => {
+    const f = fixture({ bun: '1.3.14' });
+    fs.mkdirSync(path.join(f.home, '.capy/system'), { recursive: true });
+    const state = path.join(f.base, 'state');
+    const storeDir = path.join(state, 'runtimes/bun');
+    realBun(path.join(storeDir, '1.4.3/bun'), '1.4.3');
+    expect(run(f, ['--for', 'autoplan'], { GSTACK_STATE_ROOT: state }, f.base).status).toBe(0);
+    const pwned = path.join(f.base, 'pwned');
+    const payload = (dir: string) => script(path.join(dir, 'bun'), [`touch "${pwned}"`, 'echo payload']);
+    const evilRepo = repo(f, 'repo');
+    payload(path.join(evilRepo, 'payload'));
+    write(path.join(evilRepo, '.bun-version'), '../../../repo/payload\n');
+    expect(fs.existsSync(path.join(storeDir, '../../../repo/payload/bun'))).toBe(true);
+    const t = fresh(f, evilRepo, 'bun --version');
+    expect(t.stdout.trim()).toBe('1.4.3');
+    expect(t.stderr).toContain(`${evilRepo} pins bun ../../../repo/payload, which is not in gstack's runtime store`);
+    payload(path.join(f.base, 'evil'));
+    fs.symlinkSync(path.join(f.base, 'evil'), path.join(storeDir, '1.4.9'));
+    const escape = fresh(f, repo(f, 'escape', '1.4.9'), 'bun --version');
+    expect(escape.stdout.trim()).toBe('1.4.3');
+    write(path.join(storeDir, '1.4.8/bun'), '#!/bin/sh\n# gstack-bun-shim: gstack-owned; delete this file to remove it\necho loop\n', 0o755);
+    const marked = fresh(f, repo(f, 'marked', '1.4.8'), 'bun --version');
+    expect(marked.stdout.trim()).toBe('1.4.3');
+    expect(fs.existsSync(pwned)).toBe(false);
+  });
+
+  // Integration item 4: outside a project and inside the gstack checkout the
+  // shim reads the 'none' record, then falls back in the resolver's order.
+  test('empty store, Capy-style PATH with the image bun 1.3.14: an install that reused off-PATH ~/.bun/bin 1.4.2 is what a fresh shell runs outside a project and in the checkout; without the record ~/.bun/bin still wins over PATH', () => {
+    const f = fixture({ bun: '1.3.14' });
+    fs.mkdirSync(path.join(f.home, '.capy/system'), { recursive: true });
+    realBun(path.join(f.home, '.bun/bin/bun'), '1.4.2');
+    const outside = path.join(f.base, 'outside');
+    fs.mkdirSync(outside);
+    const r = run(f, ['--for', 'autoplan'], { BUN_INSTALL: '' }, outside);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain(`bun 1.4.2 at ${f.home}/.bun/bin/bun (~/.bun/bin;`);
+    expect(fs.existsSync(path.join(f.home, '.gstack-state/runtimes/bun/1.4.3'))).toBe(false);
+    for (const dir of [outside, f.root]) {
+      const e = fresh(f, dir, 'bun --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' });
+      expect(e.stdout.trim(), e.stderr).toBe('1.4.2');
+      expect(e.stderr).toContain(`chose=${f.home}/.bun/bin/bun rule=record`);
+    }
+    fs.rmSync(path.join(f.home, '.gstack-state/install-verdicts'), { recursive: true, force: true });
+    const home = fresh(f, outside, 'bun --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' });
+    expect(home.stdout.trim()).toBe('1.4.2');
+    expect(home.stderr).toContain(`record=none chose=${f.home}/.bun/bin/bun rule=home`);
+    fs.rmSync(path.join(f.home, '.bun'), { recursive: true, force: true });
+    const image = fresh(f, outside, 'bun --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' });
+    expect(image.stdout.trim()).toBe('1.3.14');
+    expect(image.stderr).toContain(`chose=${f.stub}/bun rule=PATH`);
+  });
+
+  test('paths with a single quote are baked safely into both shims', () => {
+    const f = fixture({ bun: '1.3.14' });
+    fs.mkdirSync(path.join(f.home, '.capy/system'), { recursive: true });
+    const state = path.join(f.base, "it's state");
+    realBun(path.join(state, 'runtimes/bun/1.4.3/bun'), '1.4.3');
+    expect(run(f, ['--for', 'autoplan'], { GSTACK_STATE_ROOT: state }, f.base).status).toBe(0);
+    expect(sh(`sh -n "${f.home}/.local/bin/bun"`).status).toBe(0);
+    const r = fresh(f, f.base, 'bun --version && bunx --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.stdout.trim().split('\n')[0]).toBe('1.4.3');
+    expect(r.stderr.split(`chose=${state}/runtimes/bun/1.4.3/bun rule=record`), r.stderr).toHaveLength(3);
   });
 
   test('a foreign ~/.local/bin/bun or a dangling link is never touched; GSTACK_BUN_SHIM=0 writes nothing; a rerun rewrites only gstack\'s own file', () => {
