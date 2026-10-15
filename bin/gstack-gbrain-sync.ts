@@ -30,7 +30,7 @@
  */
 
 import { existsSync, statSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, renameSync, realpathSync, readdirSync, appendFileSync } from "fs";
-import { join, dirname } from "path";
+import { join, dirname, basename, isAbsolute } from "path";
 import { execSync, spawnSync } from "child_process";
 import { homedir, hostname } from "os";
 import { createHash } from "crypto";
@@ -1476,18 +1476,28 @@ async function runCodeImport(args: CliArgs): Promise<StageResult> {
 /**
  * Ensure `.gbrain-source` is ignored in the consumer repo.
  *
- * Idempotent. A trimmed `.gbrain-source` line is enough, and so is any
- * pattern `git check-ignore` already applies (an ignore-everything `*`
- * covers the pin). Appending a second line would dirty a tracked
- * `.gitignore`. Wraps writes in try/catch so a read-only checkout or weird
+ * Idempotent. A trimmed `.gbrain-source` line is enough, and so is a
+ * pattern in a tracked `.gitignore` that already ignores the pin (an
+ * ignore-everything `*` covers it); appending a second line would dirty that
+ * tracked file. Global excludes and `.git/info/exclude` do not count: they
+ * are invisible to teammates' clones, which would then commit the pin
+ * (#1384). Wraps writes in try/catch so a read-only checkout or weird
  * perms logs a warning and lets the rest of the sync continue.
  */
-function gitAlreadyIgnoresGbrainSource(root: string): boolean {
-  const result = spawnSync("git", ["-C", root, "check-ignore", "-q", "--", ".gbrain-source"], {
+function trackedGitignoreIgnoresGbrainSource(root: string): boolean {
+  const check = spawnSync("git", ["-C", root, "-c", "core.excludesFile=", "check-ignore", "-v", "-z", "--stdin"], {
+    input: ".gbrain-source\0",
+    encoding: "utf-8",
     timeout: 5_000,
-    stdio: "ignore",
   });
-  return result.status === 0;
+  if (check.status !== 0) return false;
+  const [source = "", , pattern = ""] = check.stdout.split("\0");
+  if (pattern.startsWith("!") || basename(source) !== ".gitignore" || isAbsolute(source)) return false;
+  const tracked = spawnSync("git", ["-C", root, "ls-files", "--error-unmatch", "--", `:(top,literal)${source}`], {
+    stdio: "ignore",
+    timeout: 5_000,
+  });
+  return tracked.status === 0;
 }
 
 export function ensureGbrainSourceGitignored(root: string): void {
@@ -1502,7 +1512,7 @@ export function ensureGbrainSourceGitignored(root: string): void {
     const alreadyIgnored = existing
       .split("\n")
       .some((line) => line.trim() === ".gbrain-source");
-    if (alreadyIgnored || gitAlreadyIgnoresGbrainSource(root)) {
+    if (alreadyIgnored || trackedGitignoreIgnoresGbrainSource(root)) {
       return;
     }
     const sep = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
