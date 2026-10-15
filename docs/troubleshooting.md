@@ -1255,7 +1255,10 @@ action that never fails the run. Without provenance (a direct
 `GSTACK_CAPY_WRAPPER=` line, which reads as wrapper 0) it reads the Drive
 copies (`~/.capy/drive/*/skills/gstack/scripts/install.sh`, or only
 `GSTACK_CAPY_WRAPPER_PATH` when set) and fails only when every copy is stale,
-listing each with its revision. A stale active wrapper also fails.
+listing each with its revision. A stale active wrapper is a `WARN` too: an
+older copy still works (`capy/support.env`). `bin/gstack-upgrade` runs the
+installer with the checkout's own copy as the active wrapper and never leaves
+a pending reinstall when the wrapper row is the only failure.
 
 **Fix.** This session: run the checkout's own copy,
 `bash <checkout>/capy/skill/gstack/scripts/install.sh --check --for <skill>`;

@@ -89,7 +89,10 @@ whose pid is alive and outside its own process chain exists;
    (`--project <path>`, default the git toplevel of the current directory) are
    read with the doctor's own parser (`bin/gstack-runtime-pins.ts`: engines,
    packageManager, `.tool-versions`, `.bun-version` and CI `bun-version:` lanes
-   for this platform). One resolver picks the Bun (`gstack_bun_resolve` in
+   for this platform). CI exact pins for this platform are alternatives: a
+   repository may test several Bun versions (gstack's own CI pins 1.4.2 and
+   runs one job on 1.4.3), so a Bun equal to any one of them satisfies CI;
+   CI ranges and every non-CI pin stay required. One resolver picks the Bun (`gstack_bun_resolve` in
    `bin/gstack-bun-version.sh`; `resolveBun` in `lib/pregate/runtime.ts` is
    its TypeScript twin), and the installer, `--check`, the doctor, the bun
    shim and install admission all use it. Candidates, first eligible wins:
@@ -101,16 +104,19 @@ whose pid is alive and outside its own process chain exists;
    release archive, verifies its SHA-256 against `bin/gstack-bun-version.sh`
    and unpacks it into the versioned store
    `<state root>/runtimes/bun/<version>/bun`, under `~/.gstack-runtime.lock`.
-   A store entry is never replaced in place, and `~/.bun/bin` is never
-   written. The archive is the project's exact pin when gstack carries a
-   verified archive for it (`GSTACK_BUN_VERIFIED`: 1.4.2, 1.4.3), else the
+   Each version directory also holds `bunx -> bun`. A broken entry is
+   repaired without a window (its files are renamed over their predecessors),
+   and `~/.bun/bin` is never written. The archive is the project's non-CI
+   exact pin when gstack carries a verified archive for it
+   (`GSTACK_BUN_VERIFIED`: 1.4.2, 1.4.3); with only CI exact pins, the install
+   default when it is one of them, else the highest verified one; else the
    install default `GSTACK_BUN_DEFAULT` (1.4.3, above the 1.4.2 minimum; one
    CI job runs the quick free tier on it).
    `GSTACK_BUN_INSTALL_VERSION=<v>` overrides the default; a version without a
    verified archive or below the minimum stops the install
    ([BUN_INSTALL_VERSION_INVALID](troubleshooting.md#bun-install-version-invalid)).
-   With an exact pin, only that version satisfies it. Any other exact pin
-   (below the minimum, two different ones, or one without a verified
+   With a non-CI exact pin, only that version satisfies it. Any other exact
+   pin (below the minimum, two different non-CI ones, or one without a verified
    archive), or a range gstack's minimum does not satisfy, stops with both
    constraints ([RUNTIME_PIN_CONFLICT](troubleshooting.md#capy-install-runtime-conflict),
    exit 3) before `./setup`. With no Bun at or above the security floor, the
@@ -119,7 +125,8 @@ whose pid is alive and outside its own process chain exists;
    gpt-6-astra`, both with `--no-browser`. Skipped when this exact HEAD was set
    up with the same hosts, model and browser flag (recorded in the git dir
    after a successful setup) and `gstack-doctor --check` passes; a warm rerun
-   takes about a second.
+   takes about a second. Each setup ends with its own `gstack ready (<host>)`;
+   the installer then prints `gstack ready (claude, codex)`.
 4. `gstack-doctor --check` for the requested workflow (`--for <skill>`,
    `--only <skill>`, or `--require <id,id>`; default `claude,codex,patch`),
    run with the launch PATH, so the trailer certifies the Bun workflows run.
@@ -131,9 +138,15 @@ whose pid is alive and outside its own process chain exists;
    `bun_install` when this run downloaded it), the trailer, the remote
    minimum, the launch PATH and the time. Admission refuses a workflow whose
    running Bun is not the one the verdict recorded
-   ([BUN_RESOLUTION_DRIFT](troubleshooting.md#bun-resolution-drift)); the
-   doctor's `runtime` row reports the same drift. A schema 1 verdict (keyed
-   by checkout only) is still read.
+   ([BUN_RESOLUTION_DRIFT](troubleshooting.md#bun-resolution-drift)), and so
+   do the pregate's lanes and guards, which also refuse an invalid verdict
+   ([INSTALL_UNVERIFIED](troubleshooting.md#install-unverified)) under
+   `GSTACK_CAPY=1` or whenever a verdict exists. `--check` keeps the recorded
+   Bun while it exists, reports the recorded version and satisfies the pins;
+   a candidate that would now resolve first is a `note:` line, and only a
+   recorded Bun that is gone, changed or no longer satisfies the pins fails
+   the doctor's `runtime` row. A schema 1 verdict (keyed by checkout only) is
+   still read.
 6. On a Capy machine (`CAPY_MACHINE_CONFIG` set or `~/.capy/system` present),
    install mode writes the bun shims described below.
 
@@ -148,14 +161,21 @@ Bun. Install mode therefore writes `~/.local/bin/bun` and `~/.local/bin/bunx`
 small POSIX script whose second line is the marker
 `# gstack-bun-shim: gstack-owned; delete this file to remove it`. At every
 call the `bun` shim finds the git toplevel around the working directory and
-runs, in order: the Bun that project's install verdict recorded, the store
-copy of the project's exact pin, the store copy of the install default, then
-the first non-shim `bun` on PATH. A project with no verdict prints
-`gstack bun shim: <root> has no recorded Bun; run ... --check here` to stderr
-and falls through. `bunx` runs `bun x` through the `bun` shim beside it.
+runs, in order: the Bun that project's install verdict recorded (the `none`
+verdict outside any project and inside the gstack checkout), the store copy
+of the project's exact pin, the store copy of the install default, then
+`$BUN_INSTALL/bin/bun`, `~/.bun/bin/bun` and every non-shim `bun` on PATH,
+first at or above the supported minimum, then at or above the security
+floor. A pin is used only when it is `x.y.z` and its store entry is a real
+binary inside the store (no `..`, symlink escape or shim-marked file). A
+project pinning a Bun the store lacks prints `gstack bun shim: <root> pins
+bun <v>, which is not in gstack's runtime store; run ... --check here`;
+an unrecorded, unpinned repo falls through quietly. `bunx` runs `bun x`
+through the `bun` shim beside it.
 
 - `GSTACK_BUN_SHIM_EXPLAIN=1 bun --version` prints
-  `gstack bun shim: project=<root> record=<file> chose=<bun> rule=<rule>`.
+  `gstack bun shim: project=<root> record=<file> chose=<bun> rule=<rule>`
+  (and names a missing record).
 - `GSTACK_BUN_SHIM=0` at install time writes no shim.
 - Removing it: delete `~/.local/bin/bun` and `~/.local/bin/bunx`. gstack
   replaces only a missing file or a file carrying the marker; a foreign file
@@ -288,10 +308,13 @@ that is behind origin is fast-forwarded by the checkout's own wrapper, so the
 floor is not what keeps machines current). It never exceeds VERSION
 (test/capy-skill-wrapper.test.ts). Raise `GSTACK_CAPY_MIN_WRAPPER` together with
 `GSTACK_CAPY_WRAPPER` in the bootstrapper when the bootstrapper itself
-changes; older Drive copies keep working and print an owner action
+changes in a way older copies cannot work with; older Drive copies keep
+working and print an owner action
 ([CAPY_WRAPPER_STALE](troubleshooting.md#capy-wrapper-stale)), and the
-doctor's `wrapper` row warns. Wrapper 2 adds the trailer's `latest:` note
-and the `cloned` line.
+doctor's `wrapper` row warns (an active copy below the minimum is a WARN,
+never a FAIL; `bin/gstack-upgrade` never leaves a pending reinstall for it).
+Wrapper 2 only adds optional exports (the trailer's `latest:` note and the
+`cloned` line), so the minimum stays 1.
 
 ## Exit codes
 
