@@ -1074,20 +1074,6 @@ ref when you are done (this also stops the daily line):
 git -C ~/.claude/skills/gstack update-ref -d 'refs/gstack/rescue/<oid>'
 ```
 
-<a id="auto-update-bun-version-unreadable"></a>
-### `gstack auto-update: update held (bun-version-unreadable: <detail>); nothing was installed or changed. gstack could not read the version of the Bun that setup runs ...`
-
-**Meaning.** The auto-updater checks the Bun that setup will run against the
-incoming release's Bun floor before it moves your checkout. That Bun's
-`--version` printed something that is not a version, so the floor cannot be
-checked and the update is held rather than risk setup running on a Bun below
-it.
-
-**Fix.** Reinstall Bun from https://bun.sh (or with your package manager),
-open a new terminal and check that `bun --version` prints a version such as
-`1.4.2`. `bun upgrade` uses the same unreadable binary, so it is not the fix.
-gstack retries at the next check.
-
 <a id="setup-runtime-root-contains-checkout"></a>
 ### `gstack setup: refusing to replace <root> for <host>: this runtime directory contains the source checkout setup runs from (<checkout>), so replacing it would delete the checkout. Nothing was changed.`
 

@@ -166,20 +166,10 @@ describe.skipIf(process.platform === 'win32')('gstack-session-update: held-updat
     expect(git(fx.install, 'rev-parse', 'HEAD')).toBe(target);
   });
 
-  test('bun-version-unreadable: reinstall Bun, never bun upgrade', () => {
-    const fx = makeFixture();
-    pending(fx, { pull: 'bun-version-unreadable: /x/bun --version printed garbage' });
-    const out = banner(fx).trim();
-    expect(out).toContain('update held (bun-version-unreadable: /x/bun --version printed garbage)');
-    expect(out).toContain('reinstall Bun from https://bun.sh');
-    expect(out).not.toContain('bun upgrade');
-    expect(out).toContain('troubleshooting.md#auto-update-bun-version-unreadable');
-  });
-
   test('every anchor the lines link to exists', () => {
     const src = fs.readFileSync(SCRIPT, 'utf8');
     const anchors = [...src.matchAll(/troubleshooting\.md#([a-z0-9-]+)/g)].map((m) => m[1]!);
-    for (const a of ['auto-update-unmerged-files', 'auto-update-autostash-unrecoverable', 'auto-update-bun-version-unreadable', 'auto-update-rescued-edits']) expect(anchors).toContain(a);
+    for (const a of ['auto-update-unmerged-files', 'auto-update-autostash-unrecoverable', 'auto-update-rescued-edits']) expect(anchors).toContain(a);
     for (const a of anchors) expect(DOC, a).toContain(`<a id="${a}"></a>`);
   });
 });
