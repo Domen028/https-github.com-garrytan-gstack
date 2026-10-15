@@ -133,12 +133,14 @@ describe('setup.ps1', () => {
 });
 
 /**
- * Git Bash resolution, one row per case of lib/script-invocation.ts's fixture
- * table (Lane C, PR 2; mirrored here, not imported): the override and its
- * deprecated alias, both set, a missing override, a scoop shim, per-user,
- * portable and machine-wide Git, an MSYS bash on PATH, and the WSL and
- * non-MSYS rejections. pwsh on Linux with every location injected: PATH,
- * git --exec-path, LOCALAPPDATA, ProgramFiles and SystemRoot.
+ * Git Bash resolution: setup.ps1's own refusal and warning text, then every
+ * row of lib/script-invocation.ts's table (test/fixtures/windows-bash-resolution.json)
+ * so the two resolvers cannot drift. The override and its deprecated alias,
+ * both set, a missing override, a scoop shim, per-user, portable and
+ * machine-wide Git, an MSYS bash on PATH, and the WSL and non-MSYS
+ * rejections. pwsh on Linux with every location injected: PATH,
+ * git --exec-path, LOCALAPPDATA, ProgramFiles and SystemRoot. A shared row's
+ * C:/... path lives under <root>/C/..., with its separators kept as written.
  */
 describe.skipIf(!PWSH || IS_WIN)('setup.ps1: Git Bash resolution', () => {
   type Row = {
@@ -170,6 +172,36 @@ describe.skipIf(!PWSH || IS_WIN)('setup.ps1: Git Bash resolution', () => {
     { name: 'missing: every candidate and why, then both recipes', execPath: 'Git/mingw64/libexec/git-core', env: { LOCALAPPDATA: '@AppData/Local', ProgramFiles: '@Program Files' },
       refused: ['setup.ps1: Git Bash (bash.exe) was not found. Tried:', '  @Git/bin/bash.exe: not found', '  @bin/bin/bash.exe: not found', '  @AppData/Local/Programs/Git/bin/bash.exe: not found', '  @Program Files/Git/bin/bash.exe: not found'] },
   ];
+  type SharedRow = {
+    name: string;
+    env?: Record<string, string>;
+    exists?: string[];
+    gitExecPath?: string;
+    which?: { git?: string; bash?: string };
+    uname?: string;
+    expect: { bash?: string; source?: string; refused?: boolean };
+    warning?: string | null;
+  };
+  const SHARED: SharedRow[] = JSON.parse(fs.readFileSync(path.resolve(import.meta.dir, 'fixtures', 'windows-bash-resolution.json'), 'utf-8')).rows;
+  const underRoot = (p: string) => p.replace(/^([A-Za-z]):(?=[\\/])/, '$1');
+  const fwd = (p: string) => underRoot(p).replace(/\\/g, '/');
+  const command = (p: string) => fwd(p).replace(/\.exe$/i, '');
+  for (const s of SHARED) {
+    const pathBash = s.which?.bash ? command(s.which.bash) : undefined;
+    const env: Record<string, string> = { ProgramFiles: '@C/Program Files', SystemRoot: '@C/Windows' };
+    for (const [k, v] of Object.entries(s.env ?? {})) env[k] = `@${underRoot(v)}`;
+    ROWS.push({
+      name: `shared table: ${s.name}`,
+      git: s.which?.git ? command(s.which.git) : undefined,
+      execPath: s.gitExecPath ? fwd(s.gitExecPath) : undefined,
+      gitBash: (s.exists ?? []).map(fwd).filter((f) => f.replace(/\.exe$/i, '') !== pathBash),
+      pathBash: pathBash ? { [pathBash]: s.uname ?? '' } : undefined,
+      env,
+      used: s.expect.bash ? (s.expect.source === 'PATH' ? pathBash : fwd(s.expect.bash)) : undefined,
+      refused: s.expect.refused ? [] : undefined,
+      warnings: s.warning === undefined ? undefined : s.warning ? 1 : 0,
+    });
+  }
   const RECIPE = [
     "  PowerShell (new windows; restart Claude Code after): [Environment]::SetEnvironmentVariable('GSTACK_GIT_BASH', 'C:\\Program Files\\Git\\bin\\bash.exe', 'User')",
     '  Claude Code: add "GSTACK_GIT_BASH": "C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe" to the "env" block of ~/.claude/settings.json',
@@ -204,7 +236,7 @@ describe.skipIf(!PWSH || IS_WIN)('setup.ps1: Git Bash resolution', () => {
       const lines = out.split(/\r?\n/);
       if (row.used) {
         expect(r.status, out).toBe(0);
-        expect(lines.filter((l) => l.startsWith('BASH_USED='))).toEqual([`BASH_USED=${path.join(root, row.used)}`]);
+        expect(lines.filter((l) => l.startsWith('BASH_USED=')).map((l) => l.replace(/\\/g, '/'))).toEqual([`BASH_USED=${path.join(root, row.used)}`]);
       } else {
         expect(r.status, out).toBe(1);
         expect(out).not.toContain('BASH_USED=');

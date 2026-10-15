@@ -48,7 +48,7 @@ $override = $env:GSTACK_GIT_BASH
 if (-not $override -and $env:GSTACK_BASH) {
     $overrideName = 'GSTACK_BASH'
     $override = $env:GSTACK_BASH
-} elseif ($override -and $env:GSTACK_BASH -and $env:GSTACK_BASH -ne $override) {
+} elseif ($override -and $env:GSTACK_BASH -and ($env:GSTACK_BASH -replace '\\', '/') -ne ($override -replace '\\', '/')) {
     Write-Host ('setup.ps1: GSTACK_GIT_BASH ({0}) and GSTACK_BASH ({1}) differ; using GSTACK_GIT_BASH. GSTACK_BASH is a deprecated alias: unset it.' -f $override, $env:GSTACK_BASH)
 }
 $bash = $null
@@ -63,7 +63,10 @@ if ($override) {
     $candidates = New-Object System.Collections.Generic.List[string]
     $execPath = $null
     try { $execPath = (& git --exec-path 2>$null | Select-Object -First 1) } catch { }
-    if ($execPath) { $candidates.Add((Join-Path $execPath '..\..\..\bin\bash.exe')) }
+    if ($execPath) {
+        $candidates.Add((Join-Path $execPath '..\..\..\bin\bash.exe'))
+        $candidates.Add((Join-Path $execPath '..\..\..\usr\bin\bash.exe'))
+    }
     $dir = Split-Path (Get-Command git -CommandType Application | Select-Object -First 1).Source
     for ($i = 0; $i -lt 3 -and $dir; $i++) {
         $candidates.Add((Join-Path $dir 'bin\bash.exe'))
