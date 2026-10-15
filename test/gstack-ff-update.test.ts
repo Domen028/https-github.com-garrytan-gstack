@@ -366,7 +366,7 @@ describe.skipIf(process.platform === 'win32')('gstack-ff-update: callers', () =>
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline && !/UPDATED|UP_TO_DATE|SKIP ff_busy|PULL_FAILED|HELD/.test(fs.existsSync(log) ? fs.readFileSync(log, 'utf8') : '')) await new Promise((r) => setTimeout(r, 100));
     while (fs.existsSync(path.join(stateA, '.setup-lock')) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 100));
-    expect([0, 75]).toContain(step4.status);
+    expect([0, 75]).toContain(step4.status ?? -1);
     expect(git(fx.install, 'rev-parse', 'HEAD')).toBe(incoming);
     expect(git(fx.install, 'ls-files', '-u')).toBe('');
     expect(read(fx, 'notes.txt')).toBe('top UPSTREAM\nmiddle\nbottom\n');
