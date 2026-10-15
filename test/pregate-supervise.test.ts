@@ -182,15 +182,18 @@ describe('gstack-pregate: the test stage never hangs silently', () => {
     expect(alive(Number(fs.readFileSync(path.join(repo.root, 'bg.pid'), 'utf8')))).toBe(false);
   }, 90_000);
 
-  test('--timeout bounds the whole check: serial files past the deadline are not started and the lane is incomplete', () => {
+  test('--timeout bounds each runner process: serial files that each fit run to a pass even when their total exceeds it; one that overruns is incomplete', () => {
     const repo = makeFixtureRepo(); repos.push(repo);
-    const slow = "const test = require('node:test');\ntest('slow', async () => { await new Promise(r => setTimeout(r, 2500)); });\n";
+    const slow = "const test = require('node:test');\ntest('slow', async () => { await new Promise(r => setTimeout(r, 1500)); });\n";
     commit(repo, { 'test/a.serial.test.js': slow, 'test/b.serial.test.js': slow, 'test/c.serial.test.js': slow });
-    const r = pregate(repo, ['--timeout', '4']);
-    expect(r.status).toBe(EXIT.fail);
-    const row = lanes(repo);
-    expect(row).toMatchObject({ status: 'incomplete', code: 'PREGATE_INCOMPLETE' });
-    expect(row.detail).toMatch(/local lane timed out after 4000 ms \(3 files; 1 of 3 file\(s\) not started\)/);
+    const r = pregate(repo, ['--timeout', '3']);
+    expect(r.status).toBe(EXIT.ok);
+    expect(lanes(repo)).toMatchObject({ status: 'pass' });
+    expect(lanes(repo).detail).toContain('3 tests ran in 3 file(s) (3 serial), exit 0');
+    commit(repo, { 'test/c.serial.test.js': "const test = require('node:test');\ntest('slower', async () => { await new Promise(r => setTimeout(r, 5000)); });\n" });
+    expect(pregate(repo, ['--timeout', '3']).status).toBe(EXIT.fail);
+    expect(lanes(repo)).toMatchObject({ status: 'incomplete', code: 'PREGATE_INCOMPLETE' });
+    expect(lanes(repo).detail).toContain('a runner process timed out after 3000 ms (--timeout applies to each runner process; 3 files; last file started: test/c.serial.test.js)');
   }, 90_000);
 
   test('a late tree mutation by a test\'s child is caught while the check runs, and a leftover child cannot mutate the tree after it', async () => {

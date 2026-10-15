@@ -6,7 +6,7 @@
  *                  [--allow-repo-commands] [--policy-from base|head] [--out <pregate.json>]
  *                  [--timeout <s>] [--stall-timeout <s>] [--remote --spend-cap <usd>] [--run <id>] [--explain] [--json]
  *   gstack-pregate verify [--out <pregate.json>] [--json]      publication check: current tree, no fail/incomplete, obligations cleared
- *   gstack-pregate clear --remote <workflow.yml/job> --run-url <url> | --bundle-lane <label> [--out <pregate.json>]
+ *   gstack-pregate clear --remote <workflow.yml/job> --run-url <url> | --bundle-lane <label> | --receipt <file> [--out <pregate.json>]
  *   gstack-pregate lanes [--explain]                             the lane list and platform tiers read from .github/workflows
  *   gstack-pregate validate | init [--explain] [--force]         the working-tree .gstack/pregate.json
  *   gstack-pregate sealed [--range <a..b>] [--remote <name>] [--base <branch>] [--json]
@@ -29,10 +29,11 @@ import * as path from 'node:path';
 import { EXIT, exitTableHelp, formatResult, type PregateFile } from '../lib/headless-artifacts';
 import { PREGATE_CONFIG_PATH, exampleConfigJson, explainConfig, loadConfigFromHead } from '../lib/pregate/config';
 import { buildContext } from '../lib/pregate/context';
-import { CHECKS, CHECK_IDS, PREGATE_OUT_REL, PREGATE_TIER2, clearObligation, readPregateFile, renderTable, runPregate, verifyPregate, writePregateFile } from '../lib/pregate/index';
+import { CHECKS, CHECK_IDS, PREGATE_OUT_REL, PREGATE_TIER2, clearDecision, clearObligation, readPregateFile, renderTable, runPregate, verifyPregate, writePregateFile } from '../lib/pregate/index';
 import { describeLane, discoverLanes } from '../lib/pregate/workflows';
+import { REMOTE_GATE_LANE } from '../lib/pregate/checks/lanes';
 import { ensureTmpExcluded } from '../lib/restamp';
-import { resultCodeSuffix, resultLine, type ResultCodeName } from '../lib/result-codes';
+import { RESULT_CODES, resultCodeSuffix, resultLine, type ResultCodeName } from '../lib/result-codes';
 import { DEFAULT_STALL_TIMEOUT_S } from '../lib/pregate/context';
 import { cancelActive } from '../lib/pregate/supervise';
 import { defaultGh, evaluateRegate, renderRegate } from '../lib/pregate/regate';
@@ -45,7 +46,9 @@ const HELP = `gstack-pregate — cheap checks before anything paid or remote (do
 
   run (default)   stage 1 mechanical preflight (${CHECKS.filter(c => c.stage === 'preflight').map(c => c.id).join(', ')}), then stage 2 test execution (${CHECKS.filter(c => c.stage === 'tests').map(c => c.id).join(', ')})
   verify          publication check against ${PREGATE_OUT_REL}: current tree, no fail or incomplete, every requires-remote obligation cleared
-  clear           record the receipt that clears one requires-remote obligation
+  clear           record the receipt that clears one requires-remote obligation: pregate.json/remote_gate needs
+                  --receipt <file> (the gate's PREGATE_REMOTE: line, checked against the tested tree); a
+                  test_backend/<backend> run URL is recorded as attested, not validated
   lanes           print every CI lane with its platform tier (from .github/workflows/*.yml)
   validate | init the working-tree ${PREGATE_CONFIG_PATH}
   sealed [--range <a..b>] [--remote <name>] [--base <branch>]
@@ -61,7 +64,8 @@ const HELP = `gstack-pregate — cheap checks before anything paid or remote (do
   --allow-repo-commands         run pin-file commands and the test runner (what /ship passes); without it those checks are incomplete
   --policy-from base|head       base (default, reviewed) or head (unreviewed; needs --allow-repo-commands)
   --out <file>                  pregate.json path (default ${PREGATE_OUT_REL})
-  --timeout <s>                 per-check timeout (default 600): it bounds the whole check, every runner process included
+  --timeout <s>                 timeout for each runner process (default 600): the unit-file group, each serial file, each guard
+                                without timeout_s; the stall timeout catches a silent one sooner
   --stall-timeout <s>           kill a test command's process group after this long with no output and record the check
                                 incomplete (PREGATE_STALLED); default stall_timeout_s from the base .gstack/pregate.json,
                                 else ${DEFAULT_STALL_TIMEOUT_S}; 0 disables
@@ -87,7 +91,7 @@ function flag(args: string[], name: string): string | undefined { const i = args
 const VERB_FLAGS: Record<string, [string[], string[]]> = {
   run: [['--stage', '--only', '--base', '--policy-from', '--out', '--timeout', '--stall-timeout', '--spend-cap', '--run'], ['--allow-repo-commands', '--explain', '--json', '--remote']],
   verify: [['--out'], ['--json']],
-  clear: [['--remote', '--run-url', '--bundle-lane', '--out'], []],
+  clear: [['--remote', '--run-url', '--bundle-lane', '--receipt', '--out'], []],
   lanes: [[], ['--explain', '--json']],
   validate: [[], ['--json']],
   init: [[], ['--explain', '--force']],
@@ -191,16 +195,19 @@ function cmdVerify(root: string, rest: string[], json: boolean): number {
 
 function cmdClear(root: string, rest: string[]): number {
   const lane = flag(rest, '--remote');
-  const receipt = flag(rest, '--run-url') ?? (flag(rest, '--bundle-lane') ? `bundle-lane:${flag(rest, '--bundle-lane')}` : undefined);
-  if (!lane || !receipt) { process.stderr.write(`gstack-pregate clear: --remote <workflow.yml/job> and --run-url <url> (or --bundle-lane <label>) are required\n`); return EXIT.usage; }
+  if (!lane) { process.stderr.write(`gstack-pregate clear: --remote <workflow.yml/job> with --run-url <url>, --bundle-lane <label> or (for ${REMOTE_GATE_LANE}) --receipt <file> is required\n`); return EXIT.usage; }
   const out = outPath(root, rest);
   const read = fs.existsSync(out) ? readPregateFile(out) : { file: null, errors: [] };
   if (!read.file) { process.stderr.write(resultLine('gstack-pregate clear', 'PREGATE_STALE', `${out} is missing or invalid; run gstack-pregate first`) + '\n'); return EXIT.fail; }
-  let file: PregateFile;
-  try { file = clearObligation(read.file, lane, receipt, `gstack-pregate clear ${new Date().toISOString()}`); }
-  catch (e: any) { process.stderr.write(`gstack-pregate clear: ${e.message}\n`); return EXIT.usage; }
+  const decision = clearDecision(read.file, lane, { runUrl: flag(rest, '--run-url'), bundleLane: flag(rest, '--bundle-lane'), receiptPath: flag(rest, '--receipt') });
+  if ('refused' in decision) {
+    if (decision.refused === 'usage') { process.stderr.write(`gstack-pregate clear: ${decision.message}\n`); return EXIT.usage; }
+    process.stderr.write(`gstack-pregate clear: receipt refused — ${decision.message}; fix: ${RESULT_CODES.PREGATE_RECEIPT_INVALID.fix} ${resultCodeSuffix('PREGATE_RECEIPT_INVALID')}\n`);
+    return EXIT.fail;
+  }
+  const file = clearObligation(read.file, lane, decision.receipt, `gstack-pregate clear ${new Date().toISOString()}`);
   writePregateFile(root, out, file);
-  process.stdout.write(`PREGATE_CLEARED: ${lane} receipt=${receipt} verdict=${file.verdict}\n`);
+  process.stdout.write(`PREGATE_CLEARED: ${lane} receipt=${decision.receipt} verdict=${file.verdict}${decision.attested ? ` (attested, not validated: ${lane} has no machine-checkable receipt)` : ''}\n`);
   return EXIT.ok;
 }
 

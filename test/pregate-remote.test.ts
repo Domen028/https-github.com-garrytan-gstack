@@ -71,16 +71,47 @@ describe('small machines record the test tier for the remote gate (C4)', () => {
     expect((await lanesOn(gated(), { cores: 16, testBackend: 'local' })).lanes.status).toBe('pass');
   });
 
-  test('`clear` discharges the recorded obligation like any requires-remote lane', () => {
+  test('`clear` on the remote_gate obligation needs the gate\'s PREGATE_REMOTE receipt for the tested tree; a run URL or a bad receipt leaves it uncleared', async () => {
     const repo = gated();
     const fileAt = path.join(repo.work, '.gstack/tmp/pregate.json');
-    return lanesOn(repo, { cores: 4, testBackend: 'local' }).then(({ file }) => {
-      fs.mkdirSync(path.dirname(fileAt), { recursive: true });
-      fs.writeFileSync(fileAt, JSON.stringify(file));
-      const cleared = runBin(repo, 'gstack-pregate', ['clear', '--remote', 'pregate.json/remote_gate', '--run-url', 'https://ci.example/run/1']);
-      expect(cleared.status).toBe(EXIT.ok);
-      expect(cleared.out).toContain('PREGATE_CLEARED: pregate.json/remote_gate receipt=https://ci.example/run/1 verdict=requires-remote cleared');
-    });
+    const { file } = await lanesOn(repo, { cores: 4, testBackend: 'local' });
+    fs.mkdirSync(path.dirname(fileAt), { recursive: true });
+    fs.writeFileSync(fileAt, JSON.stringify(file));
+    const clear = (args: string[]) => runBin(repo, 'gstack-pregate', ['clear', '--remote', 'pregate.json/remote_gate', ...args]);
+    const receiptOf = (line: string) => { const f = path.join(repo.root, `receipt-${Math.random().toString(36).slice(2)}.log`); fs.writeFileSync(f, `gate log\n${line}\n`); return f; };
+    const url = clear(['--run-url', 'https://ci.example/run/1']);
+    expect(url.status).toBe(EXIT.usage);
+    expect(url.err).toContain('clears only with --receipt <file>');
+    for (const [line, why] of [
+      [`PREGATE_REMOTE: tree=${'deadbeef'.repeat(8)} tests=3 failed=0`, 'the remote gate tested tree deadbeefdead'],
+      [`PREGATE_REMOTE: tree=${file.tree} tests=0 failed=0`, 'the remote gate reported 0 tests'],
+      [`PREGATE_REMOTE: tree=${file.tree} tests=3 failed=1`, 'the remote gate reported 1 failed of 3'],
+      ['all green, trust me', 'has no PREGATE_REMOTE: line'],
+    ] as const) {
+      const r = clear(['--receipt', receiptOf(line)]);
+      expect(r.status).toBe(EXIT.fail);
+      expect(r.err).toContain(why);
+      expect(r.err).toContain('(PREGATE_RECEIPT_INVALID; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#pregate-receipt-invalid)');
+      expect(JSON.parse(fs.readFileSync(fileAt, 'utf8')).requires_remote[0].receipt).toBeNull();
+    }
+    const ok = clear(['--receipt', receiptOf(`PREGATE_REMOTE: tree=${file.tree} tests=3 failed=0`)]);
+    expect(ok.status).toBe(EXIT.ok);
+    expect(ok.out).toMatch(new RegExp(`^PREGATE_CLEARED: pregate\\.json/remote_gate receipt=remote-gate tree=${file.tree.slice(0, 12)} tests=3 receipt=\\S+ sha256=[0-9a-f]{12} verdict=requires-remote cleared$`, 'm'));
+    expect(ok.out).not.toContain('attested');
+  });
+
+  test('`clear` on a test_backend obligation records the run URL as attested, not validated, and says so', async () => {
+    const repo = gated(BASE_PREGATE);
+    const fileAt = path.join(repo.work, '.gstack/tmp/pregate.json');
+    const { file, lanes } = await lanesOn(repo, { cores: 4, testBackend: 'ubicloud' });
+    expect(lanes.detail).toContain('gstack-pregate clear --remote test_backend/ubicloud --run-url <url>');
+    fs.mkdirSync(path.dirname(fileAt), { recursive: true });
+    fs.writeFileSync(fileAt, JSON.stringify(file));
+    expect(runBin(repo, 'gstack-pregate', ['clear', '--remote', 'test_backend/ubicloud', '--receipt', fileAt]).status).toBe(EXIT.usage);
+    const r = runBin(repo, 'gstack-pregate', ['clear', '--remote', 'test_backend/ubicloud', '--run-url', 'https://ci.example/run/7']);
+    expect(r.status).toBe(EXIT.ok);
+    expect(r.out).toContain('PREGATE_CLEARED: test_backend/ubicloud receipt=attested:https://ci.example/run/7 verdict=requires-remote cleared (attested, not validated: test_backend/ubicloud has no machine-checkable receipt)');
+    expect(JSON.parse(fs.readFileSync(fileAt, 'utf8')).requires_remote[0].receipt).toBe('attested:https://ci.example/run/7');
   });
 
   test('config: stall_timeout_s and remote_gate are typed', async () => {

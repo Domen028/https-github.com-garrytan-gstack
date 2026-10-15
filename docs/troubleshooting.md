@@ -2445,6 +2445,20 @@ child, a server that never exits, a synchronous wait), fix it and rerun
 needs a larger `--stall-timeout`; `0` disables the stall kill and leaves only
 `--timeout`.
 
+<a id="pregate-receipt-invalid"></a>
+### `PREGATE_RECEIPT_INVALID`
+
+**Meaning.** `gstack-pregate clear --remote pregate.json/remote_gate --receipt
+<file>` read the remote gate's output and its `PREGATE_REMOTE:` line is missing,
+names another tree than the one `pregate.json` tested, reports 0 tests, or
+reports failures. The obligation stays uncleared. A run URL alone never clears
+this obligation; a `test_backend/<backend>` obligation takes a run URL, recorded
+as attested rather than validated.
+
+**Fix.** Run the remote gate on the tree pregate tested and pass its output
+file with `--receipt`, or let `gstack-pregate --stage tests --remote --spend-cap
+<usd> --allow-repo-commands` run and validate it.
+
 <a id="pregate-stale"></a>
 ### `PREGATE_STALE`
 
