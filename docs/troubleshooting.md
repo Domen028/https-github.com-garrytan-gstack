@@ -1407,6 +1407,32 @@ killed.
 **Fix.** After `browse stop`, check for a leftover browser with
 `ps aux | grep -i chrom` and end it with `kill <pid>`.
 
+<a id="browse-no-active-page"></a>
+### `No active page. Use "browse goto <url>" first.` (after the last tab was closed outside browse)
+
+**Meaning.** When every tab was closed outside browse (the headed window's tabs
+closed by hand, or a page that closed itself), earlier releases failed every
+later command this way, `status` and `stop` included, until the daemon was
+killed (#3167). Now `status` and `stop` answer without opening a tab, and any
+other command opens one new blank tab first and prints
+`[browse] warning: every tab was closed outside browse, so this command ran on a new blank tab; open your page again with: browse goto <url>`.
+
+**Fix.** `browse goto <url>` to open your page again.
+
+**Fixed in.** The first release after v1.91.101.0 (#3167).
+
+<a id="browse-tab-unrecoverable"></a>
+### ``browse: every tab was closed outside browse and a new one could not be opened, because the browser or its context is gone (<cause>); fix: run `browse restart` ... (BROWSE_TAB_UNRECOVERABLE)``
+
+**Meaning.** Every tab was closed outside browse and the browser, or its
+context, is gone too, so browse could not open a tab to run the command.
+`browse status` and `browse stop` still answer.
+
+**Fix.** `browse restart` (`$B restart` inside a gstack skill), then run the
+command again.
+
+**Fixed in.** The first release after v1.91.101.0 (#3167).
+
 ---
 
 ## Windows

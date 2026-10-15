@@ -558,6 +558,11 @@ export const RESULT_CODES = {
     fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
   },
   // Fix wave 2026-10-15, PR 1a (items 7 and 11).
+  BROWSE_TAB_UNRECOVERABLE: {
+    anchor: 'browse-tab-unrecoverable',
+    summary: 'every tab was closed outside browse and a new one could not be opened, because the browser or its context is gone',
+    fix: 'run `browse restart` (`$B restart` in a gstack skill); `browse status` and `browse stop` keep working',
+  },
   BUN_VERSION_UNREADABLE: {
     anchor: 'bun-version-unreadable',
     summary: 'bun --version did not print a version gstack can compare with the incoming release\'s Bun floor, so the update was held and nothing was changed',

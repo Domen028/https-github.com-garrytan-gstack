@@ -192,6 +192,7 @@ gstack_result_anchor() {
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
     CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;
     INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
+    BROWSE_TAB_UNRECOVERABLE) printf '%s' 'browse-tab-unrecoverable' ;;
     BUN_VERSION_UNREADABLE) printf '%s' 'bun-version-unreadable' ;;
     *) return 1 ;;
   esac
