@@ -394,6 +394,11 @@ export const RESULT_CODES = {
     summary: 'a test command printed nothing for the stall timeout, so its process group was killed; the check is incomplete, never pass',
     fix: 'read the lane log for the last file started, fix the hang, or raise `--stall-timeout` (`stall_timeout_s`; 0 disables) for a test that is quiet for longer, then rerun `gstack-pregate --stage tests`',
   },
+  PREGATE_RECEIPT_INVALID: {
+    anchor: 'pregate-receipt-invalid',
+    summary: 'the receipt offered to `gstack-pregate clear` for the remote gate obligation does not show the tested tree passing',
+    fix: 'rerun the remote gate on this tree and pass its output with `gstack-pregate clear --remote pregate.json/remote_gate --receipt <file>`, or run `gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands`',
+  },
   PREGATE_STALE: {
     anchor: 'pregate-stale',
     summary: 'pregate.json was recorded against a different tree than the one being published',

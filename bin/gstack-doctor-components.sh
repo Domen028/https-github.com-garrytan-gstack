@@ -162,6 +162,7 @@ gstack_result_anchor() {
     PREGATE_LANE_FAILED) printf '%s' 'pregate-lane-failed' ;;
     PREGATE_INCOMPLETE) printf '%s' 'pregate-incomplete' ;;
     PREGATE_STALLED) printf '%s' 'pregate-stalled' ;;
+    PREGATE_RECEIPT_INVALID) printf '%s' 'pregate-receipt-invalid' ;;
     PREGATE_STALE) printf '%s' 'pregate-stale' ;;
     PREGATE_REMOTE_UNCLEARED) printf '%s' 'pregate-remote-uncleared' ;;
     ISSUE_UNREADABLE) printf '%s' 'issue-unreadable' ;;

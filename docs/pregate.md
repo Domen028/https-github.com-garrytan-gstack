@@ -206,7 +206,11 @@ run, `pregate.json/remote_gate` (the declared command) or
 <repo> -- '<runner> <files>'`). Without either, the tier runs locally under
 the supervision above. Close the obligation one of two ways:
 
-- `gstack-pregate clear --remote <lane> --run-url <url>` after running it; or
+- after running it, `gstack-pregate clear --remote pregate.json/remote_gate
+  --receipt <file>` with the gate's output, validated as `--remote` validates it
+  (a run URL is refused, `PREGATE_RECEIPT_INVALID` for a bad receipt), or
+  `gstack-pregate clear --remote test_backend/<backend> --run-url <url>`, which
+  has no machine-checkable receipt and is recorded as `attested:<url>`; or
 - `gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands`,
   which runs the declared `remote_gate` now (never under `--policy-from head`;
   a `test_backend` without `remote_gate` cannot be run this way). The gate runs

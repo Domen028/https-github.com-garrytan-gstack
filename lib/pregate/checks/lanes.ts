@@ -117,8 +117,27 @@ function remoteObligation(ctx: PregateContext, sel: Selection): RemoteObligation
   const declared = ctx.config.remote_gate;
   const runner = detectRunner(ctx, sel.localTests);
   const command = declared ?? `${GSTACK_ROOT}/scripts/ubicloud/ubi-runner.sh run --src ${quote(ctx.repoRoot)} -- ${quote(runner ? runner.replace('{files}', sel.localTests.map(quote).join(' ')) : '<test runner> <selected files>')}`;
-  const [workflow, job] = declared ? ['pregate.json', 'remote_gate'] : ['test_backend', ctx.testBackend];
+  const [workflow, job] = declared ? REMOTE_GATE_LANE.split('/') as [string, string] : ['test_backend', ctx.testBackend];
   return { lane: `${workflow}/${job}`, platform: 'remote', workflow, job, tests: sel.localTests, receipt: null, command };
+}
+
+export const REMOTE_GATE_LANE = 'pregate.json/remote_gate';
+/** The `clear` command for an obligation: the remote gate's own output for remote_gate, a run URL otherwise. */
+export const clearHint = (lane: string) => `gstack-pregate clear --remote ${lane} ${lane === REMOTE_GATE_LANE ? '--receipt <gate output file>' : '--run-url <url>'}`;
+export interface RemoteReport { tree: string; tests: number; failed: number; spent?: string }
+
+/** The last `PREGATE_REMOTE: tree=<tree> tests=<n> failed=<n> [spent=<usd>]` line in a remote gate's output. */
+export function parseRemoteReport(output: string): RemoteReport | null {
+  const m = [...output.matchAll(/^PREGATE_REMOTE: tree=(\S+) tests=(\d+) failed=(\d+)(?: spent=(\d+(?:\.\d+)?))?\s*$/gm)].pop();
+  return m ? { tree: m[1]!, tests: Number(m[2]), failed: Number(m[3]), spent: m[4] } : null;
+}
+
+/** Why a remote gate report does not clear the obligation for `tree` (`--remote` and `clear --receipt`), or null when it does. */
+export function remoteReportProblem(report: RemoteReport, tree: string): string | null {
+  if (report.tree !== tree) return `the remote gate tested tree ${report.tree.slice(0, 12)}, not ${tree.slice(0, 12)}`;
+  if (report.tests === 0) return 'the remote gate reported 0 tests';
+  if (report.failed > 0) return `the remote gate reported ${report.failed} failed of ${report.tests}`;
+  return null;
 }
 
 /**
@@ -141,22 +160,18 @@ async function runRemote(ctx: PregateContext, sel: Selection, base: CheckResult)
   fs.writeFileSync(filesFile, sel.localTests.join('\n') + '\n');
   const r = await supervise({ command: obligation.command!, cwd: ctx.repoRoot, env: { ...ctx.env, PREGATE_TREE: ctx.wtree, PREGATE_FILES_FILE: filesFile, PREGATE_SPEND_CAP_USD: String(cap) }, log, deadline: Date.now() + ctx.timeoutMs, stallMs: ctx.stallTimeoutMs, label: `remote gate ${obligation.lane}`, progress: ctx.progress });
   const output = readRange(log, r.start, r.end);
-  const reported = [...output.matchAll(/^PREGATE_REMOTE: tree=(\S+) tests=(\d+) failed=(\d+)(?: spent=(\d+(?:\.\d+)?))?\s*$/gm)].pop();
-  const spent = reported?.[4];
+  const reported = parseRemoteReport(output);
+  const spent = reported?.spent;
   const spend = `spend: spent ${spent ? `$${spent}` : '$0'}, reserved $0, unknown ${spent ? '$0' : `$${cap} (no spent= reported; counted at the cap)`} (cap $${cap})`;
   ctx.progress(`PREGATE_REMOTE_SPEND: ${spend.slice('spend: '.length)}`);
   const runLines = [...lines, `remote gate: ${obligation.command}`, `log: ${log}`, spend, ...output.trim().split('\n').slice(-15).map(l => `  ${l}`)];
   const inputs = { ...base.inputs, command: sha256(obligation.command!) };
   const why = r.outcome !== 'exited' ? `the remote gate did not finish (${r.outcome === 'stalled' ? `no output for ${ctx.stallTimeoutMs / 1000} s` : r.outcome})`
     : !reported ? `the remote gate exited ${r.exit} without a PREGATE_REMOTE: line`
-    : reported[1] !== ctx.wtree ? `the remote gate tested tree ${reported[1]!.slice(0, 12)}, not ${ctx.wtree.slice(0, 12)}`
-    : Number(reported[2]) === 0 ? 'the remote gate reported 0 tests'
-    : Number(reported[3]) > 0 ? `the remote gate reported ${reported[3]} failed of ${reported[2]}`
-    : r.exit !== 0 ? `the remote gate exited ${r.exit}`
-    : null;
+    : remoteReportProblem(reported, ctx.wtree) ?? (r.exit !== 0 ? `the remote gate exited ${r.exit}` : null);
   if (why) return { ...base, inputs, lines: runLines, status: 'incomplete', remote: [...sel.remote, obligation], code: r.outcome === 'stalled' ? 'PREGATE_STALLED' : 'PREGATE_INCOMPLETE', detail: `${why}; requires-remote ${obligation.lane} stays uncleared`, fix: `read ${log}; the obligation clears only on PREGATE_REMOTE: tree=${ctx.wtree.slice(0, 12)}… tests>0 failed=0 with exit 0` };
-  const cleared = { ...obligation, receipt: `remote-gate tree=${ctx.wtree.slice(0, 12)} tests=${reported![2]}`, cleared_by: `gstack-pregate --remote ${new Date().toISOString()}` };
-  return { ...base, inputs, lines: runLines, status: 'requires-remote', remote: [...sel.remote, cleared], detail: `remote gate ${obligation.lane}: ${reported![2]} tests, 0 failed on tree ${ctx.wtree.slice(0, 12)}; ${spend}` };
+  const cleared = { ...obligation, receipt: `remote-gate tree=${ctx.wtree.slice(0, 12)} tests=${reported!.tests}`, cleared_by: `gstack-pregate --remote ${new Date().toISOString()}` };
+  return { ...base, inputs, lines: runLines, status: 'requires-remote', remote: [...sel.remote, cleared], detail: `remote gate ${obligation.lane}: ${reported!.tests} tests, 0 failed on tree ${ctx.wtree.slice(0, 12)}; ${spend}` };
 }
 
 async function run(ctx: PregateContext): Promise<CheckResult> {
@@ -174,7 +189,7 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
   const smallMachine = ctx.cores < SMALL_MACHINE_CORES && sel.localTests.length > 0 && (ctx.config.remote_gate || ctx.testBackend !== 'local');
   if (smallMachine) {
     const obligation = remoteObligation(ctx, sel);
-    return { ...base, status: 'requires-remote', remote: [...sel.remote, obligation], lines: [...lines, `requires-remote ${obligation.lane}: ${ctx.cores} cores (under ${SMALL_MACHINE_CORES}); ${sel.localTests.length} local test file(s) recorded for the remote gate, not run here`, `run: ${obligation.command}`], detail: `${sel.localTests.length} local test file(s) recorded as requires-remote ${obligation.lane} (${ctx.cores} cores, under ${SMALL_MACHINE_CORES}); run it, then gstack-pregate clear --remote ${obligation.lane} --run-url <url>, or gstack-pregate --remote --spend-cap <usd> --allow-repo-commands` };
+    return { ...base, status: 'requires-remote', remote: [...sel.remote, obligation], lines: [...lines, `requires-remote ${obligation.lane}: ${ctx.cores} cores (under ${SMALL_MACHINE_CORES}); ${sel.localTests.length} local test file(s) recorded for the remote gate, not run here`, `run: ${obligation.command}`], detail: `${sel.localTests.length} local test file(s) recorded as requires-remote ${obligation.lane} (${ctx.cores} cores, under ${SMALL_MACHINE_CORES}); run it, then ${clearHint(obligation.lane)}, or gstack-pregate --remote --spend-cap <usd> --allow-repo-commands` };
   }
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
