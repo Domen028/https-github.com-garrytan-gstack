@@ -1,9 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as net from 'node:net';
 import * as os from 'node:os';
 import { join, resolve } from 'node:path';
-import { runDocker } from '../lib/cso/docker';
+import { dockerExactImagePresent, runDocker } from '../lib/cso/docker';
 import { childEnvironment, runProcess } from '../lib/cso/process';
 
 // OrbStack installs docker as a symlink to a multicall binary that dispatches
@@ -27,6 +28,10 @@ int main(int argc, char **argv) {
   }
   if (argc >= 3 && strcmp(argv[1], "context") == 0 && strcmp(argv[2], "show") == 0) {
     puts("orbstack");
+    return 0;
+  }
+  if (argc >= 3 && strcmp(argv[1], "image") == 0 && strcmp(argv[2], "inspect") == 0) {
+    printf("{\"Os\":\"linux\",\"Architecture\":\"amd64\",\"Id\":\"sha256:%064d\",\"RepoDigests\":[\"%s\"],\"Config\":{\"Entrypoint\":[\"/opt/cso/entrypoint\"]}}\n", 0, argv[argc - 1]);
     return 0;
   }
   for (int i = 1; i < argc; i++)
@@ -76,6 +81,26 @@ describe.skipIf(process.platform === 'win32')('CSO Docker invocation through a m
     expect(r.stdout.trim()).toBe('orbstack');
   });
 
+  test('a production image probe admits an image through the multicall binary', async () => {
+    const socket = join(root, 'probe.sock');
+    const server = net.createServer().listen(socket);
+    await new Promise((done) => server.once('listening', done));
+    try {
+      const stat = fs.statSync(socket);
+      const image = `registry.example/cso/semgrep@sha256:${'b'.repeat(64)}`;
+      const present = await dockerExactImagePresent(
+        { uri: `unix://${socket}`, socket, executable: multicall, device: stat.dev, inode: stat.ino },
+        root,
+        image,
+        'linux/amd64',
+      );
+      expect(present).toBe(true);
+      expect(fs.readFileSync(log, 'utf8')).toContain(`image inspect --format {{json .}} ${image}`);
+    } finally {
+      server.close();
+    }
+  });
+
   test('runProcess refuses an argv0 that is not a bare command name', async () => {
     await expect(
       runProcess(multicall, ['context', 'show'], { cwd: root, env: childEnvironment(root), argv0: '../docker' }),
@@ -110,7 +135,7 @@ describe.skipIf(process.platform === 'win32')('CSO Docker invocation through a m
       '-c',
       'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()',
       socket,
-    ]);
+    ], { timeout: 30_000 });
     expect(made.status).toBe(0);
     const stat = fs.lstatSync(socket);
     const owner = spawn('/bin/sleep', ['0.2'], { stdio: 'ignore' });
