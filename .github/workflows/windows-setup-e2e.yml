@@ -122,6 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           : > "$RUNNER_TEMP/setup-cases"
+          # shellcheck disable=SC2016
           MAJOR=$(powershell.exe -NoProfile -NonInteractive -Command '$PSVersionTable.PSVersion.Major' | tr -d '\r')
           test "$MAJOR" = 5 || (echo "powershell.exe is PowerShell '$MAJOR', not Windows PowerShell 5.1" && exit 1)
           echo ps51 >> "$RUNNER_TEMP/setup-cases"
