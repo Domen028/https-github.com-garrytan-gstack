@@ -544,4 +544,11 @@ describe('weekly/manual workflow contract', () => {
     expect(text).not.toMatch(/pull_request|ANTHROPIC_API_KEY|OPENAI_API_KEY|codex exec|claude -p|gh issue|eval:bg|gstack-config set/);
     expect(text.match(/uses: [^\n]+/g)?.every(line => /@[a-f0-9]{40}$/.test(line))).toBe(true);
   });
+
+  test('its upload-artifact pin is the one the eval workflows use, so a Dependabot group bump keeps them together', () => {
+    const pin = (file: string) => [...readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), 'utf8').matchAll(/actions\/upload-artifact@([0-9a-f]{40})/g)].map(m => m[1]);
+    const own = pin('model-policy-freshness.yml');
+    expect(own).toHaveLength(1);
+    for (const file of ['evals.yml', 'evals-periodic.yml', 'windows-free-tests.yml']) expect(new Set(pin(file))).toEqual(new Set(own));
+  });
 });
