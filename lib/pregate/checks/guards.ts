@@ -45,6 +45,7 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
     return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', lines: listed, detail: `${selected.length} guard(s) not run (pass --allow-repo-commands): ${selected.map(g => g.id).join(', ')}`, fix: 'rerun with --allow-repo-commands (what a lane runs before reporting done, and what /ship passes)' };
   }
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
+  if (runtime.refusal) return { ...base, ...runtime.refusal, lines: [`runtime: ${runtime.label}`] };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-guards-'));
   const runs: GuardRun[] = [];
   for (const g of selected) runs.push(await runGuard(ctx, g, runtime.env, dir));

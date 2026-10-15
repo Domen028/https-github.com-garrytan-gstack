@@ -184,6 +184,7 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
   const runner = detectRunner(ctx, sel.localTests);
   if (!runner) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${sel.localTests.length} selected file(s)`, fix: 'declare `runner` (with {files}) in .gstack/pregate.json' };
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
+  if (runtime.refusal) return { ...base, ...runtime.refusal, lines: [`runtime: ${runtime.label}`] };
   const r = await runLocal(ctx, runtime.env, runner, sel.localTests);
   const runLines = [...lines, `runtime: ${runtime.label}`, `progress: ${adapterFor(runner) ?? 'none (no progress adapter for this runner; serial files and heartbeats only)'}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
   const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command), runtime: runtime.label } };

@@ -12,14 +12,17 @@
  *
  * The install verdict for (checkout, project) is the one record install,
  * the shim and admission share. Under the admission condition (GSTACK_CAPY=1,
- * or a verdict exists for this checkout and project) the lanes run the Bun it
- * recorded, and a recorded Bun that is gone or changed is reported as drift;
- * otherwise the verdict check is skipped with an explain line (contributors, CI).
+ * or a verdict exists for this checkout and project) it is validated as
+ * workflow admission validates it and the lanes run the Bun it recorded; an
+ * invalid verdict (INSTALL_UNVERIFIED) or a recorded Bun that is gone, changed
+ * or no longer satisfies the pins (BUN_RESOLUTION_DRIFT) makes the lanes and
+ * guards incomplete before anything launches. Otherwise the verdict check is
+ * skipped with an explain line (contributors, CI).
  */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { findInstallVerdict, readInstallVerdict, sourceRoot } from '../install-verdict';
+import { findInstallVerdict, installProject, readInstallVerdict, sourceRoot, verdictProblem } from '../install-verdict';
 import { resultCodeSuffix } from '../result-codes';
 import { collectPins, evaluatePins, exactPlan, parseVersion, satisfies } from '../runtime-pins';
 import { resolveStateRoot } from '../state-root';
@@ -133,40 +136,55 @@ export interface LaunchRuntime {
   version: string | null;
   env: NodeJS.ProcessEnv;
   label: string;
-  /** The install-verdict check: ok, drift (recorded Bun gone or changed), missing (GSTACK_CAPY=1 without one) or skipped. */
-  verdict: 'ok' | 'drift' | 'missing' | 'skipped';
+  /**
+   * The install-verdict check: ok, drift (recorded Bun gone, changed or no
+   * longer satisfying the pins), unverified (no verdict under GSTACK_CAPY=1,
+   * or one that is not ok, for another HEAD, planning-only, another project or
+   * too narrow) or skipped (no GSTACK_CAPY=1 and no verdict: contributors, CI).
+   */
+  verdict: 'ok' | 'drift' | 'unverified' | 'skipped';
   verdictLine: string;
+  /** Set for drift and unverified: the lanes and guards return it before launching anything. */
+  refusal: { status: 'incomplete'; code: 'BUN_RESOLUTION_DRIFT' | 'INSTALL_UNVERIFIED'; detail: string; fix: string } | null;
 }
 
-/** The Bun the lanes and guards run under, its dir first on PATH; the env is unchanged when nothing qualifies. */
+/**
+ * The Bun the lanes and guards run under, its dir first on PATH; the env is
+ * unchanged when nothing qualifies. Under the admission condition the install
+ * verdict for (checkout, project) is validated as workflow admission does
+ * (verdictProblem: ok, HEAD, pins, project, coverage, for /ship) and its
+ * recorded Bun is the one launched; the gstack checkout itself binds the
+ * 'none' verdict (installProject).
+ */
 export function launchRuntime(repoRoot: string, env: NodeJS.ProcessEnv): LaunchRuntime {
-  let project: string | null = null;
-  try { project = fs.realpathSync(repoRoot); } catch { /* unresolvable: no project */ }
   const checkout = sourceRoot(GSTACK_ROOT);
+  const project = installProject(checkout, repoRoot);
   const file = findInstallVerdict(checkout, project, env);
   const recorded = readInstallVerdict(file);
-  const bound = recorded && (recorded.schema_version === 1 || (recorded.project ?? '') === (project ?? '')) ? recorded : null;
-  const launch = (bin: string, version: string, why: string, verdict: LaunchRuntime['verdict'], verdictLine: string): LaunchRuntime => {
-    const dir = path.dirname(bin);
-    return { dir, version, env: { ...env, PATH: [dir, env.PATH ?? ''].filter(Boolean).join(path.delimiter) }, label: `bun ${version} at ${bin} (${why})${verdictLine ? `; ${verdictLine}` : ''}`, verdict, verdictLine };
-  };
+  let pinsRoot: string | null = null;
+  try { pinsRoot = fs.realpathSync(repoRoot); } catch { /* unresolvable: no pins */ }
+  const { pinExact, accept } = projectBunPins(pinsRoot, env);
+  const result = (dir: string | null, version: string | null, label: string, verdict: LaunchRuntime['verdict'], verdictLine: string, refusal: LaunchRuntime['refusal'] = null): LaunchRuntime =>
+    ({ dir, version, env: dir ? { ...env, PATH: [dir, env.PATH ?? ''].filter(Boolean).join(path.delimiter) } : env, label: `${label}${verdictLine ? `; ${verdictLine}` : ''}`, verdict, verdictLine, refusal });
+  const refuse = (code: 'BUN_RESOLUTION_DRIFT' | 'INSTALL_UNVERIFIED', detail: string, fix: string) =>
+    result(null, null, 'not launched', code === 'BUN_RESOLUTION_DRIFT' ? 'drift' : 'unverified', `install verdict: ${detail}; fix: ${fix} ${resultCodeSuffix(code)}`, { status: 'incomplete', code, detail: `install verdict: ${detail}`, fix });
+  const installer = 'run the Capy skill installer here (scripts/install.sh --for ship), then rerun gstack-pregate with the GSTACK_LAUNCH line it prints';
   let verdict: LaunchRuntime['verdict'] = 'skipped';
   let verdictLine = '';
-  if (env.GSTACK_CAPY !== '1' && !bound) {
+  if (env.GSTACK_CAPY !== '1' && !recorded) {
     verdictLine = 'install verdict: not checked (no GSTACK_CAPY=1 and no verdict for this checkout and project)';
-  } else if (!bound) {
-    verdict = 'missing';
-    verdictLine = `install verdict: none for ${project ?? 'this directory'} at ${file}; fix: run the Capy skill installer (scripts/install.sh --check --for review) here ${resultCodeSuffix('INSTALL_UNVERIFIED')}`;
-  } else if (bound.bun_path) {
-    const now = fs.existsSync(bound.bun_path) ? bunVersionOf(bound.bun_path, env) : '';
-    if (now && now === bound.bun_version) return launch(bound.bun_path, now, 'recorded by the install verdict', 'ok', '');
-    verdict = 'drift';
-    verdictLine = `install verdict: recorded bun ${bound.bun_version} at ${bound.bun_path} ${now ? `now reports ${now}` : 'is gone'}; fix: re-run the Capy skill installer with --check (scripts/install.sh --check --for review) ${resultCodeSuffix('BUN_RESOLUTION_DRIFT')}`;
   } else {
+    const problem = verdictProblem('ship', GSTACK_ROOT, env, '', '', repoRoot);
+    if (problem) return refuse('INSTALL_UNVERIFIED', problem.detail, problem.fix ?? installer);
     verdict = 'ok';
+    if (recorded!.bun_path) {
+      const now = fs.existsSync(recorded!.bun_path) ? bunVersionOf(recorded!.bun_path, env) : '';
+      const why = !now ? 'is gone' : now !== recorded!.bun_version ? `now reports ${now}` : !accept(now) ? 'no longer satisfies the project pins' : '';
+      if (why) return refuse('BUN_RESOLUTION_DRIFT', `recorded bun ${recorded!.bun_version} at ${recorded!.bun_path} ${why}`, 're-run the Capy skill installer with --check (scripts/install.sh --check --for ship) and follow its fix');
+      return result(path.dirname(recorded!.bun_path), now, `bun ${now} at ${recorded!.bun_path} (recorded by the install verdict)`, 'ok', '');
+    }
   }
-  const { pinExact, accept } = projectBunPins(project, env);
   const { resolution } = resolveBun({ store: bunStore(resolveStateRoot(env)), env, pinExact, accept });
-  if (resolution) return launch(resolution.bin, resolution.version, `resolved: ${resolution.rule}`, verdict, verdictLine);
-  return { dir: null, version: null, env, label: `PATH (no eligible Bun in the runtime store, $BUN_INSTALL/bin, ~/.bun/bin or PATH)${verdictLine ? `; ${verdictLine}` : ''}`, verdict, verdictLine };
+  if (resolution) return result(path.dirname(resolution.bin), resolution.version, `bun ${resolution.version} at ${resolution.bin} (resolved: ${resolution.rule})`, verdict, verdictLine);
+  return result(null, null, 'PATH (no eligible Bun in the runtime store, $BUN_INSTALL/bin, ~/.bun/bin or PATH)', verdict, verdictLine);
 }

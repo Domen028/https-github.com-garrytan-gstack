@@ -130,9 +130,10 @@ function supportedBun(gstackRoot: string): string {
   return text.match(/^GSTACK_BUN_TESTED="([0-9.]+)"/m)?.[1] ?? '0.0.0';
 }
 
-interface VerdictProblem { detail: string; code: ResultCodeName; fix?: string }
+export interface VerdictProblem { detail: string; code: ResultCodeName; fix?: string }
 
-function verdictProblem(skill: string, gstackRoot: string, env: Env, bunPath: string, bunVersion: string, cwd?: string): VerdictProblem | null {
+/** Why the install verdict for (checkout, project of `cwd`) does not admit `skill`; null when it does. `bunPath` '' skips the running-Bun check. */
+export function verdictProblem(skill: string, gstackRoot: string, env: Env, bunPath: string, bunVersion: string, cwd?: string): VerdictProblem | null {
   const src = sourceRoot(gstackRoot);
   const project = installProject(src, cwd);
   const file = findInstallVerdict(src, project, env);

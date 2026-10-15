@@ -116,4 +116,19 @@ describe('one Bun resolution contract, two twins', () => {
     expect(bashResolve({ ...l, env, state: env.GSTACK_STATE_ROOT }, null)).toBe(want);
     expect(tsResolve({ ...l, env, state: env.GSTACK_STATE_ROOT }, null)).toBe(want);
   });
+
+  // Integration item 8: the gstack checkout itself binds the 'none' verdict.
+  test('launchRuntime on the gstack checkout reads the none verdict and launches its recorded Bun', () => {
+    const l = layout({ storeVersions: ['1.4.3'] });
+    const { installVerdictPath } = require('../lib/install-verdict') as typeof import('../lib/install-verdict');
+    const checkout = fs.realpathSync(ROOT);
+    const file = installVerdictPath(checkout, l.state, null);
+    const head = spawnSync('git', ['-C', ROOT, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 }).stdout.trim();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ schema_version: 2, checkout, project: '', head, for: 'ship', required: ['claude', 'codex', 'patch'], pins_planning_only: false, ok: true, trailer: 'gstack: ok', min_revision: '', launch_path: '', time: '', bun_path: REAL_BUN, bun_version: Bun.version }));
+    const r = launchRuntime(ROOT, l.env);
+    expect(r.refusal).toBeNull();
+    expect(r.verdict).toBe('ok');
+    expect(r.label).toBe(`bun ${Bun.version} at ${REAL_BUN} (recorded by the install verdict)`);
+  });
 });
