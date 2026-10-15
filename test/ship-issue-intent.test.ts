@@ -141,8 +141,11 @@ describe('related PRs (D2)', () => {
     expect(renderIssueLines(links)).toEqual(['Fixes #6252', 'Fixes #6275', 'Related: #6253 (@andreineacsu)', 'Related: #6299 (@ghost)', 'Related: forker/gbrain#12 (@forker)']);
     related[0]!.supersedes = true;
     related[0]!.credit = true;
-    expect(renderIssueLines(links).slice(2, 4)).toEqual(['Supersedes #6253 (@andreineacsu)', 'Contributed by @andreineacsu (#6253)']);
-    expect(lineSources(links)[0]).toBe('Supersedes #6253 (@andreineacsu) ← open PR closing #6252, #6275; owner confirmed --supersedes');
+    expect(renderIssueLines(links).slice(2, 4)).toEqual(['Supersedes #6253', 'Contributed by @andreineacsu']);
+    expect(lineSources(links).slice(0, 2)).toEqual([
+      'Supersedes #6253 ← open PR closing #6252, #6275 by @andreineacsu; owner confirmed --supersedes',
+      'Contributed by @andreineacsu ← #6253, open PR closing #6252, #6275; owner confirmed --credit',
+    ]);
     expect(resolveLinks([], [], () => true, [], [])).not.toHaveProperty('related');
   });
 });
@@ -166,7 +169,7 @@ describe('gstack-issue-links (bin): related PRs, flake validation, lookup failur
     const credited = runBin(repo, 'gstack-issue-links', ['--base', 'main', '--supersedes', '7', '--credit', '7', '--out', out, '--json'], env);
     expect(credited.status).toBe(EXIT.ok);
     const j = JSON.parse(credited.out);
-    expect(j.lines).toEqual(['Fixes #14', 'Refs #30', 'Supersedes #7 (@alice)', 'Contributed by @alice (#7)', 'Related: carol/repo#11 (@carol)']);
+    expect(j.lines).toEqual(['Fixes #14', 'Refs #30', 'Supersedes #7', 'Contributed by @alice', 'Related: carol/repo#11 (@carol)']);
     expect(j.candidates.map((c: { issue: number }) => c.issue)).toEqual([30]);
     expect(JSON.parse(fs.readFileSync(out, 'utf8'))).toEqual({ fixes: [14], refs: [30], flakes: [], related: [{ pr: 7, author: 'alice', closes: [14], supersedes: true, credit: true }, { pr: 11, repo: 'carol/repo', author: 'carol', closes: [14] }] });
     expect(runBin(repo, 'gstack-issue-links', ['--base', 'main', '--supersedes', '99'], env)).toMatchObject({ status: EXIT.usage, err: expect.stringContaining('--supersedes #99 is not a Related PR (#7, carol/repo#11)') });

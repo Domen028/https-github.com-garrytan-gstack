@@ -19,8 +19,9 @@
  *     `Flake: <test>` title): `Flake: #N (run <id>)`. Duplicate test names
  *     keep the lowest issue number.
  *   - Open PRs by other authors that close an issue this PR fixes are
- *     `Related: #N (@author)`; `Supersedes` and `Contributed by` only with the
- *     owner's confirmation (--supersedes / --credit).
+ *     `Related: #N (@author)`; `Supersedes #N` and `Contributed by @author`
+ *     (lib/contributor-mode.ts credit lines) only with the owner's
+ *     confirmation (--supersedes / --credit).
  */
 
 export type IssueIntent = 'fixes' | 'refs';
@@ -163,8 +164,8 @@ export function renderIssueLines(links: IssueLinks): string[] {
   for (const c of links.cross) lines.push(`Refs ${c}`);
   for (const f of links.flakes) lines.push(`Flake: #${f.issue} (run ${f.run})`);
   for (const r of links.related ?? []) {
-    lines.push(`${r.supersedes ? 'Supersedes' : 'Related:'} ${prId(r)} (@${r.author})`);
-    if (r.credit) lines.push(`Contributed by @${r.author} (${prId(r)})`);
+    lines.push(r.supersedes ? `Supersedes ${prId(r)}` : `Related: ${prId(r)} (@${r.author})`);
+    if (r.credit) lines.push(`Contributed by @${r.author}`);
   }
   return lines;
 }
@@ -175,8 +176,8 @@ export function lineSources(links: IssueLinks): string[] {
   for (const f of links.flakes) out.push(`Flake: #${f.issue} (run ${f.run}) ← bot flake issue for ${f.test ?? 'an unnamed test'}`);
   for (const r of links.related ?? []) {
     const closes = `open PR closing ${r.closes.map(n => `#${n}`).join(', ')}`;
-    out.push(`${r.supersedes ? 'Supersedes' : 'Related:'} ${prId(r)} (@${r.author}) ← ${closes}${r.supersedes ? '; owner confirmed --supersedes' : ''}`);
-    if (r.credit) out.push(`Contributed by @${r.author} (${prId(r)}) ← ${closes}; owner confirmed --credit`);
+    out.push(r.supersedes ? `Supersedes ${prId(r)} ← ${closes} by @${r.author}; owner confirmed --supersedes` : `Related: ${prId(r)} (@${r.author}) ← ${closes}`);
+    if (r.credit) out.push(`Contributed by @${r.author} ← ${prId(r)}, ${closes}; owner confirmed --credit`);
   }
   return out;
 }

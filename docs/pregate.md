@@ -363,9 +363,10 @@ every refused match is printed with its reason.
 
 Open PRs by other authors (not the `gh` user, not this branch) whose closing
 set overlaps this PR's `Fixes` are `Related: #N (@author)`, read page by page
-from each issue's closing-PR references, in unattended runs too. `Supersedes #N
-(@author)` replaces that line and `Contributed by @author (#N)` is added only
-with `--supersedes N` / `--credit N`, after the owner confirms.
+from each issue's closing-PR references, in unattended runs too. `Supersedes #N`
+replaces that line and `Contributed by @author` is added (the credit lines of
+`lib/contributor-mode.ts`) only with `--supersedes N` / `--credit N`, after the
+owner confirms.
 `--no-auto-links` skips the lookup. A failed lookup prints `ISSUE_LOOKUP_FAILED`
 and keeps the other lines. The stderr preview names the source of each line.
 

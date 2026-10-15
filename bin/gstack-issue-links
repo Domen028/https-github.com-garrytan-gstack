@@ -34,8 +34,8 @@ const HELP = `gstack-issue-links — Fixes only on explicit closure intent; ever
   --base <ref>        base branch (default: origin/HEAD, else main); commits origin/<base>..HEAD are read
   --issue <n>         explicit closure intent (repeatable); still read through gstack-issue-guard
   --ci-run <id>       a failing CI run id (repeatable); bot flake issues of this repo naming it and a test become Flake: #N (run <id>)
-  --supersedes <pr>   owner confirmed this PR supersedes a Related PR: Supersedes #N (@author) (repeatable)
-  --credit <pr>       owner confirmed crediting a Related PR's author: Contributed by @author (#N) (repeatable)
+  --supersedes <pr>   owner confirmed this PR supersedes a Related PR: Supersedes #N (repeatable)
+  --credit <pr>       owner confirmed crediting a Related PR's author: Contributed by @author (repeatable)
   --no-auto-links     no Related lookup (open PRs by other authors closing a fixed issue)
   --repo <owner/repo> repository for gh (default: the current remote)
   --out <file>        write the issues object (fixes, refs, flakes, related) for gstack-ship-receipt write --issues @file
