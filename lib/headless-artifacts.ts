@@ -68,7 +68,7 @@ export interface PregateCheck {
   // C-pregate (C8): stage, the input identity the check ran against, the fix clause and result code, and per-item lines.
   stage?: 'preflight' | 'tests'; inputs?: Record<string, string>; fix?: string; code?: string; lines?: string[];
 }
-export interface PregateRemote { lane: string; platform: string; workflow: string; job: string; tests: string[]; receipt: string | null; cleared_by?: string }
+export interface PregateRemote { lane: string; platform: string; workflow: string; job: string; tests: string[]; receipt: string | null; cleared_by?: string; command?: string }
 export interface PregateFile {
   schema_version: 1; tree: string; checks: PregateCheck[]; run?: string; stage1_ms?: number; stage2_ms?: number;
   // C-pregate (C8): head/base identity, the policy sources, persisted requires-remote obligations and the one-line verdict.
@@ -187,7 +187,7 @@ export const ARTIFACT_SCHEMAS = {
       schema_version: { const: 1 }, run: str, tree: str, stage1_ms: num, stage2_ms: num,
       checks: { type: 'array', items: { type: 'object', required: ['id', 'status'], properties: { id: str, status: { enum: ['pass', 'fail', 'warn', 'incomplete', 'requires-remote', 'not_installed'] }, ms: num, detail: str, stage: { enum: ['preflight', 'tests'] }, inputs: { type: 'object' }, fix: str, code: str, lines: strList } } },
       head: str, base: str, generated_at: str, policy: str, registry: str, verdict: str,
-      requires_remote: { type: 'array', items: { type: 'object', required: ['lane', 'platform', 'tests', 'receipt'], properties: { lane: str, platform: str, workflow: str, job: str, tests: strList, receipt: nullableStr, cleared_by: str } } },
+      requires_remote: { type: 'array', items: { type: 'object', required: ['lane', 'platform', 'tests', 'receipt'], properties: { lane: str, platform: str, workflow: str, job: str, tests: strList, receipt: nullableStr, cleared_by: str, command: str } } },
     },
   },
   'ship-receipt': {

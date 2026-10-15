@@ -8,15 +8,15 @@
  * Incidents: p0-4-pipe-hidden-failure (`false | tail` read as green),
  * p0-4-windows-lane-unrun (a Windows-only change merged with its lane unrun).
  */
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { baseInputs, sha256 } from '../context';
 import { selectLanes, type Selection } from '../lane-selection';
 import { launchRuntime } from '../runtime';
+import { adapterFor, readRange, supervise, type Counter, type Supervised } from '../supervise';
 import { matchesAny } from '../../ship-policy';
-import type { CheckDef, CheckResult, PregateContext } from '../types';
+import type { CheckDef, CheckResult, PregateContext, RemoteObligation } from '../types';
 
 /** The test command with `{files}`; detected from the repo when the config does not name one. */
 export function detectRunner(ctx: PregateContext, files: readonly string[]): string | null {
@@ -49,32 +49,55 @@ export function parseSummary(output: string): RunnerSummary {
   return { ran: null, failed: null };
 }
 
-interface LocalRun { exit: number | null; ran: number | null; failed: number | null; log: string; tail: string[]; command: string }
+interface LocalRun { exit: number | null; outcome: Supervised['outcome'] | 'not-started'; ran: number | null; failed: number | null; tail: string[]; command: string; files: string[]; lastFile: string | null; ms: number }
 
-function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[], log: string): LocalRun {
-  const command = runner.replace('{files}', files.map(f => `'${f.replace(/'/g, `'\\''`)}'`).join(' '));
-  const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: ctx.timeoutMs, maxBuffer: 256 * 1024 * 1024, env: { ...env, CI: env.CI ?? '1' } });
-  const output = `${r.stdout ?? ''}\n${r.stderr ?? ''}`;
-  fs.appendFileSync(log, `$ ${command}\n${output}\n`);
+const quote = (f: string) => `'${f.replace(/'/g, `'\\''`)}'`;
+
+async function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[], log: string, deadline: number, counter: Counter): Promise<LocalRun> {
+  const command = runner.replace('{files}', files.map(quote).join(' '));
+  const r = await supervise({ command, cwd: ctx.repoRoot, env: { ...env, CI: env.CI ?? '1' }, log, deadline, stallMs: ctx.stallTimeoutMs, label: `lanes (${files.length === 1 ? files[0] : `${files.length} files`})`, files, adapter: adapterFor(runner), counter, progress: ctx.progress });
+  const output = readRange(log, r.start, r.end);
   const summary = parseSummary(output);
-  return { exit: r.status, ...summary, log, tail: output.trim().split('\n').slice(-25), command };
+  return { exit: r.exit, outcome: r.outcome, ...summary, tail: output.trim().split('\n').slice(-25), command, files, lastFile: r.lastFile, ms: r.ms };
 }
 
 /**
  * Unit files in one runner process, then each serial-pattern file in its
  * own (a serial file shares process-wide state: a module mock, an env
- * mutation). The first non-zero or timed-out run decides the exit; counts
- * add up only when every run reported a summary.
+ * mutation). `--timeout` bounds the whole check: a group that would start
+ * after the deadline is not started. A stalled group is killed and the next
+ * one runs. The first unfinished, then the first non-zero run decides the
+ * exit; counts add up only when every run reported a summary.
  */
-function runLocal(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[]): LocalRun & { serial: number } {
+async function runLocal(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[]) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-lanes-'));
   const log = path.join(dir, 'lanes.log');
+  fs.writeFileSync(log, '');
   const serial = files.filter(f => matchesAny(ctx.config.serial_patterns, f));
   const unit = files.filter(f => !serial.includes(f));
-  const runs = [...(unit.length ? [unit] : []), ...serial.map(f => [f])].map(group => runOnce(ctx, env, runner, group, log));
+  const deadline = Date.now() + ctx.timeoutMs;
+  const counter: Counter = { done: 0, total: files.length };
+  const runs: LocalRun[] = [];
+  for (const group of [...(unit.length ? [unit] : []), ...serial.map(f => [f])]) {
+    if (Date.now() >= deadline) { runs.push({ exit: null, outcome: 'not-started', ran: null, failed: null, tail: [], command: '', files: group, lastFile: null, ms: 0 }); continue; }
+    runs.push(await runOnce(ctx, env, runner, group, log, deadline, counter));
+  }
   const bad = runs.find(r => r.exit === null) ?? runs.find(r => r.exit !== 0);
   const sum = (k: 'ran' | 'failed') => (runs.some(r => r[k] === null) ? null : runs.reduce((n, r) => n + (r[k] as number), 0));
-  return { exit: bad ? bad.exit : 0, ran: sum('ran'), failed: sum('failed'), log, tail: (bad ?? runs[runs.length - 1]!).tail, command: runs.map(r => r.command).join(' && '), serial: serial.length };
+  const started = runs.filter(r => r.outcome !== 'not-started');
+  return { runs, bad, exit: bad ? bad.exit : 0, ran: sum('ran'), failed: sum('failed'), log, tail: (bad?.tail.length ? bad : started[started.length - 1] ?? runs[0]!).tail, command: started.map(r => r.command).join(' && '), serial: serial.length };
+}
+
+/** Why the local lane did not finish: the stall, the deadline or a launch failure, with the last file started. */
+function unfinished(ctx: PregateContext, r: Awaited<ReturnType<typeof runLocal>>, total: number): Pick<CheckResult, 'code' | 'detail' | 'fix'> {
+  const notStarted = r.runs.filter(x => x.outcome === 'not-started').flatMap(x => x.files).length;
+  const stalled = r.runs.filter(x => x.outcome === 'stalled');
+  const rest = `${notStarted ? `; ${notStarted} of ${total} file(s) not started` : ''}${r.failed ? `; ${r.failed} failed before that` : ''}`;
+  if (stalled.length) {
+    return { code: 'PREGATE_STALLED', detail: `no test output for ${ctx.stallTimeoutMs / 1000} s; process group killed; last file started: ${stalled.map(x => x.lastFile ?? `(none reported; ${x.files.length} file(s))`).join(', ')}${rest}`, fix: `read ${r.log} for the stalled file; fix the hang, or raise --stall-timeout (stall_timeout_s in .gstack/pregate.json; 0 disables) for a test that is quiet for longer` };
+  }
+  const why = r.runs.find(x => x.outcome === 'spawn-failed') ? 'the runner could not be launched' : `local lane timed out after ${ctx.timeoutMs} ms`;
+  return { code: 'PREGATE_INCOMPLETE', detail: `${why} (${total} files${rest})`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
 }
 
 function describe(sel: Selection): string[] {
@@ -84,7 +107,62 @@ function describe(sel: Selection): string[] {
   return lines;
 }
 
-function run(ctx: PregateContext): CheckResult {
+export const SMALL_MACHINE_CORES = 8;
+const GSTACK_ROOT = path.resolve(import.meta.dir, '..', '..', '..');
+
+/**
+ * The small-machine obligation: the repo's declared `remote_gate`, else the
+ * configured test backend running this selection through gstack's Ubicloud
+ * runner (that command prints no PREGATE_REMOTE line, so only `clear` with a
+ * run URL discharges it).
+ */
+function remoteObligation(ctx: PregateContext, sel: Selection): RemoteObligation {
+  const declared = ctx.config.remote_gate;
+  const runner = detectRunner(ctx, sel.localTests);
+  const command = declared ?? `${GSTACK_ROOT}/scripts/ubicloud/ubi-runner.sh run --src ${quote(ctx.repoRoot)} -- ${quote(runner ? runner.replace('{files}', sel.localTests.map(quote).join(' ')) : '<test runner> <selected files>')}`;
+  const [workflow, job] = declared ? ['pregate.json', 'remote_gate'] : ['test_backend', ctx.testBackend];
+  return { lane: `${workflow}/${job}`, platform: 'remote', workflow, job, tests: sel.localTests, receipt: null, command };
+}
+
+/**
+ * `--remote`: run the declared remote gate now, under the spend cap. The
+ * gate gets PREGATE_TREE, PREGATE_FILES_FILE and PREGATE_SPEND_CAP_USD and
+ * must print `PREGATE_REMOTE: tree=<tree> tests=<n> failed=<n> [spent=<usd>]`;
+ * the obligation clears only when that tree is the tested tree, tests > 0,
+ * failed = 0 and the gate exited 0. Anything else leaves it uncleared and
+ * the check incomplete.
+ */
+async function runRemote(ctx: PregateContext, sel: Selection, base: CheckResult): Promise<CheckResult> {
+  const lines = base.lines ?? [];
+  if (!ctx.config.remote_gate) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `--remote runs only a declared remote gate; ${ctx.configLabel} has no remote_gate`, fix: 'declare remote_gate (a command that prints PREGATE_REMOTE: tree=… tests=… failed=…) in .gstack/pregate.json on the base branch, or run the tests locally without --remote' };
+  const obligation = remoteObligation(ctx, sel);
+  const cap = ctx.remote!.spendCapUsd;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-pregate-remote-'));
+  const log = path.join(dir, 'remote.log');
+  const filesFile = path.join(dir, 'files.txt');
+  fs.writeFileSync(log, '');
+  fs.writeFileSync(filesFile, sel.localTests.join('\n') + '\n');
+  const r = await supervise({ command: obligation.command!, cwd: ctx.repoRoot, env: { ...ctx.env, PREGATE_TREE: ctx.wtree, PREGATE_FILES_FILE: filesFile, PREGATE_SPEND_CAP_USD: String(cap) }, log, deadline: Date.now() + ctx.timeoutMs, stallMs: ctx.stallTimeoutMs, label: `remote gate ${obligation.lane}`, progress: ctx.progress });
+  const output = readRange(log, r.start, r.end);
+  const reported = [...output.matchAll(/^PREGATE_REMOTE: tree=(\S+) tests=(\d+) failed=(\d+)(?: spent=(\d+(?:\.\d+)?))?\s*$/gm)].pop();
+  const spent = reported?.[4];
+  const spend = `spend: spent ${spent ? `$${spent}` : '$0'}, reserved $0, unknown ${spent ? '$0' : `$${cap} (no spent= reported; counted at the cap)`} (cap $${cap})`;
+  ctx.progress(`PREGATE_REMOTE_SPEND: ${spend.slice('spend: '.length)}`);
+  const runLines = [...lines, `remote gate: ${obligation.command}`, `log: ${log}`, spend, ...output.trim().split('\n').slice(-15).map(l => `  ${l}`)];
+  const inputs = { ...base.inputs, command: sha256(obligation.command!) };
+  const why = r.outcome !== 'exited' ? `the remote gate did not finish (${r.outcome === 'stalled' ? `no output for ${ctx.stallTimeoutMs / 1000} s` : r.outcome})`
+    : !reported ? `the remote gate exited ${r.exit} without a PREGATE_REMOTE: line`
+    : reported[1] !== ctx.wtree ? `the remote gate tested tree ${reported[1]!.slice(0, 12)}, not ${ctx.wtree.slice(0, 12)}`
+    : Number(reported[2]) === 0 ? 'the remote gate reported 0 tests'
+    : Number(reported[3]) > 0 ? `the remote gate reported ${reported[3]} failed of ${reported[2]}`
+    : r.exit !== 0 ? `the remote gate exited ${r.exit}`
+    : null;
+  if (why) return { ...base, inputs, lines: runLines, status: 'incomplete', remote: [...sel.remote, obligation], code: r.outcome === 'stalled' ? 'PREGATE_STALLED' : 'PREGATE_INCOMPLETE', detail: `${why}; requires-remote ${obligation.lane} stays uncleared`, fix: `read ${log}; the obligation clears only on PREGATE_REMOTE: tree=${ctx.wtree.slice(0, 12)}… tests>0 failed=0 with exit 0` };
+  const cleared = { ...obligation, receipt: `remote-gate tree=${ctx.wtree.slice(0, 12)} tests=${reported![2]}`, cleared_by: `gstack-pregate --remote ${new Date().toISOString()}` };
+  return { ...base, inputs, lines: runLines, status: 'requires-remote', remote: [...sel.remote, cleared], detail: `remote gate ${obligation.lane}: ${reported![2]} tests, 0 failed on tree ${ctx.wtree.slice(0, 12)}; ${spend}` };
+}
+
+async function run(ctx: PregateContext): Promise<CheckResult> {
   const sel = selectLanes(ctx);
   ctx.explain.push(...sel.provenance);
   for (const [lane, set] of Object.entries(sel.laneSets)) ctx.explain.push(`lane ${lane}: ${set === '?' ? 'file set unknown' : `${set.length} files`}`);
@@ -95,15 +173,21 @@ function run(ctx: PregateContext): CheckResult {
     return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: 'add a test that names the file, or declare its lane (or []) under dependencies in .gstack/pregate.json' };
   }
   if (sel.tests.length === 0) return { ...base, detail: ctx.touched.length ? 'nothing touched selects a test' : 'no touched files' };
+  if (ctx.remote && sel.localTests.length) return runRemote(ctx, sel, base);
+  const smallMachine = ctx.cores < SMALL_MACHINE_CORES && sel.localTests.length > 0 && (ctx.config.remote_gate || ctx.testBackend !== 'local');
+  if (smallMachine) {
+    const obligation = remoteObligation(ctx, sel);
+    return { ...base, status: 'requires-remote', remote: [...sel.remote, obligation], lines: [...lines, `requires-remote ${obligation.lane}: ${ctx.cores} cores (under ${SMALL_MACHINE_CORES}); ${sel.localTests.length} local test file(s) recorded for the remote gate, not run here`, `run: ${obligation.command}`], detail: `${sel.localTests.length} local test file(s) recorded as requires-remote ${obligation.lane} (${ctx.cores} cores, under ${SMALL_MACHINE_CORES}); run it, then gstack-pregate clear --remote ${obligation.lane} --run-url <url>, or gstack-pregate --remote --spend-cap <usd> --allow-repo-commands` };
+  }
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
   const runner = detectRunner(ctx, sel.localTests);
   if (!runner) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${sel.localTests.length} selected file(s)`, fix: 'declare `runner` (with {files}) in .gstack/pregate.json' };
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
-  const r = runLocal(ctx, runtime.env, runner, sel.localTests);
-  const runLines = [...lines, `runtime: ${runtime.label}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
+  const r = await runLocal(ctx, runtime.env, runner, sel.localTests);
+  const runLines = [...lines, `runtime: ${runtime.label}`, `progress: ${adapterFor(runner) ?? 'none (no progress adapter for this runner; serial files and heartbeats only)'}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
   const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command), runtime: runtime.label } };
-  if (r.exit === null) return { ...withRun, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `local lane timed out after ${ctx.timeoutMs} ms (${sel.localTests.length} files)`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
+  if (r.exit === null) return { ...withRun, status: 'incomplete', ...unfinished(ctx, r, sel.localTests.length) };
   if (r.exit !== 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `local lane exited ${r.exit} (${r.failed ?? '?'} failed of ${r.ran ?? '?'} ran; ${sel.localTests.length} files; pipefail)`, fix: `read ${r.log}, fix the in-branch failure, rerun gstack-pregate --stage tests` };
   if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests for ${sel.localTests.length} selected file(s)`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
   const detail = `${r.ran ?? 'count unavailable'} tests ran in ${sel.localTests.length} file(s)${r.serial ? ` (${r.serial} serial)` : ''}, exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;

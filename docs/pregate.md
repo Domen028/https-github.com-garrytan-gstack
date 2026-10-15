@@ -66,6 +66,8 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
 | `sealed` | sealed or eval output that must never reach a public destination; read by the pre-push hook and `gstack-pregate sealed` (see [sealed output](#sealed)) |
 | `price_file` | repo-relative path of the paid gate's call-plan data file (`GSTACK_EVAL_CALLS v1`); `gstack-eval-plan price-gate` prices from it and never executes anything ([docs/eval-calls.md](eval-calls.md)) |
+| `stall_timeout_s` | seconds a test command may print nothing before its process group is killed and the check is `incomplete` (`PREGATE_STALLED`); default 300, `0` disables; `--stall-timeout` overrides (see [supervision](#supervision)) |
+| `remote_gate` | the repo's remote test gate command; under 8 cores the local test tier becomes a `requires-remote` obligation naming it, and `--remote` runs it (see [remote gate](#remote-gate)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
 takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
@@ -73,7 +75,8 @@ takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
 ## `gstack-pregate`
 
 ```
-gstack-pregate [--stage preflight|tests|all] [--only <check,..>] [--allow-repo-commands] [--policy-from base|head] [--explain] [--json]
+gstack-pregate [--stage preflight|tests|all] [--only <check,..>] [--allow-repo-commands] [--policy-from base|head]
+               [--timeout <s>] [--stall-timeout <s>] [--remote --spend-cap <usd>] [--explain] [--json]
 gstack-pregate verify | clear --remote <workflow.yml/job> --run-url <url> | lanes | validate | init
 ```
 
@@ -123,6 +126,13 @@ Two stages with separate clocks, both printed:
   first of `$BUN_INSTALL/bin` and `~/.bun/bin` whose Bun satisfies gstack's and
   the project's `engines.bun` (the row prints `runtime: bun <v> from <dir>`),
   so a Capy host's older image Bun cannot flip the verdict.
+- Every test-tier command (the lanes runner, each guard, the `--remote` gate)
+  runs supervised: see [supervision](#supervision). `--timeout` bounds the
+  whole check (all runner processes together); a serial file that would start
+  after the deadline is not started and the check is `incomplete`.
+- Under 8 cores, a base-branch `remote_gate` or a remote `test_backend`
+  (`gstack-config set test_backend ubicloud`) records the local test tier as a
+  `requires-remote` obligation instead of running it: see [remote gate](#remote-gate).
 
 Every check records the input identity it ran against (the working-tree
 fingerprint before and after, the selection, the command hash); a tree that
@@ -142,6 +152,70 @@ Unknown flags exit 2 with usage on every verb (an agent told to run a flag this
 gstack lacks never gets a green it did not ask for). Tier 2 checks still to come
 (`ratchets`, `lint`, `links`, `hermetic`, `patches`, `integrator`) are named in
 `--only`'s help.
+
+<a id="supervision"></a>
+## Supervision: progress, stalls, deadlines
+
+GBRA-95 (gbrain, 4 cores): a core edit selected 3,683 local files, 358 of them
+serial; the test stage printed nothing for 90 minutes because each runner
+process had its own `--timeout` and its output was buffered until it returned.
+Now each test-tier command:
+
+- runs in its own process group (`setsid`), with stdout and stderr appended to
+  a log file, never a pipe, so a backgrounded grandchild that keeps the output
+  open cannot hold the check; after the command exits, the group's leftover
+  members are killed;
+- reports live on stderr (stdout stays the table, or one JSON document with
+  `--json`):
+  ```
+  PREGATE_TEST: <n>/<total> <file> start
+  PREGATE_TEST: <n>/<total> <file> pass|fail <seconds>
+  PREGATE_HEARTBEAT: <label> running <s>s; last file <file>; log <bytes> bytes, last growth <s>s ago (<log>)
+  PREGATE: tests <verdict> in <s>s — lanes: <detail>
+  ```
+  Per-file lines come from a progress adapter where the runner's reporter
+  provides them: `bun test` (its `<file>:` headers) is the only adapter today;
+  a one-file run (each serial file) reports its file from the launch for any
+  runner. Other runners (node --test, vitest, jest, pytest) get heartbeats
+  only. A heartbeat follows each 60 s with no progress line;
+- is killed as **stalled** when its log does not grow for the stall timeout
+  (`--stall-timeout <s>`, else `stall_timeout_s`, else 300; `0` disables): the
+  check is `incomplete` with `PREGATE_STALLED` and names the last file
+  started; the next serial file still runs;
+- is killed as **timed out** at the check's `--timeout` deadline.
+
+A kill is SIGTERM to the group, then SIGKILL after 5 s (a group that ignores
+SIGTERM still dies). SIGINT or SIGTERM to `gstack-pregate` itself SIGKILLs every
+running group, writes no `pregate.json` and exits 130 or 143. Windows has no
+process groups here: the kill is `taskkill /T /F` on the shell's tree, which
+misses a descendant that was reparented or started detached.
+
+<a id="remote-gate"></a>
+## Small machines and the remote gate
+
+Under 8 cores (`os.availableParallelism()`), when the base branch's
+`.gstack/pregate.json` declares `remote_gate` or `gstack-config get
+test_backend` is not `local`, the lanes check runs nothing locally: it records
+the selected local files as a `requires-remote` obligation with the command to
+run, `pregate.json/remote_gate` (the declared command) or
+`test_backend/<backend>` (gstack's `scripts/ubicloud/ubi-runner.sh run --src
+<repo> -- '<runner> <files>'`). Without either, the tier runs locally under
+the supervision above. Close the obligation one of two ways:
+
+- `gstack-pregate clear --remote <lane> --run-url <url>` after running it; or
+- `gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands`,
+  which runs the declared `remote_gate` now (never under `--policy-from head`;
+  a `test_backend` without `remote_gate` cannot be run this way). The gate runs
+  in the repository root with `PREGATE_TREE` (the working-tree fingerprint
+  being tested), `PREGATE_FILES_FILE` (the selected files, one per line) and
+  `PREGATE_SPEND_CAP_USD`, and must print
+  `PREGATE_REMOTE: tree=<tree> tests=<n> failed=<n> [spent=<usd>]`, reporting the
+  tree it actually tested. The obligation clears only when that tree is
+  `PREGATE_TREE`, `tests` > 0, `failed` = 0 and the gate exits 0; anything else
+  leaves it uncleared and the check `incomplete`. The cap defaults to
+  `$GSTACK_SPEND_CAP_USD`; there is no default spend. Spend prints as
+  `spent, reserved, unknown`: a gate that prints no `spent=` is `unknown`,
+  counted at the cap.
 
 <a id="guards"></a>
 ## Guards and the lane-done rule

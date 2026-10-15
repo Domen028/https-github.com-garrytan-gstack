@@ -2426,6 +2426,21 @@ pass and blocks publication.
 **Fix.** Pass `--allow-repo-commands`, install the tool, raise `--timeout`, or
 keep the tree still, then rerun.
 
+<a id="pregate-stalled"></a>
+### `PREGATE_STALLED`
+
+**Meaning.** A test command the lanes check (or a guard, or the `--remote`
+gate) launched wrote nothing to its log for the stall timeout (default 300 s,
+`stall_timeout_s` in the base branch's `.gstack/pregate.json`, or
+`--stall-timeout`). pregate killed its process group and names the last test
+file started. The check is incomplete, never pass.
+
+**Fix.** Open the printed log, find the hang in the named file (a blocked
+child, a server that never exits, a synchronous wait), fix it and rerun
+`gstack-pregate --stage tests`. A test that is legitimately quiet for longer
+needs a larger `--stall-timeout`; `0` disables the stall kill and leaves only
+`--timeout`.
+
 <a id="pregate-stale"></a>
 ### `PREGATE_STALE`
 
