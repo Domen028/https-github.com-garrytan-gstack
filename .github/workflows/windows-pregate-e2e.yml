@@ -149,8 +149,7 @@ jobs:
           set -uo pipefail
           T="$RUNNER_TEMP/pregate-e2e"
           cd "$T/work"
-          OUT=$(GSTACK_HOME="$T/home" GSTACK_GIT_BASH='C:\no-such-git\bin\bash.exe' bun "$GITHUB_WORKSPACE/bin/gstack-restamp" --base main --allow-repo-commands --next --dry-run 2>&1)
-          CODE=$?
+          OUT=$(GSTACK_HOME="$T/home" GSTACK_GIT_BASH='C:\no-such-git\bin\bash.exe' bun "$GITHUB_WORKSPACE/bin/gstack-restamp" --base main --allow-repo-commands --next --dry-run 2>&1) && CODE=0 || CODE=$?
           echo "$OUT" | tail -n 3
           test "$CODE" -ne 0 || (echo "restamp passed without a bash" && exit 1)
           echo "$OUT" | grep -q 'cannot fingerprint the working tree (gstack-wtree could not start: gstack: no Git Bash found' || (echo "the refusal does not say why" && exit 1)
