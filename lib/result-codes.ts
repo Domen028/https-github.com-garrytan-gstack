@@ -526,6 +526,16 @@ export const RESULT_CODES = {
     summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes',
     fix: 'render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`',
   },
+  CHECKPOINT_INVALID: {
+    anchor: 'checkpoint-invalid',
+    summary: 'the autoplan checkpoint cannot be restored: its manifest is unreadable, a listed file is missing, escapes the checkpoint or does not match its sha256',
+    fix: 'restore from an intact copy of `<GSTACK_AUTOPLAN_CHECKPOINT_DIR>/<run>/` (its `restore.md` names the command); nothing was written to --out',
+  },
+  CHECKPOINT_TARGET_EXISTS: {
+    anchor: 'checkpoint-target-exists',
+    summary: '`gstack-autoplan resume --from` restores only into an empty or missing --out directory',
+    fix: 'pass a new --out directory, or resume the run already there without --from',
+  },
   OWNER_REPLY_REQUIRED: {
     anchor: 'owner-reply-required',
     summary: 'an agent answered the gate (`--by agent:<id>`) without the owner\'s verbatim reply',

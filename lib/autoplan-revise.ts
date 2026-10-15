@@ -125,7 +125,7 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   const changed = opened.filter(p => state.phases[p]!.snapshot !== newHash);
   const reopen = state.phase_order.filter(p => changed.includes(p) || (p === 'eng' && opened.includes('eng') && changed.length > 0));
   const atGate = state.status === 'gate_pending' ? state.gate_rev : undefined;
-  journal(out, { event: 'revise_intent', k, staging, plan: file, old_plan_sha256: oldHash, new_plan_sha256: newHash, at_gate_rev: atGate ?? null, incorporates, withdraw, settle });
+  journal(out, { event: 'revise_intent', k, staging: path.relative(out, staging), plan: file, old_plan_sha256: oldHash, new_plan_sha256: newHash, at_gate_rev: atGate ?? null, incorporates, withdraw, settle });
 
   const renames = reopen.length ? planReopen(state, reopen, state.gate_rev ?? 0, `revise v${k}`) : [];
   for (const p of added) state.phases[p] = {};
@@ -169,15 +169,16 @@ export function recoverRevise(out: string): string[] {
   const rows = readJournal(out);
   const intent = rows.filter(r => r.event === 'revise_intent').pop();
   if (!intent || rows.some(r => (r.event === 'plan_revised' || r.event === 'revise_abandoned') && r.k === intent.k)) return [];
-  const stagedRun = path.join(intent.staging, FILES.run);
+  const staging = path.resolve(out, intent.staging);
+  const stagedRun = path.join(staging, FILES.run);
   if (!fs.existsSync(stagedRun)) {
     journal(out, { event: 'revise_abandoned', k: intent.k });
-    fs.rmSync(intent.staging, { recursive: true, force: true });
+    fs.rmSync(staging, { recursive: true, force: true });
     return [`REVISE_RECOVERED: v${intent.k} abandoned (nothing was published)`];
   }
   const stage = JSON.parse(fs.readFileSync(stagedRun, 'utf8')) as { state: RunState; renames: Array<[string, string]>; committed: Record<string, unknown>; settled: Array<Record<string, unknown>> };
   fs.writeFileSync(path.join(out, FILES.run), JSON.stringify(stage.state, null, 2) + '\n');
   const state = readState(out);
-  publish(state, intent.staging, stage.renames, { ...stage.committed, recovered: true }, stage.settled);
+  publish(state, staging, stage.renames, { ...stage.committed, recovered: true }, stage.settled);
   return [`REVISE_RECOVERED: v${intent.k} completed (reopened=${(stage.committed.reopened as string[]).join(',') || 'none'})`];
 }

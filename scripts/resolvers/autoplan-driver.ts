@@ -29,6 +29,7 @@ export const AUTOPLAN_DRIVER_COMMANDS: Array<{ cmd: string; does: string }> = [
   { cmd: 'gstack-autoplan revise --out <dir> --withdraw <decision id>', does: 'drop a pending amendment instead of applying it' },
   { cmd: 'gstack-autoplan export --out <dir>', does: 'write the artifact set; then `gstack-artifact validate <dir>/run.json`' },
   { cmd: 'gstack-autoplan status|resume --out <dir>', does: 'read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts)' },
+  { cmd: 'gstack-autoplan resume --out <new dir> --from <checkpoint>', does: 'restore a hash-verified checkpoint (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership' },
 ];
 
 /** The reply grammar `gstack-gate` parses, one form per line. */
@@ -41,7 +42,7 @@ export const GATE_REPLY_FORMS: Array<{ reply: string; means: string }> = [
 
 /** Result codes the loop can print, in the order a run meets them. */
 export const DRIVER_CODES = ['RUN_NOT_INITIALIZED', 'PLAN_SECTIONS_INVALID', 'RUN_LOCKED', 'EXECUTION_UNKNOWN', 'SPEND_CAP_EXCEEDED', 'PHASE_NOT_AWAITING', 'ATTEMPT_MISMATCH',
-  'RESULT_RECEIPT_MISSING', 'RESULT_FINDINGS_MISSING', 'MODEL_FAMILY_CONFLICT', 'CONSENSUS_MISSING', 'GATE_REV_STALE', 'GATE_REPLY_UNPARSED', 'GATE_REC_STALE', 'OWNER_REPLY_REQUIRED', 'GATE_OWNER_REPLY_MISMATCH', 'PLAN_AMEND_PENDING', 'AMENDMENT_NOT_SETTLEABLE', 'GSTACK_VERSION_CHANGED'] as const;
+  'RESULT_RECEIPT_MISSING', 'RESULT_FINDINGS_MISSING', 'MODEL_FAMILY_CONFLICT', 'CONSENSUS_MISSING', 'GATE_REV_STALE', 'GATE_REPLY_UNPARSED', 'GATE_REC_STALE', 'OWNER_REPLY_REQUIRED', 'GATE_OWNER_REPLY_MISMATCH', 'PLAN_AMEND_PENDING', 'AMENDMENT_NOT_SETTLEABLE', 'CHECKPOINT_INVALID', 'GSTACK_VERSION_CHANGED'] as const;
 /** Fix text for codes the plan specifies and lane B-core adds to lib/result-codes.ts; the table's own fix wins once it exists. */
 const PENDING_FIX: Record<string, string> = {
   PLAN_SECTIONS_INVALID: 'the plan needs one `## Implementation plan` and one `## Review record`; rerun `next --scaffold` to wrap a plan that has neither',

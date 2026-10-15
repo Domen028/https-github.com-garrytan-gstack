@@ -2745,6 +2745,29 @@ the render the owner answered.
 **Fix.** Render again (`gstack-gate render <dir>/gate.json --all`), relay it,
 and answer with `--rec-hash <h>` from that render.
 
+<a id="checkpoint-invalid"></a>
+### `CHECKPOINT_INVALID`
+
+**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` refused
+the checkpoint: `checkpoint.json` is unreadable or not a schema_version 1
+checkpoint, or a listed file is missing, is not a regular file, escapes the
+checkpoint directory, or does not match its recorded sha256. Nothing was
+written to `--out`.
+
+**Fix.** Restore from an intact copy. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR`
+set, every command that leaves the run at rest rewrites
+`<dir>/<run>/` (its `restore.md` names the exact command); a copy that was
+edited or partially synced fails here by design.
+
+<a id="checkpoint-target-exists"></a>
+### `CHECKPOINT_TARGET_EXISTS`
+
+**Meaning.** `resume --from` restores only into a missing or empty `--out`
+directory, and this one already holds files.
+
+**Fix.** Pass a new `--out` directory, or run `gstack-autoplan resume --out
+<dir>` without `--from` to resume the run already there.
+
 <a id="owner-reply-required"></a>
 ### `OWNER_REPLY_REQUIRED`
 

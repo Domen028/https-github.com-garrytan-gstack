@@ -38,6 +38,13 @@ line yourself; gstack never writes the plan.
    then `next` refuses with `PLAN_AMEND_PENDING` and `export` will not mark the run complete.
 5. `REOPENED: <phases>` means loop `next` again (Eng last). `APPROVED:` means `export`.
 
+### On Capy
+
+- Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
+  hand is not an autoplan run: do not present it as one.
+- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder so a run at rest
+  survives machine replacement; restore with `resume --out <new dir> --from <dir>/<run>`.
+
 ### Commands
 
 - `gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--scaffold]`
@@ -66,6 +73,8 @@ line yourself; gstack never writes the plan.
   write the artifact set; then `gstack-artifact validate <dir>/run.json`.
 - `gstack-autoplan status|resume --out <dir>`
   read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts).
+- `gstack-autoplan resume --out <new dir> --from <checkpoint>`
+  restore a hash-verified checkpoint (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership.
 
 ## Reviewer result format
 
@@ -119,6 +128,7 @@ is the completion check. Copy the whole directory, never single files.
 - `GATE_OWNER_REPLY_MISMATCH`: relay exactly what the owner chose (or their reply itself, e.g. `--reply rec`); ask the owner when their words and the tokens disagree
 - `PLAN_AMEND_PENDING`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; settle a packaging or ordering change with `gstack-autoplan revise --out <dir> --settle <id>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`
 - `AMENDMENT_NOT_SETTLEABLE`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`; settle only packaging or ordering changes on an unchanged plan
+- `CHECKPOINT_INVALID`: restore from an intact copy of `<GSTACK_AUTOPLAN_CHECKPOINT_DIR>/<run>/` (its `restore.md` names the command); nothing was written to --out
 - `GSTACK_VERSION_CHANGED`: nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade
 
 ## Coordinator contract (inherited by every lane)

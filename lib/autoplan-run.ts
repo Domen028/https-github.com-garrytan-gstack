@@ -167,7 +167,7 @@ function openPhase(state: RunState, phase: Phase, cwd: string): void {
   ps.outside = state.outside_enabled ? { status: 'pending', attempts: [] }
     : notRun ? { status: 'disabled', outcome: 'not_run', reason: notRun.reason, detail: notRun.detail } : { status: 'disabled' };
   ps.prompts = prompts;
-  journal(state.out, { event: 'phase_opened', phase, snapshot: snap.sha256, prompts });
+  journal(state.out, { event: 'phase_opened', phase, snapshot: snap.sha256, prompts: Object.fromEntries(Object.entries(prompts).map(([k, p]) => [k, path.relative(state.out, p)])) });
 }
 
 export function nextStep(o: NextOptions): NextResult {
@@ -213,7 +213,7 @@ export function nextStep(o: NextOptions): NextResult {
     catch (e: any) { if (e.code === 'SPEND_CAP_EXCEEDED') { state.attempt_counter--; writeState(state); throw new RunError('SPEND_CAP_EXCEEDED', e.message, 3); } throw e; }
     const row: AttemptState = { attempt, state: 'dispatched', prompt: prompts[voice], result: path.join(state.out, attemptFile(phase, voice, attempt.slice(state.run.length + 1), 'md')), estimate_usd: estimate, dispatched_at: now() };
     bindPromptResult(row.prompt, row.result);
-    journal(state.out, { event: 'dispatched', attempt, phase, voice, snapshot: ps.snapshot, prompt: row.prompt, prompt_sha256: sha256File(row.prompt), result: row.result, estimate_usd: estimate });
+    journal(state.out, { event: 'dispatched', attempt, phase, voice, snapshot: ps.snapshot, prompt: path.relative(state.out, row.prompt), prompt_sha256: sha256File(row.prompt), result: path.relative(state.out, row.result), estimate_usd: estimate });
     (v.attempts ??= []).push(row);
     v.attempt = attempt; v.status = 'running';
     result.attempts.push({ attempt, voice, prompt: row.prompt, result: row.result, model_family: familyHint(state, voice), new: true });
@@ -329,7 +329,7 @@ export function submitResult(o: SubmitOptions): SubmitResult {
   const sha = sha256File(bound);
   const provider = o.runner ?? 'host-subagent';
   const receipt = { receipt: bind.receipt, findings_source: bind.source, reviewed_sha256: ps.snapshot, ...(bind.receipt === 'attested' ? { attest_reason: o.attest } : {}) };
-  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: bound, result_sha256: sha, model, runner: provider, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
+  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: path.basename(bound), result_sha256: sha, model, runner: provider, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
   settle(path.join(state.out, FILES.spend), open.attempt, o.usageUsd ?? 'unknown');
   open.state = 'submitted'; open.terminal_at = now();
   Object.assign(v, { status: 'completed', model, provider, output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: open.attempt, usage: { usd: o.usageUsd ?? 'unknown' }, ...receipt } satisfies Partial<VoiceState>);
@@ -406,17 +406,18 @@ export function resumeRun(out: string): ResumeResult {
     if (terminal.has(r.attempt)) {
       // A submit that journaled but died before run.json: re-bind from the journal and the file on disk.
       const sub = rows.find(x => x.event === 'submitted' && x.attempt === r.attempt);
-      if (sub && a && a.state !== 'submitted' && fs.existsSync(sub.result) && sha256File(sub.result) === sub.result_sha256) {
+      const result = sub && path.resolve(out, sub.result);
+      if (sub && result && a && a.state !== 'submitted' && fs.existsSync(result) && sha256File(result) === sub.result_sha256) {
         a.state = 'submitted'; a.terminal_at = sub.ts;
-        Object.assign(v!, { status: 'completed', model: sub.model, provider: sub.runner ?? 'unknown', output: path.basename(sub.result), result_sha256: sub.result_sha256, findings: sub.findings, attempt: sub.attempt,
+        Object.assign(v!, { status: 'completed', model: sub.model, provider: sub.runner ?? 'unknown', output: path.basename(result), result_sha256: sub.result_sha256, findings: sub.findings, attempt: sub.attempt,
           ...(sub.receipt ? { receipt: sub.receipt, findings_source: sub.findings_source, reviewed_sha256: sub.reviewed_sha256, ...(sub.attest_reason ? { attest_reason: sub.attest_reason } : {}) } : {}) });
-        state.artifacts[path.basename(sub.result)] = { path: path.basename(sub.result), sha256: sub.result_sha256 };
+        state.artifacts[path.basename(result)] = { path: path.basename(result), sha256: sub.result_sha256 };
         if (r.voice === 'native') state.native_model = sub.model; else state.outside_model = sub.model;
         rebound.push(r.attempt);
       }
       continue;
     }
-    if (!a) { (v!.attempts ??= []).push({ attempt: r.attempt, state: 'execution_unknown', prompt: r.prompt, result: r.result, estimate_usd: r.estimate_usd ?? 0, dispatched_at: r.ts }); v!.status = 'running'; }
+    if (!a) { (v!.attempts ??= []).push({ attempt: r.attempt, state: 'execution_unknown', prompt: path.resolve(out, r.prompt), result: path.resolve(out, r.result), estimate_usd: r.estimate_usd ?? 0, dispatched_at: r.ts }); v!.status = 'running'; }
     else if (a.state === 'dispatched') a.state = 'execution_unknown';
     else continue;
     journal(out, { event: 'execution_unknown', attempt: r.attempt, phase: r.phase, voice: r.voice, by: 'resume' });

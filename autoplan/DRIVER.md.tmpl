@@ -35,6 +35,13 @@ line yourself; gstack never writes the plan.
    then `next` refuses with `PLAN_AMEND_PENDING` and `export` will not mark the run complete.
 5. `REOPENED: <phases>` means loop `next` again (Eng last). `APPROVED:` means `export`.
 
+### On Capy
+
+- Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
+  hand is not an autoplan run: do not present it as one.
+- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder so a run at rest
+  survives machine replacement; restore with `resume --out <new dir> --from <dir>/<run>`.
+
 ### Commands
 
 {{AUTOPLAN_DRIVER_COMMANDS}}
