@@ -166,6 +166,8 @@ if [ -f "$PENDING_FILE" ]; then
     case "$_P_PULL" in
       bun-too-old*)
         echo "gstack auto-update: update held ($_P_PULL); nothing was installed or changed. Fix now: bun upgrade && cd $GSTACK_DIR && git pull --ff-only && ./setup" ;;
+      bun-version-unreadable*)
+        echo "gstack auto-update: update held ($_P_PULL); nothing was installed or changed. Fix now: reinstall Bun (curl -fsSL https://bun.sh/install | bash), check that bun --version prints a version, then cd $GSTACK_DIR && git pull --ff-only && ./setup. https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bun-version-unreadable" ;;
       hook-does-not-parse*)
         echo "gstack auto-update: update held ($_P_PULL); nothing was installed or changed, and your current hooks keep running. This is a gstack bug; report ${_P_PULL#hook-does-not-parse: } at https://github.com/garrytan/gstack/issues. gstack retries at the next check. https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#auto-update-hook-does-not-parse" ;;
       hook-check-unavailable*)
@@ -283,7 +285,7 @@ fi
   PULL_EXIT=$?
   # The fast-forward targets the exact revision whose requirement was read.
   # Setup runs `bun` from this PATH, so that is the binary checked; a
-  # malformed version passes here because setup only warns on it.
+  # version it cannot read holds too (bun-version-unreadable, #3195).
   INCOMING="" HELD=""
   if [ "$PULL_EXIT" -eq 0 ]; then
     INCOMING=$(git -C "$GSTACK_DIR" rev-parse --verify '@{upstream}^{commit}' 2>"${PULL_ERR_FILE:-/dev/null}") || PULL_EXIT=1
