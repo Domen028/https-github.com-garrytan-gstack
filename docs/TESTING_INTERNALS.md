@@ -1164,11 +1164,13 @@ changed. Cut or unstarted reruns are incomplete, not passes.
 ### Free suite duration seed
 
 `scripts/free-test-durations.json` drives shard packing; files missing from it
-pack at the seed's 99th percentile. Acceptable seeds come from
+pack at the seed's 99th percentile. Acceptable seeds come only from
 `bun run test:ubicloud --record-durations` (each file timed in its own child on a
-VM with the CI lane's environment) or a CI recording. A 4-core laptop or
-small-sandbox recording is not acceptable: browser and display tests skip or slow
-down there, so the seed misstates them.
+VM with the CI lane's environment; it needs `UBICLOUD_API_KEY` and copies the
+refreshed seed back into the checkout). A 4-core laptop or small-sandbox
+recording is not acceptable: browser and display tests skip or slow down there,
+so the seed misstates them. Contributors without `UBICLOUD_API_KEY` leave the
+refresh to a maintainer.
 
 - `--ci-plan` warns in the job summary, with the refresh command, when more than 5
   files are unseeded; it never fails a PR. `--ci-verify` lists shards that ran
