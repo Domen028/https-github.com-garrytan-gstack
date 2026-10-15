@@ -102,4 +102,15 @@ describe('workflow action pins', () => {
     const config = Bun.YAML.parse(fs.readFileSync(path.join(GITHUB_DIR, 'dependabot.yml'), 'utf-8')) as any;
     expect((config.updates ?? []).map((update: any) => update['package-ecosystem'])).toContain('github-actions');
   });
+
+  test('Dependabot holds Playwright minor and major bumps behind the windowsHide patch; patch updates still flow', () => {
+    const config = Bun.YAML.parse(fs.readFileSync(path.join(__dirname, '..', '.github', 'dependabot.yml'), 'utf-8')) as any;
+    const bun = (config.updates ?? []).find((update: any) => update['package-ecosystem'] === 'bun');
+    const ignored = Object.fromEntries((bun?.ignore ?? []).map((rule: any) => [rule['dependency-name'], rule]));
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
+    expect(Object.keys(pkg.patchedDependencies ?? {}).some(key => key.startsWith('playwright-core@'))).toBe(true);
+    for (const name of ['playwright', 'playwright-core']) {
+      expect(ignored[name]).toEqual({ 'dependency-name': name, 'update-types': ['version-update:semver-minor', 'version-update:semver-major'] });
+    }
+  });
 });
