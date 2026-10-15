@@ -13,7 +13,7 @@ Three bins, all over `lib/`:
 |---|---|---|
 | `gstack-regen` | `.gstack/generated.json` | generated files regenerate, never hand-merge |
 | `gstack-pregate` | `.gstack/pregate.json` | two-stage cheap gate, `pregate.json` record, publication check |
-| `gstack-issue-links` | — | `Fixes #N` only on explicit closure intent |
+| `gstack-issue-links` | — | `Fixes #N` only on explicit closure intent; Related PRs and validated flake issues |
 
 ## Trust boundary
 
@@ -413,14 +413,39 @@ held-out and transcript layout.
 ## `gstack-issue-links`
 
 ```
-gstack-issue-links [--base <ref>] [--issue <n>]... [--ci-run <id>]... [--out issues.json] [--json]
+gstack-issue-links [--base <ref>] [--issue <n>]... [--ci-run <id>]... [--supersedes <pr>]... [--credit <pr>]...
+                   [--no-auto-links] [--author <login>] [--repo <owner/repo>] [--out issues.json] [--json]
 ```
 
 Reads `origin/<base>..HEAD`. `Fixes #N` only on explicit closure intent: a
-`Fixes`/`Closes`/`Resolves #N` trailer line or `--issue N`. A bare mention, a
-partial fix, a deferred ask and every cross-repo `owner/repo#N` are `Refs`. Each
-closure issue is read through `gstack-issue-guard`; one that cannot be read is
-`Refs #N (unreadable …)` with `ISSUE_UNREADABLE` (exit 1), never `Fixes`. Each
-`--ci-run <id>` is searched among open issues whose body names it and rendered
-`Flake: #N (run <id>)`. The printed lines go under `## Issues` in the PR body;
-`--out` writes the object `gstack-ship-receipt write --issues @file` embeds.
+`Fixes`/`Closes`/`Resolves #N` trailer line or `--issue N`. A bare mention
+(a subject's `(#N)` included), a partial fix, a deferred ask and every
+cross-repo `owner/repo#N` are `Refs`. Same-repo references are printed as
+promotion candidates (`reference #N ← <commit line> (promote: fix #N)` on
+stderr, `candidates` in `--json`): the owner's `fix #N` reply reruns with
+`--issue N`; an unattended run keeps them `Refs` and lists them in the
+handoff. Each closure issue is read through `gstack-issue-guard`; one that
+cannot be read is `Refs #N (unreadable …)` with `ISSUE_UNREADABLE` (exit 1),
+never `Fixes`.
+
+Each `--ci-run <id>` is searched among open issues whose body names it and
+rendered `Flake: #N (run <id>)` only for a bot-opened issue of this repository
+that names that run (its `flake:json` `first_seen.run_id`, or this repository's
+`actions/runs/<id>` URL) and a test (`flake:json` `file › test`, or a
+`Flake: <test>` title). Two issues for the same test keep the lower number;
+every refused match is printed with its reason.
+
+Open PRs by other authors (not `--author`, default the `gh` viewer, which is
+an app identity on hosts like Capy, so pass your login there; not this branch) whose closing
+set overlaps this PR's `Fixes` are `Related: #N (@author)`, read page by page
+from each issue's closing-PR references, in unattended runs too. `Supersedes #N`
+replaces that line and `Contributed by @author` is added (the credit lines of
+`lib/contributor-mode.ts`) only with `--supersedes N` / `--credit N`, after the
+owner confirms.
+`--no-auto-links` skips the lookup. A failed lookup prints `ISSUE_LOOKUP_FAILED`
+and keeps the other lines. The stderr preview names the source of each line.
+
+The printed lines go under `## Issues` in the PR body; `--out` writes the
+object (`fixes`, `refs`, `flakes`, `related`) `gstack-ship-receipt write
+--issues @file` embeds. With `--body`, that write refuses a body missing any of
+those lines (`ISSUE_LINKS_MISSING`).

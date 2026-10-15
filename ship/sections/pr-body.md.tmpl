@@ -47,6 +47,15 @@ then return here for a new lookup and a fresh body before publishing.
    and names the remaining work; never auto-close it. Include the archive filename
    and `spec_filed_at`, not a private absolute path; `gstack-post` scans them with the body.
 
+### Issue links
+
+Run `~/.claude/skills/gstack/bin/gstack-issue-links --base <base> --out .gstack/tmp/issues.json`, adding
+`--issue <n>` per issue the user named as fixed, `--ci-run <id>` per failing CI run and
+`--author <login>` when `gh` runs as an app (Capy). Interactive:
+ask once about its `(promote: fix #N)` references (each `fix #<n>` reply adds `--issue <n>`), and add
+`--supersedes <n>`/`--credit <n>` for a `Related:` PR only when the owner confirms; rerun after any change.
+The completion message lists unpromoted candidates, `Related:` lines and any `ISSUE_LOOKUP_FAILED`.
+
 The PR/MR body should contain these sections (never reuse a prior run's body):
 
 ```
@@ -109,9 +118,7 @@ unavailable results as passing.>
 Without a valid match, omit this entire section.>
 
 ## Issues
-<The lines `gstack-issue-links --base <base> [--issue <n>] [--ci-run <id>] --out .gstack/tmp/issues.json`
-prints: Fixes only from a Fixes/Closes trailer or --issue, Refs otherwise,
-Flake: #N for failing run ids. Omit when it prints none.>
+<Issue links stdout, verbatim; omit on ISSUE_LINKS: none.>
 
 ## Verification Results
 <Step 8.1 obligations executed at Step 9: N PASS, M FAIL, K BLOCKED, J NOT RUN,
@@ -178,7 +185,8 @@ per-lane counts (`{"<lane>":{"pass":N,"fail":N,"skip":N}}`) to
 Add `--receipt .gstack/tmp/tree-receipt.json` only when Step 16 wrote it (gate-ahead).
 New PR/MR: omit `--pr`, then rerun with the number after creation and repost the body.
 Its `SHIP_RECEIPT:` line opens the completion message. `RECEIPT_INVALID` names the bad
-field: fix that input file and rerun; nothing was written. `PREGATE_STALE` means rerun
+field: fix that input file and rerun; nothing was written. `ISSUE_LINKS_MISSING`: add
+the named line under `## Issues` and rerun. `PREGATE_STALE` means rerun
 `gstack-pregate` on the stamped tree; `PREGATE_REMOTE_UNCLEARED` needs
 `gstack-pregate clear` with the run URL. Both stop publication.
 
