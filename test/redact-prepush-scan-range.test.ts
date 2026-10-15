@@ -24,11 +24,12 @@ import { dirname, join } from "path";
 // Fixture git was spawned with the parent environment. A global or system
 // core.hooksPath, or the same key via GIT_CONFIG_COUNT /
 // GIT_CONFIG_PARAMETERS, runs on these pushes and rejects the local remote
-// (#2967). /dev/null drops the global file; NUL is that device on Windows.
+// (#2967). /dev/null drops the global file on every platform: Git for
+// Windows rejects NUL (see EMPTY_GLOBAL_GIT_CONFIG in lib/cso/process.ts).
 // Config written inside the fixture repo still applies.
 function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_CONFIG_COUNT = "0";
   delete env.GIT_CONFIG_PARAMETERS;
@@ -389,6 +390,17 @@ describe("fixture git ignores inherited hook config (#2967)", () => {
       run(["remote", "add", "origin", remote], work);
       run(["push", "-q", "origin", "main"], work);
     });
+  });
+
+  test("a hooksPath in the default global files under HOME or XDG_CONFIG_HOME cannot reject the fixture push", () => {
+    const { hooks } = hooksPathConfig();
+    const home = keep(mkdtempSync(join(tmpdir(), "gstack-prepush-home-")));
+    const xdg = join(home, "xdg");
+    mkdirSync(join(xdg, "git"), { recursive: true });
+    const body = `[core]\n\thooksPath = ${JSON.stringify(hooks)}\n`;
+    writeFileSync(join(home, ".gitconfig"), body);
+    writeFileSync(join(xdg, "git", "config"), body);
+    withInheritedEnv({ HOME: home, USERPROFILE: home, XDG_CONFIG_HOME: xdg, GIT_CONFIG_GLOBAL: undefined }, () => pushSeed());
   });
 
   test("a repo-local hooksPath still rejects the fixture push", () => {

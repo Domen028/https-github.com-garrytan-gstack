@@ -41,7 +41,7 @@ let remote: string;
 // hooksPath written into the fixture repo still runs.
 function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
-  env.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  env.GIT_CONFIG_GLOBAL = "/dev/null";
   env.GIT_CONFIG_NOSYSTEM = "1";
   env.GIT_CONFIG_COUNT = "0";
   delete env.GIT_CONFIG_PARAMETERS;
