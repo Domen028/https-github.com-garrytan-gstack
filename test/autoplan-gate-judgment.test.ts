@@ -6,7 +6,10 @@
  * basis. Reopen and APPLY key on the chosen option's `changes_plan`; accepted
  * changes are pending amendments that `next` refuses past (PLAN_AMEND_PENDING)
  * until `revise --incorporates` binds them to a changed plan or `--withdraw`
- * drops them. `all as-is` keeps every direction. Partial replies resolve
+ * drops them. `all as-is` keeps every direction; `all` leaves an item
+ * recommended `b` pending (the owner's own token changes their direction;
+ * field gate rev 1, d3) and the GATE_PENDING line names the tokens. Partial
+ * replies resolve
  * against persisted decisions. On reruns a challenge without `changes` is an
  * agent decision that reopens nothing, rerun prompts carry the decided items,
  * and answered items from phases that did not rerun carry forward.
@@ -45,7 +48,7 @@ function gated(ceo: { native?: unknown[]; outside?: unknown[] }, eng: { native?:
 }
 const gate = (out: string) => JSON.parse(fs.readFileSync(path.join(out, 'gate.json'), 'utf8'));
 const decisions = (out: string) => readJsonl(path.join(out, 'decisions.jsonl'));
-const answer = (out: string, rev: number, reply: string, json = false) => r.ap(['answer', '--out', out, '--gate-rev', String(rev), '--reply', reply, ...(json ? ['--json'] : [])]);
+const answer = (out: string, rev: number, reply: string, json = false) => r.ap(['answer', '--by', 'human', '--out', out, '--gate-rev', String(rev), '--reply', reply, ...(json ? ['--json'] : [])]);
 const v = (dir: string, text: string) => { const f = path.join(dir, `v${++n}.md`); fs.writeFileSync(f, text); return f; };
 
 describe('changes and user-challenge defaults', () => {
@@ -100,9 +103,14 @@ describe('changes and user-challenge defaults', () => {
 });
 
 describe('accepted changes are amendments', () => {
-  test('`all` accepts an agreeing change: APPLY, REOPENED, NEXT revise; next refuses until revise --incorporates binds it', () => {
+  test('`all` leaves the agreeing change pending; its own token accepts it: APPLY, REOPENED, NEXT revise; next refuses until revise --incorporates binds it', () => {
     const g = gated(AGREE, {});
-    const res = answer(g.out, 1, 'all');
+    const held = answer(g.out, 1, 'all');
+    expect(held.status, held.stderr).toBe(0);
+    expect(held.stdout).toMatch(/^GATE_PENDING: uc1 unanswered \(reply with uc1a\|uc1b; all does not answer items recommended b\)$/m);
+    expect(held.stdout).not.toMatch(/^APPLY:/m);
+    expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ status: 'pending' });
+    const res = answer(g.out, 1, 'uc1b');
     expect(res.status, res.stderr).toBe(0);
     expect(res.stdout).toMatch(new RegExp(`^APPLY: ${esc(g.run)}-uc1 Ship the backoff behind a flag first .* -> accept the change both reviewers recommend`, 'm'));
     expect(res.stdout).toMatch(/^REOPENED: ceo,eng \(Eng last\) reason=uc1b$/m);
@@ -143,7 +151,7 @@ describe('accepted changes are amendments', () => {
     expect(asIs.stdout).not.toMatch(/^APPLY:/m);
     expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ chosen: 'a', status: 'overridden' });
     const w = gated(AGREE, {});
-    expect(answer(w.out, 1, 'all').stdout).toMatch(/^APPLY:/m);
+    expect(answer(w.out, 1, 'all except uc1b').stdout).toMatch(/^APPLY:/m);
     const withdraw = r.ap(['revise', '--out', w.out, '--withdraw', `${w.run}-uc1`]);
     expect(withdraw.status, withdraw.stderr).toBe(0);
     expect(readJsonl(path.join(w.out, 'attempts.jsonl')).find(e => e.event === 'amendment_withdrawn')).toMatchObject({ decision: `${w.run}-uc1` });

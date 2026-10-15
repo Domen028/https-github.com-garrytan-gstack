@@ -68,9 +68,25 @@ export function validateGateList(list: unknown): string[] {
   return problems;
 }
 
-/** The `all` resolution: every item takes its recommendation; shown under the list so the reply shape is explicit. */
+/**
+ * An approval item whose recommended option changes the plan (both voices
+ * recommend the change) is answered only by its own token: `all` must never
+ * flip the owner's stated direction on their behalf (field gate rev 1, d3).
+ */
+export function heldFromAll(item: GateItem): boolean {
+  return item.kind === 'approval' && item.options.some(o => o.key === item.recommended && o.changes_plan === true);
+}
+
+/** The `all` resolution: every item takes its recommendation, except the ones `heldFromAll` leaves to the owner; shown under the list so the reply shape is explicit. */
 export function resolveAll(list: GateList): Record<string, string> {
-  return Object.fromEntries(list.items.map(i => [i.id, i.recommended]));
+  return Object.fromEntries(list.items.filter(i => !heldFromAll(i)).map(i => [i.id, i.recommended]));
+}
+
+/** The `GATE_PENDING` hint: exact tokens per pending item, and the `all` rule when any pending item is held from it. */
+export function pendingHint(list: GateList, pending: string[]): string {
+  const items = pending.map(id => list.items.find(i => i.id === id)).filter((i): i is GateItem => !!i);
+  const tokens = items.map(i => i.options.map(o => `${i.id}${o.key}`).join('|')).join(' ');
+  return `reply with ${tokens || 'p1a..p1e'}${items.some(heldFromAll) ? '; all does not answer items recommended b' : ' or all'}`;
 }
 
 export function renderGate(list: GateList, page = 1, pageSize = PAGE_SIZE): string {
@@ -92,6 +108,7 @@ export function renderGate(list: GateList, page = 1, pageSize = PAGE_SIZE): stri
   if (pages > 1) lines.push(`Ids are stable across pages; render page N with \`gstack-gate render <file> --page N\`.`);
   lines.push('Reply with exactly one of: `all` · `<id><option>` tokens, e.g. `' + exampleTokens(list) + '` · `all except <tokens>` · `all as-is` (keep every direction).');
   lines.push('Items marked auto take their recommendation if unanswered; approval items stay pending until answered. Bare yes/no is not accepted.');
+  for (const held of list.items.filter(heldFromAll)) lines.push(`\`all\` does not answer ${held.id} (recommended ${held.recommended} changes the plan); reply ${held.options.map(o => `${held.id}${o.key}`).join(' or ')} yourself.`);
   lines.push(`Reply binds to gate_rev=${list.gate_rev}. \`all\` resolves to: ${JSON.stringify({ gate_rev: list.gate_rev, choices: resolveAll(list) })}`);
   return lines.join('\n') + '\n';
 }
@@ -156,7 +173,7 @@ export function parseReply(reply: string, list: GateList, gateRev?: number, prio
     if (chosen !== undefined) choices.push({ id: item.id, chosen, kind: item.kind, how: how(item, chosen) });
     else if (earlier !== undefined && item.options.some(o => o.key === earlier)) choices.push({ id: item.id, chosen: earlier, kind: item.kind, how: how(item, earlier), prior: true });
     else if (asIs) { const keep = keepDirection(item); choices.push({ id: item.id, chosen: keep, kind: item.kind, how: how(item, keep) }); }
-    else if (all) choices.push({ id: item.id, chosen: item.recommended, kind: item.kind, how: 'recommended' });
+    else if (all && !heldFromAll(item)) choices.push({ id: item.id, chosen: item.recommended, kind: item.kind, how: 'recommended' });
     else if (item.kind === 'auto') choices.push({ id: item.id, chosen: item.recommended, kind: item.kind, how: 'auto_default' });
     else pending.push(item.id);
   }
@@ -185,14 +202,17 @@ export function decisionRows(list: GateList, extra: Partial<DecisionRow> = {}): 
   }));
 }
 
-export function applyReply(rows: DecisionRow[], parsed: ParsedReply, answeredAt: string): DecisionRow[] {
+/** `--by` values: the owner typing tokens, or an agent relaying or deciding them. */
+export const ANSWERED_BY_RE = /^(human|agent:[A-Za-z0-9_.:-]+)$/;
+
+export function applyReply(rows: DecisionRow[], parsed: ParsedReply, answeredAt: string, answeredBy?: string): DecisionRow[] {
   if (!parsed.valid) return rows;
   const byId = new Map(parsed.choices.map(c => [c.id, c]));
   return rows.map(row => {
     const choice = byId.get(row.label?.toLowerCase() ?? '') ?? byId.get(row.id.slice(row.run.length + 1).replace(/^r\d+-/, ''));
     if (!choice || choice.prior || row.gate_rev !== parsed.gate_rev) return row;
     return {
-      ...row, chosen: choice.chosen, answered_at: answeredAt, reply: parsed.reply,
+      ...row, chosen: choice.chosen, answered_at: answeredAt, reply: parsed.reply, ...(answeredBy ? { answered_by: answeredBy } : {}),
       status: choice.how === 'override' ? 'overridden' : 'approved',
     };
   });

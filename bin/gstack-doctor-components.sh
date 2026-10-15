@@ -105,6 +105,7 @@ gstack_result_anchor() {
     REVIEW_STATUS_MISMATCH) printf '%s' 'review-status-mismatch' ;;
     GATE_REV_STALE) printf '%s' 'gate-rev-stale' ;;
     GATE_REPLY_UNPARSED) printf '%s' 'gate-reply-unparsed' ;;
+    ANSWER_BY_REQUIRED) printf '%s' 'answer-by-required' ;;
     COMPONENT_MISSING) printf '%s' 'doctor-component-missing' ;;
     RUNTIME_BELOW_MINIMUM) printf '%s' 'doctor-runtime-below-minimum' ;;
     PROJECT_PIN_MISMATCH) printf '%s' 'doctor-project-pin-mismatch' ;;
@@ -186,6 +187,7 @@ gstack_result_anchor() {
     GSTACK_VERSION_CHANGED) printf '%s' 'gstack-version-changed' ;;
     ARTIFACT_GATE_UNSETTLED) printf '%s' 'artifact-gate-unsettled' ;;
     UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;
+    UPGRADE_BUSY) printf '%s' 'upgrade-busy' ;;
     UPGRADE_FETCH_FAILED) printf '%s' 'upgrade-fetch-failed' ;;
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
     CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;

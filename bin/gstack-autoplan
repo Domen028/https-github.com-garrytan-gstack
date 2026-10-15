@@ -26,7 +26,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { answerGate } from '../lib/autoplan-gate';
-import { admit } from '../lib/autoplan-admission';
+import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
 import { migrateRun } from '../lib/autoplan-migrate';
 import { reviseRun } from '../lib/autoplan-revise';
@@ -60,7 +60,7 @@ DRIVER: ${driverFile()}
           --incorporates discharges the named accepted changes (the plan must change); --withdraw (alone or with --plan) drops one
   run     --out <dir> --plan <file> --native-model <id> --outside-model <id> [--runner codex-cli|api] [--native-runner api] ...
           next in a loop, only when a runner executes both voices here; --deadline cancels the children it started
-  answer  --out <dir> --gate-rev <rev> --reply "<all | d3b uc1a | all except d3b>" [--json]
+  answer  --out <dir> --gate-rev <rev> --reply "<all | d3b uc1a | all except d3b>" --by <human|agent:<id>> [--json]
   resume  --out <dir> [--json]      status  --out <dir> [--json]      export  --out <dir>      release --out <dir> --attempt <id>
   contract                          print lib/coordinator-contract.ts (the block every lane and reviewer prompt inherits word for word)
 
@@ -99,6 +99,7 @@ function nextLine(state: RunState, out: string): string {
  */
 function mutating(out: string, json: boolean, fn: () => number): number {
   const admission = admit(process.env);
+  touchInstallLease(process.env);
   return withRunLock(out, () => {
     const notices = [...admission.lines];
     const record = (state: RunState) => {
@@ -245,12 +246,12 @@ async function main(argv: string[]): Promise<number> {
       }, { steal: true });
     }
     if (cmd === 'answer') {
-      const rev = flag(rest, '--gate-rev'); const reply = flag(rest, '--reply');
+      const rev = flag(rest, '--gate-rev'); const reply = flag(rest, '--reply'); const by = flag(rest, '--by');
       if (reply === undefined) return usage('answer needs --reply "<text>"');
       if (rev === undefined) { const s = readState(out); process.stderr.write(resultLine('gstack-autoplan answer', 'GATE_REV_STALE', `no --gate-rev given; current gate_rev=${s.gate_rev ?? 0}`) + '\n'); return EXIT.refused; }
       return mutating(out, json, () => {
         const state = readState(out);
-        const r = answerGate(state, Number(rev), reply);
+        const r = answerGate(state, Number(rev), reply, by);
         writeState(state);
         const lines = [...r.lines];
         if (r.outcome === 'reopened') lines.push(nextLine(state, out));

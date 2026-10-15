@@ -10,24 +10,32 @@
 #   gstack-upgrade           fast-forward, then reinstall: bin/gstack-capy-install on a
 #                            Capy install (the marker it writes in the git dir),
 #                            else ./setup --refresh-registered (setup runs migrations)
+#   gstack-upgrade --ff-only-no-reinstall
+#                            fast-forward with every refusal below, print the upgraded
+#                            line and exit 0 without reinstalling (for a caller about
+#                            to run the installer itself: bin/gstack-capy-session)
 #
 # Refuses with exit 3 and changes nothing (UPGRADE_REFUSED) when the directory
 # is not a gstack checkout, HEAD is detached or not on the remote default
 # branch (a pin), any tracked byte is dirty, a local commit diverged, the
 # incoming release's Bun floor holds, or another updater holds the setup
 # lock; never stashes, never resets. An unreachable remote is
-# UPGRADE_FETCH_FAILED (exit 3). Prints `gstack-upgrade: upgraded <old> -> <new>`
-# before reinstalling; a failed reinstall exits 1 and the next run completes it.
+# UPGRADE_FETCH_FAILED (exit 3). While another live session holds a workflow
+# lease on this installation (bin/gstack-lease live) it refuses with
+# UPGRADE_BUSY (exit 3); GSTACK_UPGRADE_FORCE=1 overrides. Prints
+# `gstack-upgrade: upgraded <old> -> <new>` before reinstalling; a failed
+# reinstall exits 1 and the next run completes it.
 # Bash 3.2 plus git; the fetch is bounded by `timeout` when present.
 set -u
 BASH_COMPAT=50
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
-CHECK=0
+CHECK=0 REINSTALL=1
 case "${1:-}" in
   --check) CHECK=1 ;;
+  --ff-only-no-reinstall) REINSTALL=0 ;;
   '') ;;
-  -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "gstack-upgrade: unknown argument '$1'" >&2; exit 2 ;;
 esac
 
@@ -88,6 +96,18 @@ if ! git -C "$ROOT" merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null; then
   git -C "$ROOT" merge-base --is-ancestor HEAD FETCH_HEAD 2>/dev/null \
     || refuse "diverged: $(git -C "$ROOT" rev-list --count FETCH_HEAD..HEAD 2>/dev/null || echo '?') local commits are not on origin/$DEFAULT" "git -C $ROOT log --oneline FETCH_HEAD..HEAD shows them; move them to another branch, then re-run"
 fi
+# Workflow leases (bin/gstack-lease): sessions sharing this installation that
+# are alive and not this process's own chain. Moving the checkout under them
+# is what the lease exists to prevent; the caller's own session never counts.
+if [ "${GSTACK_UPGRADE_FORCE:-}" != 1 ] && [ -x "$ROOT/bin/gstack-lease" ] \
+  && BUSY=$("$ROOT/bin/gstack-lease" live --root "$ROOT" --exclude-ancestry-of $$ 2>/dev/null); then
+  HOLDERS=""
+  while read -r _pid _age; do HOLDERS="$HOLDERS${HOLDERS:+, }pid $_pid ($_age)"; done <<EOF_BUSY
+$BUSY
+EOF_BUSY
+  echo "gstack-upgrade: live gstack sessions hold this installation: $HOLDERS; nothing was changed; fix: wait for those sessions to finish, or re-run with GSTACK_UPGRADE_FORCE=1 when you know they are idle (UPGRADE_BUSY)" >&2
+  exit 3
+fi
 # shellcheck source=bin/gstack-bun-version.sh
 . "$ROOT/bin/gstack-bun-version.sh" 2>/dev/null && HOLD=$(gstack_bun_incoming_hold "$ROOT" "$INCOMING") \
   && refuse "the incoming release holds: $HOLD" "install Bun $(git -C "$ROOT" show "$INCOMING:bin/gstack-bun-version.sh" 2>/dev/null | sed -n 's/^GSTACK_BUN_TESTED="\(.*\)"/\1/p') (bin/gstack-capy-install on Capy), then re-run"
@@ -106,4 +126,5 @@ NEW=$(head -1 "$ROOT/VERSION")
 echo "gstack-upgrade: upgraded $INSTALLED -> $NEW"
 rm -rf "$LOCK_DIR"; trap - EXIT
 
+[ "$REINSTALL" -eq 1 ] || exit 0
 reinstall "$INSTALLED"

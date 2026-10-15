@@ -26,9 +26,12 @@ line yourself; gstack never writes the plan.
 2. Submit each voice exactly once (`BOUND:`). Both voices in closes the phase (`PHASE_CLOSED:`).
 3. Repeat `next` until `status=gate_pending` (`GATE: gate_rev=<n>`); render it with
    `gstack-gate render <dir>/gate.json`. You never approve the gate for the owner: relay it.
-4. `answer` with the owner's reply. `APPLY: <id> <title> -> <change>` lines are accepted plan
-   changes: edit the plan, then `revise` (the printed `NEXT:` names it). Until then `next`
-   refuses with `PLAN_AMEND_PENDING` and `export` will not mark the run complete.
+4. `answer` with the owner's reply and `--by human` (the owner typed the tokens) or
+   `--by agent:<id>` (you relayed or decided them); without it an unattended run refuses
+   (`ANSWER_BY_REQUIRED`). `all` leaves every item recommended `b` pending: only the owner's
+   own token changes their stated direction. `APPLY: <id> <title> -> <change>` lines are
+   accepted plan changes: edit the plan, then `revise` (the printed `NEXT:` names it). Until
+   then `next` refuses with `PLAN_AMEND_PENDING` and `export` will not mark the run complete.
 5. `REOPENED: <phases>` means loop `next` again (Eng last). `APPROVED:` means `export`.
 
 ### Commands

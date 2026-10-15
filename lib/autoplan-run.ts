@@ -145,14 +145,16 @@ function openPhase(state: RunState, phase: Phase, cwd: string): void {
   if (ps.snapshot) return;
   const methodology = snapshotTool(['methodology', phase, reviewSkillFile(phase), state.restore], cwd);
   const snap = snapshotTool(['create', phase, state.active_plan, state.restore, methodology.methodologyPath], cwd);
+  // Every later phase reviews with its closed predecessors' consensus as data
+  // (not only Eng): a DX or design reviewer who never saw the CEO consensus
+  // re-raises what the CEO phase already reconciled (field gate rev 2).
   const prior: Array<{ phase: string; text: string }> = [];
-  if (phase === 'eng') {
-    for (const p of state.phase_order) {
-      if (p === 'eng' || !state.phases[p]?.closed_at) continue;
-      const file = path.join(state.out, `${p}-consensus.md`);
-      if (!fs.existsSync(file)) throw new RunError('CONSENSUS_MISSING', `${p} closed without ${p}-consensus.md`, 3);
-      prior.push({ phase: p, text: fs.readFileSync(file, 'utf8') });
-    }
+  for (const p of state.phase_order) {
+    if (p === phase) break;
+    if (!state.phases[p]?.closed_at) continue;
+    const file = path.join(state.out, `${p}-consensus.md`);
+    if (!fs.existsSync(file)) throw new RunError('CONSENSUS_MISSING', `${p} closed without ${p}-consensus.md`, 3);
+    prior.push({ phase: p, text: fs.readFileSync(file, 'utf8') });
   }
   const sections = sectionLoadFor(phase, state.scope, state.session_kind === 'unattended' || state.light ? 'light' : 'full');
   const decided = (state.gate_rev ?? 0) >= 1 ? readDecisions(state.out).filter(r => r.chosen != null && r.status !== 'pending')

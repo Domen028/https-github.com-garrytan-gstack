@@ -67,6 +67,7 @@ export function capyHost(opts: CapyHostOptions = {}): CapyHost {
     PATH: [systemBin, inherited].join(path.delimiter),
     HOME: home, TMPDIR: base, BUN_INSTALL: path.join(home, '.bun'),
     GSTACK_HOME: stateRoot, GSTACK_STATE_ROOT: stateRoot, GSTACK_EPHEMERAL: '1',
+    GSTACK_LEASE_DIR: path.join(base, 'gstack-leases'),
     GIT_CONFIG_GLOBAL: path.join(home, '.gitconfig'), GIT_CONFIG_NOSYSTEM: '1',
     GIT_AUTHOR_NAME: 'Fixture', GIT_AUTHOR_EMAIL: 'fixture@example.test',
     GIT_COMMITTER_NAME: 'Fixture', GIT_COMMITTER_EMAIL: 'fixture@example.test',

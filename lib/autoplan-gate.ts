@@ -24,7 +24,7 @@ import { consensusRecord, reconcile, renderConsensus, type ConsensusRecord, type
 import type { Phase } from './autoplan-prompts';
 import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, writeDecisions, type RunState, type VoiceState } from './autoplan-state';
 import { phaseClose } from './autoplan-timing';
-import { applyReply, decisionId, decisionRows, keepDirection, parseReply, validateGateList, type GateChoice, type GateItem, type GateList, type GateOption } from './gate-list';
+import { ANSWERED_BY_RE, applyReply, decisionId, decisionRows, keepDirection, parseReply, pendingHint, validateGateList, type GateChoice, type GateItem, type GateList, type GateOption } from './gate-list';
 import type { FindingRow } from './headless-artifacts';
 import { readJsonl } from './headless-artifacts';
 import { closeDraftDirectionsFile, loadBriefInputs } from './owner-brief';
@@ -189,9 +189,11 @@ export interface AnswerResult { state: RunState; applied: boolean; pending: stri
  * prints `APPLY:` and becomes a pending amendment (`next` refuses until
  * `revise --incorporates` or `--withdraw`).
  */
-export function answerGate(state: RunState, gateRev: number, reply: string): AnswerResult {
+export function answerGate(state: RunState, gateRev: number, reply: string, answeredBy?: string): AnswerResult {
   const gateFile = path.join(state.out, 'gate.json');
   if (state.status !== 'gate_pending' || !fs.existsSync(gateFile)) throw new RunError('PHASE_NOT_AWAITING', `run is ${state.status}, not gate_pending`, 3);
+  if (answeredBy !== undefined && !ANSWERED_BY_RE.test(answeredBy)) throw new RunError('ANSWER_BY_REQUIRED', `--by ${JSON.stringify(answeredBy)} is neither human nor agent:<id>`, 3);
+  if (answeredBy === undefined && state.session_kind === 'unattended') throw new RunError('ANSWER_BY_REQUIRED', 'an unattended run records who answered; pass --by human or --by agent:<id>', 3);
   const list = JSON.parse(fs.readFileSync(gateFile, 'utf8')) as GateList;
   const rows = readDecisions(state.out);
   const prior = Object.fromEntries(rows.filter(r => r.gate_rev === list.gate_rev && r.chosen != null && r.status !== 'pending' && r.label).map(r => [r.label!.toLowerCase(), r.chosen!]));
@@ -203,7 +205,7 @@ export function answerGate(state: RunState, gateRev: number, reply: string): Ans
   const plan = parsed.choices.find(c => c.id === 'p1');
   const lines: string[] = [];
   const answeredAt = now();
-  const record = () => writeDecisions(state.out, applyReply(rows, parsed, answeredAt).map(r => {
+  const record = () => writeDecisions(state.out, applyReply(rows, parsed, answeredAt, answeredBy).map(r => {
     const c = r.gate_rev === list.gate_rev && r.chosen && !r.chosen_text ? itemOf((r.label ?? '').toLowerCase())?.options.find(o => o.key === r.chosen) : undefined;
     return c ? { ...r, chosen_text: c.text } : r;
   }));
@@ -212,7 +214,7 @@ export function answerGate(state: RunState, gateRev: number, reply: string): Ans
     record();
     const pending = parsed.pending.length ? parsed.pending : ['p1'];
     state.gate = { ...(state.gate ?? {}), last_reply: reply, pending };
-    lines.push(`GATE_PENDING: ${pending.join(', ')} unanswered (reply with p1a..p1e or all)`);
+    lines.push(`GATE_PENDING: ${pending.join(', ')} unanswered (${pendingHint(list, pending)})`);
     return { state, applied: true, pending, reopened: [], outcome: 'gate_pending', lines };
   }
   const proceeds = plan.chosen !== 'c' && plan.chosen !== 'e';
@@ -227,8 +229,8 @@ export function answerGate(state: RunState, gateRev: number, reply: string): Ans
     if (phase) { reopenSet.add(phase); if (state.phase_order.includes('eng')) reopenSet.add('eng'); }
   }
   record();
-  state.gate = { ...(state.gate ?? {}), answered_at: answeredAt, reply, gate_rev: gateRev, plan: plan.chosen, overrides: tokens(overrides) };
-  journalRow(state.out, { event: 'answered', gate_rev: gateRev, reply, plan: plan.chosen, overrides: tokens(overrides), changes: tokens(changing), reopen: [...reopenSet] });
+  state.gate = { ...(state.gate ?? {}), answered_at: answeredAt, reply, gate_rev: gateRev, plan: plan.chosen, overrides: tokens(overrides), ...(answeredBy ? { answered_by: answeredBy } : {}) };
+  journalRow(state.out, { event: 'answered', gate_rev: gateRev, reply, plan: plan.chosen, overrides: tokens(overrides), changes: tokens(changing), reopen: [...reopenSet], ...(answeredBy ? { answered_by: answeredBy } : {}) });
   if (plan.chosen === 'c') {
     lines.push(`GATE_PENDING: interrogate recorded; the gate stays at gate_rev=${gateRev}`);
     return { state, applied: true, pending: ['p1'], reopened: [], outcome: 'gate_pending', lines };

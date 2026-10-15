@@ -1,0 +1,96 @@
+#!/usr/bin/env bash
+# gstack-lease — the workflow lease on a shared gstack installation. Several
+# agents (eight Capy subagents, say) share one checkout; a session-start
+# fast-forward must not move it under a session mid-workflow. The state-root
+# session markers (bin/gstack-skill-start) differ per agent, so an updater
+# cannot see them; leases live in the installation's own git dir, beside
+# gstack-upgrade.pending, where every session and updater of this checkout
+# shares them.
+#
+# Usage:
+#   gstack-lease touch [--root <checkout>] [--pid <p> | --from <pid>]
+#       write <git dir>/gstack-leases/<pid>; pid defaults to the harness pid
+#       behind this call (bin/gstack-harness-pid.sh, the same derivation the
+#       session marker uses), or behind --from (a caller whose own parent is
+#       short-lived passes its parent pid); leases older than 120 min are pruned
+#   gstack-lease live [--root <checkout>] [--exclude-ancestry-of <pid>]
+#       print `<pid> <age>m` per lease whose pid is alive and is neither the
+#       given pid nor one of its ancestors (the caller's own session); exit 0
+#       when any live lease exists, 1 when none
+#   gstack-lease list [--root <checkout>]
+#       print `<pid> <age>m alive|dead` for every lease
+# <checkout> defaults to the source checkout behind this bin (an installed
+# runtime root's .source-path, else ../). A root that is not a git checkout
+# exits 2 and writes nothing. GSTACK_LEASE_DIR overrides the lease directory
+# (hermetic tests; a dev checkout's own tests must not lease it). Bash 3.2
+# plus git, ps, find.
+set -u
+BIN="$(cd "$(dirname "$0")" && pwd -P)"
+# shellcheck source=bin/gstack-install-verdict.sh
+. "$BIN/gstack-install-verdict.sh" 2>/dev/null || gstack_source_root() { (cd "$1/.." && pwd -P); }
+# shellcheck source=bin/gstack-harness-pid.sh
+. "$BIN/gstack-harness-pid.sh" 2>/dev/null || gstack_harness_pid() { printf '%s\n' "$1"; }
+
+VERB="${1:-}"; [ $# -gt 0 ] && shift
+ROOT="" PID="" EXCLUDE="" FROM=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT="${2:-}"; shift ;;
+    --pid) PID="${2:-}"; shift ;;
+    --from) FROM="${2:-}"; shift ;;
+    --exclude-ancestry-of) EXCLUDE="${2:-}"; shift ;;
+    *) echo "gstack-lease: unknown argument '$1'" >&2; exit 2 ;;
+  esac
+  shift
+done
+case "$VERB" in
+  touch|live|list) ;;
+  -h|--help|'') sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  *) echo "gstack-lease: unknown verb '$VERB'" >&2; exit 2 ;;
+esac
+[ -n "$ROOT" ] || ROOT=$(gstack_source_root "$BIN")
+GIT_DIR_ABS=$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null) \
+  || { echo "gstack-lease: $ROOT is not a git checkout" >&2; exit 2; }
+DIR="${GSTACK_LEASE_DIR:-$GIT_DIR_ABS/gstack-leases}"
+
+alive() { kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1; }
+age_min() { # FILE — minutes since its mtime
+  _m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)
+  echo $(( ( $(date +%s) - _m ) / 60 ))
+}
+
+case "$VERB" in
+  touch)
+    [ -n "$PID" ] || PID=$(gstack_harness_pid "${FROM:-$PPID}")
+    mkdir -p "$DIR" || exit 2
+    : > "$DIR/$PID" || exit 2
+    find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null
+    exit 0 ;;
+  list)
+    for f in "$DIR"/*; do
+      [ -f "$f" ] || continue
+      p=${f##*/}
+      if alive "$p"; then echo "$p $(age_min "$f")m alive"; else echo "$p $(age_min "$f")m dead"; fi
+    done
+    exit 0 ;;
+esac
+
+# live: the caller's own chain (the pid and its ancestors, up to 64 hops) never counts.
+ANCESTRY=" "
+p="$EXCLUDE"; hops=0
+while [ -n "$p" ] && [ "$hops" -lt 64 ]; do
+  case "$p" in ''|*[!0-9]*|0|1) break ;; esac
+  ANCESTRY="$ANCESTRY$p "
+  p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+  hops=$((hops + 1))
+done
+FOUND=1
+for f in "$DIR"/*; do
+  [ -f "$f" ] || continue
+  p=${f##*/}
+  case "$ANCESTRY" in *" $p "*) continue ;; esac
+  alive "$p" || continue
+  echo "$p $(age_min "$f")m"
+  FOUND=0
+done
+exit $FOUND

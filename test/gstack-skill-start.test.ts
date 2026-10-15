@@ -40,6 +40,7 @@ function runStart(args: string[] = [], env: Record<string, string> = {}): string
       PATH: process.env.PATH!,
       HOME: tmpHome,
       GSTACK_HOME: tmpGstackHome,
+      GSTACK_LEASE_DIR: path.join(tmpGstackHome, 'leases'),
       ...env,
     },
   });
@@ -151,6 +152,7 @@ describe('gstack-skill-start behavior', () => {
       try {
         const output = runStart([], {
           GSTACK_HOME: state,
+          GSTACK_LEASE_DIR: path.join(state, 'leases'),
           GSTACK_CHECKPOINT_MODE: 'continuous',
           GSTACK_CHECKPOINT_PUSH: 'true',
         });
@@ -182,7 +184,7 @@ describe('gstack-skill-start behavior', () => {
         timeout: 30_000,
         encoding: 'utf-8',
         cwd: tmpHome,
-        env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome },
+        env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome, GSTACK_LEASE_DIR: path.join(tmpGstackHome, 'leases') },
       });
       // The poisoned marker must be neutralized...
       expect(out).not.toContain('GSTACK_INSTRUCTION_BEGIN: evil');
@@ -230,7 +232,7 @@ describe('gstack-skill-start behavior', () => {
     const state = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-pid-'));
     fs.writeFileSync(path.join(state, 'config.yaml'), 'update_check: false\n');
     try {
-      const env = { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: state, START };
+      const env = { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: state, GSTACK_LEASE_DIR: path.join(state, 'leases'), START };
       for (const command of ['"$START" --skill t; true', 'sh -c \'"$START" --skill t; true\'; true']) {
         const out = execFileSync('bash', ['-c', command], { timeout: 30_000, encoding: 'utf-8', cwd: tmpHome, env });
         expect(out).toMatch(new RegExp(`^SESSION_ID: ${process.pid}-`, 'm'));
@@ -487,7 +489,7 @@ describe('gstack-skill-start behavior', () => {
     fs.writeFileSync(path.join(freshGh, 'config.yaml'), 'update_check: false\n');
 
     const localStart = path.join(projectSkillRoot, 'bin', 'gstack-skill-start');
-    const env = { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: freshGh };
+    const env = { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: freshGh, GSTACK_LEASE_DIR: path.join(freshGh, 'leases') };
     try {
       const overlay = execFileSync(localStart, ['--skill', 'testskill'], {
         timeout: 30_000,
@@ -689,7 +691,7 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-sync-home-'));
     const gh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-sync-gh-'));
     const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-sync-remote-'));
-    const env = { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: gh };
+    const env = { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: gh, GSTACK_LEASE_DIR: path.join(gh, 'leases') };
     const bin = (name: string, args: string[]) =>
       execFileSync(path.join(ROOT, 'bin', name), args, { timeout: 30_000, encoding: 'utf-8', cwd: home, env, stdio: 'pipe' });
     const remoteFiles = () => execFileSync('git', ['--git-dir=' + remote, 'ls-tree', '-r', '--name-only', 'main'], { encoding: 'utf-8', timeout: 30_000 });
@@ -736,7 +738,7 @@ describe('gstack-skill-end', () => {
     const out = execFileSync(
       END,
       ['--skill', 't', '--outcome', 'success', '--session-id', 'sid-1', '--tel-start', String(start)],
-      { timeout: 30_000, encoding: 'utf-8', cwd: tmpHome, env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome } },
+      { timeout: 30_000, encoding: 'utf-8', cwd: tmpHome, env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome, GSTACK_LEASE_DIR: path.join(tmpGstackHome, 'leases') } },
     );
     const m = out.match(/SKILL_END: recorded outcome=success duration_s=(\d+)/);
     expect(m).not.toBeNull();
@@ -760,7 +762,7 @@ describe('gstack-skill-end', () => {
       timeout: 30_000,
       encoding: 'utf-8',
       cwd: tmpHome,
-      env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome },
+      env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: tmpGstackHome, GSTACK_LEASE_DIR: path.join(tmpGstackHome, 'leases') },
     });
     expect(fs.existsSync(pending)).toBe(false);
   });
@@ -797,7 +799,7 @@ describe('gstack-skill-start install admission', () => {
   };
   const start = (gh: string, skill: string, env: Record<string, string>, bin = START) => spawnSync(bin, ['--skill', skill], {
     timeout: 30_000, encoding: 'utf-8', cwd: tmpHome,
-    env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: gh, ...env },
+    env: { PATH: process.env.PATH!, HOME: tmpHome, GSTACK_HOME: gh, GSTACK_LEASE_DIR: path.join(gh, 'leases'), ...env },
   });
 
   test('unattended with Bun 1.3.14 first on PATH: the runtime row with its fix, status=refused, exit 3; interactive keeps running', () => {

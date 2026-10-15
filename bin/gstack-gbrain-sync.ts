@@ -1608,7 +1608,7 @@ function runMemoryIngest(args: CliArgs, previous: SyncState, consent: Transcript
     process.env.GSTACK_SYNC_MEMORY_TIMEOUT_MS,
     "GSTACK_SYNC_MEMORY_TIMEOUT_MS",
   );
-  const result = spawnSync("bun", ingestArgs, {
+  const result = spawnSync(process.execPath, ingestArgs, {
     encoding: "utf-8",
     timeout: memoryTimeoutMs,
     env: childEnv,
