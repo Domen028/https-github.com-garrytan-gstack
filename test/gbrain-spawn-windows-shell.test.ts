@@ -119,6 +119,8 @@ describe("bashScriptInvocation", () => {
     const inv = bashScriptInvocation("C:\\x\\gstack-brain-sync", [], {
       platform: "win32",
       exists: () => false,
+      gitExecPath: () => null,
+      which: () => null,
       env: {},
     });
     expect(inv).toBeNull();

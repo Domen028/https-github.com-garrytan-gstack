@@ -9,7 +9,8 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { manifestTestPaths } from '../lib/pregate/lane-selection';
-import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
+import { runScriptSync } from '../lib/script-invocation';
+import { BASE_PREGATE, BIN, cleanup, commit, makeFixtureRepo, type FixtureRepo } from './helpers/pregate-fixture';
 
 const repos: FixtureRepo[] = [];
 afterEach(() => { while (repos.length) cleanup(repos.pop()!); });
@@ -60,8 +61,10 @@ describe('lanes: a bracketed route test in a platform-only lane keeps its remote
     repo.git('push', '-q', 'origin', 'feature:main');
     repo.git('fetch', '-q', 'origin');
     commit(repo, { [route]: "const test = require('node:test');\ntest('route', () => {});\n" });
-    const r = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests', '--explain']);
-    expect(r.out).toContain('lane windows.yml/windows-shard: 2 files from manifest `node scripts/windows-list.js`');
+    const run = runScriptSync(BIN('gstack-pregate'), ['--base', 'main', '--allow-repo-commands', '--stage', 'tests', '--explain'],
+      { cwd: repo.work, encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...repo.env } });
+    const r = { out: run.stdout ?? '', err: `${run.stderr ?? ''}${run.error ? `\n${run.error.message}` : ''}` };
+    expect(r.out, r.err).toContain('lane windows.yml/windows-shard: 2 files from manifest `node scripts/windows-list.js`');
     const out = JSON.parse(fs.readFileSync(path.join(repo.work, '.gstack/tmp/pregate.json'), 'utf8'));
     expect(out.requires_remote).toEqual([{ lane: 'windows.yml/windows-shard', platform: 'windows', workflow: 'windows.yml', job: 'windows-shard', tests: [route], receipt: null }]);
     expect(r.out).toContain(`requires-remote windows.yml/windows-shard (windows): 1 test(s) — ${route}`);
