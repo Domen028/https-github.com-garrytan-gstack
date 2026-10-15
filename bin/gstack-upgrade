@@ -24,18 +24,31 @@
 # lease on this installation (bin/gstack-lease live) it refuses with
 # UPGRADE_BUSY (exit 3); GSTACK_UPGRADE_FORCE=1 overrides. Prints
 # `gstack-upgrade: upgraded <old> -> <new>` before reinstalling; a failed
-# reinstall exits 1 and the next run completes it.
+# reinstall exits 1 and the next run completes it (a pending marker in the git
+# dir, kept only for setup or install failures).
+#
+# Every success path (already current, fast-forwarded, a completed pending
+# reinstall) then certifies the caller's project: the git toplevel of the
+# directory gstack-upgrade was started in, captured before any cd. On Capy
+# that is bin/gstack-capy-install --project <it> (it installs the project's
+# pinned Bun when that pin is a verified version); elsewhere gstack-doctor
+# --check --require runtime,pins. A failure prints the standard trailer
+# (`gstack: fail pins`) and exits 1; the checkout move is kept and no pending
+# marker is left. Outside a project, or with --check, nothing is certified.
 # Bash 3.2 plus git; the fetch is bounded by `timeout` when present.
 set -u
 BASH_COMPAT=50
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
+CALLER=$(pwd -P)
+CALLER_PROJECT=$(git rev-parse --show-toplevel 2>/dev/null) && CALLER_PROJECT=$(cd "$CALLER_PROJECT" && pwd -P) || CALLER_PROJECT=""
+[ "$CALLER_PROJECT" = "$ROOT" ] && CALLER_PROJECT=""
 CHECK=0 REINSTALL=1
 case "${1:-}" in
   --check) CHECK=1 ;;
   --ff-only-no-reinstall) REINSTALL=0 ;;
   '') ;;
-  -h|--help) sed -n '2,28p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  -h|--help) sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "gstack-upgrade: unknown argument '$1'" >&2; exit 2 ;;
 esac
 
@@ -62,16 +75,41 @@ _receipted_git open gstack-upgrade "${HOST:-unknown}" gstack-self-update-pull "$
 INCOMING=$(git -C "$ROOT" rev-parse FETCH_HEAD)
 REMOTE_VER=$(git -C "$ROOT" show FETCH_HEAD:VERSION 2>/dev/null | head -1)
 PENDING="$(git -C "$ROOT" rev-parse --absolute-git-dir)/gstack-upgrade.pending"
-reinstall() { # FROM — run the install step; a pending marker survives a failure
-  printf '%s\n' "$1" > "$PENDING"
-  cd "$ROOT" || exit 1
-  if [ -f "$(git rev-parse --absolute-git-dir 2>/dev/null)/gstack-capy-install.state" ] && [ -x "$ROOT/bin/gstack-capy-install" ]; then
-    GSTACK_CAPY_UPGRADED_FROM="$1" "$ROOT/bin/gstack-capy-install" </dev/null
-  else
-    ./setup --refresh-registered </dev/null
+CAPY=0
+[ -f "$(git -C "$ROOT" rev-parse --absolute-git-dir)/gstack-capy-install.state" ] && [ -x "$ROOT/bin/gstack-capy-install" ] && CAPY=1
+# certify — the caller's project (see the header); exits with its outcome.
+certify() {
+  [ -n "$CALLER_PROJECT" ] && [ "$REINSTALL" -eq 1 ] || exit 0
+  if [ "$CAPY" -eq 1 ]; then
+    _err=$(mktemp "${TMPDIR:-/tmp}/gstack-upgrade.XXXXXX")
+    (cd "$CALLER" && "$ROOT/bin/gstack-capy-install" --project "$CALLER_PROJECT" </dev/null 2>"$_err")
+    _rc=$?
+    _conflict=$(grep '(RUNTIME_PIN_CONFLICT;' "$_err" | tail -1)
+    cat "$_err" >&2; rm -f "$_err"
+    [ "$_rc" -eq 0 ] && exit 0
+    [ -n "$_conflict" ] && echo "gstack: fail pins — ${_conflict#gstack-capy-install: }"
+    exit 1
   fi
-  _rc=$?
-  [ "$_rc" -eq 0 ] && { rm -f "$PENDING"; exit 0; }
+  (cd "$CALLER" && "$ROOT/bin/gstack-doctor" --check --require runtime,pins --project "$CALLER_PROJECT" </dev/null) && exit 0
+  exit 1
+}
+reinstall() { # FROM — run the install step; a pending marker survives a failure.
+  # With a project to certify next, the installer's own trailer is held back
+  # (printed only when the reinstall fails), so no ok precedes a pins failure.
+  printf '%s\n' "$1" > "$PENDING"
+  _held=$(mktemp "${TMPDIR:-/tmp}/gstack-upgrade.XXXXXX")
+  if [ "$CAPY" -eq 1 ]; then
+    (cd "$ROOT" && GSTACK_CAPY_UPGRADED_FROM="$1" "$ROOT/bin/gstack-capy-install" </dev/null) | while IFS= read -r _line; do
+      case "$_line" in "gstack: "*) [ -n "$CALLER_PROJECT" ] && { printf '%s\n' "$_line" > "$_held"; continue; } ;; esac
+      printf '%s\n' "$_line"
+    done
+    _rc=${PIPESTATUS[0]}
+  else
+    (cd "$ROOT" && ./setup --refresh-registered </dev/null)
+    _rc=$?
+  fi
+  if [ "$_rc" -eq 0 ]; then rm -f "$PENDING" "$_held"; certify; fi
+  cat "$_held"; rm -f "$_held"
   echo "gstack-upgrade: the checkout is at $(head -1 "$ROOT/VERSION") but its reinstall failed (exit $_rc); fix: re-run $ROOT/bin/gstack-upgrade (it completes the pending reinstall)" >&2
   exit 1
 }
@@ -82,7 +120,8 @@ if [ "$INCOMING" = "$(git -C "$ROOT" rev-parse HEAD)" ] || git -C "$ROOT" merge-
     reinstall "$(head -1 "$PENDING")"
   fi
   echo "gstack-upgrade: current $INSTALLED"
-  exit 0
+  [ "$CHECK" -eq 1 ] && exit 0
+  certify
 fi
 if [ "$CHECK" -eq 1 ]; then
   echo "gstack-upgrade: behind $INSTALLED -> ${REMOTE_VER:-unknown} ($(git -C "$ROOT" rev-list --count HEAD..FETCH_HEAD 2>/dev/null || echo '?') commits)"
