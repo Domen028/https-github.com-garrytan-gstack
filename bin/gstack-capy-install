@@ -332,6 +332,7 @@ if [ "$CHECK_ONLY" -eq 0 ] && [ "$SKIPPED" -eq 0 ]; then
   T1=$(now)
   ./setup --host claude --no-prefix $BROWSER_FLAG </dev/null || setup_failed "./setup --host claude failed (exit $?)"
   ./setup --host codex --model gpt-6-astra $BROWSER_FLAG </dev/null || setup_failed "./setup --host codex failed (exit $?)"
+  echo "gstack ready (claude, codex)"
   T2=$(now)
   [ -n "$HEAD_SHA" ] && printf '%s\n' "$SETUP_RECORD" > "$SETUP_STATE" 2>/dev/null
   say "planning-only install: $((T2 - T1))s (setup both hosts; Chromium not downloaded)"

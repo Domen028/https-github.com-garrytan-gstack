@@ -54,7 +54,7 @@ function fixture(opts: { bun?: string; jq?: boolean } = {}) {
     fs.chmodSync(path.join(root, rel), fs.statSync(path.join(REPO, rel)).mode);
   }
   write(path.join(root, 'VERSION'), '1.2.3\n');
-  script(path.join(root, 'setup'), ['echo "setup $*" >> "$CAPY_LOG"', 'echo "env GSTACK_SKIP_PLAYWRIGHT=${GSTACK_SKIP_PLAYWRIGHT:-} GSTACK_SKIP_FONTS=${GSTACK_SKIP_FONTS:-} bun=$(bun --version)" >> "$CAPY_LOG"', 'exit "${STUB_SETUP_EXIT:-0}"']);
+  script(path.join(root, 'setup'), ['echo "setup $*" >> "$CAPY_LOG"', 'echo "gstack ready ($2)"', 'echo "env GSTACK_SKIP_PLAYWRIGHT=${GSTACK_SKIP_PLAYWRIGHT:-} GSTACK_SKIP_FONTS=${GSTACK_SKIP_FONTS:-} bun=$(bun --version)" >> "$CAPY_LOG"', 'exit "${STUB_SETUP_EXIT:-0}"']);
   script(path.join(root, 'bin/gstack-doctor'), [
     'echo "doctor $* GSTACK_EPHEMERAL=${GSTACK_EPHEMERAL:-}" >> "$CAPY_LOG"', 'echo "doctor-cwd $(pwd -P)" >> "$CAPY_LOG"',
     'echo "required: claude codex patch"', 'echo "PASS claude ok"', 'echo "SKIP browser (lazy)"', '[ -n "${STUB_PINS_SKIP:-}" ] && echo "SKIP pins ($STUB_PINS_SKIP)"',
@@ -113,6 +113,17 @@ describe('gstack-capy-install', () => {
     expect(r.stdout).toContain('reusing');
     expect(r.stdout).not.toContain('cloning');
     expect(f.calls().some(l => l.startsWith('curl '))).toBe(false);
+  });
+
+  // Integration item 7: setup runs once per host, so each run ends with its
+  // own ready line; the installer prints the one line naming both.
+  test('after both host setups the last ready line is the installer\'s `gstack ready (claude, codex)`; a skipped setup prints none', () => {
+    const f = fixture();
+    const r = f.run(['--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const ready = r.stdout.split('\n').filter(l => l.startsWith('gstack ready'));
+    expect(ready).toEqual(['gstack ready (claude)', 'gstack ready (codex)', 'gstack ready (claude, codex)']);
+    expect(f.run(['--for', 'autoplan']).stdout).not.toContain('gstack ready');
   });
 
   test('--for names the workflow; --with-browser drops --no-browser, runs gstack-browser-ensure and times it separately', () => {
