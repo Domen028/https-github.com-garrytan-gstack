@@ -1275,16 +1275,17 @@ default in the runtime store (`<state root>/runtimes/bun/<version>/bun`),
 `$BUN_INSTALL/bin`, `~/.bun/bin`, then PATH; the first Bun that satisfies
 gstack's minimum and every project pin wins. Install records the pick in the
 install verdict for this checkout and project (`bun_path`, `bun_version`,
-`bun_rule`). `--check` resolved a different Bun: the recorded binary was
-deleted or replaced, `BUN_INSTALL` or PATH changed, or a new candidate (a store
-Bun) now resolves first. The same code refuses a workflow start
-(`INSTALL: fail runtime — bun <v> at <path> is running, but the install
-verdict recorded ...`) when the Bun running is not the recorded one.
+`bun_rule`). The recorded Bun is gone, reports another version (replaced in
+place), or no longer satisfies gstack's minimum and the project's pins. A
+different candidate that would now resolve first (a store Bun another
+project's install published, a changed `BUN_INSTALL`) is not drift: `--check`
+keeps the recorded Bun, prints `note: the recorded bun ... stays certified`
+and names the installer run that records the new pick. The pregate's lanes and
+guards (`lib/pregate/runtime.ts`) and the workflow start refuse with this code
+when the Bun the verdict recorded is gone or changed.
 
-**Fix.** Run the row's fix. When the current pick satisfies the pins it is the
-installer (it records the new resolution); otherwise it names the variable to
-restore (`export BUN_INSTALL=<recorded>`), the directory to put back on PATH,
-or the installer that re-downloads the recorded version into the store. The
+**Fix.** Run the row's fix: the installer, which records the current pick, or,
+when nothing eligible remains, re-downloads a verified Bun into the store. The
 next `--check` passes.
 
 <a id="bun-install-version-invalid"></a>

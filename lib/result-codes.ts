@@ -599,8 +599,8 @@ export const RESULT_CODES = {
   },
   BUN_RESOLUTION_DRIFT: {
     anchor: 'bun-resolution-drift',
-    summary: 'the Bun the resolution contract picks now (or the Bun running) is not the one the install verdict recorded for this checkout and project',
-    fix: 'run the fix the row prints: re-run the installer when the current Bun satisfies the pins, else restore the recorded binary or the variable that changed',
+    summary: 'the Bun the install verdict recorded for this checkout and project is gone, reports another version, or no longer satisfies the pins (or the Bun running is not it)',
+    fix: 'run the fix the row prints: the installer, which records the current resolution or re-downloads a verified Bun into the store',
   },
   BUN_INSTALL_VERSION_INVALID: {
     anchor: 'bun-install-version-invalid',

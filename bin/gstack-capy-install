@@ -267,27 +267,33 @@ else
   [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && say "install version $INSTALL_VERSION from GSTACK_BUN_INSTALL_VERSION (default $GSTACK_BUN_DEFAULT)"
   say "bun $RES_VER at $RES_BIN ($(gstack_bun_rule_text "$RES_RULE"); satisfies gstack's supported minimum $GSTACK_BUN_TESTED$([ -n "$PIN_ALTS" ] && printf " and the project's CI pins (alternatives: %s)" "$PIN_ALTS" || printf '%s' "${PIN_EXACT:+ and the project pin $PIN_EXACT}")$([ -z "$PIN_EXACT" ] && [ -n "$PIN" ] && printf ' and the project pin %s' "$PIN")$([ -z "$PIN_EXACT" ] && [ "$PINS_MODE" = parser ] && printf ' and the project pins'))"
 fi
+# Drift (--check only). The recorded Bun stays certified while it exists,
+# reports the recorded version and satisfies gstack's minimum and the pins;
+# a different candidate that would now resolve first is only a note. Drift
+# (BUN_RESOLUTION_DRIFT) is the recorded Bun gone, changed or no longer
+# satisfying the pins.
+if [ "$CHECK_ONLY" -eq 1 ] && [ -n "$REC_BUN" ]; then
+  _why="" _wrapper="${GSTACK_CAPY_WRAPPER_PATH:+bash $GSTACK_CAPY_WRAPPER_PATH}"; _wrapper="${_wrapper:-$ROOT/bin/gstack-capy-install}${FOR:+ --for $FOR}"
+  _recnow=""; [ -x "$REC_BUN" ] && _recnow=$("$REC_BUN" --version 2>/dev/null | head -1)
+  if [ ! -x "$REC_BUN" ]; then _why="the recorded binary is gone"
+  elif [ "$_recnow" != "$REC_VER" ]; then _why="$REC_BUN now reports ${_recnow:-nothing} (replaced in place)"
+  elif [ "$(gstack_bun_status "$REC_VER")" != ok ] || ! pins_accept "$REC_VER"; then _why="bun $REC_VER no longer satisfies gstack's supported minimum $GSTACK_BUN_TESTED and the project pins $(pins_text)"
+  fi
+  if [ -z "$_why" ]; then
+    [ "$REC_BUN" != "$RES_BIN" ] && say "note: the recorded bun $REC_VER at $REC_BUN stays certified; ${RES_BIN:+bun $RES_VER at $RES_BIN ($RES_RULE) would now resolve first; }run $_wrapper to record the current resolution"
+    RES_BIN="$REC_BUN" RES_VER="$REC_VER" RES_RULE="$REC_RULE"
+  else
+    if [ -n "$RES_BIN" ]; then _fix="$_wrapper (records the current resolution: bun $RES_VER at $RES_BIN)"
+    else _fix="$_wrapper (reinstalls bun ${PIN_EXACT:-$INSTALL_VERSION} into $STORE)"
+    fi
+    _now="no eligible bun"; [ -n "$RES_BIN" ] && _now="bun $RES_VER at $RES_BIN ($RES_RULE)"
+    export GSTACK_DOCTOR_RUNTIME_DRIFT="recorded bun $REC_VER at $REC_BUN ($REC_RULE), now $_now; changed: $_why"
+    export GSTACK_DOCTOR_RUNTIME_DRIFT_FIX="$_fix"
+  fi
+fi
 if [ -n "$RES_BIN" ] && [ "$(gstack_realpath "$(command -v bun 2>/dev/null || echo /nonexistent)" 2>/dev/null)" != "$RES_BIN" ]; then
   LAUNCH_DIR=$(dirname "$RES_BIN")
   export PATH="$LAUNCH_DIR:$PATH"
-fi
-# Drift (--check only): the recorded resolution no longer matches this one.
-if [ "$CHECK_ONLY" -eq 1 ] && [ -n "$REC_BUN" ] && { [ "$REC_BUN" != "$RES_BIN" ] || [ "$REC_VER" != "$RES_VER" ]; }; then
-  _why="" _wrapper="${GSTACK_CAPY_WRAPPER_PATH:+bash $GSTACK_CAPY_WRAPPER_PATH}"; _wrapper="${_wrapper:-$ROOT/bin/gstack-capy-install}${FOR:+ --for $FOR}"
-  if [ ! -x "$REC_BUN" ]; then _why="the recorded binary is gone"
-  elif [ "$("$REC_BUN" --version 2>/dev/null | head -1)" != "$REC_VER" ]; then _why="$REC_BUN now reports $("$REC_BUN" --version 2>/dev/null | head -1) (replaced in place)"
-  elif [ "$REC_RULE" = BUN_INSTALL ] && [ "${BUN_INSTALL:-}" != "$REC_BUN_INSTALL" ]; then _why="BUN_INSTALL changed (recorded ${REC_BUN_INSTALL:-unset}, now ${BUN_INSTALL:-unset})"
-  elif [ "$RES_RULE" = PATH ] || [ "$REC_RULE" = PATH ]; then _why="PATH changed"
-  else _why="a ${RES_RULE:-new} candidate now resolves first"
-  fi
-  if [ -n "$RES_BIN" ]; then _fix="$_wrapper (records the current resolution: bun $RES_VER at $RES_BIN)"
-  elif [ "$REC_RULE" = BUN_INSTALL ] && [ -x "$REC_BUN" ]; then _fix="export BUN_INSTALL=$REC_BUN_INSTALL (the recorded Bun is still there), then re-run the check"
-  elif [ -x "$REC_BUN" ]; then _fix="export PATH=\"$(dirname "$REC_BUN"):\$PATH\" (the recorded Bun is still there), then re-run the check"
-  else _fix="$_wrapper (reinstalls bun $REC_VER into $STORE)"
-  fi
-  _now="no eligible bun"; [ -n "$RES_BIN" ] && _now="bun $RES_VER at $RES_BIN ($RES_RULE)"
-  export GSTACK_DOCTOR_RUNTIME_DRIFT="recorded bun $REC_VER at $REC_BUN ($REC_RULE), now $_now; changed: $_why"
-  export GSTACK_DOCTOR_RUNTIME_DRIFT_FIX="$_fix"
 fi
 
 # 3. Install both host profiles; Chromium lazy unless --with-browser. Skipped

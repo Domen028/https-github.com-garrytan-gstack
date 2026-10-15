@@ -524,21 +524,40 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     expect(lastLine(again.stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
   });
 
-  test('drift: a changed BUN_INSTALL names the variable to restore, and a new eligible candidate names the install rerun; each fix converges', () => {
+  // Integration item 5: drift is only the recorded Bun gone, changed or no
+  // longer satisfying the pins. A changed BUN_INSTALL or a newly populated
+  // store default is a note, and the recorded Bun stays the launch Bun.
+  test('drift false positives: a changed BUN_INSTALL or a newer store default only notes; the recorded Bun stays certified and launched', () => {
     const f = fixture({ bun: '1.3.14' });
     const bi = path.join(f.base, 'bun-install');
     realBun(path.join(bi, 'bin/bun'), '1.4.2');
     expect(run(f, ['--for', 'autoplan'], { BUN_INSTALL: bi }).status).toBe(0);
     const unset = run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: '' });
-    expect(unset.status).toBe(1);
-    expect(unset.stdout).toContain(`changed: BUN_INSTALL changed (recorded ${bi}, now unset); fix: export BUN_INSTALL=${bi} (the recorded Bun is still there), then re-run the check`);
-    expect(run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: bi }).status).toBe(0);
+    expect(unset.status, unset.stdout + unset.stderr).toBe(0);
+    expect(unset.stdout).toContain(`GSTACK_LAUNCH: PATH=${bi}/bin:$PATH `);
     realBun(path.join(store(f, '1.4.3'), 'bun'), '1.4.3');
     const newer = run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: bi });
-    expect(newer.status).toBe(1);
-    expect(newer.stdout).toContain(`changed: a default candidate now resolves first; fix: ${f.root}/bin/gstack-capy-install --for autoplan (records the current resolution: bun 1.4.3 at ${store(f, '1.4.3')}/bun)`);
+    expect(newer.status, newer.stdout + newer.stderr).toBe(0);
+    expect(newer.stdout).toContain(`note: the recorded bun 1.4.2 at ${bi}/bin/bun stays certified; bun 1.4.3 at ${store(f, '1.4.3')}/bun (default) would now resolve first; run ${f.root}/bin/gstack-capy-install --for autoplan to record the current resolution`);
+    expect(newer.stdout).toContain(`GSTACK_LAUNCH: PATH=${bi}/bin:$PATH `);
+    expect(newer.stdout).not.toContain('BUN_RESOLUTION_DRIFT');
     expect(run(f, ['--for', 'autoplan'], { BUN_INSTALL: bi }).status).toBe(0);
-    expect(run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: bi }).status).toBe(0);
+    const recorded = run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: bi });
+    expect(recorded.status).toBe(0);
+    expect(recorded.stdout).not.toContain('note: the recorded bun');
+  });
+
+  test('drift: a recorded Bun that no longer satisfies the project pins fails --check with BUN_RESOLUTION_DRIFT', () => {
+    const f = fixture({ bun: '1.3.14' });
+    withPins(f);
+    realBun(path.join(f.home, '.bun/bin/bun'), '1.4.2');
+    const project = ciProject(f, 'p', '1.4.2');
+    expect(run(f, ['--for', 'review'], { BUN_INSTALL: '' }, project).status).toBe(0);
+    write(path.join(project, '.github/workflows/ci.yml'), fs.readFileSync(path.join(project, '.github/workflows/ci.yml'), 'utf8').replace('1.4.2', '1.4.3'));
+    const c = run(f, ['--check', '--for', 'review'], { BUN_INSTALL: '' }, project);
+    expect(c.status).toBe(1);
+    expect(c.stdout).toContain('changed: bun 1.4.2 no longer satisfies gstack\'s supported minimum 1.4.2 and the project pins');
+    expect(lastLine(c.stdout)).toBe('gstack: fail runtime');
   });
 
   test('GSTACK_BUN_INSTALL_VERSION picks a verified install version and is shown; an unverified one stops before anything is installed', () => {
