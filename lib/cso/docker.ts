@@ -937,6 +937,7 @@ export class DockerGroup {
       workdir?: string;
       env?: Record<string, string>;
       redaction?: 'withhold' | 'splice';
+      stdoutFormat?: 'json';
       preparationCommand?: true;
     } = {},
   ): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -961,6 +962,7 @@ export class DockerGroup {
       timeoutMs: remaining,
       maxBytes: this.remainingOutput,
       redaction: options.redaction,
+      stdoutFormat: options.stdoutFormat,
       preparationCommand: options.preparationCommand,
     });
     this.remainingOutput = Math.max(0, this.remainingOutput - r.capturedBytes);
