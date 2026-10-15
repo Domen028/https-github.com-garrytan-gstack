@@ -57,13 +57,12 @@ export function generateGBrainContextLoad(ctx: TemplateContext): string {
 
 **Skip this entire section if \`gbrain\` is not on PATH.**
 
-Extract 2-4 keywords from the user's request. Search the brain:
-\`gbrain search "<keywords>"\`. Read the top 3 results with
-\`gbrain get "<slug>"\`. Use that context to inform your analysis.
+Run \`gbrain search "<keywords>"\` with 2-4 request keywords. Use returned
+Markdown directly. For local page hits, read the top 3 with
+\`gbrain get "<slug>"\`; cloud-only hits have no local page to fetch.
 
 If \`gbrain search\` returns no results or any non-zero exit, proceed
-without brain context. Full search/read protocol + examples:
-see \`docs/gbrain-write-surfaces.md\` §Context Load.`;
+without brain context. Protocol: \`docs/gbrain-write-surfaces.md\` §Context Load.`;
 
   if (ctx.skillName === 'investigate') {
     base += `\n\nFor structured-data extraction requests ("track this", "extract from emails", "build a tracker"), route to GBrain's data-research skill instead: \`gbrain call data-research\`.`;

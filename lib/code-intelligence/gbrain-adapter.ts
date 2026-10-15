@@ -29,6 +29,8 @@ import {
   type SourceRef,
   type SourceStatus,
 } from "./contract";
+import { gbrainSearchHits } from "../gbrain-search-results";
+import { brainQueryTimeoutMs } from "../gbrain-context-timeout";
 
 const CAPABILITIES: CodeProviderCapability[] = [
   "register_source",
@@ -60,20 +62,13 @@ const ENVIRONMENTAL_ERROR_RE =
   /not on PATH|command not found|PGLite|WASM|failed to initialize|Aborted|Cannot connect to database|not configured|config\.json|database (is )?un(reachable|available)/i;
 
 /**
- * Parse `gbrain search` text output (`[score] slug -- snippet`) into hits.
- * gbrain's search prints text, not JSON (verified in
- * lib/gstack-decision-semantic.ts). Exported for deterministic unit testing.
+ * Read structured search evidence, with legacy text compatibility. Cloud-only
+ * memory is not a local code document and cannot be used as a code reference.
  */
 export function parseGbrainSearch(stdout: string, minScore: number, limit: number): CodeSearchHit[] {
-  const hits: CodeSearchHit[] = [];
-  for (const line of stdout.split("\n")) {
-    const m = line.match(/^\[([\d.]+)\]\s+(\S+)\s+--\s+(.*)$/);
-    if (!m) continue;
-    const score = parseFloat(m[1]);
-    if (!Number.isFinite(score) || score < minScore) continue;
-    hits.push({ ref: m[2], score, snippet: m[3].trim(), kind: "document" });
-  }
-  return hits.slice(0, limit);
+  return gbrainSearchHits(stdout, minScore, Number.MAX_SAFE_INTEGER)
+    .flatMap((hit): CodeSearchHit[] => hit.slug ? [{ ref: hit.slug, score: hit.score, snippet: hit.snippet, kind: "document" }] : [])
+    .slice(0, limit);
 }
 
 export class GbrainProvider implements CodeProvider {
@@ -158,11 +153,9 @@ export class GbrainProvider implements CodeProvider {
     // any receipt) exist; the receipt lands before the subprocess spawns.
     assertEgressConsent(this, opts);
     this.#receipt("code-search-query (sent by gbrain subprocess)", opts, query);
-    // `gbrain search` is global and has no `--source` flag; `--limit` is real
-    // (verified against gbrain 0.42.x --help).
-    const args = ["search", query];
+    const args = ["search", query, "--json"];
     if (opts.limit) args.push("--limit", String(opts.limit));
-    const r = spawnGbrain(args, { baseEnv: opts.env, timeout: opts.timeout ?? DEFAULT_TIMEOUT_MS });
+    const r = spawnGbrain(args, { baseEnv: opts.env, timeout: opts.timeout ?? Math.max(DEFAULT_TIMEOUT_MS, brainQueryTimeoutMs(opts.env)) });
     this.#assertOk(r);
     return parseGbrainSearch(r.stdout || "", opts.minScore ?? 0.1, opts.limit ?? 10);
   }

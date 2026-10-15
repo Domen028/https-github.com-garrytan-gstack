@@ -102,7 +102,7 @@ if (semantic && queryRaw) {
       // gbrain hits are EXTERNAL corpus content — datamark slug + snippet too so they
       // can't spoof role markers / fences when printed into agent context.
       const snip = datamark(h.snippet.length > 100 ? `${h.snippet.slice(0, 100)}…` : h.snippet);
-      console.log(`  [${h.score.toFixed(2)}] ${datamark(h.slug)}: ${snip}`);
+      console.log(`  [${h.score.toFixed(2)}] ${datamark(h.slug ?? 'HydraDB cloud memory')}: ${snip}`);
     }
   }
 }
