@@ -5,6 +5,8 @@
 # and execs this script with its own arguments plus:
 #   GSTACK_CAPY_WRAPPER_REV / GSTACK_CAPY_WRAPPER_PATH  the bootstrapper that ran
 #   GSTACK_CAPY_REMOTE_MIN    the supported minimum from origin's capy/support.env, or `unknown`
+#   GSTACK_CAPY_REMOTE_VERSION origin's VERSION read in this run (wrapper 2+; the
+#                             installer's `latest: <ver> available` trailer note)
 #   GSTACK_CAPY_UPGRADED_FROM the version it fast-forwarded from (setup is never skipped then)
 #   GSTACK_CAPY_LOCK_HELD=1   install mode: .gstack-capy-install.lock is held on an
 #                             inherited descriptor; nothing here takes it again

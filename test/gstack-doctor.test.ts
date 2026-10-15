@@ -863,4 +863,25 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(parse(f, []).line('runtime')).toContain(`; ${shim} is not gstack's shim (no marker), left untouched: launch with the GSTACK_LAUNCH line`);
     expect(parse(f, [], { GSTACK_BUN_INSTALL_VERSION: '1.4.2' }).line('runtime')).toContain('; install version 1.4.2 from GSTACK_BUN_INSTALL_VERSION');
   });
+
+  test('A-a: the Capy skill\'s dispatch examples (fail revision, fail runtime,pins, fail pins) match the real failure heads, unchanged', () => {
+    const skill = fs.readFileSync(path.join(REPO, 'capy/skill/gstack/SKILL.md'), 'utf8');
+    const step = skill.split('\n').find(l => l.includes('If the trailer names `revision`, `runtime` or `pins`'))!;
+    const examples = [...step.matchAll(/`(gstack: fail [^`]+)`/g)].map(m => m[1]);
+    expect(examples).toEqual(['gstack: fail revision …', 'gstack: fail runtime,pins', 'gstack: fail pins']);
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, '.bun-version'), '1.4.2\n');
+    const real: Record<string, string> = {
+      revision: parse(f, ['--require', 'claude', '--min-revision', '99.0.0.0']).trailer,
+      'runtime,pins': parse(f, ['--require', 'claude', '--project', project], { STUB_BUN_VERSION: '1.3.14' }).trailer,
+      pins: parse(f, ['--require', 'claude', '--project', project], { STUB_BUN_VERSION: '1.4.3' }).trailer,
+    };
+    for (const example of examples) {
+      const ids = example.slice('gstack: fail '.length).replace(/ …$/, '');
+      const head = real[ids];
+      expect(head === `gstack: fail ${ids}` || head.startsWith(`gstack: fail ${ids} — `), `${example} vs ${head}`).toBe(true);
+      expect(head.match(/^gstack: fail ([a-z,-]+)/)?.[1].split(',')).toEqual(ids.split(','));
+    }
+  });
 });

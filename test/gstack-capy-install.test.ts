@@ -57,7 +57,7 @@ function fixture(opts: { bun?: string; jq?: boolean } = {}) {
   script(path.join(root, 'setup'), ['echo "setup $*" >> "$CAPY_LOG"', 'echo "env GSTACK_SKIP_PLAYWRIGHT=${GSTACK_SKIP_PLAYWRIGHT:-} GSTACK_SKIP_FONTS=${GSTACK_SKIP_FONTS:-} bun=$(bun --version)" >> "$CAPY_LOG"', 'exit "${STUB_SETUP_EXIT:-0}"']);
   script(path.join(root, 'bin/gstack-doctor'), [
     'echo "doctor $* GSTACK_EPHEMERAL=${GSTACK_EPHEMERAL:-}" >> "$CAPY_LOG"', 'echo "doctor-cwd $(pwd -P)" >> "$CAPY_LOG"',
-    'echo "required: claude codex patch"', 'echo "PASS claude ok"', 'echo "SKIP browser (lazy)"',
+    'echo "required: claude codex patch"', 'echo "PASS claude ok"', 'echo "SKIP browser (lazy)"', '[ -n "${STUB_PINS_SKIP:-}" ] && echo "SKIP pins ($STUB_PINS_SKIP)"',
     '[ "${STUB_DOCTOR_FAIL:-}" = 1 ] && { echo "FAIL codex — missing; fix: x (COMPONENT_MISSING; d)"; echo "gstack: fail codex"; exit 1; }',
     '[ -n "${GSTACK_DOCTOR_RUNTIME_DRIFT:-}" ] && { echo "FAIL runtime — bun resolution drifted: $GSTACK_DOCTOR_RUNTIME_DRIFT; fix: $GSTACK_DOCTOR_RUNTIME_DRIFT_FIX (BUN_RESOLUTION_DRIFT; d)"; echo "gstack: fail runtime"; exit 1; }',
     'echo "gstack: ok $(cat "$(dirname "$0")/../VERSION") for=autoplan"',
@@ -237,10 +237,25 @@ describe('gstack-capy-install', () => {
     const before = sh('git rev-parse HEAD', f.root).stdout.trim();
     const r = run(f, ['--revision', 'v9.9.9.9']);
     expect(r.status, r.stdout + r.stderr).toBe(0);
-    expect(lastLine(r.stdout)).toBe(`gstack: ok 1.2.3 for=autoplan (requested v9.9.9.9; run ${f.root}/bin/gstack-upgrade to move)`);
+    expect(lastLine(r.stdout)).toBe(`gstack: ok 1.2.3 for=autoplan (requested: v9.9.9.9 (run ${f.root}/bin/gstack-upgrade to move))`);
     expect(sh('git rev-parse HEAD', f.root).stdout.trim()).toBe(before);
     expect(run(f, ['--revision', '1.2.3']).stdout).not.toContain('requested');
     expect(lastLine(run(f, ['--revision', before]).stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
+  });
+
+  test('trailer grammar: notes ride only on ok, in the fixed order requested, pins, latest; a stale FETCH_HEAD without the wrapper\'s env adds no latest note', () => {
+    const f = fixture();
+    const all = run(f, ['--revision', 'v9.9.9.9'], { STUB_PINS_SKIP: 'planning-only; repo pins differ: x', GSTACK_CAPY_REMOTE_VERSION: '1.10.0' });
+    expect(all.status, all.stdout + all.stderr).toBe(0);
+    expect(lastLine(all.stdout)).toBe(`gstack: ok 1.2.3 for=autoplan (requested: v9.9.9.9 (run ${f.root}/bin/gstack-upgrade to move); pins: skipped (planning-only); latest: 1.10.0 available)`);
+    expect(lastLine(run(f, [], { STUB_PINS_SKIP: 'no project: /x is not inside a git repository; pass --project <path>' }).stdout)).toBe('gstack: ok 1.2.3 for=autoplan (pins: skipped (no project))');
+    expect(lastLine(run(f, [], { GSTACK_CAPY_REMOTE_VERSION: '1.2.3' }).stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
+    expect(lastLine(run(f, [], { GSTACK_CAPY_REMOTE_VERSION: '1.0.9' }).stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
+    sh(`git update-ref FETCH_HEAD HEAD && printf '%s\\t\\tbranch main\\n' "$(git rev-parse HEAD)" > .git/FETCH_HEAD`, f.root);
+    write(path.join(f.root, 'VERSION'), '1.2.3\n');
+    expect(lastLine(run(f, ['--check']).stdout)).toBe('gstack: ok 1.2.3 for=autoplan');
+    const failed = run(f, ['--revision', 'v9.9.9.9'], { STUB_DOCTOR_FAIL: '1', STUB_PINS_SKIP: 'planning-only; x', GSTACK_CAPY_REMOTE_VERSION: '9.0.0' });
+    expect(lastLine(failed.stdout)).toBe('gstack: fail codex');
   });
 
   test('--root clones when the directory is absent and refuses a non-gstack directory', () => {
