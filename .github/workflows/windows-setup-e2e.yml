@@ -117,7 +117,8 @@ jobs:
       - name: setup.ps1 cases under Windows PowerShell 5.1 with a space in the temp path (#3130)
         # test/setup-ps1.test.ts runs powershell.exe on Windows: argv forwarding
         # with adversarial arguments, the empty-argument refusal, and pwsh. The
-        # one Linux-only case (a missing prerequisite) is the only skip.
+        # skips are its Linux-only cases: a missing prerequisite, and the Git
+        # Bash resolution table, whose locations are injected into pwsh.
         run: |
           set -euo pipefail
           : > "$RUNNER_TEMP/setup-cases"
@@ -136,7 +137,7 @@ jobs:
           test "$CODE" -eq 0 || (echo "test/setup-ps1.test.ts exited $CODE" && exit 1)
           grep -qE '^ *4 pass$' <<< "$OUT" || (echo "expected exactly 4 executed setup.ps1 cases" && exit 1)
           grep -qE '^ *0 fail$' <<< "$OUT" || (echo "a setup.ps1 case failed" && exit 1)
-          grep -qE '^ *1 skip$' <<< "$OUT" || (echo "expected exactly 1 skipped (Linux-only) setup.ps1 case" && exit 1)
+          grep -qE '^ *15 skip$' <<< "$OUT" || (echo "expected exactly 15 skipped setup.ps1 cases (the Linux-only prerequisite case and the 14 pwsh-on-Linux Git Bash resolution rows)" && exit 1)
           echo setup-ps1-cases >> "$RUNNER_TEMP/setup-cases"
         shell: bash
 

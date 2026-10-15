@@ -131,3 +131,86 @@ describe('setup.ps1', () => {
     }
   });
 });
+
+/**
+ * Git Bash resolution, one row per case of lib/script-invocation.ts's fixture
+ * table (Lane C, PR 2; mirrored here, not imported): the override and its
+ * deprecated alias, both set, a missing override, a scoop shim, per-user,
+ * portable and machine-wide Git, an MSYS bash on PATH, and the WSL and
+ * non-MSYS rejections. pwsh on Linux with every location injected: PATH,
+ * git --exec-path, LOCALAPPDATA, ProgramFiles and SystemRoot.
+ */
+describe.skipIf(!PWSH || IS_WIN)('setup.ps1: Git Bash resolution', () => {
+  type Row = {
+    name: string;
+    git?: string;                        // where the fake git lives (default bin/git)
+    execPath?: string;                   // what git --exec-path prints (relative to the root); none when absent
+    gitBash?: string[];                  // fake Git Bash files
+    pathBash?: Record<string, string>;   // bash on PATH -> what its uname -s prints
+    env?: Record<string, string>;        // values may start with @ for a root-relative path
+    used?: string;                       // the bash that ran setup
+    refused?: string[];                  // the refusal lines that must appear
+    warnings?: number;                   // how many differ-warnings print
+  };
+  const ROWS: Row[] = [
+    { name: 'override', gitBash: ['custom/bash.exe', 'Program Files/Git/bin/bash.exe'], env: { GSTACK_GIT_BASH: '@custom/bash.exe', ProgramFiles: '@Program Files' }, used: 'custom/bash.exe' },
+    { name: 'alias', gitBash: ['custom/bash.exe'], env: { GSTACK_BASH: '@custom/bash.exe' }, used: 'custom/bash.exe' },
+    { name: 'both set and differ: GSTACK_GIT_BASH wins, one warning', gitBash: ['a/bash.exe', 'b/bash.exe'], env: { GSTACK_GIT_BASH: '@a/bash.exe', GSTACK_BASH: '@b/bash.exe' }, used: 'a/bash.exe', warnings: 1 },
+    { name: 'both set to the same path: no warning', gitBash: ['a/bash.exe'], env: { GSTACK_GIT_BASH: '@a/bash.exe', GSTACK_BASH: '@a/bash.exe' }, used: 'a/bash.exe', warnings: 0 },
+    { name: 'a missing override is refused, never skipped', gitBash: ['Program Files/Git/bin/bash.exe'], env: { GSTACK_GIT_BASH: '@nope/bash.exe', ProgramFiles: '@Program Files' }, refused: ['setup.ps1: GSTACK_GIT_BASH names @nope/bash.exe, which does not exist.'] },
+    { name: 'a missing alias is refused by its own name', env: { GSTACK_BASH: '@nope/bash.exe' }, refused: ['setup.ps1: GSTACK_BASH names @nope/bash.exe, which does not exist.'] },
+    { name: 'scoop shim: git --exec-path finds the real install', git: 'scoop/shims/git', execPath: 'scoop/apps/git/current/mingw64/libexec/git-core', gitBash: ['scoop/apps/git/current/bin/bash.exe'], used: 'scoop/apps/git/current/bin/bash.exe' },
+    { name: 'per-user Git', execPath: 'nowhere/mingw64/libexec/git-core', gitBash: ['AppData/Local/Programs/Git/bin/bash.exe'], env: { LOCALAPPDATA: '@AppData/Local' }, used: 'AppData/Local/Programs/Git/bin/bash.exe' },
+    { name: 'portable Git: the folders around git.exe', git: 'PortableGit/cmd/git', gitBash: ['PortableGit/bin/bash.exe'], used: 'PortableGit/bin/bash.exe' },
+    { name: 'machine-wide Git', gitBash: ['Program Files/Git/bin/bash.exe'], env: { ProgramFiles: '@Program Files' }, used: 'Program Files/Git/bin/bash.exe' },
+    { name: 'an MSYS bash on PATH', pathBash: { 'msys64/usr/bin/bash': 'MINGW64_NT-10.0-19045' }, used: 'msys64/usr/bin/bash' },
+    { name: 'WSL rejection (System32 and WindowsApps)', pathBash: { 'Windows/System32/bash': 'Linux', 'Users/u/AppData/Local/Microsoft/WindowsApps/bash': 'Linux' }, env: { SystemRoot: '@Windows' },
+      refused: ["  @Windows/System32/bash: WSL's bash, not Git Bash", "  @Users/u/AppData/Local/Microsoft/WindowsApps/bash: WSL's bash, not Git Bash"] },
+    { name: 'a PATH bash that is not MSYS', pathBash: { 'usr/bin/bash': 'Linux' }, refused: ["  @usr/bin/bash: not Git Bash (uname -s printed 'Linux')"] },
+    { name: 'missing: every candidate and why, then both recipes', execPath: 'Git/mingw64/libexec/git-core', env: { LOCALAPPDATA: '@AppData/Local', ProgramFiles: '@Program Files' },
+      refused: ['setup.ps1: Git Bash (bash.exe) was not found. Tried:', '  @Git/bin/bash.exe: not found', '  @bin/bin/bash.exe: not found', '  @AppData/Local/Programs/Git/bin/bash.exe: not found', '  @Program Files/Git/bin/bash.exe: not found'] },
+  ];
+  const RECIPE = [
+    "  PowerShell (new windows; restart Claude Code after): [Environment]::SetEnvironmentVariable('GSTACK_GIT_BASH', 'C:\\Program Files\\Git\\bin\\bash.exe', 'User')",
+    '  Claude Code: add "GSTACK_GIT_BASH": "C:\\\\Program Files\\\\Git\\\\bin\\\\bash.exe" to the "env" block of ~/.claude/settings.json',
+    'Nothing was installed or changed. (BASH_UNAVAILABLE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bash-unavailable)',
+  ];
+  const WARNING = 'GSTACK_BASH is a deprecated alias: unset it.';
+
+  function put(file: string, body: string) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, body, { mode: 0o755 });
+  }
+
+  for (const row of ROWS) {
+    test(row.name, () => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'setup-ps1-bash-')));
+      dirs.push(root);
+      const at = (v: string) => v.replace(/@/g, `${root}/`);
+      fs.copyFileSync(SCRIPT, path.join(root, 'setup.ps1'));
+      put(path.join(root, row.git ?? 'bin/git'), `#!/bin/sh\n[ "$1" = --exec-path ] && ${row.execPath ? `echo '${root}/${row.execPath}'` : ':'}\nexit 0\n`);
+      for (const tool of ['bun', 'node']) put(path.join(root, 'bin', tool), '#!/bin/sh\nexit 0\n');
+      for (const f of row.gitBash ?? []) put(path.join(root, f), '#!/bin/sh\necho "BASH_USED=$0"\n');
+      for (const [f, kernel] of Object.entries(row.pathBash ?? {})) {
+        put(path.join(root, f), `#!/bin/sh\n[ "$2" = 'uname -s' ] && { echo '${kernel}'; exit 0; }\necho "BASH_USED=$0"\n`);
+      }
+      const PATH = [...new Set([path.join(root, 'bin'), path.dirname(path.join(root, row.git ?? 'bin/git')),
+        ...Object.keys(row.pathBash ?? {}).map((f) => path.dirname(path.join(root, f)))])].join(':');
+      const env: Record<string, string> = { PATH, HOME: root, TMPDIR: root };
+      for (const [k, v] of Object.entries(row.env ?? {})) env[k] = at(v);
+      const r = spawnSync(PWSH!, ['-NoProfile', '-NonInteractive', '-File', path.join(root, 'setup.ps1'), '--host', 'codex'],
+        { cwd: root, encoding: 'utf-8', env, timeout: 60_000 });
+      const out = (r.stdout || '') + (r.stderr || '');
+      const lines = out.split(/\r?\n/);
+      if (row.used) {
+        expect(r.status, out).toBe(0);
+        expect(lines.filter((l) => l.startsWith('BASH_USED='))).toEqual([`BASH_USED=${path.join(root, row.used)}`]);
+      } else {
+        expect(r.status, out).toBe(1);
+        expect(out).not.toContain('BASH_USED=');
+        for (const l of [...row.refused!.map(at), ...RECIPE]) expect(lines, out).toContain(l);
+      }
+      if (row.warnings !== undefined) expect(lines.filter((l) => l.includes(WARNING)), out).toHaveLength(row.warnings);
+    });
+  }
+});

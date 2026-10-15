@@ -11,7 +11,8 @@
         .\setup.ps1
         .\setup.ps1 --host codex
 
-    Set GSTACK_GIT_BASH to a bash.exe to use instead of Git for Windows' own.
+    Set GSTACK_GIT_BASH to a bash.exe to use instead of Git for Windows' own
+    (GSTACK_BASH is its deprecated alias).
 #>
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -28,20 +29,76 @@ if ($missing) {
     exit 1
 }
 
-# Git Bash, found from git.exe (Git\cmd, Git\bin or Git\mingw64\bin). Never a
-# bare `bash` from PATH: on Windows that is often WSL's, with a different home.
-$bash = $env:GSTACK_GIT_BASH
-if (-not $bash) {
+# Git Bash. The override first: GSTACK_GIT_BASH, or GSTACK_BASH, its deprecated
+# alias at the same precedence (GSTACK_GIT_BASH wins when both are set and
+# differ, with one warning); an override that does not exist is refused, never
+# skipped. Then the Git for Windows install git.exe belongs to (git --exec-path
+# finds it behind a scoop shim or in a portable Git; then the folders around
+# git.exe), the per-user and machine-wide installs, and last a bash on PATH that
+# reports MSYS. Never WSL's bash (System32, WindowsApps): a different
+# filesystem and home. Same order and refusal as lib/script-invocation.ts.
+$recipe = @(
+    'Install Git for Windows (winget install --id Git.Git -e), or point gstack at its bash.exe:',
+    '  PowerShell (new windows; restart Claude Code after): [Environment]::SetEnvironmentVariable(''GSTACK_GIT_BASH'', ''C:\Program Files\Git\bin\bash.exe'', ''User'')',
+    '  Claude Code: add "GSTACK_GIT_BASH": "C:\\Program Files\\Git\\bin\\bash.exe" to the "env" block of ~/.claude/settings.json',
+    'Nothing was installed or changed. (BASH_UNAVAILABLE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bash-unavailable)'
+)
+$overrideName = 'GSTACK_GIT_BASH'
+$override = $env:GSTACK_GIT_BASH
+if (-not $override -and $env:GSTACK_BASH) {
+    $overrideName = 'GSTACK_BASH'
+    $override = $env:GSTACK_BASH
+} elseif ($override -and $env:GSTACK_BASH -and $env:GSTACK_BASH -ne $override) {
+    Write-Host ('setup.ps1: GSTACK_GIT_BASH ({0}) and GSTACK_BASH ({1}) differ; using GSTACK_GIT_BASH. GSTACK_BASH is a deprecated alias: unset it.' -f $override, $env:GSTACK_BASH)
+}
+$bash = $null
+if ($override) {
+    if (-not (Test-Path -LiteralPath $override -PathType Leaf)) {
+        Write-Host ('setup.ps1: {0} names {1}, which does not exist.' -f $overrideName, $override)
+        foreach ($line in $recipe) { Write-Host $line }
+        exit 1
+    }
+    $bash = $override
+} else {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    $execPath = $null
+    try { $execPath = (& git --exec-path 2>$null | Select-Object -First 1) } catch { }
+    if ($execPath) { $candidates.Add((Join-Path $execPath '..\..\..\bin\bash.exe')) }
     $dir = Split-Path (Get-Command git -CommandType Application | Select-Object -First 1).Source
     for ($i = 0; $i -lt 3 -and $dir; $i++) {
-        $candidate = Join-Path $dir 'bin\bash.exe'
-        if (Test-Path -LiteralPath $candidate -PathType Leaf) { $bash = $candidate; break }
+        $candidates.Add((Join-Path $dir 'bin\bash.exe'))
         $dir = Split-Path $dir
     }
-}
-if (-not $bash -or -not (Test-Path -LiteralPath $bash -PathType Leaf)) {
-    Write-Host 'Git Bash (bash.exe) was not found next to git. Reinstall Git for Windows, or set GSTACK_GIT_BASH to its bash.exe.'
-    exit 1
+    if ($env:LOCALAPPDATA) { $candidates.Add((Join-Path $env:LOCALAPPDATA 'Programs\Git\bin\bash.exe')) }
+    if ($env:ProgramFiles) { $candidates.Add((Join-Path $env:ProgramFiles 'Git\bin\bash.exe')) }
+    $rejected = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in $candidates) {
+        $full = [System.IO.Path]::GetFullPath($candidate)
+        if (Test-Path -LiteralPath $full -PathType Leaf) { $bash = $full; break }
+        $rejected.Add(('  {0}: not found' -f $full))
+    }
+    if (-not $bash) {
+        $wsl = @()
+        if ($env:SystemRoot) { $wsl += ((Join-Path $env:SystemRoot 'System32') -replace '\\', '/').ToLowerInvariant() + '/' }
+        foreach ($cmd in @(Get-Command bash -CommandType Application -All -ErrorAction SilentlyContinue)) {
+            $path = $cmd.Source
+            $norm = ($path -replace '\\', '/').ToLowerInvariant()
+            if ($norm -like '*/windowsapps/*' -or ($wsl | Where-Object { $norm.StartsWith($_) })) {
+                $rejected.Add(('  {0}: WSL''s bash, not Git Bash' -f $path))
+                continue
+            }
+            $kernel = ''
+            try { $kernel = [string](& $path -c 'uname -s' 2>$null | Select-Object -First 1) } catch { }
+            if ($kernel -match '^(MINGW|MSYS)') { $bash = $path; break }
+            $rejected.Add(('  {0}: not Git Bash (uname -s printed ''{1}'')' -f $path, $kernel))
+        }
+    }
+    if (-not $bash) {
+        Write-Host 'setup.ps1: Git Bash (bash.exe) was not found. Tried:'
+        foreach ($line in $rejected) { Write-Host $line }
+        foreach ($line in $recipe) { Write-Host $line }
+        exit 1
+    }
 }
 
 # Arguments travel NUL-separated in a private file, never on the native command
