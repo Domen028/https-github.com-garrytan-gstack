@@ -122,7 +122,7 @@ is the completion check. Copy the whole directory, never single files.
 - `MODEL_FAMILY_CONFLICT`: pass `--model <id>` of a different family (anthropic, openai, google, xai, deepseek, qwen, zai, moonshot, meta, mistral); a same-family result is not an outside voice
 - `CONSENSUS_MISSING`: resume the run so the phase closes through reconciliation; the Eng prompt is never sent without every prior phase summary
 - `GATE_REV_STALE`: render the current gate list, read it, and reply with its gate_rev
-- `GATE_REPLY_UNPARSED`: reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous
+- `GATE_REPLY_UNPARSED`: reply with `rec`, `as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `rec except <tokens>`; bare yes/no is ambiguous
 - `GATE_REC_STALE`: render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`
 - `OWNER_REPLY_REQUIRED`: pass the owner's words exactly with `--owner-reply "<text>"`, `--owner-reply -` (stdin) or `--owner-reply-file <path>`
 - `GATE_OWNER_REPLY_MISMATCH`: relay exactly what the owner chose (or their reply itself, e.g. `--reply rec`); ask the owner when their words and the tokens disagree

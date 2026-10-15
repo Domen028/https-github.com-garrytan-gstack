@@ -112,7 +112,7 @@ export const RESULT_CODES = {
   GATE_REPLY_UNPARSED: {
     anchor: 'gate-reply-unparsed',
     summary: 'part of the reply matched no gate item or option, so nothing was applied',
-    fix: 'reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
+    fix: 'reply with `rec`, `as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `rec except <tokens>`; bare yes/no is ambiguous',
   },
   ANSWER_BY_REQUIRED: {
     anchor: 'answer-by-required',
