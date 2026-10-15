@@ -458,7 +458,7 @@ exec "$chose" "$@"
 EOF_SHIM
       } > "$tmp"
     fi
-    chmod 0755 "$tmp" && if cmp -s "$tmp" "$dir/$name"; then rm -f "$tmp"; else mv -f "$tmp" "$dir/$name"; fi
+    chmod 0755 "$tmp" && if cmp -s "$tmp" "$dir/$name"; then rm -f "$tmp"; else mv -f "$tmp" "$dir/$name" && say "wrote $dir/$name (gstack's per-directory $name shim; GSTACK_BUN_SHIM_EXPLAIN=1 shows its choice, GSTACK_BUN_SHIM=0 opts out)"; fi
   done
   exec 8>&-
 }

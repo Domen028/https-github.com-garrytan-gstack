@@ -175,10 +175,13 @@ describe('guards and lanes: install verdict admission (integration item 8)', () 
     expect(checkRow(repo, 'guards')).toMatchObject({ status: 'incomplete', code: 'BUN_RESOLUTION_DRIFT' });
     expect(checkRow(repo, 'guards').detail).toContain(`recorded bun 1.4.3 at ${repo.root}/gone/bun is gone`);
     expect(ran(repo)).toBe(false);
-    verdict(repo, { bun_path: fs.realpathSync(process.execPath), bun_version: Bun.version });
+    const stub = path.join(fs.realpathSync(repo.root), 'pinned', 'bun');
+    fs.mkdirSync(path.dirname(stub), { recursive: true });
+    fs.writeFileSync(stub, `#!/bin/sh\n[ "$1" = --version ] && { echo 1.4.2; exit 0; }\nexec '${fs.realpathSync(process.execPath)}' "$@"\n`, { mode: 0o755 });
+    verdict(repo, { bun_path: stub, bun_version: '1.4.2' });
     const ok = run(repo);
     expect(ok.status, ok.out).toBe(EXIT.ok);
-    expect(ok.out).toContain(`runtime: bun ${Bun.version} at ${fs.realpathSync(process.execPath)} (recorded by the install verdict)`);
+    expect(ok.out).toContain(`runtime: bun 1.4.2 at ${stub} (recorded by the install verdict)`);
     expect(ran(repo)).toBe(true);
   });
 });
