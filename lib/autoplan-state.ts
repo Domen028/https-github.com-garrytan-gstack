@@ -24,6 +24,8 @@ export interface Amendment {
   decision: string; title: string; chosen: string; text: string; gate_rev: number; status: 'pending' | 'incorporated' | 'withdrawn' | 'settled'; at: string; settled_at?: string;
   /** The gate item's `changes` and phase: packaging/ordering changes settle without a plan edit (`revise --settle`). */
   changes?: string; phase?: string; item?: string;
+  /** The reviewed Implementation-plan hash of the active plan when the owner accepted it: `--settle` evidence. */
+  plan_sha256?: string;
 }
 export interface PhaseState {
   snapshot?: string; snapshot_dir?: string; snapshot_path?: string; methodology?: string; opened_at?: string; closed_at?: string;

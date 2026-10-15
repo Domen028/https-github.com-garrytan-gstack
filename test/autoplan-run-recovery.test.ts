@@ -88,14 +88,14 @@ describe('next/submit loop', () => {
     const ceo = runPhase(out, 'ceo');
     expect(ceo.native.status, ceo.native.stderr).toBe(0);
     expect(ceo.outside.status, ceo.outside.stderr).toBe(0);
-    expect(ceo.outside.stdout).toMatch(/^PHASE_CLOSED: ceo confirmed=2 disagree=0 new=1 native_only=1 coverage=both$/m);
+    expect(ceo.outside.stdout).toMatch(/^PHASE_CLOSED: ceo confirmed=0 unverified=2 disagree=0 new=1 native_only=1 coverage=both$/m);
     expect(ceo.outside.stdout).toContain('GSTACK_RESULT: skill=autoplan status=running run=');
     const consensus = JSON.parse(fs.readFileSync(path.join(out, 'ceo-consensus.json'), 'utf8'));
     const run = readRun(out).run;
     expect(consensus.rows.map((r: any) => [r.outside_id, r.native_id, r.disposition, r.basis])).toEqual([
-      [`${run}-ceo-outside-1`, `${run}-ceo-native-1`, 'confirmed', 'file_line'],
+      [`${run}-ceo-outside-1`, `${run}-ceo-native-1`, 'unverified', 'file_line'],
       [`${run}-ceo-outside-2`, null, 'new', 'none'],
-      [`${run}-ceo-outside-3`, `${run}-ceo-native-3`, 'confirmed', 'title'],
+      [`${run}-ceo-outside-3`, `${run}-ceo-native-3`, 'unverified', 'title'],
     ]);
     expect(consensus.native_only_ids).toEqual([`${run}-ceo-native-2`]);
     const eng = runPhase(out, 'eng');
@@ -110,8 +110,9 @@ describe('next/submit loop', () => {
     const decisions = fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
     expect(decisions.every((d: any) => d.status === 'pending' && d.gate_rev === 1)).toBe(true);
     const tasks = fs.readFileSync(path.join(out, 'tasks.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
-    expect(tasks.length).toBe(4);
-    expect(tasks[0]).toMatchObject({ schema_version: 2, status: 'blocked_on_decision', blocked_by: [`${run}-p1`], findings: [`${run}-ceo-native-1`, `${run}-ceo-outside-1`] });
+    expect(tasks.length).toBe(6);
+    expect(tasks[0]).toMatchObject({ schema_version: 2, status: 'blocked_on_decision', blocked_by: [`${run}-p1`], findings: [`${run}-ceo-native-1`] });
+    expect(tasks.flatMap((t: any) => t.findings).filter((f: string) => f.endsWith('-ceo-outside-1'))).toHaveLength(1);
     expect(fs.readFileSync(path.join(out, 'review-record.md'), 'utf8')).toContain('GUARD_NOT_INSTALLED');
     expect(fs.readFileSync(path.join(out, 'plan.md'), 'utf8').startsWith('## URGENT, outside this plan')).toBe(true);
     // a missing prior consensus refuses the Eng dispatch

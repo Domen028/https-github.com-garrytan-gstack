@@ -533,12 +533,12 @@ export const RESULT_CODES = {
   },
   AMENDMENT_NOT_SETTLEABLE: {
     anchor: 'amendment-not-settleable',
-    summary: '`revise --settle` named an accepted change that needs a plan edit (its item changes scope, cost or direction, or names no packaging/ordering change), or the reviewed plan changed since the gate',
-    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`; settle only packaging or ordering changes on an unchanged plan',
+    summary: '`revise --settle` named an accepted change that needs a plan edit (its item changes scope, cost or direction, or names no packaging/ordering change), or the plan has edits no revise has recorded',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>` (add `--settle <id>` to settle packaging/ordering changes in the same call); settle alone only on the plan the run already reviews',
   },
   GATE_REC_STALE: {
     anchor: 'gate-rec-stale',
-    summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes',
+    summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes, or the gate predates `rec` (a gate.json without rec_rev, rendered when `all` left changes pending)',
     fix: 'render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`',
   },
   CHECKPOINT_INVALID: {

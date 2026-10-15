@@ -19,8 +19,8 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { exportRun } from './autoplan-export';
-import { driftLine } from './autoplan-plan-text';
-import { consensusRecord, reconcile, renderConsensus, SETTLEABLE_CHANGES, type ConsensusRecord, type ReconciliationOverride, type ReconciliationRow } from './autoplan-reconcile';
+import { driftLine, reviewHash } from './autoplan-plan-text';
+import { consensusRecord, reconcile, remedyKey, renderConsensus, SETTLEABLE_CHANGES, type ConsensusRecord, type ReconciliationOverride, type ReconciliationRow } from './autoplan-reconcile';
 import type { Phase } from './autoplan-prompts';
 import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, writeDecisions, type Amendment, type RunState, type VoiceState } from './autoplan-state';
 import { phaseClose } from './autoplan-timing';
@@ -71,7 +71,6 @@ const CONTENT_SCOPE: Record<string, string> = { ceo: 'scope', design: 'design', 
 const optionHash = (options: GateOption[]) => createHash('sha256').update(JSON.stringify(options.map(o => [o.key, o.text]))).digest('hex').slice(0, 16);
 const KEEP = (text: string): GateOption => ({ key: 'a', text, changes_plan: false });
 
-const remedyKey = (text: string | undefined) => (text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 /**
  * A user challenge both voices raised recommends the change only with an
@@ -88,7 +87,7 @@ export function challengeDefault(row: ReconciliationRow, n: FindingRow | undefin
     : nf?.resolution || of.resolution ? ` (native: ${nf?.resolution ?? 'no remedy stated'}; outside: ${of.resolution ?? 'no remedy stated'})` : '';
   const text = `accept the change both reviewers recommend${remedies}`;
   const keep = (basis: string) => ({ recommended: 'a' as const, basis: `plan direction; ${basis}`, text });
-  if (row.disposition === 'unverified') return keep('same location, agreement unverified');
+  if (row.disposition === 'unverified') return keep(row.resolution.startsWith('same title, a remedy is missing') ? 'a remedy is missing' : row.resolution.startsWith('same title') ? 'remedies differ; no shared proposal' : 'same location, agreement unverified');
   if (row.disposition !== 'confirmed') return keep('voices disagree');
   if (!nf?.changes || !of.changes) return keep('no shared changes value');
   if (nf.changes !== of.changes) return keep('voices name different changes');
@@ -147,7 +146,7 @@ export function buildGate(state: RunState, gateRev: number): GateList {
     }
   }
   items.push(planApproval(state, items));
-  const list: GateList = { schema_version: 1, run: state.run, gate_rev: gateRev, items, title: '/autoplan final approval gate' };
+  const list: GateList = { schema_version: 1, run: state.run, gate_rev: gateRev, items, title: '/autoplan final approval gate', rec_rev: 0 };
   const problems = validateGateList(list);
   if (problems.length) throw new Error(`gate list invalid: ${problems.join('; ')}`);
   return list;
@@ -237,6 +236,15 @@ export function applyGuidance(a: Pick<Amendment, 'changes' | 'item'>): string {
   return a.changes && SETTLEABLE_CHANGES.includes(a.changes) ? `no plan edit needed: revise --settle ${a.item}` : 'edit the plan, then revise';
 }
 
+/** The revise steps that discharge the pending amendments: settle the packaging/ordering changes first, then edit for the rest. */
+export function amendmentSteps(state: RunState, out: string): string {
+  const pending = (state.amendments ?? []).filter(a => a.status === 'pending');
+  const settle = pending.filter(a => applyGuidance(a).startsWith('no plan edit')).map(a => a.item ?? a.decision);
+  const edit = pending.filter(a => !applyGuidance(a).startsWith('no plan edit')).map(a => a.decision);
+  return [settle.length ? `gstack-autoplan revise --out ${out} --settle ${settle.join(',')}` : '',
+    edit.length ? `edit the plan, then gstack-autoplan revise --out ${out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${edit.join(',')}` : ''].filter(Boolean).join('; then ');
+}
+
 /** The owner's words must not contradict the relayed tokens: when they parse, both must resolve to the same choices. */
 function checkOwnerReply(list: GateList, gateRev: number, prior: Record<string, string>, relayed: ParsedReply, ownerReply: string): boolean {
   const owner = parseReply(ownerReply, list, gateRev, prior);
@@ -270,6 +278,7 @@ export function answerGate(state: RunState, gateRev: number, reply: string, answ
   if (!parsed.valid) throw new RunError('GATE_REPLY_UNPARSED', parsed.error === 'GATE_EMPTY' ? 'empty reply' : `unparsed: ${parsed.unparsed.join(', ')}`);
   const currentHash = recHash(list);
   if (o.recHash !== undefined && o.recHash !== currentHash) throw new RunError('GATE_REC_STALE', `--rec-hash ${o.recHash} was rendered before the recommendations changed; current rec_hash=${currentHash}`, 3);
+  if (parsed.mode === 'rec' && list.rec_rev === undefined && o.recHash === undefined) throw new RunError('GATE_REC_STALE', `this gate was written before \`rec\`/\`all\` took plan changes (gate.json has no rec_rev), so the owner saw a different meaning; render it again (gstack-gate render ${gateFile} --all), relay it, and answer with --rec-hash ${currentHash}, or reply with explicit <id><option> tokens`, 3);
   if (parsed.mode === 'rec' && (list.rec_rev ?? 0) > 0 && o.recHash === undefined) throw new RunError('GATE_REC_STALE', `recommend changed this gate (rec_rev=${list.rec_rev}); pass --rec-hash from the render the owner saw (current rec_hash=${currentHash})`, 3);
   const ownerParsed = o.ownerReply !== undefined ? checkOwnerReply(list, gateRev, prior, parsed, o.ownerReply) : undefined;
   const provenance = o.ownerReply !== undefined ? { owner_reply: o.ownerReply, owner_reply_parsed: ownerParsed } : {};
@@ -310,10 +319,11 @@ export function answerGate(state: RunState, gateRev: number, reply: string, answ
     lines.push('REJECTED: run.json.status=incomplete');
     return { state, applied: true, pending: [], reopened: [], outcome: 'rejected', lines };
   }
+  const acceptedPlan = changing.length ? reviewHash(fs.readFileSync(state.active_plan, 'utf8')) : '';
   for (const c of changing) {
     const item = itemOf(c.id);
     const amendment: Amendment = { decision: decisionId(state.run, gateRev, c.id), title: item.title, chosen: c.chosen, text: optionOf(c).text, gate_rev: gateRev, status: 'pending', at: answeredAt,
-      item: c.id, ...(item.changes ? { changes: item.changes } : {}), ...(item.phase ? { phase: item.phase } : {}) };
+      item: c.id, ...(item.changes ? { changes: item.changes } : {}), ...(item.phase ? { phase: item.phase } : {}), plan_sha256: acceptedPlan };
     (state.amendments ??= []).push(amendment);
     journalRow(state.out, { event: 'amendment_pending', decision: amendment.decision, gate_rev: gateRev, ...(item.changes ? { changes: item.changes } : {}) });
     lines.push(`APPLY: ${amendment.decision} ${item.title} -> ${amendment.text}; ${applyGuidance(amendment)}`);

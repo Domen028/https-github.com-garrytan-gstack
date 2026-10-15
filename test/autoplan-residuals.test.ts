@@ -13,6 +13,8 @@
  *     required in an unattended run and lands on every decision row; an agent
  *     answer also carries the owner's verbatim reply (next-wave B-c), and a
  *     parseable owner reply that resolves differently from the relay is refused.
+ *  A gate.json written before `rec` (no rec_rev) refuses alias replies
+ *     until the owner sees a re-render (--rec-hash); tokens still answer.
  *  B-b `recommend` changes what `rec` resolves to, so it bumps rec_rev and a
  *     `rec` must carry the rec_hash of the render the owner saw.
  */
@@ -99,6 +101,29 @@ describe('R1/B1: `rec` (and its alias `all`) takes every recommendation, plan ch
     expect(readRun(out).status).toBe('amend_pending');
     const rows = decisions(out);
     for (const i of uc) expect(rows.find(r => r.label === i.id.toUpperCase())).toMatchObject({ status: 'approved', chosen: 'b' });
+  });
+});
+
+describe('legacy gates: a gate.json written before `rec` (no rec_rev)', () => {
+  test('alias replies are refused until a re-render binds --rec-hash; explicit tokens still answer', () => {
+    const out = agreedRun('legacy');
+    const gateFile = path.join(out, 'gate.json');
+    const gate = JSON.parse(fs.readFileSync(gateFile, 'utf8'));
+    expect(gate.rec_rev).toBe(0);
+    delete gate.rec_rev;
+    fs.writeFileSync(gateFile, JSON.stringify(gate, null, 2) + '\n');
+    const before = fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8');
+    for (const reply of ['all', 'rec', 'approve all', 'all except uc1a']) {
+      const refused = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', reply, '--by', 'human']);
+      expect(refused.status, reply).toBe(3);
+      expect(refused.stderr).toMatch(/written before `rec`\/`all` took plan changes.*\(GATE_REC_STALE\)$/m);
+    }
+    expect(fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8')).toBe(before);
+    const tokens = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'uc1a', '--by', 'human']);
+    expect(tokens.status, tokens.stderr).toBe(0);
+    const hash = renderGate(JSON.parse(fs.readFileSync(gateFile, 'utf8'))).match(/rec_hash=([0-9a-f]{12})/)![1]!;
+    const bound = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'rec', '--rec-hash', hash, '--by', 'human']);
+    expect(bound.status, bound.stderr).toBe(0);
   });
 });
 

@@ -26,7 +26,7 @@
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { answerGate, applyGuidance, recommendGate } from '../lib/autoplan-gate';
+import { amendmentSteps, answerGate, recommendGate } from '../lib/autoplan-gate';
 import { checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
@@ -98,11 +98,7 @@ const resultLineFor = (status: string, out: string) => `GSTACK_RESULT: skill=aut
 const listFlag = (args: string[], name: string) => args.flatMap((a, i) => (a === name && args[i + 1] ? args[i + 1]!.split(',').map(x => x.trim()).filter(Boolean) : []));
 /** The NEXT line after an answer or revise: per pending change, settle it or edit the plan and revise; else next. */
 function nextLine(state: RunState, out: string): string {
-  const pending = pendingAmendments(state);
-  const settle = pending.filter(a => applyGuidance(a).startsWith('no plan edit')).map(a => a.item ?? a.decision);
-  const edit = pending.filter(a => !applyGuidance(a).startsWith('no plan edit')).map(a => a.decision);
-  if (!pending.length) return `NEXT: gstack-autoplan next --out ${out}`;
-  return `NEXT: ${[edit.length ? `edit the plan, then gstack-autoplan revise --out ${out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${edit.join(',')}` : '', settle.length ? `gstack-autoplan revise --out ${out} --settle ${settle.join(',')}` : ''].filter(Boolean).join('; ')}`;
+  return pendingAmendments(state).length ? `NEXT: ${amendmentSteps(state, out)}` : `NEXT: gstack-autoplan next --out ${out}`;
 }
 
 /**

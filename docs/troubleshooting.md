@@ -2809,14 +2809,18 @@ pending, revise without `--incorporates`:
 
 **Meaning.** `gstack-autoplan revise --settle <id>` discharges an accepted change
 without a plan edit, which is honest only for a packaging or ordering change
-(the gate item's `changes` is `packaging` or `ordering`) on a plan nobody has
-edited since it was reviewed. The named change alters scope, cost or direction,
-names no `changes` value, or the plan file's Implementation plan no longer
-matches the reviewed snapshot. Nothing was changed.
+(the gate item's `changes` is `packaging` or `ordering`) on the plan the run
+already reviews: the plan the owner accepted it on, or one a later `revise`
+recorded. The named change alters scope, cost or direction, names no `changes`
+value, the plan file has edits no `revise` has recorded, or `--settle` came with
+a `--plan` that changes the Implementation plan while incorporating nothing.
+Nothing was changed.
 
 **Fix.** Edit the plan, then
-`gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`.
-The `APPLY:` line for each change says which path it takes.
+`gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`,
+adding `--settle <id>` to settle packaging or ordering changes in the same call
+(or settle them after the revise). The `APPLY:` line for each change says which
+path it takes, and `NEXT:` lists the settle step first.
 
 <a id="gate-rec-stale"></a>
 ### `GATE_REC_STALE`
@@ -2825,10 +2829,14 @@ The `APPLY:` line for each change says which path it takes.
 was rendered, so a `rec` (or `all`) reply the owner gave to the earlier render
 would take recommendations they never saw. Every render prints
 `rec_hash=<h>`; once `recommend` has run, a `rec` answer must name the hash of
-the render the owner answered.
+the render the owner answered. The same refusal meets a `rec`/`all` reply to a
+gate written before `rec` existed (a `gate.json` with no `rec_rev`, from
+1.91.101.0 or earlier): that render told the owner `all` leaves items
+recommended `b` pending, and `all` now takes them.
 
 **Fix.** Render again (`gstack-gate render <dir>/gate.json --all`), relay it,
-and answer with `--rec-hash <h>` from that render.
+and answer with `--rec-hash <h>` from that render. Explicit `<id><option>`
+tokens are never refused.
 
 <a id="checkpoint-invalid"></a>
 ### `CHECKPOINT_INVALID`
