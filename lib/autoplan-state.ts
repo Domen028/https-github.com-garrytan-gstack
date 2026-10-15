@@ -20,7 +20,11 @@ export interface VoiceState extends VoiceOutcome {
   receipt?: 'verified' | 'attested'; attest_reason?: string; findings_source?: 'fence' | 'table' | 'list' | 'none'; reviewed_sha256?: string;
 }
 /** An accepted plan change (gate option with changes_plan) the plan must absorb before the run continues. */
-export interface Amendment { decision: string; title: string; chosen: string; text: string; gate_rev: number; status: 'pending' | 'incorporated' | 'withdrawn'; at: string; settled_at?: string }
+export interface Amendment {
+  decision: string; title: string; chosen: string; text: string; gate_rev: number; status: 'pending' | 'incorporated' | 'withdrawn' | 'settled'; at: string; settled_at?: string;
+  /** The gate item's `changes` and phase: packaging/ordering changes settle without a plan edit (`revise --settle`). */
+  changes?: string; phase?: string; item?: string;
+}
 export interface PhaseState {
   snapshot?: string; snapshot_dir?: string; snapshot_path?: string; methodology?: string; opened_at?: string; closed_at?: string;
   native?: VoiceState; outside?: VoiceState; consensus?: Record<string, unknown>; skipped?: string;

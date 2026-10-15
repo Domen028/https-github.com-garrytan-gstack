@@ -2745,7 +2745,10 @@ incorporated or withdrawn; `export` refuses a `complete` run with one pending.
 **Fix.** Edit the plan, then `gstack-autoplan revise --out <dir> --plan <file>
 --incorporates <decision id,...>`. `revise` binds each named id to the old and
 new Implementation-plan hashes and refuses when the Implementation plan did
-not change; an id you do not name stays pending. To drop an accepted change
+not change; an id you do not name stays pending. A packaging or ordering change
+(its `APPLY:` line ends `no plan edit needed: revise --settle <id>`) is
+discharged with `gstack-autoplan revise --out <dir> --settle <id>` and reopens
+nothing. To drop an accepted change
 instead, `gstack-autoplan revise --out <dir> --withdraw <decision id>` records
 the withdrawal in the journal.
 
@@ -2760,6 +2763,76 @@ amendments), or it was already incorporated or withdrawn. Nothing was changed.
 **Fix.** Name only the ids the refusal lists after `pending:`. With none
 pending, revise without `--incorporates`:
 `gstack-autoplan revise --out <dir> --plan <file>`.
+
+<a id="amendment-not-settleable"></a>
+### `AMENDMENT_NOT_SETTLEABLE`
+
+**Meaning.** `gstack-autoplan revise --settle <id>` discharges an accepted change
+without a plan edit, which is honest only for a packaging or ordering change
+(the gate item's `changes` is `packaging` or `ordering`) on a plan nobody has
+edited since it was reviewed. The named change alters scope, cost or direction,
+names no `changes` value, or the plan file's Implementation plan no longer
+matches the reviewed snapshot. Nothing was changed.
+
+**Fix.** Edit the plan, then
+`gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`.
+The `APPLY:` line for each change says which path it takes.
+
+<a id="gate-rec-stale"></a>
+### `GATE_REC_STALE`
+
+**Meaning.** `gstack-autoplan recommend` changed a recommendation after the gate
+was rendered, so a `rec` (or `all`) reply the owner gave to the earlier render
+would take recommendations they never saw. Every render prints
+`rec_hash=<h>`; once `recommend` has run, a `rec` answer must name the hash of
+the render the owner answered.
+
+**Fix.** Render again (`gstack-gate render <dir>/gate.json --all`), relay it,
+and answer with `--rec-hash <h>` from that render.
+
+<a id="checkpoint-invalid"></a>
+### `CHECKPOINT_INVALID`
+
+**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` refused
+the checkpoint: `checkpoint.json` is unreadable or not a schema_version 1
+checkpoint, or a listed file is missing, is not a regular file, escapes the
+checkpoint directory, or does not match its recorded sha256. Nothing was
+written to `--out`.
+
+**Fix.** Restore from an intact copy. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR`
+set, every command that leaves the run at rest rewrites
+`<dir>/<run>/` (its `restore.md` names the exact command); a copy that was
+edited or partially synced fails here by design.
+
+<a id="checkpoint-target-exists"></a>
+### `CHECKPOINT_TARGET_EXISTS`
+
+**Meaning.** `resume --from` restores only into a missing or empty `--out`
+directory, and this one already holds files.
+
+**Fix.** Pass a new `--out` directory, or run `gstack-autoplan resume --out
+<dir>` without `--from` to resume the run already there.
+
+<a id="owner-reply-required"></a>
+### `OWNER_REPLY_REQUIRED`
+
+**Meaning.** An agent answered the gate (`--by agent:<id>`) without recording
+what the owner actually said. Nothing was applied.
+
+**Fix.** Pass the owner's words verbatim: `--owner-reply "<text>"`,
+`--owner-reply -` to read them from stdin, or `--owner-reply-file <path>`. They
+are stored on every decision row; when they parse under the gate grammar they
+must resolve to the same choices as `--reply`.
+
+<a id="gate-owner-reply-mismatch"></a>
+### `GATE_OWNER_REPLY_MISMATCH`
+
+**Meaning.** The owner's verbatim reply is itself a gate reply (for example
+`rec`), and it resolves to different choices than the tokens the agent relayed.
+Nothing was applied.
+
+**Fix.** Relay what the owner chose; passing their reply as `--reply` is always
+consistent. When the owner's words and your tokens disagree, ask the owner.
 
 <a id="gstack-version-changed"></a>
 ### `GSTACK_VERSION_CHANGED`

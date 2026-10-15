@@ -26,10 +26,12 @@ const SEVERITY_ALIASES: Record<string, Severity> = {
 export interface CanonicalFinding {
   severity: Severity; title: string; file?: string; line?: number; fix?: string; local_id?: string;
   user_challenge?: boolean; urgent?: boolean; suggested_owner?: string; plan_items?: string[]; dimension?: string;
-  /** What a user challenge changes; only these three make it a gate question (plan B2a). */
+  /** What a user challenge changes: scope, cost or direction (plan B2a), or packaging/ordering (settled without a plan edit). */
   changes?: Changes;
 }
-export const CHANGES = ['scope', 'cost', 'direction'] as const;
+export const CHANGES = ['scope', 'cost', 'direction', 'packaging', 'ordering'] as const;
+/** Accepted changes of these kinds need no Implementation-plan edit: `revise --settle` records them. */
+export const SETTLEABLE_CHANGES: readonly string[] = ['packaging', 'ordering'];
 export type Changes = typeof CHANGES[number];
 export interface ParsedReviewResult {
   receipt: { ok: boolean; phase?: string; sha256?: string; line?: string };
@@ -67,9 +69,9 @@ export function parseReceipt(text: string, expected: { phase: string; sha256: st
 function parseFences(text: string, errors: string[]): { findings: CanonicalFinding[]; fenceFound: boolean } {
   const findings: CanonicalFinding[] = [];
   let fenceFound = false;
-  for (const fence of text.matchAll(/^[ \t]*(`{3,}|~{3,})gstack-findings[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*\1[ \t]*$/gm)) {
+  for (const fence of text.matchAll(/^[ \t]*(`{3,}|~{3,})gstack-findings[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??[ \t]*\1[ \t]*$/gm)) {
     fenceFound = true;
-    fence[2]!.split('\n').forEach((raw, i) => {
+    (fence[2] ?? '').split('\n').forEach((raw, i) => {
       const line = raw.trim();
       if (!line) return;
       let row: any;
@@ -186,7 +188,8 @@ export function canonicalRows(findings: CanonicalFinding[], ctx: { run: string; 
   } as FindingRow));
 }
 
-export type ReconciliationDisposition = 'confirmed' | 'disagree' | 'new';
+/** `unverified`: the same file:line with no other shared evidence (titles unalike): associated, agreement unverified. */
+export type ReconciliationDisposition = 'confirmed' | 'unverified' | 'disagree' | 'new';
 export interface ReconciliationRow {
   outside_id: string; native_id: string | null; disposition: ReconciliationDisposition;
   /** Why this disposition: the matched location or title, or the parent's override reason. */
@@ -208,11 +211,14 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 const level = (s: Severity) => SEVERITIES.indexOf(s);
 
 /**
- * Structural reconciliation: a file:line match (±3 lines) is `confirmed`
- * unless severities differ by two or more levels (`disagree`); otherwise a
- * title overlap of at least half the words is `confirmed`; else `new`. Each
- * native finding is matched at most once. Overrides replace the structural
- * row for their outside id and must name ids from these two lists.
+ * Structural reconciliation. Findings associate by a title overlap of at least
+ * half the words, or by file:line (±3 lines). A title association is
+ * `confirmed` unless severities differ by two or more levels (`disagree`); a
+ * location-only association is `unverified` (same location, agreement
+ * unverified: two findings near one line are not one finding); else `new`.
+ * Each native finding is matched at most once. Overrides (the parent's
+ * semantic reconciliation, with an optional shared `proposal`) replace the
+ * structural row for their outside id and must name ids from these two lists.
  */
 export function reconcile(native: FindingRow[], outside: FindingRow[], overrides: ReconciliationOverride[] = []): { rows: ReconciliationRow[]; native_only: string[]; errors: string[] } {
   const errors: string[] = [];
@@ -222,7 +228,7 @@ export function reconcile(native: FindingRow[], outside: FindingRow[], overrides
   for (const o of overrides) {
     if (!outsideIds.has(o.outside_id)) { errors.push(`override names unknown outside id ${o.outside_id}`); continue; }
     if (o.native_id && !nativeIds.has(o.native_id)) { errors.push(`override for ${o.outside_id} names unknown native id ${o.native_id}`); continue; }
-    if (!['confirmed', 'disagree', 'new'].includes(o.disposition)) { errors.push(`override for ${o.outside_id}: disposition ${JSON.stringify(o.disposition)} is not confirmed|disagree|new`); continue; }
+    if (!['confirmed', 'unverified', 'disagree', 'new'].includes(o.disposition)) { errors.push(`override for ${o.outside_id}: disposition ${JSON.stringify(o.disposition)} is not confirmed|unverified|disagree|new`); continue; }
     if (o.disposition !== 'new' && !o.native_id) { errors.push(`override for ${o.outside_id}: ${o.disposition} needs a native_id`); continue; }
     if (typeof o.resolution !== 'string' || !o.resolution.trim()) { errors.push(`override for ${o.outside_id}: resolution is required`); continue; }
     byOutside.set(o.outside_id, o);
@@ -238,28 +244,29 @@ export function reconcile(native: FindingRow[], outside: FindingRow[], overrides
         ...(typeof override.proposal === 'string' && override.proposal.trim() ? { proposal: override.proposal.trim() } : {}) });
       continue;
     }
+    const near = (n: FindingRow) => !!o.file && o.line !== undefined && n.file === o.file && n.line !== undefined && Math.abs(n.line - o.line) <= 3;
+    const ot = tokens(o.title);
     let match: FindingRow | undefined;
-    let basis: ReconciliationRow['basis'] = 'none';
-    if (o.file && o.line !== undefined) {
-      match = native.find(n => !used.has(n.id) && n.file === o.file && n.line !== undefined && Math.abs(n.line - o.line!) <= 3);
-      if (match) basis = 'file_line';
+    let best = 0;
+    for (const n of native) {
+      if (used.has(n.id)) continue;
+      const score = jaccard(ot, tokens(n.title)) + (near(n) ? 0.01 : 0);
+      if (score >= 0.5 && score > best) { best = score; match = n; }
     }
-    if (!match) {
-      const ot = tokens(o.title);
-      let best = 0;
-      for (const n of native) {
-        if (used.has(n.id)) continue;
-        const score = jaccard(ot, tokens(n.title));
-        if (score >= 0.5 && score > best) { best = score; match = n; }
-      }
-      if (match) basis = 'title';
-    }
+    const titled = !!match;
+    match ??= native.find(n => !used.has(n.id) && near(n));
     if (!match) { rows.push({ outside_id: o.id, native_id: null, disposition: 'new', resolution: 'not raised by the native voice', basis: 'none', severity: { outside: o.severity, native: null } }); continue; }
     used.add(match.id);
+    const basis: ReconciliationRow['basis'] = near(match) ? 'file_line' : 'title';
+    const where = near(match) ? `${o.file}:${o.line}` : 'same title';
+    if (!titled) {
+      rows.push({ outside_id: o.id, native_id: match.id, disposition: 'unverified', resolution: `same location, agreement unverified (${where}): ${match.title}`, basis, severity: { outside: o.severity, native: match.severity } });
+      continue;
+    }
     const delta = Math.abs(level(match.severity) - level(o.severity));
     rows.push({
       outside_id: o.id, native_id: match.id, disposition: delta >= 2 ? 'disagree' : 'confirmed',
-      resolution: delta >= 2 ? `severity: native ${match.severity}, outside ${o.severity} (${basis === 'file_line' ? `${o.file}:${o.line}` : 'same title'})` : `both voices (${basis === 'file_line' ? `${o.file}:${o.line}` : 'same title'}): ${match.title}`,
+      resolution: delta >= 2 ? `severity: native ${match.severity}, outside ${o.severity} (${where})` : `both voices (${where}): ${match.title}`,
       basis, severity: { outside: o.severity, native: match.severity },
     });
   }
@@ -271,6 +278,8 @@ export interface ConsensusRecord {
   native: { model: string | null; findings: number; by_severity: Record<Severity, number> } | null;
   outside: { model: string | null; provider: string | null; findings: number; by_severity: Record<Severity, number> } | null;
   confirmed: number; disagree: number; new: number; native_only: number;
+  /** Same location, agreement unverified (absent on records written before it existed). */
+  unverified?: number;
   rows: ReconciliationRow[]; native_only_ids: string[];
   /** CONFIRMED requires both voices completed. */
   coverage: 'both' | 'native_only' | 'outside_only' | 'none';
@@ -288,7 +297,7 @@ export function consensusRecord(phase: string, native: { rows: FindingRow[]; mod
     schema_version: 1, phase,
     native: native ? { model: native.model ?? null, findings: native.rows.length, by_severity: bySeverity(native.rows) } : null,
     outside: outside ? { model: outside.model ?? null, provider: outside.provider ?? null, findings: outside.rows.length, by_severity: bySeverity(outside.rows) } : null,
-    confirmed: rows.filter(r => r.disposition === 'confirmed').length, disagree: rows.filter(r => r.disposition === 'disagree').length,
+    confirmed: rows.filter(r => r.disposition === 'confirmed').length, unverified: rows.filter(r => r.disposition === 'unverified').length, disagree: rows.filter(r => r.disposition === 'disagree').length,
     new: rows.filter(r => r.disposition === 'new').length, native_only: native && outside ? rec.native_only.length : (native?.rows.length ?? 0),
     rows, native_only_ids: native && outside ? rec.native_only : (native?.rows.map(r => r.id) ?? []),
     coverage: native && outside ? 'both' : native ? 'native_only' : outside ? 'outside_only' : 'none',
@@ -306,7 +315,7 @@ export function renderConsensus(c: ConsensusRecord, findings: FindingRow[]): str
     ...SEVERITIES.map(s => `  ${s.padEnd(15)} ${String(c.native?.by_severity[s] ?? '—').padEnd(28)} ${c.outside?.by_severity[s] ?? '—'}`),
     `  Findings        ${String(c.native?.findings ?? '—').padEnd(28)} ${c.outside?.findings ?? '—'}`,
     c.coverage === 'both'
-      ? `CONFIRMED ${c.confirmed} · DISAGREE ${c.disagree} · NEW (outside only) ${c.new} · native only ${c.native_only}. Both completed.`
+      ? `CONFIRMED ${c.confirmed} · SAME LOCATION, UNVERIFIED ${c.unverified ?? 0} · DISAGREE ${c.disagree} · NEW (outside only) ${c.new} · native only ${c.native_only}. Both completed.`
       : `Consensus: N/A (voice coverage: ${c.coverage.replace('_', ' ')}); confirmed counts require both voices.`,
     '',
     'Reconciliation (each outside finding against the native result):',

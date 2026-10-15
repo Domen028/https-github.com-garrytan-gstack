@@ -1,24 +1,23 @@
 /**
- * Gate judgment (plan B2a/B2b, items 8 and 10, with the B-core amendments):
- * findings carry `changes`; a user challenge both voices raised on a confirmed
- * finding with the same `changes` and both remedies recommends `b`, rendering
- * both remedies verbatim and the basis; anything weaker keeps `a` with its
- * basis. Reopen and APPLY key on the chosen option's `changes_plan`; accepted
- * changes are pending amendments that `next` refuses past (PLAN_AMEND_PENDING)
- * until `revise --incorporates` binds them to a changed plan or `--withdraw`
- * drops them. `all as-is` keeps every direction; `all` leaves an item
- * recommended `b` pending (the owner's own token changes their direction;
- * field gate rev 1, d3) and the GATE_PENDING line names the tokens. Partial
- * replies resolve
- * against persisted decisions. On reruns a challenge without `changes` is an
- * agent decision that reopens nothing, rerun prompts carry the decided items,
- * and answered items from phases that did not rerun carry forward.
+ * Gate judgment (plan B2a/B2b, items 8 and 10, with the B-core amendments and
+ * next-wave B1/B2/B5): findings carry `changes`; a user challenge both voices
+ * raised on a confirmed finding with the same `changes` recommends `b` only
+ * with one shared proposal (the parent's override, or the same remedy from
+ * both), rendering both remedies verbatim and the basis; anything weaker keeps
+ * `a` with its basis. APPLY keys on the chosen option's `changes_plan`;
+ * accepted changes are pending amendments (status amend_pending, nothing
+ * reopens at answer) that `next` refuses past (PLAN_AMEND_PENDING) until
+ * `revise --incorporates` binds them to a changed plan or `--withdraw` drops
+ * them. `as-is` keeps every direction; `rec` (alias `all`) takes every
+ * recommendation. Partial replies resolve against persisted decisions. On
+ * reruns a challenge without `changes` is an agent decision that reopens
+ * nothing, and rerun prompts carry the decided items.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { ROOT, SMALL_PLAN } from './helpers/autoplan-run-fixture';
+import { ROOT, SMALL_PLAN, boundOf, resultOf } from './helpers/autoplan-run-fixture';
 import { capyRunner, phaseVia, readJsonl, readRunJson, writePlan } from './helpers/autoplan-capy';
 
 const r = capyRunner();
@@ -32,6 +31,14 @@ const AGREE = {
 const DISAGREE = {
   native: [{ id: 'F1', severity: 'Critical', title: 'Persist attempts in a separate table', file: 'lib/worker.ts', line: 10, user_challenge: true, changes: 'scope', fix: 'new table' }],
   outside: [{ id: 'O1', severity: 'Low', title: 'Persist attempts in a separate table', file: 'lib/worker.ts', line: 11, user_challenge: true, changes: 'scope', fix: 'keep the column' }],
+};
+const SAME = {
+  native: [{ id: 'F4', severity: 'High', title: 'Cap the retry storage per tenant', user_challenge: true, changes: 'scope', fix: 'Cap stored attempts at 50 per tenant.' }],
+  outside: [{ id: 'O4', severity: 'High', title: 'Cap the retry storage per tenant', user_challenge: true, changes: 'scope', fix: 'cap stored attempts at 50 per tenant' }],
+};
+const PACKAGING = {
+  native: [{ id: 'F5', severity: 'Medium', title: 'Split the backoff into its own PR', user_challenge: true, changes: 'packaging', fix: 'land the schedule change as its own PR' }],
+  outside: [{ id: 'O5', severity: 'Medium', title: 'Split the backoff into its own PR', user_challenge: true, changes: 'packaging', fix: 'Land the schedule change as its own PR.' }],
 };
 const MISMATCH = {
   native: [{ id: 'F1', severity: 'Medium', title: 'Drop the jitter requirement', user_challenge: true, changes: 'scope', fix: 'remove jitter' }],
@@ -54,34 +61,37 @@ const v = (dir: string, text: string) => { const f = path.join(dir, `v${++n}.md`
 describe('changes and user-challenge defaults', () => {
   test('`changes` reaches findings.jsonl, the schema and decisions; an unknown value is refused', () => {
     const g = gated(AGREE, {});
-    expect(readJsonl(path.join(g.out, 'ceo-native.md.findings.jsonl'))[0]).toMatchObject({ changes: 'scope', user_challenge: true });
+    expect(readJsonl(`${boundOf(g.out, 'ceo', 'native')}.findings.jsonl`)[0]).toMatchObject({ changes: 'scope', user_challenge: true });
     const schema = spawnSync('bun', [path.join(ROOT, 'bin', 'gstack-artifact'), 'schema', 'findings'], { cwd: ROOT, encoding: 'utf8', timeout: 60_000 });
-    expect(JSON.parse(schema.stdout).properties.changes).toEqual({ enum: ['scope', 'cost', 'direction'] });
-    expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ changes: 'scope', recommended: 'b', recommended_basis: 'both voices; remedies shown' });
+    expect(JSON.parse(schema.stdout).properties.changes).toEqual({ enum: ['scope', 'cost', 'direction', 'packaging', 'ordering'] });
+    expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ changes: 'scope', recommended: 'a', recommended_basis: 'plan direction; remedies differ; no shared proposal' });
     const dir = path.join(r.host.base, 'badchanges');
     const out = path.join(dir, 'run');
     expect(r.ap(['next', '--out', out, '--plan', writePlan(dir), '--no-ui']).status).toBe(0);
-    expect(r.review(path.join(out, 'ceo-native-prompt.md'), { FIXTURE_FINDINGS: JSON.stringify([{ severity: 'Low', title: 'x', user_challenge: true, changes: 'packaging' }]) }).status).toBe(0);
-    const bad = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'anthropic/claude-opus-5-5']);
+    expect(r.review(path.join(out, 'ceo-native-prompt.md'), { FIXTURE_FINDINGS: JSON.stringify([{ severity: 'Low', title: 'x', user_challenge: true, changes: 'naming' }]) }).status).toBe(0);
+    const bad = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'anthropic/claude-opus-5-5']);
     expect(bad.status).toBe(1);
-    expect(bad.stderr).toMatch(/changes "packaging" is not one of scope\|cost\|direction.*\(RESULT_FINDINGS_MISSING\)$/m);
+    expect(bad.stderr).toMatch(/changes "naming" is not one of scope\|cost\|direction\|packaging\|ordering.*\(RESULT_FINDINGS_MISSING\)$/m);
   });
 
-  test('agreeing voices recommend b with both remedies verbatim; disagreement and mismatched changes keep a with the basis', () => {
-    const g = gated({ native: [...AGREE.native, ...MISMATCH.native.map(f => ({ ...f, id: 'F2' }))], outside: [...AGREE.outside, ...MISMATCH.outside.map(f => ({ ...f, id: 'O2' }))] }, DISAGREE);
+  test('one shared remedy recommends b; different remedies show both verbatim and keep a; disagreement and mismatched changes keep a with the basis', () => {
+    const g = gated({ native: [...AGREE.native, ...MISMATCH.native.map(f => ({ ...f, id: 'F2' })), ...SAME.native], outside: [...AGREE.outside, ...MISMATCH.outside.map(f => ({ ...f, id: 'O2' })), ...SAME.outside] }, DISAGREE);
     const items = gate(g.out).items;
+    const same = items.find((i: any) => i.title.startsWith('Cap the retry storage'));
+    expect(same).toMatchObject({ kind: 'approval', recommended: 'b', recommended_basis: 'both voices; same remedy' });
     const agree = items.find((i: any) => i.title.startsWith('Ship the backoff'));
-    expect(agree).toMatchObject({ kind: 'approval', recommended: 'b', recommended_basis: 'both voices; remedies shown' });
+    expect(agree).toMatchObject({ kind: 'approval', recommended: 'a', recommended_basis: 'plan direction; remedies differ; no shared proposal' });
     expect(agree.options.find((o: any) => o.key === 'b')).toMatchObject({ changes_plan: true });
     expect(agree.options.find((o: any) => o.key === 'b').text).toContain('native: gate the change behind RETRY_BACKOFF=1; outside: add a kill switch flag for the new schedule');
     expect(agree.options.find((o: any) => o.key === 'a').changes_plan).toBe(false);
     expect(items.find((i: any) => i.title.startsWith('Drop the jitter'))).toMatchObject({ recommended: 'a', recommended_basis: 'plan direction; voices name different changes' });
     expect(items.find((i: any) => i.title.startsWith('Persist attempts'))).toMatchObject({ recommended: 'a', recommended_basis: 'plan direction; voices disagree' });
     const render = spawnSync('bun', [path.join(ROOT, 'bin', 'gstack-gate'), 'render', path.join(g.out, 'gate.json')], { cwd: ROOT, encoding: 'utf8', timeout: 60_000 });
-    expect(render.stdout).toMatch(new RegExp(`\\[${agree.id}\\] .*recommended: b \\(both voices; remedies shown\\)`));
+    expect(render.stdout).toMatch(new RegExp(`\\[${same.id}\\] .*recommended: b \\(both voices; same remedy\\)`));
     expect(render.stdout).toMatch(/recommended: a \(plan direction; voices disagree\)/);
     const p1 = items.find((i: any) => i.id === 'p1');
-    expect(p1.options.find((o: any) => o.key === p1.recommended).text).toContain(`${agree.id}b`);
+    expect(p1.options.find((o: any) => o.key === p1.recommended).text).toContain(`${same.id}b`);
+    expect(p1.options.find((o: any) => o.key === p1.recommended).text).not.toContain(`${agree.id}b`);
   });
 
   test('a parent reconcile override naming one shared proposal renders that proposal as option b', () => {
@@ -91,10 +101,10 @@ describe('changes and user-challenge defaults', () => {
     r.review(path.join(out, 'ceo-native-prompt.md'), { FIXTURE_FINDINGS: JSON.stringify(AGREE.native) });
     r.review(path.join(out, 'ceo-outside-prompt.md'), { FIXTURE_FINDINGS: JSON.stringify(AGREE.outside) });
     const run = readRunJson(out);
-    expect(r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'anthropic/claude-opus-5-5']).status).toBe(0);
+    expect(r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'anthropic/claude-opus-5-5']).status).toBe(0);
     const overrides = path.join(dir, 'reconcile.jsonl');
     fs.writeFileSync(overrides, JSON.stringify({ outside_id: `${run.run}-ceo-outside-1`, native_id: `${run.run}-ceo-native-1`, disposition: 'confirmed', resolution: 'same change', proposal: 'ship behind RETRY_BACKOFF=1, default off' }) + '\n');
-    expect(r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', path.join(out, 'ceo-outside.md'), '--model', 'openai/gpt-6.1-sol', '--reconcile', overrides]).status).toBe(0);
+    expect(r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', resultOf(out, 'ceo', 'outside'), '--model', 'openai/gpt-6.1-sol', '--reconcile', overrides]).status).toBe(0);
     phaseVia(r, out, 'eng', {});
     const uc = gate(out).items.find((i: any) => i.title.startsWith('Ship the backoff'));
     expect(uc).toMatchObject({ recommended: 'b', recommended_basis: 'both voices; shared proposal' });
@@ -103,23 +113,27 @@ describe('changes and user-challenge defaults', () => {
 });
 
 describe('accepted changes are amendments', () => {
-  test('`all` leaves the agreeing change pending; its own token accepts it: APPLY, REOPENED, NEXT revise; next refuses until revise --incorporates binds it', () => {
+  test('an accepted change prints APPLY and NEXT revise and leaves amend_pending without reopening; next refuses until revise --incorporates binds it; revise reports what reopened', () => {
     const g = gated(AGREE, {});
-    const held = answer(g.out, 1, 'all');
+    const held = answer(g.out, 1, 'uc1b');
     expect(held.status, held.stderr).toBe(0);
-    expect(held.stdout).toMatch(/^GATE_PENDING: uc1 unanswered \(reply with uc1a\|uc1b; all does not answer items recommended b\)$/m);
+    expect(held.stdout).toMatch(/^GATE_PENDING: uc2, p1 unanswered \(reply with uc2a\|uc2b p1a\|p1b\|p1c\|p1d\|p1e or rec\)$/m);
     expect(held.stdout).not.toMatch(/^APPLY:/m);
-    expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ status: 'pending' });
-    const res = answer(g.out, 1, 'uc1b');
+    const res = answer(g.out, 1, 'rec');
     expect(res.status, res.stderr).toBe(0);
-    expect(res.stdout).toMatch(new RegExp(`^APPLY: ${esc(g.run)}-uc1 Ship the backoff behind a flag first .* -> accept the change both reviewers recommend`, 'm'));
-    expect(res.stdout).toMatch(/^REOPENED: ceo,eng \(Eng last\) reason=uc1b$/m);
-    expect(res.stdout).toMatch(new RegExp(`^NEXT: gstack-autoplan revise --out ${esc(g.out)} --plan ${esc(g.plan)} --incorporates ${esc(g.run)}-uc1$`, 'm'));
-    expect(res.stdout).not.toMatch(/^NEXT: gstack-autoplan next/m);
-    expect(readRunJson(g.out).amendments).toEqual([expect.objectContaining({ decision: `${g.run}-uc1`, status: 'pending' })]);
+    expect(res.stdout).toMatch(new RegExp(`^APPLY: ${esc(g.run)}-uc1 Ship the backoff behind a flag first .* -> accept the change both reviewers recommend.*; edit the plan, then revise$`, 'm'));
+    expect(res.stdout).not.toMatch(/^REOPENED:/m);
+    expect(res.stdout).toMatch(new RegExp(`^NEXT: edit the plan, then gstack-autoplan revise --out ${esc(g.out)} --plan ${esc(g.plan)} --incorporates ${esc(g.run)}-uc1$`, 'm'));
+    expect(res.stdout).toContain('status=amend_pending');
+    const before = readRunJson(g.out);
+    expect(before.status).toBe('amend_pending');
+    expect(before.phases.ceo.closed_at).toBeTruthy();
+    expect(before.amendments).toEqual([expect.objectContaining({ decision: `${g.run}-uc1`, status: 'pending', item: 'uc1', changes: 'scope' })]);
+    expect(r.ap(['status', '--out', g.out]).stdout).toMatch(new RegExp(`^AMEND_PENDING: ${esc(g.run)}-uc1 uc1 changes=scope -> edit the plan, then revise$`, 'm'));
+    expect(r.validate(g.out).status).toBe(0);
     const blocked = r.ap(['next', '--out', g.out]);
     expect(blocked.status).toBe(3);
-    expect(blocked.stderr).toMatch(new RegExp(`${esc(g.run)}-uc1.*\\(PLAN_AMEND_PENDING\\)$`, 'm'));
+    expect(blocked.stderr).toMatch(new RegExp(`${esc(g.run)}-uc1 \\(APPLY uc1: edit the plan, then revise\\).*\\(PLAN_AMEND_PENDING\\)$`, 'm'));
     const runFile = path.join(g.out, 'run.json');
     const saved = fs.readFileSync(runFile, 'utf8');
     fs.writeFileSync(runFile, JSON.stringify({ ...JSON.parse(saved), status: 'complete' }, null, 2) + '\n');
@@ -127,35 +141,66 @@ describe('accepted changes are amendments', () => {
     expect(exported.status).toBe(3);
     expect(exported.stderr).toMatch(new RegExp(`${esc(g.run)}-uc1.*\\(PLAN_AMEND_PENDING\\)$`, 'm'));
     fs.writeFileSync(runFile, saved);
-    const unrelated = r.ap(['revise', '--out', g.out, '--plan', v(g.dir, SMALL_PLAN.replace('cap 30 s', 'cap 45 s'))]);
-    expect(unrelated.status, unrelated.stderr).toBe(0);
-    expect(unrelated.stdout).toMatch(new RegExp(`^AMENDMENTS: pending=${esc(g.run)}-uc1$`, 'm'));
-    expect(r.ap(['next', '--out', g.out]).status).toBe(3);
-    const unchanged = r.ap(['revise', '--out', g.out, '--plan', v(g.dir, SMALL_PLAN.replace('cap 30 s', 'cap 45 s')), '--incorporates', `${g.run}-uc1`]);
+    const unchanged = r.ap(['revise', '--out', g.out, '--plan', g.plan, '--incorporates', `${g.run}-uc1`]);
     expect(unchanged.status).toBe(3);
     expect(unchanged.stderr).toMatch(/did not change.*\(PLAN_AMEND_PENDING\)$/m);
-    const bound = r.ap(['revise', '--out', g.out, '--plan', v(g.dir, SMALL_PLAN.replace('cap 30 s', 'cap 45 s, behind RETRY_BACKOFF=1')), '--incorporates', `${g.run}-uc1`]);
+    const bound = r.ap(['revise', '--out', g.out, '--plan', v(g.dir, SMALL_PLAN.replace('cap 30 s', 'cap 30 s, behind RETRY_BACKOFF=1')), '--incorporates', 'uc1']);
     expect(bound.status, bound.stderr).toBe(0);
+    expect(bound.stdout).toMatch(/^REVISED: plan=[0-9a-f]{12} reopened=ceo,eng$/m);
     expect(bound.stdout).toMatch(/^AMENDMENTS: pending=none$/m);
+    expect(bound.stdout).toMatch(new RegExp(`^NEXT: gstack-autoplan next --out ${esc(g.out)}$`, 'm'));
     const j = readJsonl(path.join(g.out, 'attempts.jsonl')).find(e => e.event === 'amendment_incorporated');
     expect(j).toMatchObject({ decision: `${g.run}-uc1` });
     expect(j.old_plan_sha256).not.toBe(j.new_plan_sha256);
+    expect(readJsonl(path.join(g.out, 'attempts.jsonl')).find(e => e.event === 'plan_revised')).toMatchObject({ reopened: ['ceo', 'eng'] });
+    expect(readRunJson(g.out).status).toBe('running');
     expect(r.ap(['next', '--out', g.out]).status).toBe(0);
   });
 
-  test('`all as-is` keeps every direction; --withdraw is a journaled owner decision', () => {
+  test('`as-is` keeps every direction; --withdraw is a journaled owner decision that completes the run when nothing else is pending', () => {
     const g = gated(AGREE, {});
-    const asIs = answer(g.out, 1, 'all as-is');
+    const asIs = answer(g.out, 1, 'as-is');
     expect(asIs.status, asIs.stderr).toBe(0);
     expect(asIs.stdout).toMatch(/^APPROVED: gate_rev=1 as-is$/m);
     expect(asIs.stdout).not.toMatch(/^APPLY:/m);
-    expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ chosen: 'a', status: 'overridden' });
+    expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ chosen: 'a', status: 'approved' });
     const w = gated(AGREE, {});
-    expect(answer(w.out, 1, 'all except uc1b').stdout).toMatch(/^APPLY:/m);
+    expect(answer(w.out, 1, 'rec except uc1b').stdout).toMatch(/^APPLY:/m);
     const withdraw = r.ap(['revise', '--out', w.out, '--withdraw', `${w.run}-uc1`]);
     expect(withdraw.status, withdraw.stderr).toBe(0);
+    expect(withdraw.stdout).toMatch(/^APPROVED: gate_rev=1 \(every accepted change is in the plan or settled\)$/m);
     expect(readJsonl(path.join(w.out, 'attempts.jsonl')).find(e => e.event === 'amendment_withdrawn')).toMatchObject({ decision: `${w.run}-uc1` });
-    expect(r.ap(['next', '--out', w.out]).status).toBe(0);
+    expect(readRunJson(w.out).status).toBe('complete');
+    expect(r.validate(w.out).status).toBe(0);
+  });
+});
+
+describe('record-only changes settle without a plan edit', () => {
+  test('a packaging change: APPLY says settle, revise --settle reopens nothing and completes, export and validate pass; a scope change never settles', () => {
+    const g = gated(PACKAGING, {});
+    expect(gate(g.out).items.find((i: any) => i.id === 'uc1')).toMatchObject({ recommended: 'b', changes: 'packaging' });
+    const res = answer(g.out, 1, 'rec');
+    expect(res.status, res.stderr).toBe(0);
+    expect(res.stdout).toMatch(new RegExp(`^APPLY: ${esc(g.run)}-uc1 .*; no plan edit needed: revise --settle uc1$`, 'm'));
+    expect(readRunJson(g.out).status).toBe('amend_pending');
+    expect(r.ap(['next', '--out', g.out]).stderr).toMatch(/\(PLAN_AMEND_PENDING\)$/m);
+    const settled = r.ap(['revise', '--out', g.out, '--settle', 'uc1']);
+    expect(settled.status, settled.stderr).toBe(0);
+    expect(settled.stdout).toMatch(new RegExp(`^SETTLED: ${esc(g.run)}-uc1 \\(packaging; plan [0-9a-f]{12} unchanged; nothing reopens\\)$`, 'm'));
+    expect(settled.stdout).toMatch(/^APPROVED: gate_rev=1 \(every accepted change is in the plan or settled\)$/m);
+    expect(settled.stdout).not.toMatch(/^REOPENED:/m);
+    const run = readRunJson(g.out);
+    expect(run.status).toBe('complete');
+    expect(run.amendments).toEqual([expect.objectContaining({ decision: `${g.run}-uc1`, status: 'settled', changes: 'packaging' })]);
+    expect(readJsonl(path.join(g.out, 'attempts.jsonl')).find(e => e.event === 'amendment_settled')).toMatchObject({ decision: `${g.run}-uc1`, changes: 'packaging' });
+    expect(r.ap(['export', '--out', g.out]).status).toBe(0);
+    expect(r.validate(g.out).status).toBe(0);
+    const scope = gated(AGREE, {});
+    expect(answer(scope.out, 1, 'rec except uc1b').stdout).toMatch(/; edit the plan, then revise$/m);
+    const refused = r.ap(['revise', '--out', scope.out, '--settle', 'uc1']);
+    expect(refused.status).toBe(3);
+    expect(refused.stderr).toMatch(/changes scope; only packaging or ordering changes settle.*\(AMENDMENT_NOT_SETTLEABLE\)$/m);
+    expect(readRunJson(scope.out).status).toBe('amend_pending');
   });
 });
 
@@ -167,7 +212,7 @@ describe('partial replies resolve against persisted decisions', () => {
     const first = answer(g.out, 1, 'uc1b', true);
     expect(JSON.parse(first.stdout)).toMatchObject({ outcome: 'gate_pending', pending: ['uc2'] });
     const second = answer(g.out, 1, 'all', true);
-    expect(JSON.parse(second.stdout)).toMatchObject({ outcome: 'reopened', reopened: ['ceo', 'eng'] });
+    expect(JSON.parse(second.stdout)).toMatchObject({ outcome: 'amend_pending', reopened: [], status: 'amend_pending' });
     expect(decisions(g.out).find(d => d.label === 'UC1')).toMatchObject({ chosen: 'b', status: 'overridden' });
   });
 
@@ -184,11 +229,12 @@ describe('partial replies resolve against persisted decisions', () => {
 });
 
 describe('reruns', () => {
-  test('rerun prompts carry the decided items, a ceo item answered at rev 1 carries forward, and a rerun challenge without `changes` reopens nothing', () => {
+  test('rerun prompts carry the decided items, and a rerun challenge without `changes` reopens nothing', () => {
     const g = gated({}, AGREE);
     const res = answer(g.out, 1, 'uc1a uc2b p1a');
-    expect(res.stdout).toMatch(/^REOPENED: eng \(Eng last\) reason=uc2b$/m);
-    expect(r.ap(['revise', '--out', g.out, '--withdraw', `${g.run}-uc2`]).status).toBe(0);
+    expect(res.stdout).not.toMatch(/^REOPENED:/m);
+    expect(r.ap(['revise', '--out', g.out, '--plan', v(g.dir, SMALL_PLAN.replace('cap 30 s', 'cap 30 s, behind RETRY_BACKOFF=1')), '--incorporates', 'uc2']).stdout).toMatch(/reopened=ceo,eng/);
+    phaseVia(r, g.out, 'ceo', {});
     const eng = phaseVia(r, g.out, 'eng', {
       native: [{ id: 'F9', severity: 'Low', title: 'Name the PR branch per lane', user_challenge: true }],
       outside: [{ id: 'O9', severity: 'Medium', title: 'Price the retry storage before shipping', user_challenge: true, changes: 'cost' }],
@@ -198,8 +244,6 @@ describe('reruns', () => {
     expect(prompt).toMatch(/uc2b .*Ship the backoff behind a flag first/);
     expect(prompt).toMatch(/uc1a /);
     expect(eng.outside.stdout).toContain('status=gate_pending');
-    const rev2 = decisions(g.out).filter(d => d.gate_rev === 2);
-    expect(rev2.find(d => d.label === 'UC1')).toMatchObject({ status: 'approved', chosen: 'a', carried_from: `${g.run}-uc1` });
     const items = gate(g.out).items;
     const demoted = items.find((i: any) => i.title.startsWith('Name the PR branch'));
     expect(demoted).toMatchObject({ kind: 'auto', reopens: false });

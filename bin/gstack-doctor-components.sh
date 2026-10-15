@@ -186,6 +186,12 @@ gstack_result_anchor() {
     PLAN_SECTIONS_INVALID) printf '%s' 'plan-sections-invalid' ;;
     PLAN_AMEND_PENDING) printf '%s' 'plan-amend-pending' ;;
     AMENDMENT_UNKNOWN) printf '%s' 'amendment-unknown' ;;
+    AMENDMENT_NOT_SETTLEABLE) printf '%s' 'amendment-not-settleable' ;;
+    GATE_REC_STALE) printf '%s' 'gate-rec-stale' ;;
+    CHECKPOINT_INVALID) printf '%s' 'checkpoint-invalid' ;;
+    CHECKPOINT_TARGET_EXISTS) printf '%s' 'checkpoint-target-exists' ;;
+    OWNER_REPLY_REQUIRED) printf '%s' 'owner-reply-required' ;;
+    GATE_OWNER_REPLY_MISMATCH) printf '%s' 'gate-owner-reply-mismatch' ;;
     GSTACK_VERSION_CHANGED) printf '%s' 'gstack-version-changed' ;;
     ARTIFACT_GATE_UNSETTLED) printf '%s' 'artifact-gate-unsettled' ;;
     UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;

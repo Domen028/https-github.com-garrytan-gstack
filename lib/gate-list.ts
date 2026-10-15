@@ -3,18 +3,21 @@
  * A gate list is numbered items, each with a stable id, a recommended default
  * and lettered options; `auto` items take their recommendation when
  * unanswered, `approval` items stay pending until answered. One reply
- * grammar: `all` (every item takes its recommendation), `<id><option>` tokens
- * (`d3b uc1a`), or `all except <tokens>` (the same operation as listing the
- * overrides, so there is no exclusion-vs-override ambiguity). Bare yes/no is
- * ambiguous across multi-option items and is reported as unparsed, never
- * guessed. A reply binds to the gate revision it answers (`gate_rev`).
- * `all as-is` keeps every direction: each item takes its option that does not
- * change the plan (`changes_plan: false`), so agreeing user challenges whose
- * recommendation is the change can be declined in one token. Earlier answers
- * at the same revision (`prior`) are kept unless a token names the item again:
- * only unresolved items default.
+ * grammar: `rec` (every item takes its recommendation, plan changes
+ * included), `<id><option>` tokens (`d3b uc1a`), or `rec except <tokens>`
+ * (the same operation as listing the overrides). `all`, `approve all`,
+ * `accept all` and `take all recommendations` are silent aliases of `rec`;
+ * `as-is` (alias `all as-is`) keeps every direction: each item takes its
+ * option that does not change the plan (`changes_plan: false`). Bare yes/no
+ * is ambiguous across multi-option items and is reported as unparsed, never
+ * guessed. A reply binds to the gate revision it answers (`gate_rev`), and a
+ * `rec` reply to the recommendations it saw (`rec_hash`, bumped by
+ * `gstack-autoplan recommend`). Earlier answers at the same revision
+ * (`prior`) are kept unless a token names the item again: only unresolved
+ * items default.
  * Rendered by bin/gstack-gate; rows land in decisions.jsonl (lib/headless-artifacts.ts).
  */
+import { createHash } from 'node:crypto';
 import type { DecisionRow } from './headless-artifacts';
 
 /** `changes_plan`: choosing this option is an accepted plan change (reopens its phase plus Eng, prints APPLY:). */
@@ -24,22 +27,32 @@ export interface GateItem {
   phase?: string; cost?: string; why?: string;
   /** false: an agent decision; no option reopens a phase. */
   reopens?: boolean;
-  /** Why `recommended` (e.g. `both voices; remedies shown`, `plan direction; voices disagree`). */
+  /** Why `recommended` (e.g. `both voices; shared proposal`, `plan direction; voices disagree`). */
   recommended_basis?: string; changes?: string;
+  /** Set when the relaying parent chose this recommendation (`gstack-autoplan recommend`); shown in the render. */
+  recommended_by?: string;
   /** Stable carry-forward identity (phase, finding ids, phase close, snapshot, option text). */
   origin?: string;
+  /** Advisory lines rendered under the item (PLAN_REALITY: a plan term with no number, arm list or rule body). */
+  flags?: string[];
   /** Answered at an earlier revision on an unchanged proposal from a phase that did not rerun. */
   carried?: { from: string; chosen: string; gate_rev: number };
 }
-export interface GateList { schema_version: 1; run: string; gate_rev: number; items: GateItem[]; title?: string }
+export interface GateList { schema_version: 1; run: string; gate_rev: number; items: GateItem[]; title?: string;
+  /** Bumped by every `recommend`, so a `rec` relayed before it no longer matches `recHash`. */
+  rec_rev?: number }
 
 export interface GateChoice { id: string; chosen: string; kind: 'auto' | 'approval'; how: 'recommended' | 'override' | 'auto_default'; prior?: boolean }
 export interface ParsedReply {
   valid: boolean; gate_rev: number; reply: string; choices: GateChoice[]; pending: string[]; unparsed: string[];
+  /** `rec`: the reply took the recommendations (any alias, with or without `except`). */
+  mode?: 'rec' | 'as-is' | 'tokens';
   error?: 'GATE_REV_STALE' | 'GATE_REPLY_UNPARSED' | 'GATE_EMPTY';
 }
 
 export const PAGE_SIZE = 7;
+/** Reply openers that take every recommendation: `rec` and its silent aliases. */
+const REC_ALIASES: string[][] = [['rec'], ['all'], ['approve', 'all'], ['accept', 'all'], ['take', 'all', 'recommendations']];
 const ID_RE = /^[a-z]*[0-9]+$/;
 
 export function validateGateList(list: unknown): string[] {
@@ -68,25 +81,17 @@ export function validateGateList(list: unknown): string[] {
   return problems;
 }
 
-/**
- * An approval item whose recommended option changes the plan (both voices
- * recommend the change) is answered only by its own token: `all` must never
- * flip the owner's stated direction on their behalf (field gate rev 1, d3).
- */
-export function heldFromAll(item: GateItem): boolean {
-  return item.kind === 'approval' && item.options.some(o => o.key === item.recommended && o.changes_plan === true);
+/** The recommendations a `rec` reply takes, as a short hash the render prints and `answer --rec-hash` checks. */
+export function recHash(list: GateList): string {
+  const recs = list.items.map(i => [i.id, i.recommended, i.recommended_basis ?? '', i.recommended_by ?? '']);
+  return createHash('sha256').update(JSON.stringify([list.gate_rev, list.rec_rev ?? 0, recs])).digest('hex').slice(0, 12);
 }
 
-/** The `all` resolution: every item takes its recommendation, except the ones `heldFromAll` leaves to the owner; shown under the list so the reply shape is explicit. */
-export function resolveAll(list: GateList): Record<string, string> {
-  return Object.fromEntries(list.items.filter(i => !heldFromAll(i)).map(i => [i.id, i.recommended]));
-}
-
-/** The `GATE_PENDING` hint: exact tokens per pending item, and the `all` rule when any pending item is held from it. */
+/** The `GATE_PENDING` hint: exact tokens per pending item, or `rec`. */
 export function pendingHint(list: GateList, pending: string[]): string {
   const items = pending.map(id => list.items.find(i => i.id === id)).filter((i): i is GateItem => !!i);
   const tokens = items.map(i => i.options.map(o => `${i.id}${o.key}`).join('|')).join(' ');
-  return `reply with ${tokens || 'p1a..p1e'}${items.some(heldFromAll) ? '; all does not answer items recommended b' : ' or all'}`;
+  return `reply with ${tokens || 'p1a..p1e'} or rec`;
 }
 
 export function renderGate(list: GateList, page = 1, pageSize = PAGE_SIZE): string {
@@ -98,18 +103,19 @@ export function renderGate(list: GateList, page = 1, pageSize = PAGE_SIZE): stri
   lines.push('');
   list.items.slice(start, start + pageSize).forEach((item, i) => {
     const n = start + i + 1;
-    lines.push(`${n}. [${item.id}] ${item.title} (${item.kind}; recommended: ${item.recommended}${item.recommended_basis ? ` (${item.recommended_basis})` : ''}${item.phase ? `; from ${item.phase}` : ''})`);
+    lines.push(`${n}. [${item.id}] ${item.title} (${item.kind}; recommended: ${item.recommended}${item.recommended_basis ? ` (${item.recommended_basis}${item.recommended_by ? `; set by ${item.recommended_by}` : ''})` : ''}${item.phase ? `; from ${item.phase}` : ''})`);
     if (item.why) lines.push(`   ${item.why}`);
     if (item.carried) lines.push(`   decided at gate_rev ${item.carried.gate_rev}: ${item.id}${item.carried.chosen} (carried forward; name it again to change it)`);
     for (const o of item.options) lines.push(`   ${item.id}${o.key}) ${o.text}${o.key === item.recommended ? ' (recommended)' : ''}`);
     if (item.cost) lines.push(`   cost: ${item.cost}`);
+    for (const flag of item.flags ?? []) lines.push(`   flagged: ${flag}`);
   });
   lines.push('');
-  if (pages > 1) lines.push(`Ids are stable across pages; render page N with \`gstack-gate render <file> --page N\`.`);
-  lines.push('Reply with exactly one of: `all` · `<id><option>` tokens, e.g. `' + exampleTokens(list) + '` · `all except <tokens>` · `all as-is` (keep every direction).');
+  if (pages > 1) lines.push(`Ids are stable across pages; render page N with \`gstack-gate render <file> --page N\`, or every page with \`--all\`. Relay every page.`);
+  lines.push('Reply with exactly one of: `rec` (default: take every recommendation, plan changes included) · `rec except <tokens>` · `<id><option>` tokens, e.g. `' + exampleTokens(list) + '` · `as-is` (the plan as written).');
   lines.push('Items marked auto take their recommendation if unanswered; approval items stay pending until answered. Bare yes/no is not accepted.');
-  for (const held of list.items.filter(heldFromAll)) lines.push(`\`all\` does not answer ${held.id} (recommended ${held.recommended} changes the plan); reply ${held.options.map(o => `${held.id}${o.key}`).join(' or ')} yourself.`);
-  lines.push(`Reply binds to gate_rev=${list.gate_rev}. \`all\` resolves to: ${JSON.stringify({ gate_rev: list.gate_rev, choices: resolveAll(list) })}`);
+  const rec = parseReply('rec', list);
+  lines.push(`Reply binds to gate_rev=${list.gate_rev} rec_hash=${recHash(list)}. \`rec\` resolves to: ${JSON.stringify({ gate_rev: list.gate_rev, rec_hash: recHash(list), choices: Object.fromEntries(rec.choices.map(c => [c.id, c.chosen])) })}`);
   return lines.join('\n') + '\n';
 }
 
@@ -119,7 +125,7 @@ function exampleTokens(list: GateList): string {
 
 /** Tokenize a reply: lowercase, strip separators, merge `<id> <option>` pairs into one token. */
 export function tokenize(reply: string, list: GateList): string[] {
-  const raw = reply.toLowerCase().replace(/[,;:=)]/g, ' ').split(/\s+/).filter(Boolean);
+  const raw = reply.toLowerCase().replace(/[,;:=)`"'\u2018\u2019\u201c\u201d]/g, ' ').split(/\s+/).filter(Boolean);
   const ids = new Set(list.items.map(i => i.id));
   const out: string[] = [];
   for (let i = 0; i < raw.length; i++) {
@@ -142,13 +148,14 @@ export function parseReply(reply: string, list: GateList, gateRev?: number, prio
   const tokens = tokenize(reply, list);
   if (tokens.length === 0) return { ...base, error: 'GATE_EMPTY' };
 
-  let all = false;
+  let rec = false;
   let asIs = false;
   let rest = tokens;
-  if (tokens[0] === 'all') {
-    all = true;
-    rest = tokens.slice(1);
-    if (rest[0] === 'as-is') { asIs = true; rest = rest.slice(1); }
+  const lead = REC_ALIASES.find(a => a.every((w, i) => tokens[i] === w));
+  if (lead && tokens[lead.length] === 'as-is' && lead.length === 1 && lead[0] === 'all') { asIs = true; rest = tokens.slice(2); }
+  else if (lead) { rec = true; rest = tokens.slice(lead.length); }
+  else if (tokens[0] === 'as-is') { asIs = true; rest = tokens.slice(1); }
+  if (rec || asIs) {
     if (rest[0] === 'except') rest = rest.slice(1);
     else if (rest.length > 0) return { ...base, unparsed: rest, error: 'GATE_REPLY_UNPARSED' };
   }
@@ -173,11 +180,11 @@ export function parseReply(reply: string, list: GateList, gateRev?: number, prio
     if (chosen !== undefined) choices.push({ id: item.id, chosen, kind: item.kind, how: how(item, chosen) });
     else if (earlier !== undefined && item.options.some(o => o.key === earlier)) choices.push({ id: item.id, chosen: earlier, kind: item.kind, how: how(item, earlier), prior: true });
     else if (asIs) { const keep = keepDirection(item); choices.push({ id: item.id, chosen: keep, kind: item.kind, how: how(item, keep) }); }
-    else if (all && !heldFromAll(item)) choices.push({ id: item.id, chosen: item.recommended, kind: item.kind, how: 'recommended' });
+    else if (rec) choices.push({ id: item.id, chosen: item.recommended, kind: item.kind, how: 'recommended' });
     else if (item.kind === 'auto') choices.push({ id: item.id, chosen: item.recommended, kind: item.kind, how: 'auto_default' });
     else pending.push(item.id);
   }
-  return { ...base, valid: true, choices, pending };
+  return { ...base, valid: true, choices, pending, mode: rec ? 'rec' : asIs ? 'as-is' : 'tokens' };
 }
 
 /** The option that keeps the plan's direction: the first with `changes_plan: false`; plan approval `a`; else the recommendation. */
@@ -205,14 +212,14 @@ export function decisionRows(list: GateList, extra: Partial<DecisionRow> = {}): 
 /** `--by` values: the owner typing tokens, or an agent relaying or deciding them. */
 export const ANSWERED_BY_RE = /^(human|agent:[A-Za-z0-9_.:-]+)$/;
 
-export function applyReply(rows: DecisionRow[], parsed: ParsedReply, answeredAt: string, answeredBy?: string): DecisionRow[] {
+export function applyReply(rows: DecisionRow[], parsed: ParsedReply, answeredAt: string, answeredBy?: string, extra: Partial<DecisionRow> = {}): DecisionRow[] {
   if (!parsed.valid) return rows;
   const byId = new Map(parsed.choices.map(c => [c.id, c]));
   return rows.map(row => {
     const choice = byId.get(row.label?.toLowerCase() ?? '') ?? byId.get(row.id.slice(row.run.length + 1).replace(/^r\d+-/, ''));
     if (!choice || choice.prior || row.gate_rev !== parsed.gate_rev) return row;
     return {
-      ...row, chosen: choice.chosen, answered_at: answeredAt, reply: parsed.reply, ...(answeredBy ? { answered_by: answeredBy } : {}),
+      ...row, chosen: choice.chosen, answered_at: answeredAt, reply: parsed.reply, ...(answeredBy ? { answered_by: answeredBy } : {}), ...extra,
       status: choice.how === 'override' ? 'overridden' : 'approved',
     };
   });

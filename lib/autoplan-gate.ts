@@ -20,14 +20,15 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { exportRun } from './autoplan-export';
 import { driftLine } from './autoplan-plan-text';
-import { consensusRecord, reconcile, renderConsensus, type ConsensusRecord, type ReconciliationOverride, type ReconciliationRow } from './autoplan-reconcile';
+import { consensusRecord, reconcile, renderConsensus, SETTLEABLE_CHANGES, type ConsensusRecord, type ReconciliationOverride, type ReconciliationRow } from './autoplan-reconcile';
 import type { Phase } from './autoplan-prompts';
-import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, writeDecisions, type RunState, type VoiceState } from './autoplan-state';
+import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, writeDecisions, type Amendment, type RunState, type VoiceState } from './autoplan-state';
 import { phaseClose } from './autoplan-timing';
-import { ANSWERED_BY_RE, applyReply, decisionId, decisionRows, keepDirection, parseReply, pendingHint, validateGateList, type GateChoice, type GateItem, type GateList, type GateOption } from './gate-list';
+import { ANSWERED_BY_RE, applyReply, decisionId, decisionRows, keepDirection, parseReply, pendingHint, recHash, validateGateList, type GateChoice, type GateItem, type GateList, type GateOption, type ParsedReply } from './gate-list';
 import type { FindingRow } from './headless-artifacts';
 import { readJsonl } from './headless-artifacts';
 import { closeDraftDirectionsFile, loadBriefInputs } from './owner-brief';
+import { vaguePlanTerms } from './plan-reality';
 import { settle } from './spend-ledger';
 
 export function loadOverrides(file: string | undefined): ReconciliationOverride[] {
@@ -56,7 +57,7 @@ export function closePhase(state: RunState, phase: Phase, o: { overridesFile?: s
   const md = renderConsensus(consensus, [...native, ...outside]);
   fs.writeFileSync(path.join(state.out, `${phase}-consensus.json`), JSON.stringify(consensus, null, 2) + '\n');
   fs.writeFileSync(path.join(state.out, `${phase}-consensus.md`), md);
-  ps.consensus = { confirmed: consensus.confirmed, disagree: consensus.disagree, new: consensus.new, native_only: consensus.native_only, coverage: consensus.coverage };
+  ps.consensus = { confirmed: consensus.confirmed, unverified: consensus.unverified, disagree: consensus.disagree, new: consensus.new, native_only: consensus.native_only, coverage: consensus.coverage };
   ps.closed_at = now();
   const closed = phaseClose(path.join(state.out, 'timing.json'), state.run, phase, { outside_s: seconds(ps.outside), native_s: seconds(ps.native), session_kind: state.session_kind });
   journalRow(state.out, { event: 'phase_closed', phase, consensus: ps.consensus, wall_s: closed.entry.wall_s, analytics: closed.analytics });
@@ -70,25 +71,31 @@ const CONTENT_SCOPE: Record<string, string> = { ceo: 'scope', design: 'design', 
 const optionHash = (options: GateOption[]) => createHash('sha256').update(JSON.stringify(options.map(o => [o.key, o.text]))).digest('hex').slice(0, 16);
 const KEEP = (text: string): GateOption => ({ key: 'a', text, changes_plan: false });
 
+const remedyKey = (text: string | undefined) => (text ?? '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
 /**
- * A user challenge both voices raised recommends the change only when the
- * finding reconciled `confirmed`, both name the same `changes` and the
- * remedies are on the record (both voices', or the parent's one shared
- * proposal from a reconcile override); option b shows them verbatim. Anything
- * weaker keeps the plan's direction, and the basis says why.
+ * A user challenge both voices raised recommends the change only with an
+ * explicit, coherent shared proposal: the finding reconciled `confirmed`,
+ * both name the same `changes`, and either the parent's reconcile override
+ * states one proposal for both or both voices wrote the same remedy. Title
+ * similarity and file:line proximity only associate the findings; anything
+ * weaker keeps the plan's direction, and the basis says why. Option b shows
+ * the remedies verbatim.
  */
-function challengeDefault(row: ReconciliationRow, n: FindingRow | undefined, o: FindingRow): { recommended: 'a' | 'b'; basis: string; text: string } {
+export function challengeDefault(row: ReconciliationRow, n: FindingRow | undefined, o: FindingRow): { recommended: 'a' | 'b'; basis: string; text: string } {
   const nf = n as (FindingRow & { changes?: string }) | undefined, of = o as FindingRow & { changes?: string };
   const remedies = row.proposal ? ` (shared proposal: ${row.proposal})`
     : nf?.resolution || of.resolution ? ` (native: ${nf?.resolution ?? 'no remedy stated'}; outside: ${of.resolution ?? 'no remedy stated'})` : '';
   const text = `accept the change both reviewers recommend${remedies}`;
   const keep = (basis: string) => ({ recommended: 'a' as const, basis: `plan direction; ${basis}`, text });
+  if (row.disposition === 'unverified') return keep('same location, agreement unverified');
   if (row.disposition !== 'confirmed') return keep('voices disagree');
   if (!nf?.changes || !of.changes) return keep('no shared changes value');
   if (nf.changes !== of.changes) return keep('voices name different changes');
   if (row.proposal) return { recommended: 'b', basis: 'both voices; shared proposal', text };
   if (!nf.resolution || !of.resolution) return keep('a remedy is missing');
-  return { recommended: 'b', basis: 'both voices; remedies shown', text };
+  if (remedyKey(nf.resolution) !== remedyKey(of.resolution)) return keep('remedies differ; no shared proposal');
+  return { recommended: 'b', basis: 'both voices; same remedy', text };
 }
 
 /** A rerun challenge naming no scope, cost or direction: the agent's own decision, recorded, reopening nothing. */
@@ -139,15 +146,52 @@ export function buildGate(state: RunState, gateRev: number): GateList {
         cost: `b reopens ${phase}${phase === 'eng' ? '' : ' and eng'}`, options: [KEEP('keep your direction'), { key: 'b', text: 'accept the change', changes_plan: true }] }, f.id);
     }
   }
-  const changes = items.filter(i => i.options.find(o => o.key === i.recommended)?.changes_plan).map(i => `${i.id}${i.recommended}`);
-  items.push({ id: 'p1', title: 'Plan approval', kind: 'approval', recommended: changes.length ? 'b' : 'a',
-    options: [{ key: 'a', text: 'approve as-is' }, { key: 'b', text: changes.length ? `approve with the recommended changes: ${changes.join(', ')}` : 'approve with the overrides above' },
-      { key: 'c', text: 'interrogate (ask questions; stays pending)' },
-      { key: 'd', text: `rerun every phase on the current plan, Eng last (to review an edited plan instead: gstack-autoplan revise --out ${state.out} --plan <file>)` }, { key: 'e', text: 'reject' }] });
+  items.push(planApproval(state, items));
   const list: GateList = { schema_version: 1, run: state.run, gate_rev: gateRev, items, title: '/autoplan final approval gate' };
   const problems = validateGateList(list);
   if (problems.length) throw new Error(`gate list invalid: ${problems.join('; ')}`);
   return list;
+}
+
+/** The p1 plan-approval item: recommends `b` when any item's recommendation changes the plan, with PLAN_REALITY flags. */
+function planApproval(state: RunState, items: GateItem[]): GateItem {
+  const changes = items.filter(i => i.id !== 'p1' && i.options.find(o => o.key === i.recommended)?.changes_plan).map(i => `${i.id}${i.recommended}`);
+  const planFile = fs.existsSync(state.plan_source) ? state.plan_source : state.active_plan;
+  const flags = vaguePlanTerms(fs.readFileSync(planFile, 'utf8')).map(v => `PLAN_REALITY ${JSON.stringify(v.phrase)} has no number, arm list or rule body (${path.basename(state.plan_input ?? planFile)}:${v.line}: ${v.text.length > 120 ? `${v.text.slice(0, 117)}...` : v.text}) (report only)`);
+  return { id: 'p1', title: 'Plan approval', kind: 'approval', recommended: changes.length ? 'b' : 'a', ...(flags.length ? { flags } : {}),
+    options: [{ key: 'a', text: 'approve as-is' }, { key: 'b', text: changes.length ? `approve with the recommended changes: ${changes.join(', ')}` : 'approve with the overrides above' },
+      { key: 'c', text: 'interrogate (ask questions; stays pending)' },
+      { key: 'd', text: `rerun every phase on the current plan, Eng last (to review an edited plan instead: gstack-autoplan revise --out ${state.out} --plan <file>)` }, { key: 'e', text: 'reject' }] };
+}
+
+/**
+ * `gstack-autoplan recommend`: the relaying parent sets one item's recommendation before relay, with its basis and
+ * provenance. The plan-approval item and decisions.jsonl follow, and `rec_rev` bumps so a `rec` rendered earlier is
+ * refused (GATE_REC_STALE) until the gate is rendered and relayed again.
+ */
+export function recommendGate(state: RunState, gateRev: number, itemId: string, option: string, basis: string, by: string): string[] {
+  const gateFile = path.join(state.out, 'gate.json');
+  if (state.status !== 'gate_pending' || !fs.existsSync(gateFile)) throw new RunError('PHASE_NOT_AWAITING', `run is ${state.status}, not gate_pending`, 3);
+  const list = JSON.parse(fs.readFileSync(gateFile, 'utf8')) as GateList;
+  if (gateRev !== list.gate_rev) throw new RunError('GATE_REV_STALE', `--gate-rev ${gateRev}, current gate_rev=${list.gate_rev}`, 3);
+  const item = list.items.find(i => i.id === itemId);
+  if (!item || item.id === 'p1' || !item.options.some(o => o.key === option)) throw new RunError('GATE_REPLY_UNPARSED', `${itemId}${option} names no item option a recommendation can take (p1 follows the items)`);
+  Object.assign(item, { recommended: option, recommended_basis: basis, recommended_by: by });
+  const p1 = planApproval(state, list.items);
+  list.items = list.items.map(i => (i.id === 'p1' ? p1 : i));
+  list.rec_rev = (list.rec_rev ?? 0) + 1;
+  fs.writeFileSync(gateFile, JSON.stringify(list, null, 2) + '\n');
+  const updated = new Map([item, p1].map(i => [decisionId(list.run, gateRev, i.id), i]));
+  writeDecisions(state.out, readDecisions(state.out).map(r => {
+    const i = updated.get(r.id);
+    if (!i) return r;
+    return { ...r, recommended: i.recommended, ...(i.kind === 'auto' ? { default_if_unanswered: i.recommended } : {}), ...(i.recommended_basis ? { recommended_basis: i.recommended_basis } : {}), ...(i.recommended_by ? { recommended_by: i.recommended_by } : {}) };
+  }));
+  const hash = recHash(list);
+  journalRow(state.out, { event: 'recommended', gate_rev: gateRev, item: itemId, option, basis, by, rec_rev: list.rec_rev, rec_hash: hash });
+  exportRun(state);
+  return [`RECOMMENDED: ${itemId}${option} by=${by} basis=${JSON.stringify(basis)} p1=${p1.recommended} rec_hash=${hash}`,
+    `RELAY: gstack-gate render ${gateFile} --all (a rec rendered before this is refused; answer with --rec-hash ${hash})`];
 }
 
 /** Every phase closed: write the gate list, decisions, tasks and the exported files; the run ends gate_pending. Unchanged answered proposals carry forward. */
@@ -180,32 +224,61 @@ export function finishGate(state: RunState): GateList {
 // ---------------------------------------------------------------------------
 // answer
 // ---------------------------------------------------------------------------
-export interface AnswerResult { state: RunState; applied: boolean; pending: string[]; reopened: Phase[]; outcome: 'complete' | 'gate_pending' | 'reopened' | 'rejected'; lines: string[] }
+export interface AnswerResult { state: RunState; applied: boolean; pending: string[]; reopened: Phase[]; outcome: 'complete' | 'gate_pending' | 'reopened' | 'rejected' | 'amend_pending'; lines: string[] }
+export interface AnswerOptions {
+  /** The rec_hash of the render the owner saw; required for a `rec` reply once `recommend` changed the gate. */
+  recHash?: string;
+  /** The owner's verbatim words; required for every `--by agent:<id>` answer. */
+  ownerReply?: string;
+}
+
+/** How an accepted plan change is discharged: a packaging/ordering change settles without a plan edit. */
+export function applyGuidance(a: Pick<Amendment, 'changes' | 'item'>): string {
+  return a.changes && SETTLEABLE_CHANGES.includes(a.changes) ? `no plan edit needed: revise --settle ${a.item}` : 'edit the plan, then revise';
+}
+
+/** The owner's words must not contradict the relayed tokens: when they parse, both must resolve to the same choices. */
+function checkOwnerReply(list: GateList, gateRev: number, prior: Record<string, string>, relayed: ParsedReply, ownerReply: string): boolean {
+  const owner = parseReply(ownerReply, list, gateRev, prior);
+  if (!owner.valid) return false;
+  const choices = (p: ParsedReply) => JSON.stringify(p.choices.map(c => [c.id, c.chosen]).sort());
+  if (choices(owner) !== choices(relayed) || owner.pending.join() !== relayed.pending.join()) {
+    throw new RunError('GATE_OWNER_REPLY_MISMATCH', `the owner's reply ${JSON.stringify(ownerReply)} resolves to ${owner.choices.map(c => `${c.id}${c.chosen}`).join(' ')}${owner.pending.length ? ` (pending ${owner.pending.join(',')})` : ''}; the relayed reply resolves to ${relayed.choices.map(c => `${c.id}${c.chosen}`).join(' ')}${relayed.pending.length ? ` (pending ${relayed.pending.join(',')})` : ''}`, 3);
+  }
+  return true;
+}
 
 /**
  * Apply one reply. Earlier answers at this revision stand unless named again;
  * the gate stays pending until every approval settles. A chosen option with
- * `changes_plan` is an accepted plan change: it reopens its phase plus Eng,
- * prints `APPLY:` and becomes a pending amendment (`next` refuses until
- * `revise --incorporates` or `--withdraw`).
+ * `changes_plan` is an accepted plan change: it prints `APPLY:` and becomes a
+ * pending amendment (status `amend_pending`); nothing reopens here. `revise`
+ * reopens exactly the phases whose reviewed plan changed, and `revise
+ * --settle` discharges a packaging/ordering change without an edit.
  */
-export function answerGate(state: RunState, gateRev: number, reply: string, answeredBy?: string): AnswerResult {
+export function answerGate(state: RunState, gateRev: number, reply: string, answeredBy?: string, o: AnswerOptions = {}): AnswerResult {
   const gateFile = path.join(state.out, 'gate.json');
   if (state.status !== 'gate_pending' || !fs.existsSync(gateFile)) throw new RunError('PHASE_NOT_AWAITING', `run is ${state.status}, not gate_pending`, 3);
   if (answeredBy !== undefined && !ANSWERED_BY_RE.test(answeredBy)) throw new RunError('ANSWER_BY_REQUIRED', `--by ${JSON.stringify(answeredBy)} is neither human nor agent:<id>`, 3);
   if (answeredBy === undefined && state.session_kind === 'unattended') throw new RunError('ANSWER_BY_REQUIRED', 'an unattended run records who answered; pass --by human or --by agent:<id>', 3);
+  if (answeredBy?.startsWith('agent:') && o.ownerReply === undefined) throw new RunError('OWNER_REPLY_REQUIRED', `${answeredBy} relayed or decided this reply; pass the owner's words verbatim with --owner-reply "<text>" (or --owner-reply - / --owner-reply-file <path>)`, 3);
   const list = JSON.parse(fs.readFileSync(gateFile, 'utf8')) as GateList;
   const rows = readDecisions(state.out);
   const prior = Object.fromEntries(rows.filter(r => r.gate_rev === list.gate_rev && r.chosen != null && r.status !== 'pending' && r.label).map(r => [r.label!.toLowerCase(), r.chosen!]));
   const parsed = parseReply(reply, list, gateRev, prior);
   if (parsed.error === 'GATE_REV_STALE') throw new RunError('GATE_REV_STALE', `reply names gate_rev=${gateRev}, current gate_rev=${list.gate_rev}`, 3);
   if (!parsed.valid) throw new RunError('GATE_REPLY_UNPARSED', parsed.error === 'GATE_EMPTY' ? 'empty reply' : `unparsed: ${parsed.unparsed.join(', ')}`);
+  const currentHash = recHash(list);
+  if (o.recHash !== undefined && o.recHash !== currentHash) throw new RunError('GATE_REC_STALE', `--rec-hash ${o.recHash} was rendered before the recommendations changed; current rec_hash=${currentHash}`, 3);
+  if (parsed.mode === 'rec' && (list.rec_rev ?? 0) > 0 && o.recHash === undefined) throw new RunError('GATE_REC_STALE', `recommend changed this gate (rec_rev=${list.rec_rev}); pass --rec-hash from the render the owner saw (current rec_hash=${currentHash})`, 3);
+  const ownerParsed = o.ownerReply !== undefined ? checkOwnerReply(list, gateRev, prior, parsed, o.ownerReply) : undefined;
+  const provenance = o.ownerReply !== undefined ? { owner_reply: o.ownerReply, owner_reply_parsed: ownerParsed } : {};
   const itemOf = (id: string) => list.items.find(i => i.id === id)!;
   const optionOf = (c: GateChoice) => itemOf(c.id).options.find(o => o.key === c.chosen)!;
   const plan = parsed.choices.find(c => c.id === 'p1');
   const lines: string[] = [];
   const answeredAt = now();
-  const record = () => writeDecisions(state.out, applyReply(rows, parsed, answeredAt, answeredBy).map(r => {
+  const record = () => writeDecisions(state.out, applyReply(rows, parsed, answeredAt, answeredBy, provenance).map(r => {
     const c = r.gate_rev === list.gate_rev && r.chosen && !r.chosen_text ? itemOf((r.label ?? '').toLowerCase())?.options.find(o => o.key === r.chosen) : undefined;
     return c ? { ...r, chosen_text: c.text } : r;
   }));
@@ -222,15 +295,10 @@ export function answerGate(state: RunState, gateRev: number, reply: string, answ
   const changing = proceeds ? parsed.choices.filter(c => c.id !== 'p1' && !carried(c) && itemOf(c.id).reopens !== false && (optionOf(c).changes_plan ?? c.how === 'override')) : [];
   const tokens = (cs: GateChoice[]) => cs.map(c => `${c.id}${c.chosen}`);
   const overrides = parsed.choices.filter(c => c.how === 'override' && c.id !== 'p1');
-  const reopenSet = new Set<Phase>();
-  if (plan.chosen === 'd') state.phase_order.forEach(p => reopenSet.add(p));
-  for (const c of changing) {
-    const phase = itemOf(c.id).phase as Phase | undefined;
-    if (phase) { reopenSet.add(phase); if (state.phase_order.includes('eng')) reopenSet.add('eng'); }
-  }
+  const reopenSet = new Set<Phase>(plan.chosen === 'd' ? state.phase_order : []);
   record();
-  state.gate = { ...(state.gate ?? {}), answered_at: answeredAt, reply, gate_rev: gateRev, plan: plan.chosen, overrides: tokens(overrides), ...(answeredBy ? { answered_by: answeredBy } : {}) };
-  journalRow(state.out, { event: 'answered', gate_rev: gateRev, reply, plan: plan.chosen, overrides: tokens(overrides), changes: tokens(changing), reopen: [...reopenSet], ...(answeredBy ? { answered_by: answeredBy } : {}) });
+  state.gate = { ...(state.gate ?? {}), answered_at: answeredAt, reply, gate_rev: gateRev, plan: plan.chosen, overrides: tokens(overrides), ...(answeredBy ? { answered_by: answeredBy } : {}), ...provenance };
+  journalRow(state.out, { event: 'answered', gate_rev: gateRev, reply, plan: plan.chosen, overrides: tokens(overrides), changes: tokens(changing), reopen: [...reopenSet], ...(answeredBy ? { answered_by: answeredBy } : {}), ...provenance });
   if (plan.chosen === 'c') {
     lines.push(`GATE_PENDING: interrogate recorded; the gate stays at gate_rev=${gateRev}`);
     return { state, applied: true, pending: ['p1'], reopened: [], outcome: 'gate_pending', lines };
@@ -243,30 +311,44 @@ export function answerGate(state: RunState, gateRev: number, reply: string, answ
     return { state, applied: true, pending: [], reopened: [], outcome: 'rejected', lines };
   }
   for (const c of changing) {
-    const decision = decisionId(state.run, gateRev, c.id);
-    (state.amendments ??= []).push({ decision, title: itemOf(c.id).title, chosen: c.chosen, text: optionOf(c).text, gate_rev: gateRev, status: 'pending', at: answeredAt });
-    journalRow(state.out, { event: 'amendment_pending', decision, gate_rev: gateRev });
-    lines.push(`APPLY: ${decision} ${itemOf(c.id).title} -> ${optionOf(c).text}`);
+    const item = itemOf(c.id);
+    const amendment: Amendment = { decision: decisionId(state.run, gateRev, c.id), title: item.title, chosen: c.chosen, text: optionOf(c).text, gate_rev: gateRev, status: 'pending', at: answeredAt,
+      item: c.id, ...(item.changes ? { changes: item.changes } : {}), ...(item.phase ? { phase: item.phase } : {}) };
+    (state.amendments ??= []).push(amendment);
+    journalRow(state.out, { event: 'amendment_pending', decision: amendment.decision, gate_rev: gateRev, ...(item.changes ? { changes: item.changes } : {}) });
+    lines.push(`APPLY: ${amendment.decision} ${item.title} -> ${amendment.text}; ${applyGuidance(amendment)}`);
   }
-  if (reopenSet.size === 0) {
-    state.status = 'complete';
-    lines.push(...closeDraftDirections(state, answeredAt.slice(0, 10)));
+  if (reopenSet.size) {
+    const reopened = state.phase_order.filter(p => reopenSet.has(p));
+    reopenPhases(state, reopened, gateRev, `gate_rev ${gateRev}: revise`);
+    if (changing.length) state.status = 'amend_pending';
+    lines.push(`REOPENED: ${reopened.join(',')} (Eng last) reason=revise`);
+    const drift = driftLine(state, 'PLAN_SOURCE_CHANGED');
+    if (drift) lines.push(drift);
+    return { state, applied: true, pending: [], reopened, outcome: 'reopened', lines };
+  }
+  if (changing.length) {
+    state.status = 'amend_pending';
     exportRun(state);
-    const notes = overrides.filter(o => o.chosen !== keepDirection(itemOf(o.id)));
-    lines.push(`APPROVED: gate_rev=${gateRev} ${notes.length ? `overrides=${tokens(notes).join(',')} (none change reviewed content)` : 'as-is'}`);
-    return { state, applied: true, pending: [], reopened: [], outcome: 'complete', lines };
+    lines.push(`AMEND_PENDING: ${changing.length} accepted change(s) not yet in the plan; nothing reopens until revise`);
+    return { state, applied: true, pending: [], reopened: [], outcome: 'amend_pending', lines };
   }
-  const reopened = state.phase_order.filter(p => reopenSet.has(p));
-  const reason = plan.chosen === 'd' ? 'revise' : tokens(changing).join(',');
-  reopenPhases(state, reopened, gateRev, `gate_rev ${gateRev}: ${reason}`);
-  lines.push(`REOPENED: ${reopened.join(',')} (Eng last) reason=${reason}`);
-  const drift = driftLine(state, 'PLAN_SOURCE_CHANGED');
-  if (drift) lines.push(drift);
-  return { state, applied: true, pending: [], reopened, outcome: 'reopened', lines };
+  lines.push(...approve(state, answeredAt));
+  const notes = overrides.filter(o => o.chosen !== keepDirection(itemOf(o.id)));
+  lines.push(`APPROVED: gate_rev=${gateRev} ${notes.length ? `overrides=${tokens(notes).join(',')} (none change reviewed content)` : 'as-is'}`);
+  return { state, applied: true, pending: [], reopened: [], outcome: 'complete', lines };
+}
+
+/** The run is approved: status complete, draft directions closed, files exported. */
+export function approve(state: RunState, at: string): string[] {
+  state.status = 'complete';
+  const lines = closeDraftDirections(state, at.slice(0, 10));
+  exportRun(state);
+  return lines;
 }
 
 /** E3 phase-close operation: every `draft direction stands until the owner decides` line in the active plan becomes the decided option and date. */
-function closeDraftDirections(state: RunState, date: string): string[] {
+export function closeDraftDirections(state: RunState, date: string): string[] {
   const loaded = loadBriefInputs(state.out);
   if ('error' in loaded) return [];
   const r = closeDraftDirectionsFile(state.active_plan, loaded.inputs, date);
@@ -305,7 +387,8 @@ export function planReopen(state: RunState, phases: Phase[], gateRev: number, re
         journalRow(state.out, { event: 'superseded', attempt: a.attempt, phase, voice, reason });
       }
       const output = ps[voice]?.output;
-      if (output) { archive(`${output}.findings.jsonl`); archive(output); delete state.artifacts[output]; }
+      // A sealed copy is attempt-owned and immutable: it stays in place and bound; only a pre-seal output (bound at the result path) is archived.
+      if (output && !output.endsWith('.bound.md')) { archive(`${output}.findings.jsonl`); archive(output); delete state.artifacts[output]; }
       archive(`${phase}-${voice}-prompt.md`);
     }
     archive(`${phase}-consensus.json`); archive(`${phase}-consensus.md`);

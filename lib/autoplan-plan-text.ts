@@ -10,6 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { extractImplementationPlan, implementationForReview, sectionHeadings } from '../bin/gstack-autoplan-snapshot';
 import { extractHeading } from './autoplan-prompts';
 import type { RunState } from './autoplan-state';
@@ -78,4 +79,40 @@ export function driftLine(state: RunState, code: 'PLAN_CHANGED' | 'PLAN_SOURCE_C
   try { reviewed = reviewHash(fs.readFileSync(state.active_plan, 'utf8')); } catch { return undefined; }
   if (!current || current === reviewed) return undefined;
   return `${code}: ${source} differs from the reviewed plan; run gstack-autoplan revise --out ${state.out} --plan ${source}`;
+}
+
+/** The nearest directory at or above `dir` holding `.git` (no git spawn), or undefined. */
+export function repoRoot(dir: string): string | undefined {
+  for (let d = path.resolve(dir); ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, '.git'))) return d;
+    if (path.dirname(d) === d) return undefined;
+  }
+}
+
+/** Line offset of `inner` inside `outer` (0 when it starts on line 1), or undefined when it is not a verbatim block of it. */
+function blockOffset(inner: string, outer: string): number | undefined {
+  const at = outer.indexOf(inner);
+  if (at >= 0) return outer.slice(0, at).split('\n').length - 1;
+  const restoreLine = /^<!-- \/autoplan restore point:[^\n]*\n/.exec(inner);
+  if (!restoreLine) return undefined;
+  const rest = blockOffset(inner.slice(restoreLine[0].length), outer);
+  return rest === undefined ? undefined : rest - 1;
+}
+
+/**
+ * A canonical row's `file`/`line` as the owner reads them: an absolute path under the repository root becomes
+ * repo-relative; a phase snapshot or the active plan becomes the plan's own file name, its line mapped to the plan
+ * source through the snapshot's verbatim position (dropped when it cannot be mapped). The reviewer's bytes are untouched.
+ */
+export function normalizeFindingFile(f: { file?: string; line?: number }, ctx: { cwd: string; planFiles: string[]; planSource: string; planName: string }): { file?: string; line?: number } {
+  if (!f.file) return f;
+  const planFile = ctx.planFiles.find(p => f.file === p || (!path.isAbsolute(f.file!) && path.basename(p) === f.file));
+  if (planFile) {
+    let offset: number | undefined;
+    try { offset = blockOffset(fs.readFileSync(planFile, 'utf8'), fs.readFileSync(ctx.planSource, 'utf8')); } catch { offset = undefined; }
+    return { file: ctx.planName, ...(f.line !== undefined && offset !== undefined ? { line: f.line + offset } : {}) };
+  }
+  const root = path.isAbsolute(f.file) ? repoRoot(ctx.cwd) : undefined;
+  if (root && f.file.startsWith(root + path.sep)) return { ...f, file: path.relative(root, f.file).split(path.sep).join('/') };
+  return f;
 }

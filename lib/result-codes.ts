@@ -112,7 +112,7 @@ export const RESULT_CODES = {
   GATE_REPLY_UNPARSED: {
     anchor: 'gate-reply-unparsed',
     summary: 'part of the reply matched no gate item or option, so nothing was applied',
-    fix: 'reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
+    fix: 'reply with `rec`, `as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `rec except <tokens>`; bare yes/no is ambiguous',
   },
   ANSWER_BY_REQUIRED: {
     anchor: 'answer-by-required',
@@ -509,12 +509,42 @@ export const RESULT_CODES = {
   PLAN_AMEND_PENDING: {
     anchor: 'plan-amend-pending',
     summary: 'the owner accepted plan changes at the gate that the plan has not absorbed yet',
-    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; settle a packaging or ordering change with `gstack-autoplan revise --out <dir> --settle <id>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`',
   },
   AMENDMENT_UNKNOWN: {
     anchor: 'amendment-unknown',
     summary: '`revise --incorporates` or `--withdraw` named a decision that is not a pending amendment (never accepted as a plan change, or already incorporated or withdrawn)',
     fix: 'name only the ids the refusal lists after `pending:`; with none pending, drop --incorporates and run `gstack-autoplan revise --out <dir> --plan <file>`',
+  },
+  AMENDMENT_NOT_SETTLEABLE: {
+    anchor: 'amendment-not-settleable',
+    summary: '`revise --settle` named an accepted change that needs a plan edit (its item changes scope, cost or direction, or names no packaging/ordering change), or the reviewed plan changed since the gate',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`; settle only packaging or ordering changes on an unchanged plan',
+  },
+  GATE_REC_STALE: {
+    anchor: 'gate-rec-stale',
+    summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes',
+    fix: 'render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`',
+  },
+  CHECKPOINT_INVALID: {
+    anchor: 'checkpoint-invalid',
+    summary: 'the autoplan checkpoint cannot be restored: its manifest is unreadable, a listed file is missing, escapes the checkpoint or does not match its sha256',
+    fix: 'restore from an intact copy of `<GSTACK_AUTOPLAN_CHECKPOINT_DIR>/<run>/` (its `restore.md` names the command); nothing was written to --out',
+  },
+  CHECKPOINT_TARGET_EXISTS: {
+    anchor: 'checkpoint-target-exists',
+    summary: '`gstack-autoplan resume --from` restores only into an empty or missing --out directory',
+    fix: 'pass a new --out directory, or resume the run already there without --from',
+  },
+  OWNER_REPLY_REQUIRED: {
+    anchor: 'owner-reply-required',
+    summary: 'an agent answered the gate (`--by agent:<id>`) without the owner\'s verbatim reply',
+    fix: 'pass the owner\'s words exactly with `--owner-reply "<text>"`, `--owner-reply -` (stdin) or `--owner-reply-file <path>`',
+  },
+  GATE_OWNER_REPLY_MISMATCH: {
+    anchor: 'gate-owner-reply-mismatch',
+    summary: 'the owner\'s verbatim reply parses under the gate grammar but resolves to different choices than the relayed tokens',
+    fix: 'relay exactly what the owner chose (or their reply itself, e.g. `--reply rec`); ask the owner when their words and the tokens disagree',
   },
   GSTACK_VERSION_CHANGED: {
     anchor: 'gstack-version-changed',

@@ -7,11 +7,12 @@
  *   gstack-autoplan submit  --out <dir> --phase <p> --voice native|outside --result <file> | --record <file> [--attest <reason>]
  *                           --model <id> [--attempt <id>] [--runner <r>] [--usage-usd <n>] [--reconcile <jsonl>] [--json]
  *   gstack-autoplan submit  --out <dir> --phase <p> --voice outside --unavailable <reason> | --failed <reason> [--json]
- *   gstack-autoplan revise  --out <dir> --plan <file> [--incorporates <id,...>] [--withdraw <id>] [--json]   review a revised plan in this run
+ *   gstack-autoplan revise  --out <dir> --plan <file> [--incorporates <id,...>] [--withdraw <id>] [--settle <id>] [--json]   review a revised plan in this run
  *   gstack-autoplan run     --out <dir> --plan <file> --native-model <id> --outside-model <id> [--runner codex-cli|api] [--native-runner api]
  *                           [--deadline <min>] [--spend-cap <usd>] [--estimate-usd <n>] [--json]      next in a loop; needs runners for both voices
- *   gstack-autoplan answer  --out <dir> --gate-rev <rev> --reply "<grammar>" [--json]
- *   gstack-autoplan resume  --out <dir> [--json]        take ownership; intent without a terminal record becomes EXECUTION_UNKNOWN
+ *   gstack-autoplan answer  --out <dir> --gate-rev <rev> --reply "<grammar>" --by <human|agent:<id>> [--owner-reply <text>|-] [--rec-hash <h>] [--json]
+ *   gstack-autoplan recommend --out <dir> --gate-rev <n> --item <id> --option <k> --basis "<why>" [--by <who>]
+ *   gstack-autoplan resume  --out <dir> [--from <checkpoint>] [--json]   take ownership; intent without a terminal record becomes EXECUTION_UNKNOWN
  *   gstack-autoplan status  --out <dir> [--json]        query: the manifest, no GSTACK_RESULT line
  *   gstack-autoplan export  --out <dir> [--json]        rewrite plan.md, review-record.md, findings/tasks.jsonl and run.json hashes
  *   gstack-autoplan release --out <dir> --attempt <id>  drop a reservation for an attempt that never ran
@@ -20,12 +21,13 @@
  * Logic: lib/autoplan-run.ts (next/submit/resume), lib/autoplan-gate.ts (close, gate, answer),
  * lib/autoplan-export.ts, lib/autoplan-prompts.ts, lib/spend-ledger.ts. Codes: lib/result-codes.ts.
  * Workflow commands end with GSTACK_RESULT: skill=autoplan status=<s> run=<dir>; the run is never approved here.
- * Mutating verbs (next, submit, answer, revise, export, run) pass admission first (lib/autoplan-admission.ts)
+ * Mutating verbs (next, submit, answer, recommend, revise, export, run) pass admission first (lib/autoplan-admission.ts)
  * and bring an older run directory forward (lib/autoplan-migrate.ts) under the run lock.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { answerGate } from '../lib/autoplan-gate';
+import { answerGate, applyGuidance, recommendGate } from '../lib/autoplan-gate';
+import { checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
 import { migrateRun } from '../lib/autoplan-migrate';
@@ -55,13 +57,20 @@ DRIVER: ${driverFile()}
           without its INPUT line it binds only with --attest <reason> and --attempt (receipt: attested)
   submit  --out <dir> --phase <p> --voice outside --unavailable <reason> | --failed <reason>
           the outside voice could not run: closes the phase native_only once native is bound
-  revise  --out <dir> --plan <file> [--incorporates <decision id,...>] [--withdraw <decision id>]
-          review a revised plan in this run: every phase whose reviewed Implementation-plan hash differs reopens (plus Eng);
-          --incorporates discharges the named accepted changes (the plan must change); --withdraw (alone or with --plan) drops one
+  revise  --out <dir> --plan <file> [--incorporates <id,...>] [--withdraw <id>] | --settle <id,...>
+          review a revised plan in this run: every phase whose reviewed Implementation-plan hash differs reopens (Eng last);
+          --incorporates discharges the named accepted changes (the plan must change); --withdraw (alone or with --plan) drops one;
+          --settle records a packaging/ordering change that needs no plan edit and reopens nothing (ids: decision id or d4)
   run     --out <dir> --plan <file> --native-model <id> --outside-model <id> [--runner codex-cli|api] [--native-runner api] ...
           next in a loop, only when a runner executes both voices here; --deadline cancels the children it started
-  answer  --out <dir> --gate-rev <rev> --reply "<all | d3b uc1a | all except d3b>" --by <human|agent:<id>> [--json]
-  resume  --out <dir> [--json]      status  --out <dir> [--json]      export  --out <dir>      release --out <dir> --attempt <id>
+  answer  --out <dir> --gate-rev <rev> --reply "<rec | rec except d3a | d3b uc1a | as-is>" --by <human|agent:<id>> [--json]
+          --by agent:<id> needs --owner-reply "<owner's words>" (- reads stdin; --owner-reply-file <path>), stored verbatim;
+          --rec-hash <h> binds a rec to the render the owner saw (required once recommend ran); accepted changes leave amend_pending
+  recommend --out <dir> --gate-rev <n> --item <id> --option <k> --basis "<why>" [--by <who>]
+          set one item's recommendation before relay (provenance recorded, p1 follows); re-render and relay afterwards
+  resume  --out <dir> [--from <checkpoint>] [--json]   --from restores a hash-verified checkpoint into an empty --out first
+          (GSTACK_AUTOPLAN_CHECKPOINT_DIR set: every command leaving the run at rest writes <dir>/<run>/ and prints CHECKPOINT:)
+  status  --out <dir> [--json]      export  --out <dir>      release --out <dir> --attempt <id>
   contract                          print lib/coordinator-contract.ts (the block every lane and reviewer prompt inherits word for word)
 
 The first next needs --plan. The native voice is dispatched by the parent from the printed prompt file (a subagent on the
@@ -87,10 +96,13 @@ function num(args: string[], name: string): number | undefined {
 }
 const resultLineFor = (status: string, out: string) => `GSTACK_RESULT: skill=autoplan status=${status} run=${out}`;
 const listFlag = (args: string[], name: string) => args.flatMap((a, i) => (a === name && args[i + 1] ? args[i + 1]!.split(',').map(x => x.trim()).filter(Boolean) : []));
-/** The NEXT line after a reopen or revise: revise while accepted changes are pending, else next. */
+/** The NEXT line after an answer or revise: per pending change, settle it or edit the plan and revise; else next. */
 function nextLine(state: RunState, out: string): string {
-  const pending = pendingAmendments(state).map(a => a.decision);
-  return pending.length ? `NEXT: gstack-autoplan revise --out ${out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${pending.join(',')}` : `NEXT: gstack-autoplan next --out ${out}`;
+  const pending = pendingAmendments(state);
+  const settle = pending.filter(a => applyGuidance(a).startsWith('no plan edit')).map(a => a.item ?? a.decision);
+  const edit = pending.filter(a => !applyGuidance(a).startsWith('no plan edit')).map(a => a.decision);
+  if (!pending.length) return `NEXT: gstack-autoplan next --out ${out}`;
+  return `NEXT: ${[edit.length ? `edit the plan, then gstack-autoplan revise --out ${out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${edit.join(',')}` : '', settle.length ? `gstack-autoplan revise --out ${out} --settle ${settle.join(',')}` : ''].filter(Boolean).join('; ')}`;
 }
 
 /**
@@ -116,6 +128,8 @@ function mutating(out: string, json: boolean, fn: () => number): number {
     if (notices.length) (json ? process.stderr : process.stdout).write(notices.join('\n') + '\n');
     const code = fn();
     if (admission.deviation && fs.existsSync(path.join(out, FILES.run))) { const state = readState(out); if (record(state)) writeState(state); }
+    const checkpoint = code === EXIT.ok ? checkpointRun(out) : undefined;
+    if (checkpoint) process.stderr.write(checkpoint + '\n');
     return code;
   });
 }
@@ -166,12 +180,12 @@ function doSubmit(out: string, rest: string[], json: boolean): number {
 }
 
 function doRevise(out: string, rest: string[], json: boolean): number {
-  const plan = flag(rest, '--plan'); const incorporates = listFlag(rest, '--incorporates'); const withdraw = listFlag(rest, '--withdraw');
-  if (!plan && !withdraw.length) return usage('revise needs --plan <file> (and optionally --incorporates <id,...>), or --withdraw <decision id>');
+  const plan = flag(rest, '--plan'); const incorporates = listFlag(rest, '--incorporates'); const withdraw = listFlag(rest, '--withdraw'); const settle = listFlag(rest, '--settle');
+  if (!plan && !withdraw.length && !settle.length) return usage('revise needs --plan <file> (and optionally --incorporates <id,...>), --withdraw <decision id> or --settle <id>');
   if (!plan && incorporates.length) return usage('--incorporates binds accepted changes to a revised plan: pass --plan <file>');
-  const r = reviseRun({ out, plan: plan ? path.resolve(plan) : undefined, incorporates, withdraw, cwd: process.cwd() });
+  const r = reviseRun({ out, plan: plan ? path.resolve(plan) : undefined, incorporates, withdraw, settle, cwd: process.cwd() });
   const lines = [...r.lines];
-  if (r.state.status === 'running') lines.push(nextLine(r.state, out));
+  if (r.state.status === 'running' || r.state.status === 'amend_pending') lines.push(nextLine(r.state, out));
   lines.push(resultLineFor(r.state.status, out));
   emit(json, lines, { run: r.state.run, status: r.state.status, reopened: r.reopened, amendments: pendingAmendments(r.state).map(a => a.decision), gate_rev: r.state.gate_rev ?? null, out });
   return EXIT.ok;
@@ -238,9 +252,13 @@ async function main(argv: string[]): Promise<number> {
       return EXIT.ok;
     }
     if (cmd === 'resume') {
+      const from = flag(rest, '--from');
+      const restored = from !== undefined ? restoreCheckpoint(from, out) : [];
       return withRunLock(out, () => {
         const r = resumeRun(out);
-        const lines = [...r.lines, resultLineFor(r.state.status, out)];
+        const checkpoint = checkpointRun(out);
+        if (checkpoint) process.stderr.write(checkpoint + '\n');
+        const lines = [...restored, ...r.lines, resultLineFor(r.state.status, out)];
         emit(json, lines, { run: r.state.run, status: r.state.status, execution_unknown: r.unknown, rebound: r.rebound, out });
         return EXIT.ok;
       }, { steal: true });
@@ -249,14 +267,28 @@ async function main(argv: string[]): Promise<number> {
       const rev = flag(rest, '--gate-rev'); const reply = flag(rest, '--reply'); const by = flag(rest, '--by');
       if (reply === undefined) return usage('answer needs --reply "<text>"');
       if (rev === undefined) { const s = readState(out); process.stderr.write(resultLine('gstack-autoplan answer', 'GATE_REV_STALE', `no --gate-rev given; current gate_rev=${s.gate_rev ?? 0}`) + '\n'); return EXIT.refused; }
+      const replyFile = flag(rest, '--owner-reply-file'); const ownerFlag = flag(rest, '--owner-reply');
+      if (replyFile !== undefined && ownerFlag !== undefined) return usage('--owner-reply and --owner-reply-file are exclusive');
+      const ownerReply = replyFile !== undefined ? fs.readFileSync(replyFile, 'utf8') : ownerFlag === '-' ? fs.readFileSync(0, 'utf8') : ownerFlag;
       return mutating(out, json, () => {
         const state = readState(out);
-        const r = answerGate(state, Number(rev), reply, by);
+        const r = answerGate(state, Number(rev), reply, by, { recHash: flag(rest, '--rec-hash'), ownerReply });
         writeState(state);
         const lines = [...r.lines];
-        if (r.outcome === 'reopened') lines.push(nextLine(state, out));
+        if (r.outcome === 'reopened' || r.outcome === 'amend_pending') lines.push(nextLine(state, out));
         lines.push(resultLineFor(state.status, out));
         emit(json, lines, { run: state.run, status: state.status, outcome: r.outcome, pending: r.pending, reopened: r.reopened, amendments: pendingAmendments(state).map(a => a.decision), gate_rev: state.gate_rev, out });
+        return EXIT.ok;
+      });
+    }
+    if (cmd === 'recommend') {
+      const rev = flag(rest, '--gate-rev'); const item = flag(rest, '--item'); const option = flag(rest, '--option'); const basis = flag(rest, '--basis');
+      if (rev === undefined || !item || !option || !basis?.trim()) return usage('recommend needs --gate-rev <n> --item <id> --option <k> --basis "<why>"');
+      return mutating(out, json, () => {
+        const state = readState(out);
+        const lines = recommendGate(state, Number(rev), item.toLowerCase(), option.toLowerCase(), basis.trim(), flag(rest, '--by') ?? 'parent');
+        writeState(state);
+        emit(json, [...lines, resultLineFor(state.status, out)], { run: state.run, status: state.status, gate_rev: state.gate_rev, out });
         return EXIT.ok;
       });
     }
@@ -283,7 +315,7 @@ async function main(argv: string[]): Promise<number> {
   } catch (e: any) {
     if (e instanceof RunError) {
       process.stderr.write(resultLine(`gstack-autoplan ${cmd}`, e.code, e.detail) + '\n');
-      if (['next', 'submit', 'answer', 'resume', 'run', 'revise'].includes(cmd)) process.stdout.write(resultLineFor('refused', out) + '\n');
+      if (['next', 'submit', 'answer', 'resume', 'run', 'revise', 'recommend'].includes(cmd)) process.stdout.write(resultLineFor('refused', out) + '\n');
       return e.exit === 3 ? EXIT.refused : EXIT.fail;
     }
     process.stderr.write(`gstack-autoplan ${cmd}: ${e?.message ?? e}\n`);

@@ -58,7 +58,11 @@ describe('revise', () => {
     expect(new Set(['ceo', 'dx', 'eng'].map(p => run.phases[p].snapshot)).size).toBe(1);
     expect(run.phases.ceo.snapshot).not.toBe(v1);
     expect(readJsonl(path.join(s.out, 'attempts.jsonl')).filter(e => e.event === 'plan_revised')).toHaveLength(1);
-    expect(fs.existsSync(path.join(s.out, 'ceo-native.r0.md'))).toBe(true);
+    expect(fs.existsSync(path.join(s.out, 'ceo-native-prompt.r0.md'))).toBe(true);
+    const sealed = run.history.find((h: any) => h.phase === 'ceo').previous.native.output;
+    expect(sealed).toMatch(/^ceo-native\.a\d+\.bound\.md$/);
+    expect(fs.existsSync(path.join(s.out, sealed))).toBe(true);
+    expect(run.artifacts[sealed]).toBeTruthy();
   });
 
   test('a Review-record-only edit keeps every phase; an open phase whose hash changed has its attempts superseded', () => {
@@ -95,11 +99,11 @@ describe('revise', () => {
   test('a second revise never overwrites the first archive', () => {
     const s = gated();
     expect(r.ap(['revise', '--out', s.out, '--plan', v2File(s.dir)]).status).toBe(0);
-    const first = fs.readFileSync(path.join(s.out, 'ceo-native.r1.md'));
+    const first = fs.readFileSync(path.join(s.out, 'ceo-native-prompt.r1.md'));
     phaseVia(r, s.out, 'ceo', { native: [], outside: [] });
     expect(r.ap(['revise', '--out', s.out, '--plan', v2File(s.dir, V2.replace('jitter 10%', 'jitter 20%'))]).status).toBe(0);
-    expect(fs.readFileSync(path.join(s.out, 'ceo-native.r1.md')).equals(first)).toBe(true);
-    expect(fs.existsSync(path.join(s.out, 'ceo-native.r1.v2.md'))).toBe(true);
+    expect(fs.readFileSync(path.join(s.out, 'ceo-native-prompt.r1.md')).equals(first)).toBe(true);
+    expect(fs.existsSync(path.join(s.out, 'ceo-native-prompt.r1.v2.md'))).toBe(true);
   });
 
   test('revise adds a newly in-scope phase and never removes one', () => {
