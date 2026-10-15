@@ -394,13 +394,6 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
-        with:
-          path: ~/.bun/install/cache
-          key: windows-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: |
-            windows-bun-
-
       - name: Configure git identity
         run: |
           git config --global user.email "windows-setup-e2e@gstack.test"
