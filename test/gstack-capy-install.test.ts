@@ -264,6 +264,10 @@ describe('gstack-capy-install', () => {
     const r = run(f, ['--root', clone], { GSTACK_CAPY_REPO: f.root });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stdout).toContain(`cloning ${f.root} into ${clone}`);
+    expect(r.stdout).toMatch(new RegExp(`^gstack-capy-install: cloned ${f.root} at [0-9a-f]{12} \\(1\\.2\\.3\\)$`, 'm'));
+    const handed = run(f, [], { GSTACK_CAPY_CLONED: 'https://github.com/garrytan/gstack.git' });
+    expect(handed.stdout).toMatch(/^gstack-capy-install: cloned https:\/\/github\.com\/garrytan\/gstack\.git at [0-9a-f]{12} \(1\.2\.3\)$/m);
+    expect(handed.stdout).not.toContain('reusing');
     expect(fs.existsSync(path.join(clone, 'setup'))).toBe(true);
     const occupied = path.join(f.base, 'occupied');
     write(path.join(occupied, 'README.md'), 'x');

@@ -10,7 +10,8 @@
 #   4. exec the checkout's full wrapper, bin/gstack-capy-session, with the same
 #      arguments, handing the held lock over (GSTACK_CAPY_LOCK_HELD=1) and,
 #      from revision 2, origin's VERSION read in this run
-#      (GSTACK_CAPY_REMOTE_VERSION, the trailer's `latest:` note).
+#      (GSTACK_CAPY_REMOTE_VERSION, the trailer's `latest:` note) and the repo
+#      it just cloned (GSTACK_CAPY_CLONED, the installer's `cloned` line).
 # Everything else (Bun, setup, the doctor, the verdict, the launch line) is
 # the checkout's. The last line is the `gstack:` trailer; exit 0 only on
 # `gstack: ok`. Contract: docs/capy-install.md; tests:
@@ -30,6 +31,7 @@ repo="${GSTACK_CAPY_REPO:-https://github.com/garrytan/gstack.git}"
 echo "gstack-capy-skill: wrapper $GSTACK_CAPY_WRAPPER ($self)"
 
 check=0 skill="" revision="" min_note="" remote_min="" remote_version=""
+unset GSTACK_CAPY_CLONED
 args=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -83,6 +85,7 @@ if [ ! -f "$root/setup" ]; then
   fi
   remote_min=$(support_get "$(cat "$root/capy/support.env" 2>/dev/null)" GSTACK_MIN_REVISION)
   remote_version=$(head -1 "$root/VERSION" 2>/dev/null)
+  export GSTACK_CAPY_CLONED="$repo"
 else
   # The remote's rules: fetch the default branch into FETCH_HEAD (never --depth
   # into an existing checkout), read capy/support.env from it.

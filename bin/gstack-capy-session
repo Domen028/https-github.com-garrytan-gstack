@@ -8,6 +8,7 @@
 #   GSTACK_CAPY_REMOTE_VERSION origin's VERSION read in this run (wrapper 2+; the
 #                             installer's `latest: <ver> available` trailer note)
 #   GSTACK_CAPY_UPGRADED_FROM the version it fast-forwarded from (setup is never skipped then)
+#   GSTACK_CAPY_CLONED        the repo it just cloned (wrapper 2+; the installer's `cloned` line)
 #   GSTACK_CAPY_LOCK_HELD=1   install mode: .gstack-capy-install.lock is held on an
 #                             inherited descriptor; nothing here takes it again
 # Because this file moves with the checkout, session-start behavior can change

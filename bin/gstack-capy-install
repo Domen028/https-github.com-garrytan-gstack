@@ -91,6 +91,9 @@ elif [ ! -f "$ROOT/setup" ] || [ ! -f "$ROOT/VERSION" ]; then
   else
     git clone --quiet --single-branch --depth 1 "$REPO" "$ROOT" || stop INSTALL_PREFLIGHT_FAILED "could not clone $REPO" "check network access to github.com, then re-run"
   fi
+  say "cloned $REPO at $(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null) ($(head -1 "$ROOT/VERSION"))"
+elif [ -n "${GSTACK_CAPY_CLONED:-}" ]; then
+  say "cloned $GSTACK_CAPY_CLONED at $(git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null) ($(head -1 "$ROOT/VERSION"))"
 else
   say "reusing $ROOT ($(head -1 "$ROOT/VERSION")); never reset or pulled"
 fi
