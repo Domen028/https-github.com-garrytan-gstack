@@ -408,5 +408,36 @@ export function ownedCausalOrder(metas: readonly RecordMeta[], cwd: string): Own
     order.push(node.index);
     for (const child of children.get(node.uuid!) ?? []) offer(child.index);
   }
+  const boundary = compactionCycle(nodes, new Set(order), byId, parentOf);
+  if (boundary) return { reason: 'unrecognized_shape:compaction_unreachable', shape: [shapeOf(boundary), ...shape()] };
   return { order, root: root.uuid };
+}
+
+/**
+ * An owned node the walk never reached is silently dropped, which the guard reads
+ * as an unread close packet. When that node's ancestry ends in a cycle through a
+ * compact boundary's logical parent, the cause is a compaction shape this reader
+ * does not know, so it is reported as one. An orphan whose ancestor is missing
+ * (not yet flushed) or another root keeps being dropped. Each node is walked once.
+ */
+function compactionCycle(nodes: readonly RecordMeta[], reached: ReadonlySet<number>,
+  byId: { get(id: string): RecordMeta | undefined }, parentOf: (m: RecordMeta) => string | undefined): RecordMeta | undefined {
+  const verdict = new Map<RecordMeta, RecordMeta | null>();
+  const isBoundary = (m: RecordMeta) => m.type === 'system' && m.subtype === 'compact_boundary' && m.parentNull && m.parent !== undefined;
+  for (const start of nodes) {
+    if (reached.has(start.index) || verdict.has(start)) continue;
+    const path: RecordMeta[] = [], onPath = new Map<RecordMeta, number>();
+    let result: RecordMeta | null = null;
+    for (let at: RecordMeta | undefined = start; at;) {
+      if (verdict.has(at)) { result = verdict.get(at)!; break; }
+      const loop = onPath.get(at);
+      if (loop !== undefined) { result = path.slice(loop).find(isBoundary) ?? null; break; }
+      onPath.set(at, path.length); path.push(at);
+      const id = parentOf(at);
+      at = id ? byId.get(id) : undefined;
+    }
+    for (const m of path) verdict.set(m, result);
+    if (result) return result;
+  }
+  return undefined;
 }

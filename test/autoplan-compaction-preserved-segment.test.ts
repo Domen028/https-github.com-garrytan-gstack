@@ -17,7 +17,7 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { guardFixture, section, codeOf, type GuardFixture } from './helpers/autoplan-guard-fixture';
+import { guardFixture, section, codeOf, denial, type GuardFixture } from './helpers/autoplan-guard-fixture';
 import { readOwnedClaudePublicTranscript } from '../lib/claude-public-transcript';
 import { OWNED_READ_APPROVAL } from '../autoplan/bin/owned-read';
 
@@ -34,12 +34,12 @@ const usesTool = (r: Row, id: string) => Array.isArray(r.message?.content) && r.
  * auto-compaction and in full after it, then published: the order a long
  * session produced on Claude Code 2.1.300.
  */
-function fixture(): GuardFixture {
+function fixture(history?: Row[]): GuardFixture {
   const f = guardFixture(); fixtures.push(f);
   const at = f.steps.findIndex(s => s.kind === 'use' && s.id === 'close');
   f.read('close-head', f.packet.closePacketPath, 1, 1);
   f.steps.splice(at, 0, ...f.steps.splice(-2));
-  f.publish(); f.journal();
+  f.publish(); f.journal(f.steps.length, at => at === -1 && history ? history as any : []);
   return f;
 }
 
@@ -100,28 +100,68 @@ describe('Claude Code 2.1.300 compaction with a preserved segment', () => {
     expect(await f.hook(nextPhase(f))).toEqual(OWNED_READ_APPROVAL);
   });
 
-  test('a preserved segment of only the tail (nothing kept in place) names no anchor and fails closed', async () => {
+  test('a preserved segment of only the tail (nothing kept in place) names no anchor and is reported as an unrecognized shape', async () => {
     const f = fixture(); compact300(f, { keep: 0 });
     expect(toolIds(f)).not.toContain('close');
-    expect(codeOf(await f.hook(nextPhase(f)))).toBe('close_incomplete');
+    expectUnrecognizedCompaction(f, await f.hook(nextPhase(f)));
   });
 
-  test('a boundary without compactMetadata (Claude Code before 2.1.300) is still read', () => {
+  test('a boundary without compactMetadata whose logical parent cycles back is reported, not silently cut', async () => {
     const f = fixture(); compact300(f, { shape: b => { delete b.compactMetadata; } });
-    expect(toolIds(f)).toEqual(['init', 'entry', 'close-head']);
+    expect(readOwnedClaudePublicTranscript(f.transcript, f.cwd, f.sessionId).transcript)
+      .toMatchObject({ status: 'missing', reason: 'unrecognized_shape:compaction_unreachable' });
+    expectUnrecognizedCompaction(f, await f.hook(nextPhase(f)));
   });
 
-  test('a boundary whose logical parent cycles back without a matching preserved tail still drops what follows (fails closed)', async () => {
+  test('a boundary whose logical parent cycles back without a matching preserved tail is reported as an unrecognized shape', async () => {
     const f = fixture();
     compact300(f, { shape: b => { delete b.compactMetadata.preservedSegment; delete b.compactMetadata.preservedMessages; } });
     expect(toolIds(f)).not.toContain('close');
-    expect(codeOf(await f.hook(nextPhase(f)))).toBe('close_incomplete');
+    expectUnrecognizedCompaction(f, await f.hook(nextPhase(f)));
   });
 
   test('a preserved list naming a record outside this session does not anchor the boundary', async () => {
     const f = fixture();
     compact300(f, { shape: b => { b.compactMetadata.preservedMessages.uuids = [randomUUID(), b.logicalParentUuid]; } });
     expect(toolIds(f)).not.toContain('close');
+    expectUnrecognizedCompaction(f, await f.hook(nextPhase(f)));
+  });
+
+  test('a compaction whose boundary is not flushed yet still drops what follows and denies (negative control)', async () => {
+    const f = fixture();
+    const { boundary } = compact300(f);
+    write(f, rowsOf(f).filter(r => r.uuid !== boundary));
+    expect(toolIds(f)).not.toContain('close');
     expect(codeOf(await f.hook(nextPhase(f)))).toBe('close_incomplete');
   });
+
+  test('three compactions in one session stay owned and the next phase entry passes', async () => {
+    const f = fixture();
+    for (const splitAt of ['entry', 'close-head', 'close']) compact300(f, { splitAt });
+    expect(rowsOf(f).filter(r => r.subtype === 'compact_boundary')).toHaveLength(3);
+    expect(toolIds(f)).toEqual(['init', 'entry', 'close-head', 'close', expect.stringMatching(/^noop-/)]);
+    expect(await f.hook(nextPhase(f))).toEqual(OWNED_READ_APPROVAL);
+  });
+
+  test('a 50k-record history with three compactions is decided inside the hook budget', async () => {
+    const history: Row[] = [{ type: 'user', message: { role: 'user', content: 'Review the retry change first.' },
+      extra: { origin: { kind: 'human' }, promptSource: 'typed', promptId: randomUUID() } }];
+    for (let i = 0; i < 50_000; i++) history.push({ type: 'assistant', message: { role: 'assistant', id: `msg_pad${i}`, content: [{ type: 'text', text: 'ok' }] } });
+    history.push({ type: 'assistant', message: { role: 'assistant', id: 'msg_earlier_end', content: [{ type: 'text', text: 'Done.' }], stop_reason: 'end_turn' } });
+    const f = fixture(history);
+    for (const splitAt of ['entry', 'close-head', 'close']) compact300(f, { splitAt });
+    const started = performance.now();
+    const output = await f.hook(nextPhase(f));
+    const elapsed = performance.now() - started;
+    expect(output).toEqual(OWNED_READ_APPROVAL);
+    expect(elapsed).toBeLessThan(1000);
+  });
 });
+
+/** The guard allows the call with a visible warning and logs the unverified decision; it never denies with close_incomplete. */
+function expectUnrecognizedCompaction(f: GuardFixture, output: any) {
+  expect(denial(output)).toBeUndefined();
+  expect(codeOf(output)).toBe('unrecognized_shape:compaction_unreachable');
+  expect(output.systemMessage).toContain('phase publication was NOT verified');
+  expect(f.log().at(-1)).toMatchObject({ decision: 'allow', disposition: 'unverified', code: 'unrecognized_shape:compaction_unreachable' });
+}
