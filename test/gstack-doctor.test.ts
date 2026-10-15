@@ -801,6 +801,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
   const drive = (f: Fixture, scope: string, text: string) => { const file = path.join(f.home, '.capy/drive', scope, 'skills/gstack/scripts/install.sh'); write(file, text); return file; };
   const withSupport = (f: Fixture, min = 1) => write(path.join(f.root, 'capy/support.env'), `GSTACK_MIN_REVISION=1.0.0.0\nGSTACK_CAPY_MIN_WRAPPER=${min}\n`);
   const current = fs.readFileSync(path.join(REPO, 'capy/skill/gstack/scripts/install.sh'), 'utf8');
+  const currentRev = current.match(/^GSTACK_CAPY_WRAPPER=(\d+)$/m)![1];
 
   test('direct doctor run: a pre-bootstrapper Drive copy (no revision line) fails wrapper with both fixes; a current copy is not flagged', () => {
     const f = makeFixture();
@@ -814,7 +815,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(row).toContain('(CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)');
     write(stale, current);
     const fresh = parse(f, []);
-    expect(fresh.line('wrapper')).toBe(`PASS wrapper Drive copy ${stale} (wrapper 1) (minimum 1)`);
+    expect(fresh.line('wrapper')).toBe(`PASS wrapper Drive copy ${stale} (wrapper ${currentRev}) (minimum 1)`);
     expect(fresh.status, fresh.out).toBe(0);
   });
 
@@ -824,7 +825,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     const stale = drive(f, 'org', PRE_BOOTSTRAPPER);
     const good = drive(f, 'user', current);
     const r = parse(f, []);
-    expect(r.line('wrapper')).toBe(`PASS wrapper Drive copy ${good} (wrapper 1) (minimum 1); stale copies: ${stale} (wrapper 0)`);
+    expect(r.line('wrapper')).toBe(`PASS wrapper Drive copy ${good} (wrapper ${currentRev}) (minimum 1); stale copies: ${stale} (wrapper 0)`);
     expect(parse(f, [], { GSTACK_CAPY_WRAPPER_PATH: stale }).trailer).toBe('gstack: fail wrapper');
   });
 
