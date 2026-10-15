@@ -127,9 +127,10 @@ Two stages with separate clocks, both printed:
   the project's `engines.bun` (the row prints `runtime: bun <v> from <dir>`),
   so a Capy host's older image Bun cannot flip the verdict.
 - Every test-tier command (the lanes runner, each guard, the `--remote` gate)
-  runs supervised: see [supervision](#supervision). `--timeout` bounds the
-  whole check (all runner processes together); a serial file that would start
-  after the deadline is not started and the check is `incomplete`.
+  runs supervised: see [supervision](#supervision). `--timeout` bounds each
+  runner process (the unit-file group, each serial file, each guard without
+  its own `timeout_s`), not their total; the stall timeout catches a hung or
+  silent one sooner.
 - Under 8 cores, a base-branch `remote_gate` or a remote `test_backend`
   (`gstack-config set test_backend ubicloud`) records the local test tier as a
   `requires-remote` obligation instead of running it: see [remote gate](#remote-gate).
@@ -157,9 +158,10 @@ gstack lacks never gets a green it did not ask for). Tier 2 checks still to come
 ## Supervision: progress, stalls, deadlines
 
 GBRA-95 (gbrain, 4 cores): a core edit selected 3,683 local files, 358 of them
-serial; the test stage printed nothing for 90 minutes because each runner
-process had its own `--timeout` and its output was buffered until it returned.
-Now each test-tier command:
+serial; the test stage printed nothing for 90 minutes: each runner process
+ran up to its own `--timeout` (one per serial file) with its output buffered
+until it returned, and nothing noticed a process that had gone quiet. Now each
+test-tier command:
 
 - runs in its own process group (`setsid`), with stdout and stderr appended to
   a log file, never a pipe, so a backgrounded grandchild that keeps the output
@@ -182,7 +184,9 @@ Now each test-tier command:
   (`--stall-timeout <s>`, else `stall_timeout_s`, else 300; `0` disables): the
   check is `incomplete` with `PREGATE_STALLED` and names the last file
   started; the next serial file still runs;
-- is killed as **timed out** at the check's `--timeout` deadline.
+- is killed as **timed out** when that runner process reaches `--timeout`
+  (per runner process, so many serial files that each fit still pass); the
+  check is `incomplete` and the next serial file still runs.
 
 A kill is SIGTERM to the group, then SIGKILL after 5 s (a group that ignores
 SIGTERM still dies). SIGINT or SIGTERM to `gstack-pregate` itself SIGKILLs every

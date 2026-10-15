@@ -49,13 +49,13 @@ export function parseSummary(output: string): RunnerSummary {
   return { ran: null, failed: null };
 }
 
-interface LocalRun { exit: number | null; outcome: Supervised['outcome'] | 'not-started'; ran: number | null; failed: number | null; tail: string[]; command: string; files: string[]; lastFile: string | null; ms: number }
+interface LocalRun { exit: number | null; outcome: Supervised['outcome']; ran: number | null; failed: number | null; tail: string[]; command: string; files: string[]; lastFile: string | null; ms: number }
 
 const quote = (f: string) => `'${f.replace(/'/g, `'\\''`)}'`;
 
-async function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[], log: string, deadline: number, counter: Counter): Promise<LocalRun> {
+async function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: string, files: string[], log: string, counter: Counter): Promise<LocalRun> {
   const command = runner.replace('{files}', files.map(quote).join(' '));
-  const r = await supervise({ command, cwd: ctx.repoRoot, env: { ...env, CI: env.CI ?? '1' }, log, deadline, stallMs: ctx.stallTimeoutMs, label: `lanes (${files.length === 1 ? files[0] : `${files.length} files`})`, files, adapter: adapterFor(runner), counter, progress: ctx.progress });
+  const r = await supervise({ command, cwd: ctx.repoRoot, env: { ...env, CI: env.CI ?? '1' }, log, deadline: Date.now() + ctx.timeoutMs, stallMs: ctx.stallTimeoutMs, label: `lanes (${files.length === 1 ? files[0] : `${files.length} files`})`, files, adapter: adapterFor(runner), counter, progress: ctx.progress });
   const output = readRange(log, r.start, r.end);
   const summary = parseSummary(output);
   return { exit: r.exit, outcome: r.outcome, ...summary, tail: output.trim().split('\n').slice(-25), command, files, lastFile: r.lastFile, ms: r.ms };
@@ -64,8 +64,8 @@ async function runOnce(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: stri
 /**
  * Unit files in one runner process, then each serial-pattern file in its
  * own (a serial file shares process-wide state: a module mock, an env
- * mutation). `--timeout` bounds the whole check: a group that would start
- * after the deadline is not started. A stalled group is killed and the next
+ * mutation). `--timeout` bounds each runner process; the stall timeout
+ * catches a silent one. A stalled or timed-out group is killed and the next
  * one runs. The first unfinished, then the first non-zero run decides the
  * exit; counts add up only when every run reported a summary.
  */
@@ -75,29 +75,26 @@ async function runLocal(ctx: PregateContext, env: NodeJS.ProcessEnv, runner: str
   fs.writeFileSync(log, '');
   const serial = files.filter(f => matchesAny(ctx.config.serial_patterns, f));
   const unit = files.filter(f => !serial.includes(f));
-  const deadline = Date.now() + ctx.timeoutMs;
   const counter: Counter = { done: 0, total: files.length };
   const runs: LocalRun[] = [];
   for (const group of [...(unit.length ? [unit] : []), ...serial.map(f => [f])]) {
-    if (Date.now() >= deadline) { runs.push({ exit: null, outcome: 'not-started', ran: null, failed: null, tail: [], command: '', files: group, lastFile: null, ms: 0 }); continue; }
-    runs.push(await runOnce(ctx, env, runner, group, log, deadline, counter));
+    runs.push(await runOnce(ctx, env, runner, group, log, counter));
   }
   const bad = runs.find(r => r.exit === null) ?? runs.find(r => r.exit !== 0);
   const sum = (k: 'ran' | 'failed') => (runs.some(r => r[k] === null) ? null : runs.reduce((n, r) => n + (r[k] as number), 0));
-  const started = runs.filter(r => r.outcome !== 'not-started');
-  return { runs, bad, exit: bad ? bad.exit : 0, ran: sum('ran'), failed: sum('failed'), log, tail: (bad?.tail.length ? bad : started[started.length - 1] ?? runs[0]!).tail, command: started.map(r => r.command).join(' && '), serial: serial.length };
+  return { runs, bad, exit: bad ? bad.exit : 0, ran: sum('ran'), failed: sum('failed'), log, tail: (bad ?? runs[runs.length - 1]!).tail, command: runs.map(r => r.command).join(' && '), serial: serial.length };
 }
 
-/** Why the local lane did not finish: the stall, the deadline or a launch failure, with the last file started. */
+/** Why the local lane did not finish: a stall, a runner process past --timeout or a launch failure, with the last file started. */
 function unfinished(ctx: PregateContext, r: Awaited<ReturnType<typeof runLocal>>, total: number): Pick<CheckResult, 'code' | 'detail' | 'fix'> {
-  const notStarted = r.runs.filter(x => x.outcome === 'not-started').flatMap(x => x.files).length;
   const stalled = r.runs.filter(x => x.outcome === 'stalled');
-  const rest = `${notStarted ? `; ${notStarted} of ${total} file(s) not started` : ''}${r.failed ? `; ${r.failed} failed before that` : ''}`;
+  const timedOut = r.runs.filter(x => x.outcome === 'timeout');
+  const rest = r.failed ? `; ${r.failed} failed` : '';
   if (stalled.length) {
     return { code: 'PREGATE_STALLED', detail: `no test output for ${ctx.stallTimeoutMs / 1000} s; process group killed; last file started: ${stalled.map(x => x.lastFile ?? `(none reported; ${x.files.length} file(s))`).join(', ')}${rest}`, fix: `read ${r.log} for the stalled file; fix the hang, or raise --stall-timeout (stall_timeout_s in .gstack/pregate.json; 0 disables) for a test that is quiet for longer` };
   }
-  const why = r.runs.find(x => x.outcome === 'spawn-failed') ? 'the runner could not be launched' : `local lane timed out after ${ctx.timeoutMs} ms`;
-  return { code: 'PREGATE_INCOMPLETE', detail: `${why} (${total} files${rest})`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
+  if (!timedOut.length) return { code: 'PREGATE_INCOMPLETE', detail: `the runner could not be launched (${total} files${rest})`, fix: 'read the lane log, fix the runner command, then rerun gstack-pregate --stage tests' };
+  return { code: 'PREGATE_INCOMPLETE', detail: `a runner process timed out after ${ctx.timeoutMs} ms (--timeout applies to each runner process; ${total} files; last file started: ${timedOut.map(x => x.lastFile ?? `(none reported; ${x.files.length} file(s))`).join(', ')}${rest})`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
 }
 
 function describe(sel: Selection): string[] {

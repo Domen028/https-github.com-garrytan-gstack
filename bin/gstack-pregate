@@ -61,7 +61,8 @@ const HELP = `gstack-pregate — cheap checks before anything paid or remote (do
   --allow-repo-commands         run pin-file commands and the test runner (what /ship passes); without it those checks are incomplete
   --policy-from base|head       base (default, reviewed) or head (unreviewed; needs --allow-repo-commands)
   --out <file>                  pregate.json path (default ${PREGATE_OUT_REL})
-  --timeout <s>                 per-check timeout (default 600): it bounds the whole check, every runner process included
+  --timeout <s>                 timeout for each runner process (default 600): the unit-file group, each serial file, each guard
+                                without timeout_s; the stall timeout catches a silent one sooner
   --stall-timeout <s>           kill a test command's process group after this long with no output and record the check
                                 incomplete (PREGATE_STALLED); default stall_timeout_s from the base .gstack/pregate.json,
                                 else ${DEFAULT_STALL_TIMEOUT_S}; 0 disables
