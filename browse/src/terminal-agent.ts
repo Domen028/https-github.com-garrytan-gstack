@@ -85,6 +85,8 @@ const sessionsById = new Map<string, PtySession>();
 // the listener loop.
 export interface PtySession {
   proc: any | null;        // Bun.Subprocess once spawned
+  /** Spawn-time identity of the PTY's process group; outlives the leader so shutdown can reap HUP-immune descendants. */
+  group?: PtyGroupIdentity | null;
   lifecycle?: PtyLifecycle | null;
   completion?: PtyCompletion;
   disposed?: boolean;
@@ -241,6 +243,60 @@ const sessions = new WeakMap<any, PtySession>(); // ws -> session
 // sessionsById excludes legacy grants, so neither can enumerate every PTY
 // child when the terminal-agent is replaced or its owner disappears.
 const activeSessions = new Set<PtySession>();
+// Set once shutdown starts: no new connection or PTY spawn during the grace.
+let shuttingDown = false;
+// Groups of disposed sessions whose delayed reap has not run yet; shutdown reaps them too.
+const pendingGroupReaps = new Set<PtyGroupIdentity>();
+
+/**
+ * A PTY child is its own session and process-group leader (pgid = sid =
+ * pid). That identity, with the leader's start time, stays checkable after
+ * the leader exits, so descendants that ignore SIGHUP can still be found.
+ */
+export interface PtyGroupIdentity { pgid: number; sid: number; startTime: number }
+interface ProcStat { state: string; pgrp: number; session: number; startTime: number }
+
+/** Linux /proc/<pid>/stat fields after the parenthesised comm; null when absent (or not Linux). */
+export function readProcStat(pid: number, procRoot = '/proc'): ProcStat | null {
+  let raw: string;
+  try { raw = fs.readFileSync(path.join(procRoot, String(pid), 'stat'), 'utf8'); } catch { return null; }
+  const f = raw.slice(raw.lastIndexOf(')') + 2).split(' ');
+  const stat = { state: f[0] ?? '', pgrp: Number(f[2]), session: Number(f[3]), startTime: Number(f[19]) };
+  return Number.isSafeInteger(stat.pgrp) && Number.isSafeInteger(stat.session) && Number.isSafeInteger(stat.startTime) ? stat : null;
+}
+
+/** The group identity of a freshly spawned PTY child, or null unless it provably leads its own session. */
+export function ptyGroupIdentity(pid: number, procRoot = '/proc'): PtyGroupIdentity | null {
+  const stat = readProcStat(pid, procRoot);
+  if (!stat || stat.pgrp !== pid || stat.session !== pid) return null;
+  return { pgid: pid, sid: pid, startTime: stat.startTime };
+}
+
+/**
+ * Live processes proven to belong to the group: same pgid and sid, started
+ * no earlier than its leader. A live process holding the leader's PID with
+ * another start time means the number was reused, so nothing is ours.
+ */
+export function ownedGroupMembers(id: PtyGroupIdentity, procRoot = '/proc'): number[] {
+  const leader = readProcStat(id.pgid, procRoot);
+  if (leader && leader.startTime !== id.startTime) return [];
+  let entries: string[];
+  try { entries = fs.readdirSync(procRoot); } catch { return []; }
+  const members: number[] = [];
+  for (const name of entries) {
+    if (!/^\d+$/.test(name)) continue;
+    const stat = readProcStat(Number(name), procRoot);
+    if (stat && stat.state !== 'Z' && stat.pgrp === id.pgid && stat.session === id.sid && stat.startTime >= id.startTime) members.push(Number(name));
+  }
+  return members;
+}
+
+/** SIGKILL every proven member of the group; returns how many were signalled. */
+export function reapOwnedGroup(id: PtyGroupIdentity, procRoot = '/proc', kill: (pid: number, signal: string) => void = process.kill): number {
+  const members = ownedGroupMembers(id, procRoot);
+  for (const pid of members) { try { kill(pid, 'SIGKILL'); } catch {} }
+  return members.length;
+}
 
 /** Find claude on PATH. */
 function findClaude(): string | null {
@@ -379,6 +435,12 @@ function disposeSession(session: PtySession): void {
   session.proc = null;
   session.spawned = false;
   disposePtyProcess(proc);
+  // Unlike the direct-child fallback, the group reap is not cancelled when
+  // the leader exits: a descendant that ignores SIGHUP outlives it.
+  const group = session.group;
+  if (!group) return;
+  pendingGroupReaps.add(group);
+  setTimeout(() => { pendingGroupReaps.delete(group); reapOwnedGroup(group); }, PTY_SHUTDOWN_GRACE_MS).unref?.();
 }
 
 function sendPtyCompletion(session: PtySession): void {
@@ -462,7 +524,7 @@ async function internalHandler<T>(
  * surfaced the error to the client (or will via the next frame).
  */
 function maybeSpawnPty(ws: any, session: PtySession): boolean {
-  if (session.disposed || session.completion) return false;
+  if (shuttingDown || session.disposed || session.completion) return false;
   if (session.spawned) return true;
   session.spawned = true;
   let leftover = Buffer.alloc(0);
@@ -516,6 +578,7 @@ function maybeSpawnPty(ws: any, session: PtySession): boolean {
     return false;
   }
   session.proc = proc;
+  session.group = ptyGroupIdentity(proc.pid);
   proc.exited.then(
     (code: number) => lifecycle.exited(code, proc.signalCode ?? null),
     () => lifecycle.exited(null, proc.signalCode ?? null, true),
@@ -540,6 +603,7 @@ function buildServer(port: number) {
     idleTimeout: 0, // PTY connections are long-lived; default idleTimeout would kill them
 
     fetch(req, server) {
+      if (shuttingDown) return new Response('shutting down', { status: 503 });
       const url = new URL(req.url);
 
       // /internal/grant — loopback-only handshake from parent server.
@@ -1081,14 +1145,16 @@ async function main() {
   const cleanup = async () => {
     if (cleaningUp) return;
     cleaningUp = true;
-    // Capture each child wait before disposeSession clears session.proc.
-    // disposePtyProcess sends SIGINT and schedules a SIGKILL fallback after
-    // PTY_SHUTDOWN_GRACE_MS; keeping this async handler alive lets that
-    // fallback run instead of process.exit(0) abandoning every PTY child.
-    const childExits = [...activeSessions]
-      .map(session => session.proc?.exited)
-      .filter((exited): exited is Promise<number> => !!exited);
-    for (const session of [...activeSessions]) disposeSession(session);
+    shuttingDown = true;
+    // disposePtyProcess sends SIGINT and schedules the direct child's SIGKILL
+    // fallback. Each PTY's process group, captured at spawn, is reaped after
+    // the same grace even when its leader exits first, so descendants that
+    // ignore SIGHUP do not outlive the agent. Awaiting here keeps both alive
+    // instead of process.exit(0) abandoning them.
+    const owned = [...activeSessions];
+    const childExits = owned.map(session => session.proc?.exited).filter((exited): exited is Promise<number> => !!exited);
+    for (const session of owned) disposeSession(session);
+    const groups = [...pendingGroupReaps];
     sessionsById.clear();
     try {
       const releaseCleanup = acquireAgentStateLock(dir, 25);
@@ -1100,12 +1166,12 @@ async function main() {
         }
       } finally { releaseCleanup(); }
     } catch {}
-    if (childExits.length) {
-      await Promise.race([
-        Promise.allSettled(childExits),
-        Bun.sleep(PTY_SHUTDOWN_GRACE_MS + 250),
-      ]);
-    }
+    let childrenExited = childExits.length === 0;
+    void Promise.allSettled(childExits).then(() => { childrenExited = true; });
+    const deadline = Date.now() + PTY_SHUTDOWN_GRACE_MS;
+    while (Date.now() < deadline && !(childrenExited && groups.every(group => ownedGroupMembers(group).length === 0))) await Bun.sleep(100);
+    for (const group of groups) reapOwnedGroup(group);
+    if (!childrenExited) await Promise.race([Promise.allSettled(childExits), Bun.sleep(250)]);
     process.exit(0);
   };
   process.on('SIGTERM', () => { void cleanup(); });
