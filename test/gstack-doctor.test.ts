@@ -792,6 +792,7 @@ describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pi
 // workaround (the checkout's own wrapper) certifies with the stale Drive copy
 // left unchanged. Plan A5: a drifted resolution is a runtime FAIL.
 describe('gstack-doctor --check: wrapper and runtime drift', () => {
+  const posixPathTest = process.platform === 'win32' ? test.skip : test;
   const PRE_BOOTSTRAPPER = '#!/usr/bin/env bash\n# gstack Capy skill installer (pre-bootstrapper)\nset -u\nroot="${GSTACK_CAPY_ROOT:-$HOME/.local/share/gstack}"\nexec "$root/bin/gstack-capy-install" "$@"\n';
   const parse = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
     const r = doctor(f, ['--check', ...args], extra);
@@ -803,7 +804,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
   const current = fs.readFileSync(path.join(REPO, 'capy/skill/gstack/scripts/install.sh'), 'utf8');
   const currentRev = current.match(/^GSTACK_CAPY_WRAPPER=(\d+)$/m)![1];
 
-  test('direct doctor run: a pre-bootstrapper Drive copy (no revision line) fails wrapper with both fixes; a current copy is not flagged', () => {
+  posixPathTest('direct doctor run: a pre-bootstrapper Drive copy (no revision line) fails wrapper with both fixes; a current copy is not flagged', () => {
     const f = makeFixture();
     withSupport(f);
     const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
@@ -819,7 +820,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(fresh.status, fresh.out).toBe(0);
   });
 
-  test('two Drive copies, one current: PASS naming the stale one; GSTACK_CAPY_WRAPPER_PATH alone decides when set without a revision', () => {
+  posixPathTest('two Drive copies, one current: PASS naming the stale one; GSTACK_CAPY_WRAPPER_PATH alone decides when set without a revision', () => {
     const f = makeFixture();
     withSupport(f);
     const stale = drive(f, 'org', PRE_BOOTSTRAPPER);
@@ -829,7 +830,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(parse(f, [], { GSTACK_CAPY_WRAPPER_PATH: stale }).trailer).toBe('gstack: fail wrapper');
   });
 
-  test('the printed workaround certifies: a current active wrapper passes with the stale Drive copy unchanged (WARN, owner action); a stale active wrapper is a WARN too', () => {
+  posixPathTest('the printed workaround certifies: a current active wrapper passes with the stale Drive copy unchanged (WARN, owner action); a stale active wrapper is a WARN too', () => {
     const f = makeFixture();
     withSupport(f);
     const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
@@ -858,7 +859,7 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(r.line('runtime')).toBe('FAIL runtime — bun resolution drifted: recorded bun 1.4.3 at /s/bun (home), now no eligible bun; changed: the recorded binary is gone; fix: bash /d/install.sh --for review (BUN_RESOLUTION_DRIFT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bun-resolution-drift)');
   });
 
-  test('the runtime row shows gstack\'s bun shim and where it resolves from here, or names a foreign ~/.local/bin/bun it left alone', () => {
+  posixPathTest('the runtime row shows gstack\'s bun shim and where it resolves from here, or names a foreign ~/.local/bin/bun it left alone', () => {
     const f = makeFixture();
     const shim = path.join(f.home, '.local/bin/bun');
     write(shim, '#!/bin/sh\n# gstack-bun-shim: gstack-owned; delete this file to remove it\n[ "$GSTACK_BUN_SHIM_EXPLAIN" = 1 ] && echo "gstack bun shim: project=none record=none chose=/store/1.4.3/bun rule=default" >&2\necho 1.4.3\n', 0o755);
