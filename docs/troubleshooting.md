@@ -1370,7 +1370,7 @@ the project whose pins apply.
 
 **Meaning.** The first browser skill run on a machine installed without
 Chromium (`SKIP browser (lazy; gstack-browser-ensure installs on first use)`)
-tried to install it through `bunx playwright install chromium` under setup's
+tried to install it through `bun x playwright install chromium` under setup's
 lock, or Chromium is installed but does not launch.
 
 **Fix.** Read the installer output above: offline or proxied machines need
@@ -1690,6 +1690,33 @@ anything.
 
 ```powershell
 .\setup.ps1 --host codex
+```
+
+---
+
+<a id="chromium-install-exit-127"></a>
+### `Chromium bootstrap: chromium-install — <bun> x playwright install chromium exited 127 (command not found); install Bun from bun.sh (winget Bun ships no bunx), or skip with ./setup --no-browser (Git Bash) or .\setup.ps1 --no-browser (PowerShell)`
+
+**Meaning.** setup (or `bin/gstack-browser-ensure`, as `BROWSER_UNAVAILABLE
+<bun> x playwright install chromium exited 127 (command not found)`) could
+not run the Playwright installer: the shell found no command to run. Until
+the release that fixed #3131, setup called `bunx`, which a Bun installed with
+winget does not ship, and reported the failure as `exited 127 (offline,
+proxy, or blocked download?)`. It now runs `bun x` through the Bun it
+resolved, so exit 127 means that Bun itself, or a command it starts, is
+missing. Skills that do not need a browser are installed either way.
+
+**Fix.** Install Bun from https://bun.sh (it ships `bun` and `bunx`), then
+run setup again. To install without the browser for now, in Git Bash:
+
+```bash
+./setup --no-browser
+```
+
+or in Windows PowerShell:
+
+```powershell
+.\setup.ps1 --no-browser
 ```
 
 ---

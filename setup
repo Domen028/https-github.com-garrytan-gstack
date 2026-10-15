@@ -2149,7 +2149,7 @@ fi
 # setup is installing Chromium right now, so this run registers skills and
 # re-probes next time. The download is bounded (default 600s, env
 # GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT) because Playwright's own retries cover a
-# flaky socket but not a wedged bunx; a wedged installer is killed with its
+# flaky socket but not a wedged `bun x`; a wedged installer is killed with its
 # child tree (_kill_tree: pgrep-walked, /proc-walked where pgrep is missing).
 # Reason codes: skipped, chromium-install,
 # chromium-install-timeout, chromium-install-locked, windows-no-node,
@@ -2235,12 +2235,14 @@ elif ! ensure_playwright_browser; then
     # the previous handler, so the lock trap must run both or any run taking
     # this path leaves .tmp-bun-bin behind.
     trap 'rm -rf "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun' EXIT
+    # `bun x`, not `bunx`: a winget Bun ships no bunx (#3131).
+    _PW_BUN="$(command -v "$BUN_CMD" 2>/dev/null || printf '%s' "$BUN_CMD")"
     (
       cd "$SOURCE_GSTACK_DIR"
       if [ -n "$_PLAYWRIGHT_PLATFORM_OVERRIDE" ]; then
-        PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bunx playwright install chromium
+        PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bun_cmd x playwright install chromium
       else
-        bunx playwright install chromium
+        bun_cmd x playwright install chromium
       fi
     ) &
     _PW_PID=$!
@@ -2252,9 +2254,11 @@ elif ! ensure_playwright_browser; then
     _wait_with_deadline "$_PW_PID" "$_PW_INSTALL_TIMEOUT" || _PW_RC=$?
     trap - INT TERM
     if [ "$_PW_RC" -eq 124 ]; then
-      _pw_fail chromium-install-timeout "bunx playwright install chromium exceeded ${_PW_INSTALL_TIMEOUT}s and was killed (raise with GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>)"
+      _pw_fail chromium-install-timeout "$_PW_BUN x playwright install chromium exceeded ${_PW_INSTALL_TIMEOUT}s and was killed (raise with GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>)"
+    elif [ "$_PW_RC" -eq 127 ]; then
+      _pw_fail chromium-install "$_PW_BUN x playwright install chromium exited 127 (command not found); install Bun from bun.sh (winget Bun ships no bunx), or skip with ./setup --no-browser (Git Bash) or .\\setup.ps1 --no-browser (PowerShell)"
     elif [ "$_PW_RC" -ne 0 ]; then
-      _pw_fail chromium-install "bunx playwright install chromium exited $_PW_RC (offline, proxy, or blocked download?)"
+      _pw_fail chromium-install "$_PW_BUN x playwright install chromium exited $_PW_RC (offline, proxy, or blocked download?)"
     fi
     rm -rf "$_PW_LOCK" 2>/dev/null || true
     # Restore the original handler (never `trap - EXIT`, which would clear
