@@ -28,12 +28,13 @@ line yourself; gstack never writes the plan.
    a subagent on another model family (or `gstack-outside-voice run`). Each writes `result=`.
 2. Submit each voice exactly once (`BOUND:`). Both voices in closes the phase (`PHASE_CLOSED:`).
 3. Repeat `next` until `status=gate_pending` (`GATE: gate_rev=<n>`); render it with
-   `gstack-gate render <dir>/gate.json`. You never approve the gate for the owner: relay it.
+   `gstack-gate render <dir>/gate.json --all` and relay every page. You never approve the
+   gate for the owner. Offer `rec` (every recommendation, plan changes included) as the default.
 4. `answer` with the owner's reply and `--by human` (the owner typed the tokens) or
-   `--by agent:<id>` (you relayed or decided them); without it an unattended run refuses
-   (`ANSWER_BY_REQUIRED`). `all` leaves every item recommended `b` pending: only the owner's
-   own token changes their stated direction. `APPLY: <id> <title> -> <change>` lines are
-   accepted plan changes: edit the plan, then `revise` (the printed `NEXT:` names it). Until
+   `--by agent:<id> --owner-reply "<their words>"` (you relayed them); without `--by` an
+   unattended run refuses (`ANSWER_BY_REQUIRED`). `APPLY: <id> <title> -> <change>` lines are
+   accepted plan changes (status `amend_pending`): edit the plan, then `revise` (the printed
+   `NEXT:` names it), or `revise --settle <id>` when the line says no plan edit is needed. Until
    then `next` refuses with `PLAN_AMEND_PENDING` and `export` will not mark the run complete.
 5. `REOPENED: <phases>` means loop `next` again (Eng last). `APPROVED:` means `export`.
 
@@ -51,16 +52,20 @@ line yourself; gstack never writes the plan.
   bind a canonical result (the RESULT FORMAT below).
 - `gstack-autoplan submit --out <dir> --phase <p> --voice outside --unavailable|--failed "<reason>"`
   close the phase native-only when no outside voice can run.
-- `gstack-autoplan answer --out <dir> --gate-rev <n> --reply "<reply>"`
-  answer the gate with the reply grammar below.
+- `gstack-autoplan answer --out <dir> --gate-rev <n> --reply "<reply>" --by human|agent:<id> [--owner-reply <text>|-] [--rec-hash <h>]`
+  answer the gate with the reply grammar below; an agent answer stores the owner's words verbatim.
+- `gstack-autoplan recommend --out <dir> --gate-rev <n> --item <id> --option <k> --basis "<why>"`
+  change one recommendation before relay; then render and relay again (a `rec` needs the new `--rec-hash`).
 - `gstack-autoplan revise --out <dir> --plan <plan v2> --incorporates <decision ids>`
   bind the amended plan; reopens every phase whose reviewed plan changed, Eng last.
+- `gstack-autoplan revise --out <dir> --settle <decision id|d4>`
+  discharge a packaging or ordering change with no plan edit; reopens nothing.
 - `gstack-autoplan revise --out <dir> --withdraw <decision id>`
   drop a pending amendment instead of applying it.
 - `gstack-autoplan export --out <dir>`
   write the artifact set; then `gstack-artifact validate <dir>/run.json`.
 - `gstack-autoplan status|resume --out <dir>`
-  read the manifest; take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts).
+  read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts).
 
 ## Reviewer result format
 
@@ -73,22 +78,23 @@ RESULT FORMAT (required by gstack-autoplan; the parent binds your file by this c
 ```gstack-findings
 {"id":"F1","severity":"High","title":"<one line>","file":"<path or omit>","line":12,"fix":"<the fix>"}
 ```
-   severity is Critical | High | Medium | Low | Informational. Add "user_challenge": true only when you recommend changing the plan's stated direction AND the change alters its scope, cost or direction; then also add "changes": "scope" | "cost" | "direction". Packaging, ordering, naming and other reversible choices are ordinary findings, not user challenges. Add "urgent": true and "suggested_owner": "<who>" for a security or data-loss finding this plan does not own. An empty fence means no findings; a missing fence is refused.
+   severity is Critical | High | Medium | Low | Informational. Add "user_challenge": true only when you recommend changing the plan's stated direction AND the change alters its scope, cost or direction (then also add "changes": "scope" | "cost" | "direction") or only its delivery packaging or ordering, with no Implementation-plan edit (then "changes": "packaging" | "ordering"). Naming and other reversible choices are ordinary findings, not user challenges. Add "urgent": true and "suggested_owner": "<who>" for a security or data-loss finding this plan does not own. An empty fence means no findings; a missing fence is refused.
 3. Write the whole result to this file: <result file>
 
 ## Gate replies
 
 A reply binds to the `gate_rev` you read (`--gate-rev`). Bare `yes`/`no` is unparsed, never guessed.
 
-- `all`: every item takes its recommendation (an agreed change prints APPLY: and needs revise).
-- `all as-is`: keep every direction; no plan change.
+- `rec`: every item takes its recommendation, plan changes included (each prints APPLY:); `all` is an alias.
+- `as-is`: keep every direction; no plan change.
 - `d3b uc1a`: one <id><option> token per item you set; unanswered auto items take their default.
-- `all except d3b`: recommendations, with the listed overrides.
+- `rec except d3b`: recommendations, with the listed overrides.
 
 ## Run directory
 
 Runner state: `run.json`, `attempts.jsonl`, `run.lock`, `spend.json`, `plan-active.md`, `restore.md`, `plan-source.md`. Reviewer files: `<phase>-native-prompt.md`,
-`<phase>-outside-prompt.md`, `<phase>-native.md`, `<phase>-outside.md`, `<phase>-consensus.{json,md}`,
+`<phase>-outside-prompt.md`, `<phase>-<voice>.<attempt>.md` (the reviewer writes it), its sealed
+`<phase>-<voice>.<attempt>.bound.md` (what submit bound), `<phase>-consensus.{json,md}`,
 `gate.json`, `decisions.jsonl`. `export` writes `plan.md`, `review-record.md`, `findings.jsonl`,
 `tasks.jsonl`, `timing.json` and rehashes `run.json`; `gstack-artifact validate <dir>/run.json`
 is the completion check. Copy the whole directory, never single files.
@@ -108,7 +114,11 @@ is the completion check. Copy the whole directory, never single files.
 - `CONSENSUS_MISSING`: resume the run so the phase closes through reconciliation; the Eng prompt is never sent without every prior phase summary
 - `GATE_REV_STALE`: render the current gate list, read it, and reply with its gate_rev
 - `GATE_REPLY_UNPARSED`: reply with `all`, `all as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous
-- `PLAN_AMEND_PENDING`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`
+- `GATE_REC_STALE`: render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`
+- `OWNER_REPLY_REQUIRED`: pass the owner's words exactly with `--owner-reply "<text>"`, `--owner-reply -` (stdin) or `--owner-reply-file <path>`
+- `GATE_OWNER_REPLY_MISMATCH`: relay exactly what the owner chose (or their reply itself, e.g. `--reply rec`); ask the owner when their words and the tokens disagree
+- `PLAN_AMEND_PENDING`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; settle a packaging or ordering change with `gstack-autoplan revise --out <dir> --settle <id>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`
+- `AMENDMENT_NOT_SETTLEABLE`: edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`; settle only packaging or ordering changes on an unchanged plan
 - `GSTACK_VERSION_CHANGED`: nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade
 
 ## Coordinator contract (inherited by every lane)

@@ -1,23 +1,27 @@
 /**
  * Field-wave residuals (gstack fix wave review, gate revs 1–2, 2026-10-12/13):
- *  R1 `all` never flips the owner's stated direction: a user-challenge item
- *     whose recommended option changes the plan stays pending under `all` and
- *     is answered only by its own token; the rendering says which ids `all`
- *     leaves open.
+ *  R1 (superseded by next-wave B1, owner decision gate_rev 1): `rec` and its
+ *     silent alias `all` take every recommendation, plan changes included;
+ *     `as-is` keeps every direction; the render prints the `rec` resolution
+ *     from the parser that applies it.
  *  R2 every later phase sees its predecessors' consensus: the DX prompt
  *     carries the CEO consensus, not only the Eng prompt.
  *  R3 lib code spawns the Bun that runs it (`process.execPath`), never `bun`
  *     by PATH name, so the snapshot tool and restamp cannot silently run the
  *     Capy image's 1.3.14 when a parent forgot the launch PATH.
  *  R5 gate answers carry provenance: `answer --by <human|agent:<id>>` is
- *     required in an unattended run and lands on every decision row.
+ *     required in an unattended run and lands on every decision row; an agent
+ *     answer also carries the owner's verbatim reply (next-wave B-c), and a
+ *     parseable owner reply that resolves differently from the relay is refused.
+ *  B-b `recommend` changes what `rec` resolves to, so it bumps rec_rev and a
+ *     `rec` must carry the rec_hash of the render the owner saw.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { parseReply, renderGate, type GateList } from '../lib/gate-list';
-import { attemptsOf, autoplan, readRun, review, ROOT, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
+import { attemptsOf, autoplan, readRun, resultOf, review, ROOT, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-residuals-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -34,7 +38,7 @@ const agreed: GateList = {
 };
 const decisions = (out: string) => fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
 
-/** Both voices challenge the same item with the same `changes` and a remedy each: the gate recommends `b`. */
+/** Both voices challenge the same item with the same `changes` and the same remedy: the gate recommends `b`. */
 function agreedRun(name: string): string {
   const out = startSmallRun(path.join(TMP, name));
   const native = JSON.stringify([
@@ -42,51 +46,59 @@ function agreedRun(name: string): string {
     { id: 'F3', severity: 'High', title: 'Four lanes share result-codes.ts', file: 'lib/result-codes.ts', line: 1, user_challenge: true, changes: 'direction', fix: 'stack the lanes' }]);
   const outside = JSON.stringify([
     { id: 'O1', severity: 'Critical', title: 'The install check lies by omission', file: 'bin/gstack-doctor', line: 14, fix: 'exit non-zero on any FAIL' },
-    { id: 'O3', severity: 'High', title: 'Four lanes share result-codes.ts', file: 'lib/result-codes.ts', line: 1, user_challenge: true, changes: 'direction', fix: 'stack the lanes A then B' }]);
+    { id: 'O3', severity: 'High', title: 'Four lanes share result-codes.ts', file: 'lib/result-codes.ts', line: 1, user_challenge: true, changes: 'direction', fix: 'Stack the lanes.' }]);
   for (const phase of ['ceo', 'eng']) {
     expect(autoplan(['next', '--out', out]).status).toBe(0);
     review(path.join(out, `${phase}-native-prompt.md`), { FIXTURE_FINDINGS: native });
     review(path.join(out, `${phase}-outside-prompt.md`), { FIXTURE_FINDINGS: outside });
     const ids = attemptsOf(out, phase);
-    expect(autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'native', '--result', path.join(out, `${phase}-native.md`), '--model', 'anthropic/claude-opus-4-7', '--attempt', ids.native, '--runner', 'host-subagent']).status).toBe(0);
-    expect(autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'outside', '--result', path.join(out, `${phase}-outside.md`), '--model', 'openai/gpt-6-astra', '--attempt', ids.outside, '--runner', 'host-subagent']).status).toBe(0);
+    expect(autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'native', '--result', resultOf(out, phase, 'native'), '--model', 'anthropic/claude-opus-4-7', '--attempt', ids.native, '--runner', 'host-subagent']).status).toBe(0);
+    expect(autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'outside', '--result', resultOf(out, phase, 'outside'), '--model', 'openai/gpt-6-astra', '--attempt', ids.outside, '--runner', 'host-subagent']).status).toBe(0);
   }
   expect(readRun(out).status).toBe('gate_pending');
   return out;
 }
 
-describe('R1: `all` never flips the owner\'s stated direction', () => {
-  test('an approval item recommended b (changes the plan) stays pending under `all`; its own token answers it', () => {
-    const r = parseReply('all', agreed);
-    expect(r.valid).toBe(true);
-    expect(r.pending).toEqual(['uc1']);
-    expect(r.choices.map(c => `${c.id}${c.chosen}`)).toEqual(['uc2a', 'd1a', 'p1a']);
-    const explicit = parseReply('all except uc1b', agreed);
-    expect(explicit.pending).toEqual([]);
-    expect(explicit.choices.find(c => c.id === 'uc1')).toMatchObject({ chosen: 'b', how: 'recommended' });
-    const kept = parseReply('all except uc1a', agreed);
-    expect(kept.choices.find(c => c.id === 'uc1')).toMatchObject({ chosen: 'a', how: 'override' });
-    expect(parseReply('all as-is', agreed).choices.find(c => c.id === 'uc1')).toMatchObject({ chosen: 'a' });
+describe('R1/B1: `rec` (and its alias `all`) takes every recommendation, plan changes included', () => {
+  test('an approval item recommended b is answered by `rec`/`all`; `rec except uc1a` and `as-is` keep the direction', () => {
+    for (const reply of ['rec', 'all', 'approve all', 'Accept all', 'take all recommendations']) {
+      const r = parseReply(reply, agreed);
+      expect(r.valid).toBe(true);
+      expect(r.mode).toBe('rec');
+      expect(r.pending).toEqual([]);
+      expect(r.choices.map(c => `${c.id}${c.chosen}`)).toEqual(['uc1b', 'uc2a', 'd1a', 'p1a']);
+    }
+    expect(parseReply('rec except uc1a', agreed).choices.find(c => c.id === 'uc1')).toMatchObject({ chosen: 'a', how: 'override' });
+    expect(parseReply('all except uc1a', agreed).choices.find(c => c.id === 'uc1')).toMatchObject({ chosen: 'a', how: 'override' });
+    for (const reply of ['as-is', 'all as-is']) {
+      const r = parseReply(reply, agreed);
+      expect(r.mode).toBe('as-is');
+      expect(r.choices.find(c => c.id === 'uc1')).toMatchObject({ chosen: 'a' });
+    }
+    for (const bare of ['yes', 'no', 'rec d1', 'rec yes']) expect(parseReply(bare, agreed).valid).toBe(false);
   });
 
-  test('the rendering names the ids `all` leaves open and their exact tokens', () => {
+  test('the rendering offers `rec` first and prints its resolution from the same parser, with the rec_hash', () => {
     const text = renderGate(agreed);
-    expect(text).toMatch(/`all` does not answer uc1 \(recommended b changes the plan\); reply uc1a or uc1b/);
-    expect(text).toMatch(/"choices":\{"uc2":"a","d1":"a","p1":"a"\}/);
+    expect(text).toMatch(/Reply with exactly one of: `rec` \(default: take every recommendation, plan changes included\)/);
+    expect(text).toMatch(/"choices":\{"uc1":"b","uc2":"a","d1":"a","p1":"a"\}/);
+    expect(text).toMatch(/rec_hash=[0-9a-f]{12}/);
+    expect(text).not.toMatch(/does not answer/);
   });
 
-  test('end to end: both voices agree, the gate recommends b, and `all` keeps the gate pending on that item', () => {
+  test('end to end: both voices agree with one remedy, the gate recommends b, and `rec` accepts it as a pending amendment', () => {
     const out = agreedRun('agreed');
     const gate = JSON.parse(fs.readFileSync(path.join(out, 'gate.json'), 'utf8')) as GateList;
     const uc = gate.items.filter(i => i.id.startsWith('uc'));
     expect(uc.length).toBeGreaterThan(0);
-    expect(uc.every(i => i.recommended === 'b')).toBe(true);
-    const all = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all', '--by', 'human']);
-    expect(all.status, all.stderr).toBe(0);
-    expect(all.stdout).toMatch(new RegExp(`GATE_PENDING: ${uc.map(i => i.id).join(', ')} unanswered \\(reply with ${uc.map(i => `${i.id}a|${i.id}b`).join(' ')}; all does not answer items recommended b\\)`));
-    expect(readRun(out).status).toBe('gate_pending');
+    expect(uc.every(i => i.recommended === 'b' && i.recommended_basis === 'both voices; same remedy')).toBe(true);
+    const rec = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'rec', '--by', 'human']);
+    expect(rec.status, rec.stderr).toBe(0);
+    for (const i of uc) expect(rec.stdout).toMatch(new RegExp(`^APPLY: ${readRun(out).run}-${i.id} .*; edit the plan, then revise$`, 'm'));
+    expect(rec.stdout).toContain('GSTACK_RESULT: skill=autoplan status=amend_pending');
+    expect(readRun(out).status).toBe('amend_pending');
     const rows = decisions(out);
-    for (const i of uc) expect(rows.find(r => r.label === i.id.toUpperCase()).status).toBe('pending');
+    for (const i of uc) expect(rows.find(r => r.label === i.id.toUpperCase())).toMatchObject({ status: 'approved', chosen: 'b' });
   });
 });
 
@@ -101,12 +113,51 @@ describe('R5: gate answers carry provenance', () => {
     const bad = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all as-is', '--by', 'me']);
     expect(bad.status).toBe(3);
     expect(bad.stderr).toMatch(/\(ANSWER_BY_REQUIRED\)/);
-    const ok = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all as-is', '--by', 'agent:GSTA-29']);
+    const noOwner = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all as-is', '--by', 'agent:GSTA-29']);
+    expect(noOwner.status).toBe(3);
+    expect(noOwner.stderr).toMatch(/\(OWNER_REPLY_REQUIRED\)/);
+    expect(fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8')).toBe(before);
+    const ok = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'all as-is', '--by', 'agent:GSTA-29', '--owner-reply', 'keep the plan as written']);
     expect(ok.status, ok.stderr).toBe(0);
     const answered = decisions(out).filter(r => r.status !== 'pending');
     expect(answered.length).toBeGreaterThan(0);
-    for (const r of answered) expect(r.answered_by).toBe('agent:GSTA-29');
+    for (const r of answered) expect(r).toMatchObject({ answered_by: 'agent:GSTA-29', owner_reply: 'keep the plan as written', owner_reply_parsed: false });
     expect(fs.readFileSync(path.join(out, 'review-record.md'), 'utf8')).toMatch(/answered by agent:GSTA-29/);
+  });
+});
+
+describe('B-b/B-c: recommend binds rec to the render the owner saw; the owner reply must match the relay', () => {
+  test('recommend bumps rec_rev and rewrites p1 and decisions; a rec without the new rec_hash is refused; a mismatched owner reply is refused', () => {
+    const out = agreedRun('recommend');
+    const gateFile = path.join(out, 'gate.json');
+    const uc = (JSON.parse(fs.readFileSync(gateFile, 'utf8')) as GateList).items.find(i => i.id.startsWith('uc'))!;
+    const oldHash = renderGate(JSON.parse(fs.readFileSync(gateFile, 'utf8'))).match(/rec_hash=([0-9a-f]{12})/)![1]!;
+    const rec = autoplan(['recommend', '--out', out, '--gate-rev', '1', '--item', uc.id, '--option', 'a', '--basis', 'the lanes already split by file', '--by', 'parent']);
+    expect(rec.status, rec.stderr).toBe(0);
+    const hash = rec.stdout.match(/^RECOMMENDED: .* rec_hash=([0-9a-f]{12})$/m)![1]!;
+    expect(hash).not.toBe(oldHash);
+    const gate = JSON.parse(fs.readFileSync(gateFile, 'utf8')) as GateList;
+    expect(gate.rec_rev).toBe(1);
+    expect(gate.items.find(i => i.id === uc.id)).toMatchObject({ recommended: 'a', recommended_basis: 'the lanes already split by file', recommended_by: 'parent' });
+    expect(renderGate(gate)).toContain(`rec_hash=${hash}`);
+    expect(decisions(out).find(r => r.label === uc.id.toUpperCase())).toMatchObject({ recommended: 'a', recommended_by: 'parent' });
+    const before = fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8');
+    for (const extra of [[], ['--rec-hash', oldHash]]) {
+      const stale = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'rec', '--by', 'human', ...extra]);
+      expect(stale.status).toBe(3);
+      expect(stale.stderr).toMatch(/\(GATE_REC_STALE\)/);
+    }
+    const mismatch = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'rec', '--rec-hash', hash, '--by', 'agent:GSTA-29', '--owner-reply', `${uc.id}b`]);
+    expect(mismatch.status).toBe(3);
+    expect(mismatch.stderr).toMatch(/\(GATE_OWNER_REPLY_MISMATCH\)/);
+    expect(fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8')).toBe(before);
+    const ownerFile = path.join(TMP, 'owner-reply.txt');
+    fs.writeFileSync(ownerFile, 'rec');
+    const ok = autoplan(['answer', '--out', out, '--gate-rev', '1', '--reply', 'rec', '--rec-hash', hash, '--by', 'agent:GSTA-29', '--owner-reply-file', ownerFile]);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.stdout).not.toMatch(new RegExp(`^APPLY: \\S+-${uc.id} `, 'm'));
+    expect(ok.stdout).toMatch(/^APPLY: \S+-uc2 /m);
+    expect(decisions(out).find(r => r.label === uc.id.toUpperCase())).toMatchObject({ chosen: 'a', owner_reply: 'rec', owner_reply_parsed: true, recommended_by: 'parent' });
   });
 });
 

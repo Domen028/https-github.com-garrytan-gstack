@@ -23,7 +23,7 @@ export type DecisionKind = 'auto' | 'approval' | 'user_challenge';
 export type DecisionStatus = 'pending' | 'approved' | 'overridden' | 'rejected';
 export type TaskStatus = 'pending' | 'ready' | 'blocked_on_dependency' | 'blocked_on_decision' | 'in_progress' | 'done';
 export type VoiceStatus = 'completed' | 'unavailable' | 'disabled' | 'skipped' | 'failed' | 'pending' | 'running';
-export type ResultStatus = 'complete' | 'gate_pending' | 'incomplete' | 'interrupted' | 'refused';
+export type ResultStatus = 'complete' | 'gate_pending' | 'amend_pending' | 'incomplete' | 'interrupted' | 'refused';
 export type RunStatus = ResultStatus | 'awaiting_result' | 'running';
 
 export interface FindingRow {
@@ -39,6 +39,8 @@ export interface DecisionRow {
   answered_by?: string; source?: string; cost?: string;
   /** Why the recommendation (gate items built by gstack-autoplan), what a user challenge changes, and the carry-forward identity. */
   recommended_basis?: string; changes?: string; origin?: string; carried_from?: string; chosen_text?: string;
+  /** An agent-relayed answer: the owner's verbatim words, and whether they parsed under the gate grammar. */
+  owner_reply?: string; owner_reply_parsed?: boolean; recommended_by?: string;
 }
 export interface TaskRow {
   schema_version: 2; run: string; id: string; title: string; status: TaskStatus; depends_on: string[];
@@ -84,8 +86,8 @@ export interface ShipReceipt {
   issues?: { fixes: number[]; refs: number[]; flakes: Array<{ issue: number; run: string }> };
 }
 
-export const RESULT_STATUSES: readonly ResultStatus[] = ['complete', 'gate_pending', 'incomplete', 'interrupted', 'refused'];
-const TERMINAL_RUN: readonly string[] = ['complete', 'gate_pending', 'refused', 'incomplete'];
+export const RESULT_STATUSES: readonly ResultStatus[] = ['complete', 'gate_pending', 'amend_pending', 'incomplete', 'interrupted', 'refused'];
+const TERMINAL_RUN: readonly string[] = ['complete', 'gate_pending', 'amend_pending', 'refused', 'incomplete'];
 const TERMINAL_VOICE: readonly string[] = ['completed', 'unavailable', 'disabled', 'skipped', 'failed'];
 const RESOLVED: readonly string[] = ['accepted', 'partially_accepted', 'rejected', 'deferred', 'fixed'];
 
@@ -131,7 +133,7 @@ export const ARTIFACT_SCHEMAS = {
       voice: { enum: ['native', 'outside'] }, model: str, severity: { enum: ['Critical', 'High', 'Medium', 'Low', 'Informational'] },
       title: str, file: str, line: { type: 'integer' }, disposition: { enum: ['open', 'accepted', 'partially_accepted', 'rejected', 'deferred', 'fixed'] },
       resolution: str, plan_items: strList, native_counterpart: nullableStr, source: str,
-      changes: { enum: ['scope', 'cost', 'direction'] },
+      changes: { enum: ['scope', 'cost', 'direction', 'packaging', 'ordering'] },
     },
   },
   decisions: {
@@ -169,7 +171,7 @@ export const ARTIFACT_SCHEMAS = {
     required: ['schema_version', 'run', 'status', 'required_phases', 'phases', 'artifacts'],
     properties: {
       schema_version: { const: 1 }, run: str,
-      status: { enum: ['complete', 'gate_pending', 'incomplete', 'interrupted', 'refused', 'awaiting_result', 'running'] },
+      status: { enum: ['complete', 'gate_pending', 'amend_pending', 'incomplete', 'interrupted', 'refused', 'awaiting_result', 'running'] },
       base: str, host: str, session_kind: str, required_phases: strList,
       phases: { type: 'object', description: 'phase id → { snapshot, native, outside }', properties: {} },
       counts: { type: 'object', description: 'decisions, decisions_pending, findings, tasks: each must equal the rows in its file' },
