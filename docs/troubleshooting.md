@@ -1065,6 +1065,39 @@ or too large. Each message names the cap that applied:
 holds the code you want audited and no symlinks. Add your file count or size to
 [#2993](https://github.com/garrytan/gstack/issues/2993).
 
+<a id="cso-scanner-invalid-output"></a>
+### `INVALID_OUTPUT: Scanner report is malformed, unsupported, or exceeds structural limits.` (Semgrep on a real repository)
+
+**Meaning.** Before the first release after v1.91.101.0, /cso redacted a
+scanner's JSON report by splicing an unquoted `<REDACTED-...>` marker over any
+bare number that looked like a phone number or card number, such as Semgrep's
+`"max_memory_bytes":1145427776` or an epoch timestamp. The report then failed to
+parse and the scanner was recorded as not assessed (#3185). Now a redacted
+number becomes the quoted string `"<REDACTED-...>"` and the report parses. A
+redaction that would cross JSON tokens still withholds the payload
+(`REDACTION_FAILED`).
+
+**Fix.** Update gstack (`/gstack-upgrade`), then run /cso again. If this code
+still appears, the scanner itself emitted malformed JSON; report the scanner
+and version at https://github.com/garrytan/gstack/issues.
+
+**Fixed in.** The first release after v1.91.101.0 (#3185).
+
+<a id="cso-orbstack-argv0"></a>
+### `unsupported argv0 "docker-tools"` (OrbStack's `docker` under /cso)
+
+**Meaning.** /cso runs the canonical path of `docker` (symlinks resolved), and
+OrbStack's `docker` is a symlink to one multicall binary, `docker-tools`, that
+decides what to be from the name it was started as. Started under its real name
+it refused, so Docker isolation and every scanner were reported missing
+(#3187). /cso now starts the same verified binary with the name `docker`,
+including in its cleanup watchdog.
+
+**Fix.** Update gstack (`/gstack-upgrade`), then run `gstack-doctor`; its `cso`
+row should pass with OrbStack running.
+
+**Fixed in.** The first release after v1.91.101.0 (#3187).
+
 <a id="conductor-auq-hook-removed"></a>
 ### `removed the AskUserQuestion preference hook: it breaks Conductor's native AskUserQuestion (#2207). ...`
 
