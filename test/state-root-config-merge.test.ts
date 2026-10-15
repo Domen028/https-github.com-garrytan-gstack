@@ -70,9 +70,24 @@ describe('merged config keys', () => {
     expect(r.stderr).toContain(`gstack-config: set codex_reviews in ${resolved}/config.yaml, but codex_reviews is still 'disabled': ${legacy}/config.yaml sets that more restrictive value`);
     expect(r.stderr).toContain('docs/state-root.md');
     const fix = r.stderr.split('\n').find((l) => l.startsWith('fix: '))!;
-    expect(fix).toStartWith('fix: GSTACK_STATE_ROOT=');
+    const quoted = (v: string) => spawnSync('bash', ['-c', 'printf %q "$1"', '_', v], { encoding: 'utf-8', timeout: 20_000 }).stdout;
+    expect(fix).toContain(`GSTACK_STATE_ROOT=${quoted(legacy)} `);
     const command = fix.slice('fix: '.length).replace(/ \(https:.*\)$/, '');
     expect(spawnSync('bash', ['-c', command], { env, encoding: 'utf-8', timeout: 20_000 }).status).toBe(0);
+    expect(config(['get', 'codex_reviews']).stdout).toBe('enabled');
+  });
+
+  test('the printed recovery command runs from an install path containing a space and an apostrophe', () => {
+    const install = path.join(tmp, "inst all's", 'bin');
+    fs.cpSync(path.join(ROOT, 'bin'), install, { recursive: true });
+    fs.writeFileSync(path.join(legacy, 'config.yaml'), 'codex_reviews: disabled\n');
+    const r = spawnSync('bash', [path.join(install, 'gstack-config'), 'set', 'codex_reviews', 'enabled'], { env, encoding: 'utf-8', timeout: 20_000 });
+    expect(r.status).toBe(0);
+    const fix = r.stderr.split('\n').find((l) => l.startsWith('fix: '))!;
+    const command = fix.slice('fix: '.length).replace(/ \(https:.*\)$/, '');
+    const ran = spawnSync('bash', ['-c', command], { env, encoding: 'utf-8', timeout: 20_000 });
+    expect(ran.stderr).toBe('');
+    expect(ran.status).toBe(0);
     expect(config(['get', 'codex_reviews']).stdout).toBe('enabled');
   });
 
@@ -83,7 +98,7 @@ describe('merged config keys', () => {
     expect(r.stderr).toBe('');
   });
 
-  test('list shows the winning root for merged keys and a disagreement line only when root variables name different directories', () => {
+  test('list shows the winning root for merged keys and a disagreement line when root variables differ', () => {
     fs.writeFileSync(path.join(legacy, 'config.yaml'), 'telemetry: off\n');
     fs.writeFileSync(path.join(resolved, 'config.yaml'), 'telemetry: community\nproactive: false\n');
     const plain = config(['list']).stdout;
