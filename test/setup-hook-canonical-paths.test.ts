@@ -28,21 +28,29 @@ import { spawnSync } from 'child_process';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const setupSrc = fs.readFileSync(path.join(ROOT, 'setup'), 'utf-8');
+const ROOT_HELPER = path.join(ROOT, 'bin', 'gstack-claude-root.sh');
+const rootHelperSrc = fs.readFileSync(ROOT_HELPER, 'utf-8');
+const memorableSrc = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-memorable'), 'utf-8');
 const hookBinSrc = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-settings-hook'), 'utf-8');
 const uninstallSrc = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-uninstall'), 'utf-8');
 
 describe('setup: canonical-only hook paths', () => {
   test('CANONICAL_GSTACK_ROOT honors CLAUDE_CONFIG_DIR with ~/.claude fallback', () => {
-    expect(setupSrc).toContain(
-      'CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"',
-    );
+    expect(rootHelperSrc).toContain('"${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"');
   });
 
-  describe('CANONICAL_GSTACK_ROOT resolution', () => {
-    const start = setupSrc.indexOf('CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR');
-    const end = setupSrc.indexOf('\n  fi\nfi\n', start);
-    const block = setupSrc.slice(start, end + '\n  fi\nfi\n'.length);
+  test('setup and gstack-memorable take the root from the one sourced helper', () => {
+    for (const [src, sourceLine] of [
+      [setupSrc, '. "$SOURCE_GSTACK_DIR/bin/gstack-claude-root.sh" ||'],
+      [memorableSrc, '. "$(dirname "$0")/gstack-claude-root.sh" ||'],
+    ]) {
+      expect(src).toContain(sourceLine);
+      expect(src).toContain('CANONICAL_GSTACK_ROOT="$(gstack_canonical_claude_root)"');
+      expect(src).not.toContain('CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR');
+    }
+  });
 
+  describe('gstack_canonical_claude_root', () => {
     function installAt(root: string) {
       const bin = path.join(root, 'bin');
       fs.mkdirSync(bin, { recursive: true });
@@ -52,9 +60,10 @@ describe('setup: canonical-only hook paths', () => {
     function resolve(home: string, configDir?: string): string {
       const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/bin:/bin', HOME: home };
       if (configDir !== undefined) env.CLAUDE_CONFIG_DIR = configDir;
-      const r = spawnSync('bash', ['-c', `${block}printf '%s' "$CANONICAL_GSTACK_ROOT"`], { env, encoding: 'utf-8' });
+      const r = spawnSync('bash', ['-c', 'set -u; . "$1" && gstack_canonical_claude_root', '_', ROOT_HELPER.replace(/\\/g, '/')],
+        { env, encoding: 'utf-8', timeout: 10_000 });
       expect(r.status).toBe(0);
-      return r.stdout;
+      return r.stdout.replace(/\n$/, '');
     }
 
     function withHome(fn: (home: string) => void) {
@@ -66,11 +75,6 @@ describe('setup: canonical-only hook paths', () => {
         fs.rmSync(home, { recursive: true, force: true });
       }
     }
-
-    test('the extracted block is the whole guard', () => {
-      expect(start).toBeGreaterThan(-1);
-      expect(end).toBeGreaterThan(start);
-    });
 
     test('no CLAUDE_CONFIG_DIR resolves to the $HOME install', () => {
       withHome((home) => {
@@ -101,6 +105,17 @@ describe('setup: canonical-only hook paths', () => {
         fs.mkdirSync(empty);
         expect(resolve(home, empty)).toBe(path.join(home, '.claude', 'skills', 'gstack'));
       });
+    });
+
+    test('with no $HOME install the config-dir spelling stands, even when it is empty', () => {
+      const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-canon-'));
+      try {
+        const empty = path.join(home, 'empty-config');
+        fs.mkdirSync(empty);
+        expect(resolve(home, empty)).toBe(path.join(empty, 'skills', 'gstack'));
+      } finally {
+        fs.rmSync(home, { recursive: true, force: true });
+      }
     });
   });
 

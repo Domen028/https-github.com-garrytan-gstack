@@ -333,6 +333,7 @@ SOURCE_GSTACK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SOURCE_GSTACK_DIR/bin/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $SOURCE_GSTACK_DIR/bin/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
 gstack_state_root_select; GSTACK_STATE_ROOT="$_gstack_sr_root"
 . "$SOURCE_GSTACK_DIR/bin/gstack-path-spelling.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-path-spelling.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
+. "$SOURCE_GSTACK_DIR/bin/gstack-claude-root.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-claude-root.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-install-registry.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-install-registry.sh is missing. fix: reinstall from a fresh clone (docs/ADDING_A_HOST.md)" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-render-claude.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-render-claude.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-host-renders.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-host-renders.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
@@ -3942,21 +3943,10 @@ fi
 #
 # WARNING for future code AND migrations (the v1.58.0.0.sh defect class):
 # NEVER register ${SCRIPT_DIR}/$SOURCE_GSTACK_DIR-relative hook paths.
-CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"
-# Split-brain guard: the installer currently hardcodes $HOME/.claude/skills
-# (setup:1601 TODO), so a CLAUDE_CONFIG_DIR override can name a root that was
-# never installed. Fall back to where the install actually lives — both are
-# stable, neither is the running tree, so canonical-only still holds.
-# The same fallback applies when CLAUDE_CONFIG_DIR is a per-session directory
-# whose skills link back to the $HOME install: both resolve to one tree, and
-# only the $HOME spelling outlives the session.
-_HOME_GSTACK_ROOT="$HOME/.claude/skills/gstack"
-if [ -x "$_HOME_GSTACK_ROOT/bin/gstack-session-update" ]; then
-  if [ ! -x "$CANONICAL_GSTACK_ROOT/bin/gstack-session-update" ] \
-     || [ "$(cd "$CANONICAL_GSTACK_ROOT" && pwd -P)" = "$(cd "$_HOME_GSTACK_ROOT" && pwd -P)" ]; then
-    CANONICAL_GSTACK_ROOT="$_HOME_GSTACK_ROOT"
-  fi
-fi
+# bin/gstack-claude-root.sh owns the choice: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+# by default, the $HOME install when the config dir has none (the installer
+# writes to $HOME) or links back to it (a per-session CLAUDE_CONFIG_DIR, #3180).
+CANONICAL_GSTACK_ROOT="$(gstack_canonical_claude_root)"
 
 # Echo the canonical path for a hook (repo-relative arg); fails when the hook
 # is not executable at the canonical install — callers must skip + log.
