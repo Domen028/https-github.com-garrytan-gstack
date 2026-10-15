@@ -223,3 +223,30 @@ describe('gstack-issue-links (bin): related PRs, flake validation, lookup failur
     expect(fs.readFileSync(body, 'utf8').startsWith('```gstack-ship-receipt')).toBe(true);
   });
 });
+
+describe('gstack-issue-links (bin): this PR\'s author when gh runs as an app', () => {
+  const ownPr = { number: 8, state: 'OPEN', headRefName: 'other-wave', author: { login: 'garrytan' } };
+  const contrib = { number: 7, state: 'OPEN', headRefName: 'contrib', author: { login: 'alice' } };
+  const setup = (data: Parameters<typeof ghShim>[1]) => {
+    const repo = fixture();
+    commit(repo, { 'lib/util.js': "exports.add = (a, b) => a + b + 0;\n" }, 'fix: tidy\n\nFixes #14\n');
+    return { repo, env: ghShim(repo, { repo: 'garrytan/gbrain', viewer: 'capy-ai[bot]', issues: { '14': { title: 't', body: 'b', comments: [] } }, closing: { '14': [[contrib, ownPr]] }, ...data }) };
+  };
+
+  test('an app viewer is replaced by the HEAD commit author, else a user-owned repository\'s owner, so the owner\'s own PRs are not Related', () => {
+    const byCommit = setup({ headAuthor: 'GarryTan', ownerType: 'Organization' });
+    const r = runBin(byCommit.repo, 'gstack-issue-links', ['--base', 'main', '--json'], byCommit.env);
+    expect(JSON.parse(r.out)).toMatchObject({ lines: ['Fixes #14', 'Related: #7 (@alice)'], author: { login: 'GarryTan', source: 'HEAD commit author' }, unavailable: [] });
+    const byOwner = setup({});
+    expect(JSON.parse(runBin(byOwner.repo, 'gstack-issue-links', ['--base', 'main', '--json'], byOwner.env).out)).toMatchObject({ lines: ['Fixes #14', 'Related: #7 (@alice)'], author: { login: 'garrytan', source: 'repository owner' } });
+    expect(JSON.parse(runBin(byOwner.repo, 'gstack-issue-links', ['--base', 'main', '--author', 'alice', '--json'], byOwner.env).out)).toMatchObject({ lines: ['Fixes #14', 'Related: #8 (@garrytan)'], author: { login: 'alice', source: '--author' } });
+  });
+
+  test('an app viewer with no user to stand in keeps every PR and reports the gap as ISSUE_LOOKUP_FAILED', () => {
+    const { repo, env } = setup({ ownerType: 'Organization' });
+    const r = runBin(repo, 'gstack-issue-links', ['--base', 'main', '--json'], env);
+    expect(r.status).toBe(EXIT.ok);
+    expect(JSON.parse(r.out)).toMatchObject({ lines: ['Fixes #14', 'Related: #7 (@alice)', 'Related: #8 (@garrytan)'], author: { login: 'capy-ai[bot]', source: 'gh viewer' } });
+    expect(JSON.parse(r.out).unavailable).toEqual(['this PR\'s author: gh runs as capy-ai[bot] and neither the HEAD commit nor the repository owner names a user; pass --author <login>']);
+  });
+});

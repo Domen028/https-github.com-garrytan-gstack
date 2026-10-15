@@ -443,8 +443,10 @@ that names that run (its `flake:json` `first_seen.run_id`, or this repository's
 `Flake: <test>` title). Two issues for the same test keep the lower number;
 every refused match is printed with its reason.
 
-Open PRs by other authors (not `--author`, default the `gh` viewer, which is
-an app identity on hosts like Capy, so pass your login there; not this branch) whose closing
+Open PRs by other authors (not this branch, and not this PR's author: `--author`,
+else the `gh` viewer; when the viewer is an app such as `capy-ai[bot]`, the HEAD
+commit's GitHub user, else the owner of a user-owned repository, else the gap is
+`ISSUE_LOOKUP_FAILED`) whose closing
 set overlaps this PR's `Fixes` are `Related: #N (@author)`, read page by page
 from each issue's closing-PR references, in unattended runs too. `Supersedes #N`
 replaces that line and `Contributed by @author` is added (the credit lines of
