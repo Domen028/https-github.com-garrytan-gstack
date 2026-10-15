@@ -175,5 +175,6 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/trial-cause/replays.json': ['test/trial-cause.test.ts'],
   'test/fixtures/trial-cause/thinking-captures-37198445662.json': ['test/trial-cause.test.ts'],
   'test/fixtures/trial-record-v1-reader.ts': ['test/helpers/eval-store.test.ts'],
+  'test/fixtures/windows-bash-resolution.json': ['test/script-invocation.test.ts'],
   'test/fixtures/workflow-required-steps.json': ['test/workflow-required-steps.test.ts'],
 };

@@ -1707,6 +1707,55 @@ or in Windows PowerShell:
 
 ---
 
+<a id="bash-unavailable"></a>
+### `gstack: no Git Bash found to run gstack's bash scripts on Windows (tried ...); fix: ... (BASH_UNAVAILABLE)`
+
+**Meaning.** Windows cannot run a shebang script, so gstack hands its bash
+scripts (`gstack-wtree`, `gstack-slug`, the hooks' bins, `bash -c` commands in
+regen and pregate selection manifests) to Git Bash. It looks in this order and
+the message lists every candidate it tried with the reason it was rejected:
+
+1. `GSTACK_GIT_BASH` (or the older name `GSTACK_BASH`; when both are set and
+   differ, `GSTACK_GIT_BASH` wins and a one-line warning says so). A value
+   that does not exist is refused, not skipped.
+2. bash next to `git --exec-path` (finds scoop, per-user and portable Git).
+3. `C:\Program Files\Git`, `C:\Program Files (x86)\Git`,
+   `%LOCALAPPDATA%\Programs\Git` and scoop's `git\current`.
+4. A `bash` on PATH, only when `uname -s` reports MSYS or MINGW. WSL's
+   `bash.exe` in `System32` or `WindowsApps` is never used: it reads
+   `C:\...` paths as Linux paths. A PATH bash that is neither (Cygwin, for
+   example) is no longer used either.
+
+Before #3197 these commands spawned the scripts directly, so `gstack-restamp`
+refused with `cannot fingerprint the working tree ()` and `gstack-gate-diff`
+and `gstack-evidence` silently dropped the fingerprint.
+
+**Fix.** Install Git for Windows (`winget install --id Git.Git -e` in
+PowerShell), or point gstack at your bash.exe for good. An `export` in Git Bash
+reaches only that shell, so set it where Claude Code reads it:
+
+- Windows PowerShell 5.1 or PowerShell 7, then restart Claude Code:
+
+  ```powershell
+  [Environment]::SetEnvironmentVariable('GSTACK_GIT_BASH', 'C:\Program Files\Git\bin\bash.exe', 'User')
+  ```
+
+- Or the `env` block of `~/.claude/settings.json`:
+
+  ```json
+  { "env": { "GSTACK_GIT_BASH": "C:/Program Files/Git/bin/bash.exe" } }
+  ```
+
+The hooks cache the bash they found in `<state root>/cache/windows-bash.json`
+(keyed by `git.exe`'s path and modification time, rechecked before use); the
+override is never cached.
+
+**Expected result.** `gstack-restamp --dry-run` prints its diff and
+`gstack-gate-diff` records a candidate ending in a tree id instead of
+`+nowtree`.
+
+---
+
 ## Memory and gbrain
 
 Every message below is also in [docs/gbrain-sync-errors.md](gbrain-sync-errors.md)
@@ -2273,6 +2322,12 @@ legitimate generated output, or stop the tool from writing it.
 **Meaning.** While applying or rolling back, a file no longer held the bytes
 the journal recorded (someone edited it after the stage ran). Overwriting it
 would lose that edit, so the restamp stopped.
+
+`cannot fingerprint the working tree (<detail>); nothing written` is the same
+code before anything was staged: `gstack-wtree exited <n>: <reason>` carries
+the helper's own repair (for example a writable `TMPDIR`), and
+`gstack-wtree could not start: ...` is the Windows bash lookup failing (see
+[`BASH_UNAVAILABLE`](#bash-unavailable)).
 
 **Fix.** Read `.gstack/tmp/restamp-journal.json`, reconcile the named file by
 hand, then rerun `gstack-restamp` (idempotent: a complete stamp is a no-op).

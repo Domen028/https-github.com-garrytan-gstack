@@ -573,6 +573,12 @@ export const RESULT_CODES = {
     summary: 'bun --version did not print a version gstack can compare with the incoming release\'s Bun floor, so the update was held and nothing was changed',
     fix: 'reinstall Bun from https://bun.sh (bun upgrade may not run on a broken install), check that bun --version prints a version such as 1.4.2, then update again',
   },
+  // #3197: the one Windows bash resolver (lib/script-invocation.ts) found no usable Git Bash.
+  BASH_UNAVAILABLE: {
+    anchor: 'bash-unavailable',
+    summary: 'no Git Bash found to run gstack\'s bash scripts on Windows',
+    fix: 'install Git for Windows (winget install --id Git.Git -e), or set GSTACK_GIT_BASH to its bash.exe for good: in PowerShell, [Environment]::SetEnvironmentVariable(\'GSTACK_GIT_BASH\', \'C:\\Program Files\\Git\\bin\\bash.exe\', \'User\') and restart Claude Code, or add it to the "env" block of ~/.claude/settings.json',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

@@ -195,6 +195,7 @@ gstack_result_anchor() {
     INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
     BROWSE_TAB_UNRECOVERABLE) printf '%s' 'browse-tab-unrecoverable' ;;
     BUN_VERSION_UNREADABLE) printf '%s' 'bun-version-unreadable' ;;
+    BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     *) return 1 ;;
   esac
 }
