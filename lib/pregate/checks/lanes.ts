@@ -99,6 +99,7 @@ function unfinished(ctx: PregateContext, r: Awaited<ReturnType<typeof runLocal>>
   const why = r.runs.find(x => x.outcome === 'spawn-failed') ? 'the runner could not be launched' : `local lane timed out after ${ctx.timeoutMs} ms`;
   return { code: 'PREGATE_INCOMPLETE', detail: `${why} (${total} files${rest})`, fix: 'raise --timeout or split the selection; a timed-out lane never passes' };
 }
+
 function describe(sel: Selection): string[] {
   const lines = sel.noLane.map(f => `FAIL lanes — ${f} has no test lane`);
   for (const r of sel.remote) lines.push(`requires-remote ${r.lane} (${r.platform}): ${r.tests.length} test(s) — ${r.tests.slice(0, 8).join(' ')}${r.tests.length > 8 ? ' …' : ''}`);
@@ -172,7 +173,7 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
     return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: 'add a test that names the file, or declare its lane (or []) under dependencies in .gstack/pregate.json' };
   }
   if (sel.tests.length === 0) return { ...base, detail: ctx.touched.length ? 'nothing touched selects a test' : 'no touched files' };
-  if (ctx.remote) return runRemote(ctx, sel, base);
+  if (ctx.remote && sel.localTests.length) return runRemote(ctx, sel, base);
   const smallMachine = ctx.cores < SMALL_MACHINE_CORES && sel.localTests.length > 0 && (ctx.config.remote_gate || ctx.testBackend !== 'local');
   if (smallMachine) {
     const obligation = remoteObligation(ctx, sel);
