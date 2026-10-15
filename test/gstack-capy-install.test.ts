@@ -499,6 +499,98 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
   });
 });
 
+// Plan A4/A-e: on Capy the installer writes marked ~/.local/bin/bun and bunx
+// shims that run the Bun recorded for the project around the working
+// directory, in a fresh shell with Capy's PATH and no gstack environment.
+describe.skipIf(process.platform !== 'linux')('gstack-capy-install: the per-directory bun shim', () => {
+  const realBun = (file: string, version: string) => script(file, [`[ "$1" = --version ] && { echo ${version}; exit 0; }`, `exec "${process.execPath}" "$@"`]);
+  const repo = (f: ReturnType<typeof fixture>, name: string, pin?: string) => {
+    const dir = path.join(f.base, name);
+    fs.mkdirSync(dir, { recursive: true });
+    if (pin) write(path.join(dir, '.bun-version'), `${pin}\n`);
+    sh('git init -q', dir);
+    return dir;
+  };
+  /** A fresh non-login shell: Capy's PATH (~/.local/bin first), HOME, nothing from gstack. */
+  const fresh = (f: ReturnType<typeof fixture>, cwd: string, cmd: string, extra: Record<string, string> = {}) =>
+    spawnSync('bash', ['-c', cmd], { cwd, encoding: 'utf8', timeout: 30_000, env: { HOME: f.home, PATH: `${f.home}/.local/bin:${f.env.PATH}`, ...extra } });
+
+  test('fresh shells alternate between two exact pins, an unpinned project and a directory outside any project; custom state root, no env', () => {
+    const f = fixture({ bun: '1.3.14' });
+    fs.mkdirSync(path.join(f.home, '.capy/system'), { recursive: true });
+    const state = path.join(f.base, 'custom-state');
+    const storeDir = path.join(state, 'runtimes/bun');
+    realBun(path.join(storeDir, '1.4.2/bun'), '1.4.2');
+    realBun(path.join(storeDir, '1.4.3/bun'), '1.4.3');
+    const a = repo(f, 'a', '1.4.2'), b = repo(f, 'b', '1.4.3'), c = repo(f, 'c');
+    for (const dir of [a, b, c]) {
+      const r = run(f, ['--for', 'review'], { GSTACK_STATE_ROOT: state }, dir);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+    }
+    const shim = fs.readFileSync(path.join(f.home, '.local/bin/bun'), 'utf8');
+    expect(shim.split('\n')[1]).toBe('# gstack-bun-shim: gstack-owned; delete this file to remove it');
+    expect(shim).toContain(`store='${storeDir}'`);
+    const outside = path.join(f.base, 'outside');
+    fs.mkdirSync(outside);
+    for (const [dir, want] of [[a, '1.4.2'], [b, '1.4.3'], [a, '1.4.2'], [c, '1.4.3'], [outside, '1.4.3'], [b, '1.4.3']] as const) {
+      const r = fresh(f, dir, 'bun --version');
+      expect(r.stdout.trim(), `${dir}\n${r.stderr}`).toBe(want);
+      expect(r.stderr).toBe('');
+    }
+    const explained = fresh(f, path.join(a), 'mkdir -p sub && cd sub && bun --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' });
+    expect(explained.stderr).toMatch(new RegExp(`^gstack bun shim: project=${a} record=${state}/install-verdicts/[0-9a-f]{64}/[0-9a-f]{64}\\.json chose=${storeDir}/1\\.4\\.2/bun rule=record\\n$`));
+    expect(fresh(f, outside, 'bun --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' }).stderr).toBe(`gstack bun shim: project=none record=none chose=${storeDir}/1.4.3/bun rule=default\n`);
+    const bunx = fresh(f, a, 'bunx --version', { GSTACK_BUN_SHIM_EXPLAIN: '1' });
+    expect(bunx.stderr).toContain(`chose=${storeDir}/1.4.2/bun rule=record`);
+    const unrecordedPinned = repo(f, 'd', '1.4.2');
+    const d = fresh(f, unrecordedPinned, 'bun --version');
+    expect([d.stdout.trim(), d.stderr]).toEqual(['1.4.2', '']);
+    const unrecorded = repo(f, 'e');
+    const e = fresh(f, unrecorded, 'bun --version');
+    expect(e.stdout.trim()).toBe('1.4.3');
+    expect(e.stderr).toBe(`gstack bun shim: ${unrecorded} has no recorded Bun; run ${f.root}/bin/gstack-capy-install --check here\n`);
+  });
+
+  test('a foreign ~/.local/bin/bun or a dangling link is never touched; GSTACK_BUN_SHIM=0 writes nothing; a rerun rewrites only gstack\'s own file', () => {
+    const f = fixture();
+    fs.mkdirSync(path.join(f.home, '.capy/system'), { recursive: true });
+    write(path.join(f.home, '.local/bin/bun'), '#!/bin/sh\necho mine\n', 0o755);
+    fs.symlinkSync(path.join(f.base, 'missing'), path.join(f.home, '.local/bin/bunx'));
+    const r = run(f, ['--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(fs.readFileSync(path.join(f.home, '.local/bin/bun'), 'utf8')).toBe('#!/bin/sh\necho mine\n');
+    expect(fs.readlinkSync(path.join(f.home, '.local/bin/bunx'))).toBe(path.join(f.base, 'missing'));
+    expect(r.stdout).toContain(`${f.home}/.local/bin/bun is not gstack's shim (no marker); left untouched, so keep the GSTACK_LAUNCH prefix`);
+    const g = fixture();
+    fs.mkdirSync(path.join(g.home, '.capy/system'), { recursive: true });
+    expect(run(g, [], { GSTACK_BUN_SHIM: '0' }).status).toBe(0);
+    expect(fs.existsSync(path.join(g.home, '.local/bin/bun'))).toBe(false);
+    expect(run(g).status).toBe(0);
+    const first = fs.readFileSync(path.join(g.home, '.local/bin/bun'), 'utf8');
+    expect(run(g, [], { GSTACK_STATE_ROOT: path.join(g.base, 'moved') }).status).toBe(0);
+    const second = fs.readFileSync(path.join(g.home, '.local/bin/bun'), 'utf8');
+    expect(second).not.toBe(first);
+    expect(second).toContain(`store='${path.join(g.base, 'moved')}/runtimes/bun'`);
+    const plain = fixture();
+    expect(run(plain).status).toBe(0);
+    expect(fs.existsSync(path.join(plain.home, '.local/bin/bun'))).toBe(false);
+  });
+
+  test('the shim adds little over the Bun it runs (fixture timing bound)', () => {
+    const f = fixture();
+    fs.mkdirSync(path.join(f.home, '.capy/system'), { recursive: true });
+    const storeBun = path.join(f.home, '.gstack-state/runtimes/bun/1.4.3/bun');
+    realBun(storeBun, '1.4.3');
+    expect(run(f).status).toBe(0);
+    const time = (cmd: string) => {
+      const samples = Array.from({ length: 7 }, () => { const t = performance.now(); fresh(f, f.base, cmd); return performance.now() - t; }).sort((x, y) => x - y);
+      return samples[3];
+    };
+    const overhead = time('bun --version') - time(`"${storeBun}" --version`);
+    expect(overhead).toBeLessThan(250);
+  });
+});
+
 function run(f: ReturnType<typeof fixture>, args: string[] = [], extra: Record<string, string> = {}, cwd?: string) {
   return f.run(args, extra, cwd);
 }

@@ -10,14 +10,21 @@
 # Steps: clone or reuse the checkout under a lock (never reset, never pulled
 # here; the Capy skill bootstrapper fast-forwards below-minimum checkouts and
 # hands its held lock over with GSTACK_CAPY_LOCK_HELD=1); preflight git, curl,
-# node, jq and Bun (a supported Bun already in $BUN_INSTALL/bin is reused; the
-# exact release archive, SHA-256 verified, is installed there only when
-# gstack's supported minimum and the project's pins agree on it); ./setup
+# node, jq and Bun through gstack_bun_resolve (an installed Bun that satisfies
+# gstack's minimum and the project's pins is reused; otherwise the exact
+# release archive, SHA-256 verified, is published in the runtime store
+# <state root>/runtimes/bun/<version>/bun, GSTACK_BUN_INSTALL_VERSION
+# overriding the default); ./setup
 # --host claude --no-prefix; ./setup --host codex --model gpt-6-astra (both
 # skipped when this HEAD was already set up and the check passes);
 # gstack-doctor --check with the launch PATH; the install verdict
-# (bin/gstack-install-verdict.sh). --check certifies only: no clone, no Bun
-# install, no setup. Chromium is lazy by default (bin/gstack-browser-ensure
+# (bin/gstack-install-verdict.sh), keyed by checkout and project and holding
+# the resolved Bun. --check certifies only: no clone, no Bun install, no
+# setup. On a Capy machine (CAPY_MACHINE_CONFIG or ~/.capy/system) install also writes the marked
+# per-directory shims ~/.local/bin/bun and ~/.local/bin/bunx, which run the Bun
+# recorded for the project around the working directory in any fresh shell;
+# GSTACK_BUN_SHIM=0 opts out, a foreign ~/.local/bin/bun is never touched, and
+# deleting the files removes them. Chromium is lazy by default (bin/gstack-browser-ensure
 # installs it on first use); --with-browser installs it now. The last lines
 # are the GSTACK_LAUNCH line the parent supplies to every gstack command it
 # launches and the doctor's trailer (`gstack: ok ...` or `gstack: fail ...`;
@@ -31,7 +38,7 @@ ROOT="${GSTACK_CAPY_ROOT:-$SELF}"
 REPO="${GSTACK_CAPY_REPO:-https://github.com/garrytan/gstack.git}"
 DOCS="https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md"
 FOR="" REQUIRE="" WITH_BROWSER=0 REVISION="" PROJECT="" CHECK_ONLY=0 MIN_REVISION="${GSTACK_CAPY_REMOTE_MIN:-}"
-usage() { sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'; }
 need() { [ -n "${2:-}" ] || { echo "gstack-capy-install: $1 needs a value" >&2; usage >&2; exit 2; }; }
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -309,6 +316,81 @@ if [ "$CHECK_ONLY" -eq 0 ] && [ "$SKIPPED" -eq 0 ]; then
 fi
 [ "$CHECK_ONLY" -eq 1 ] && certify "$@"
 
+# write_shim — the per-directory bun and bunx shims (Capy only, install mode).
+# The store, verdict directory, checkout and install default are baked in, so
+# a fresh shell needs no environment; rewritten when they change. Only a
+# missing file or one carrying the marker is replaced.
+write_shim() {
+  local dir="$HOME/.local/bin" name tmp
+  [ "${GSTACK_BUN_SHIM:-1}" != 0 ] || return 0
+  [ -n "${CAPY_MACHINE_CONFIG:-}" ] || [ -d "$HOME/.capy/system" ] || return 0
+  mkdir -p "$dir" || { say "could not create $dir; no bun shim written"; return 0; }
+  exec 8>"$HOME/.gstack-runtime.lock"
+  command -v flock >/dev/null 2>&1 && flock -w 60 8
+  for name in bun bunx; do
+    if { [ -e "$dir/$name" ] || [ -L "$dir/$name" ]; } && ! { [ -f "$dir/$name" ] && [ ! -L "$dir/$name" ] && _gstack_bun_is_shim "$dir/$name"; }; then
+      say "$dir/$name is not gstack's shim (no marker); left untouched, so keep the GSTACK_LAUNCH prefix"
+      continue
+    fi
+    tmp="$dir/.$name.gstack.$$"
+    if [ "$name" = bunx ]; then
+      printf '#!/bin/sh\n%s\n# The Capy bunx shim: bun x through the bun shim beside it (docs/capy-install.md).\nexec %s x "$@"\n' "$GSTACK_BUN_SHIM_MARKER" "'$dir/bun'" > "$tmp"
+    else
+      cat > "$tmp" <<EOF_SHIM
+#!/bin/sh
+$GSTACK_BUN_SHIM_MARKER
+# The Capy bun shim, written by $ROOT/bin/gstack-capy-install: runs the Bun
+# recorded for the project around the working directory (docs/capy-install.md).
+# GSTACK_BUN_SHIM_EXPLAIN=1 prints the project root, record, choice and rule.
+store='$STORE'
+verdicts='$(dirname "$(gstack_install_verdict_path "$GSTACK_STATE_ROOT" "$ROOT_REAL" "")")'
+checkout='$ROOT_REAL'
+default='$INSTALL_VERSION'
+marker='$GSTACK_BUN_SHIM_MARKER'
+sha() { if command -v sha256sum >/dev/null 2>&1; then printf '%s' "\$1" | sha256sum | cut -d' ' -f1; else printf '%s' "\$1" | shasum -a 256 | cut -d' ' -f1; fi; }
+root="" record="" chose="" rule=""
+dir=\$(pwd -P 2>/dev/null) || dir=""
+while [ -n "\$dir" ]; do
+  [ -e "\$dir/.git" ] && { root=\$dir; break; }
+  [ "\$dir" = / ] && break
+  dir=\${dir%/*}; [ -n "\$dir" ] || dir=/
+done
+if [ -n "\$root" ]; then
+  key=\$root; [ "\$root" = "\$checkout" ] && key=none
+  record="\$verdicts/\$(sha "\$key").json"
+  if [ -f "\$record" ]; then
+    b=\$(sed -n 's/^ "bun_path": "\(.*\)",\$/\1/p' "\$record" | head -1)
+    [ -n "\$b" ] && [ -x "\$b" ] && chose=\$b rule=record
+  else
+    record="" pin=""
+    [ -f "\$root/.bun-version" ] && pin=\$(head -1 "\$root/.bun-version" | tr -d ' v\r')
+    [ -n "\$pin" ] || pin=\$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"bun@\([0-9][0-9.]*\)".*/\1/p' "\$root/package.json" 2>/dev/null | head -1)
+    [ -n "\$pin" ] || pin=\$(sed -n 's/.*"bun"[[:space:]]*:[[:space:]]*"v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)".*/\1/p' "\$root/package.json" 2>/dev/null | head -1)
+    if [ -n "\$pin" ] && [ -x "\$store/\$pin/bun" ]; then chose="\$store/\$pin/bun" rule=pin
+    else echo "gstack bun shim: \$root has no recorded Bun; run ${GSTACK_CAPY_WRAPPER_PATH:+bash }${GSTACK_CAPY_WRAPPER_PATH:-$ROOT/bin/gstack-capy-install} --check here" >&2
+    fi
+  fi
+fi
+[ -n "\$chose" ] || { [ -x "\$store/\$default/bun" ] && chose="\$store/\$default/bun" rule=default; }
+if [ -z "\$chose" ]; then
+  set -f; ifs=\$IFS; IFS=:
+  for d in \$PATH; do
+    [ -n "\$d" ] && [ -f "\$d/bun" ] && [ -x "\$d/bun" ] || continue
+    head -c 512 "\$d/bun" 2>/dev/null | grep -aqF "\$marker" && continue
+    chose="\$d/bun" rule=PATH; break
+  done
+  IFS=\$ifs; set +f
+fi
+[ "\${GSTACK_BUN_SHIM_EXPLAIN:-}" = 1 ] && echo "gstack bun shim: project=\${root:-none} record=\${record:-none} chose=\${chose:-none} rule=\${rule:-none}" >&2
+[ -n "\$chose" ] || { echo "gstack bun shim: no bun found (store \$store, then PATH)" >&2; exit 127; }
+exec "\$chose" "\$@"
+EOF_SHIM
+    fi
+    chmod 0755 "$tmp" && if cmp -s "$tmp" "$dir/$name"; then rm -f "$tmp"; else mv -f "$tmp" "$dir/$name"; fi
+  done
+  exec 8>&-
+}
+
 # 4. Certify. The trailer is the contract; `(requested <ref>; ...)` when the
 # existing checkout is not at --revision (it is never moved here).
 INSTALLED=$(head -1 "$ROOT/VERSION")
@@ -319,6 +401,7 @@ if [ -n "$REVISION" ] && [ "$REVISION" != "$INSTALLED" ] && [ "$REVISION" != "v$
 fi
 TRAILER="$(printf '%s\n' "$OUT" | grep '^gstack: ' | tail -1)$REV_NOTE"
 record_verdict "$TRAILER" "$([ "$RC" -eq 0 ] && echo 1 || echo 0)"
+[ "$CHECK_ONLY" -eq 1 ] || write_shim
 printf '%s\n' "$OUT" | grep -v '^gstack: '
 say "total: $(( $(now) - T0 ))s"
 echo "GSTACK_LAUNCH: ${LAUNCH_DIR:+PATH=$LAUNCH_DIR:\$PATH }GSTACK_SESSION_KIND=unattended GSTACK_STATE_ROOT=$GSTACK_STATE_ROOT GSTACK_EPHEMERAL=${GSTACK_EPHEMERAL:-1} GSTACK_CAPY=1 GSTACK_INSTALL_VERDICT=$VERDICT"

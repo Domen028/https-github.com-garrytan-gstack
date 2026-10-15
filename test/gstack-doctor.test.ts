@@ -853,4 +853,14 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     expect(r.trailer).toBe('gstack: fail runtime');
     expect(r.line('runtime')).toBe('FAIL runtime — bun resolution drifted: recorded bun 1.4.3 at /s/bun (home), now no eligible bun; changed: the recorded binary is gone; fix: bash /d/install.sh --for review (BUN_RESOLUTION_DRIFT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bun-resolution-drift)');
   });
+
+  test('the runtime row shows gstack\'s bun shim and where it resolves from here, or names a foreign ~/.local/bin/bun it left alone', () => {
+    const f = makeFixture();
+    const shim = path.join(f.home, '.local/bin/bun');
+    write(shim, '#!/bin/sh\n# gstack-bun-shim: gstack-owned; delete this file to remove it\n[ "$GSTACK_BUN_SHIM_EXPLAIN" = 1 ] && echo "gstack bun shim: project=none record=none chose=/store/1.4.3/bun rule=default" >&2\necho 1.4.3\n', 0o755);
+    expect(parse(f, []).line('runtime')).toContain(`; shim ${shim} -> /store/1.4.3/bun`);
+    write(shim, '#!/bin/sh\necho mine\n', 0o755);
+    expect(parse(f, []).line('runtime')).toContain(`; ${shim} is not gstack's shim (no marker), left untouched: launch with the GSTACK_LAUNCH line`);
+    expect(parse(f, [], { GSTACK_BUN_INSTALL_VERSION: '1.4.2' }).line('runtime')).toContain('; install version 1.4.2 from GSTACK_BUN_INSTALL_VERSION');
+  });
 });
