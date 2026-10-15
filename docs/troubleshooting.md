@@ -2410,6 +2410,31 @@ could not be read through `gstack-issue-guard`.
 **Fix.** Check `gh auth status` and the number. Until it reads, the link is
 rendered as `Refs #N`, never `Fixes`.
 
+<a id="issue-lookup-failed"></a>
+### `ISSUE_LOOKUP_FAILED`
+
+**Meaning.** `gstack-issue-links` could not resolve the repository, list the open
+PRs that close an issue this PR fixes, or search the flake issues naming a
+`--ci-run` id. The closure and reference lines are still printed; the
+`Related:` or `Flake:` lines that lookup would have added may be missing, and
+`--json` lists each failure under `unavailable`.
+
+**Fix.** Check `gh auth status` and pass `--repo <owner/repo>` when the remote
+is not a GitHub repository, then rerun. If it still fails, say in the handoff
+which lookup is missing; never present the body as complete.
+
+<a id="issue-links-missing"></a>
+### `ISSUE_LINKS_MISSING`
+
+**Meaning.** `gstack-ship-receipt write --issues @issues.json --body <file>`
+found that the body lacks a `Fixes`, `Refs`, `Flake:`, `Related:`,
+`Supersedes` or `Contributed by` line the issues object records, so the PR
+body and its receipt would disagree. Nothing was written.
+
+**Fix.** Paste every line `gstack-issue-links` printed under `## Issues` in the
+body (or rerun `gstack-issue-links --out` if the issue set changed), then rerun
+the receipt write.
+
 ## Eval plans, lane ownership, evidence verification, the owner brief
 
 Codes printed by `bin/gstack-eval-plan`, `bin/gstack-lane-check`,

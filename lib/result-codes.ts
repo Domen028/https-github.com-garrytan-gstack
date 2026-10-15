@@ -404,6 +404,16 @@ export const RESULT_CODES = {
     summary: 'an issue a closure trailer or --issue names could not be read through gstack-issue-guard, so its link is Refs, never Fixes',
     fix: 'check `gh auth status` and the issue number; rerun gstack-issue-links once the issue reads',
   },
+  ISSUE_LOOKUP_FAILED: {
+    anchor: 'issue-lookup-failed',
+    summary: 'gstack-issue-links could not read the repository, the open PRs closing a fixed issue, or the flake issues naming a CI run, so those Related or Flake lines may be missing',
+    fix: 'check `gh auth status` and the repository (`--repo <owner/repo>`), then rerun gstack-issue-links; report the gap in the handoff if it still fails',
+  },
+  ISSUE_LINKS_MISSING: {
+    anchor: 'issue-links-missing',
+    summary: 'the PR body lacks a line gstack-issue-links wrote to issues.json, so the body and the ship receipt would disagree about what the PR closes or relates to',
+    fix: 'paste every line gstack-issue-links printed under `## Issues` in the body, then rerun gstack-ship-receipt write; nothing was written',
+  },
   // PR E (multi-agent wave): gstack-eval-plan, gstack-lane-check, gstack-evidence verify,
   // gstack-owner-brief, gstack-contributor-mode, gstack-banned-terms.
   PREREG_INCOMPLETE: {
@@ -569,6 +579,12 @@ export const TROUBLESHOOTING_DOC = 'https://github.com/garrytan/gstack/blob/main
 /** `(CODE; <doc>#anchor)` — the suffix the doctor and installer rows carry. */
 export function resultCodeSuffix(code: ResultCodeName): string {
   return `(${code}; ${TROUBLESHOOTING_DOC}#${RESULT_CODES[code].anchor})`;
+}
+
+/** The installer form: `<context>: <summary>[ — <detail>]; fix: <fix> (<CODE>; <doc>#anchor)`. */
+export function resultLineWithDocs(context: string, code: ResultCodeName, detail?: string): string {
+  const row: ResultCode = RESULT_CODES[code];
+  return `${context}: ${row.summary}${detail ? ` — ${detail}` : ''}; fix: ${row.fix} ${resultCodeSuffix(code)}`;
 }
 
 /** One error line: `<context>: <summary>[ (<detail>)]; fix: <fix> (<CODE>)`. */

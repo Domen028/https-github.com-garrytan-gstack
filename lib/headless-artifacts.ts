@@ -81,7 +81,8 @@ export interface ShipReceipt {
   // C-pregate (C8): the pre-gate's verdict against this head and its remote obligations (publication requires their receipts).
   pregate?: string; requires_remote?: string[];
   // C-pregate (C6): issue links the body carries, by intent.
-  issues?: { fixes: number[]; refs: number[]; flakes: Array<{ issue: number; run: string }> };
+  // Related open PRs by other authors (Lane D): `supersedes` / `credit` only on the owner's confirmation.
+  issues?: { fixes: number[]; refs: number[]; flakes: Array<{ issue: number; run: string }>; related?: Array<{ pr: number; repo?: string; author: string; closes: number[]; supersedes?: boolean; credit?: boolean }> };
 }
 
 export const RESULT_STATUSES: readonly ResultStatus[] = ['complete', 'gate_pending', 'incomplete', 'interrupted', 'refused'];
@@ -196,7 +197,7 @@ export const ARTIFACT_SCHEMAS = {
       session_kind: str, artifacts_consumed: { ...str, description: '<n>/<m>' }, run: str,
       thread: str, tree: { enum: ['same-modulo-stamps', 'changed', 'not-compared'] }, gate_reuse: str, policy: str, queue_mode: str, preregistration: str, history: str,
       pregate: { ...str, description: 'pass|warn|requires-remote cleared … @<tree> from pregate.json, current for this head' }, requires_remote: strList,
-      issues: { type: 'object', properties: { fixes: { type: 'array', items: { type: 'integer' } }, refs: { type: 'array', items: { type: 'integer' } }, flakes: { type: 'array', items: { type: 'object', required: ['issue', 'run'], properties: { issue: { type: 'integer' }, run: str } } } } },
+      issues: { type: 'object', properties: { fixes: { type: 'array', items: { type: 'integer' } }, refs: { type: 'array', items: { type: 'integer' } }, flakes: { type: 'array', items: { type: 'object', required: ['issue', 'run'], properties: { issue: { type: 'integer' }, run: str } } }, related: { type: 'array', items: { type: 'object', required: ['pr', 'author', 'closes'], properties: { pr: { type: 'integer' }, repo: str, author: str, closes: { type: 'array', items: { type: 'integer' } }, supersedes: { type: 'boolean' }, credit: { type: 'boolean' } } } } } },
     },
   },
 } as const satisfies Record<string, Schema>;

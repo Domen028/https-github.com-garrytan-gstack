@@ -162,6 +162,8 @@ gstack_result_anchor() {
     PREGATE_STALE) printf '%s' 'pregate-stale' ;;
     PREGATE_REMOTE_UNCLEARED) printf '%s' 'pregate-remote-uncleared' ;;
     ISSUE_UNREADABLE) printf '%s' 'issue-unreadable' ;;
+    ISSUE_LOOKUP_FAILED) printf '%s' 'issue-lookup-failed' ;;
+    ISSUE_LINKS_MISSING) printf '%s' 'issue-links-missing' ;;
     PREREG_INCOMPLETE) printf '%s' 'prereg-incomplete' ;;
     EVAL_PRICE_MISSING) printf '%s' 'eval-price-missing' ;;
     EVAL_DRY_RUN_FAILED) printf '%s' 'eval-dry-run-failed' ;;
