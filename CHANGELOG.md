@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.91.103.0] - 2026-10-15
+
+**Keep older memory within reach.**
+**Choose HydraDB when you want cloud recall.**
+
+`/setup-gbrain --hydradb` connects the brain you already use to optional HydraDB memory. Fast is the default; thinking is available when you want it. Search results and readable context keep working when GBrain switches backends. Disconnect to return to normal GBrain.
+
+### The three settings that matter
+
+These are configuration limits, not measured retrieval speeds. Verify with `gstack-config get brain_query_timeout_ms` and `gbrain cloud status`.
+
+| Setting | Before | After | Change |
+|---|---|---|---|
+| Default context query budget | 500ms | 500ms | Unchanged until opted in |
+| Optional fast / thinking budgets | Environment override | Saved 10000ms / 30000ms budgets | Survives agent restarts |
+| HydraDB credentials stored by gstack | None | None | GBrain owns the connection |
+
+### Itemized changes
+
+- Add an explicit HydraDB setup path with cloud-copy consent, verification, mode selection and local off switches. Requires GBrain's optional cloud-memory feature.
+- Preserve readable Markdown in context loading; read structured search results in decision recall and code search so human-output formatting cannot hide matches.
+- Keep cloud-only memory separate from local code references. Repo policies and transcript-capture consent continue to apply.
+
+Contributed by @SohamRatnaparkhi.
+
 ## [1.91.101.0] - 2026-10-13
 
 **The field wave's residual gaps are closed.** v1.91.96.0 through v1.91.100.0 shipped the install-honesty and unattended-`/autoplan` wave (`docs/designs/GSTACK_FIELD_WAVE_2026_10_12.md`); running that release on a Capy machine left six gaps, each reproduced here with a test that failed first.

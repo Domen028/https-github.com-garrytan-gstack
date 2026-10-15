@@ -39,18 +39,29 @@ Before starting, search the brain for relevant context:
    names, file paths, technical terms — NOT verbs or adjectives.
    Example: for "the login page is broken after deploy", search for
    `login broken deploy`.
-2. **Search**: `gbrain search "<keyword1 keyword2>"`. Returns lines like
-   `[slug] Title (score: 0.85) - first line of content...`.
+2. **Search**: `gbrain search "<keyword1 keyword2>"`. Use returned Markdown as
+   context. With optional HydraDB memory this includes cloud evidence and graph
+   context authorized by GBrain. MCP clients also receive structured results;
+   retain their provenance rather than flattening them into made-up page IDs.
 3. **If few results** (under 3): broaden to the single most specific
    keyword and search again. If still few, proceed without brain context.
-4. **Read top 3 results**: `gbrain get "<slug>"` for each. Stop
-   after 3 — diminishing returns past that.
+4. **Read top 3 local page results**: `gbrain get "<slug>"` for each. Stop
+   after 3. Cloud-only passages have no local page: use their returned Markdown
+   directly. Do not infer local slugs from titles or cloud IDs.
 5. **Use the context** to inform your analysis. Cite specific slugs in
    your output when a brain page changed your thinking.
 
 If `gbrain search` returns any non-zero exit (gbrain not on PATH, network
 flake, throttle), treat as transient: proceed without brain context. Do
 not retry inline — the user can re-run the skill later.
+
+For optional HydraDB setup, modes and returning to normal local retrieval, see
+[`setup-gbrain/hydradb.md`](../setup-gbrain/hydradb.md). The context loader's
+semantic query budget can be persisted with `gstack-config set
+brain_query_timeout_ms 10000` for fast or `30000` for thinking. Its default is
+500ms; `GSTACK_BRAIN_TIMEOUT_MS` overrides it. List/filesystem reads keep their
+existing budgets. Each vector query has its own budget, so a manifest with
+multiple queries can wait up to their combined limits.
 
 ## §Save Template (agent reads this when actually saving)
 

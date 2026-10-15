@@ -6,12 +6,11 @@
  * module is loaded lazily by `gstack-decision-search` only on `--semantic`, and every
  * path degrades to `null` (caller shows the reliable file results) when gbrain is
  * absent, unconfigured, times out, or returns nothing. It NEVER throws and NEVER
- * hangs (10s spawn timeout). We do not wire core function to this — gbrain is an
+ * hangs (bounded spawn timeout, 10s unless a larger query budget is configured). We do not wire core function to this — gbrain is an
  * enhancement, never a dependency (the code-search lesson).
  *
- * Surface reality (verified against gbrain 0.42.x, not guessed):
- *  - `gbrain search "<q>"` prints TEXT lines `[score] slug -- snippet`, NOT JSON
- *    (so we parse the text surface; execGbrainJson would always null here).
+ * Search uses `--json` so switching human output to cloud Markdown does not
+ * break parsing. Older text output remains readable for compatibility.
  *  - The curated-memory source is the one whose local_path is the gstack brain
  *    worktree (`~/.gstack-brain-worktree`), id `default` by convention — NOT a
  *    `gstack-brain-<user>` id. Scoping search to it keeps code/doc corpora out.
@@ -19,15 +18,13 @@
 
 import { spawnGbrain } from "./gbrain-exec";
 import { parseSourcesList } from "./gbrain-sources";
+import { gbrainSearchHits, type GbrainSearchHit } from "./gbrain-search-results";
+import { brainQueryTimeoutMs } from "./gbrain-context-timeout";
 
 const TIMEOUT_MS = 10_000;
 const BRAIN_WORKTREE_SUFFIX = ".gstack-brain-worktree";
 
-export interface SemanticHit {
-  score: number;
-  slug: string;
-  snippet: string;
-}
+export type SemanticHit = GbrainSearchHit;
 
 /**
  * Resolve the curated-memory source id (the gstack brain worktree). Returns null
@@ -51,21 +48,13 @@ export function resolveMemorySourceId(env?: NodeJS.ProcessEnv): string | null {
 }
 
 /**
- * Parse gbrain search's text output into scored hits. Lines look like:
+ * Parse gbrain search JSON or legacy text into scored hits. Legacy lines look like:
  *   `[0.4361] slug -- snippet text...`
  * Non-matching lines (banners, blanks) are skipped. Exported for deterministic
  * unit testing of the parser without a live gbrain.
  */
 export function parseSearchHits(stdout: string, minScore: number, limit: number): SemanticHit[] {
-  const hits: SemanticHit[] = [];
-  for (const line of stdout.split("\n")) {
-    const m = line.match(/^\[([\d.]+)\]\s+(\S+)\s+--\s+(.*)$/);
-    if (!m) continue;
-    const score = parseFloat(m[1]);
-    if (!Number.isFinite(score) || score < minScore) continue;
-    hits.push({ score, slug: m[2], snippet: m[3].trim() });
-  }
-  return hits.slice(0, limit);
+  return gbrainSearchHits(stdout, minScore, limit);
 }
 
 /**
@@ -87,7 +76,7 @@ export function semanticRecall(
   // code/doc corpora that would be mislabeled as "related decisions" (Codex finding).
   const sourceId = resolveMemorySourceId(env);
   if (!sourceId) return null;
-  const r = spawnGbrain(["search", query, "--source", sourceId], { baseEnv: env, timeout: TIMEOUT_MS });
+  const r = spawnGbrain(["search", query, "--source", sourceId, "--json"], { baseEnv: env, timeout: Math.max(TIMEOUT_MS, brainQueryTimeoutMs(env)) });
   if (r.status !== 0) return null; // gbrain down / not on PATH / errored → degrade
   return parseSearchHits(r.stdout || "", minScore, limit);
 }

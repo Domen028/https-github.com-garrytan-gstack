@@ -10,10 +10,12 @@
  *   kind: list         → gbrain list --type/--tag/--updated-after/--sort ...
  *   kind: filesystem   → local glob
  *
- * Each MCP/CLI call has a 500ms hard timeout per Section 1C. On timeout or
+ * Each MCP/CLI call defaults to a 500ms hard timeout per Section 1C. Semantic
+ * queries may opt into a larger brain_query_timeout_ms budget for cloud memory.
+ * On timeout or
  * "gbrain not in PATH" / "MCP not registered", the helper renders
  * `(unavailable)` for that section and continues — skill startup never blocks
- * > 2s on gbrain issues.
+ * beyond its configured per-query budgets on gbrain issues.
  *
  * Layer 1 fallback per F7 (Codex outside-voice): every default query carries
  * an explicit `repo: {repo_slug}` filter so cross-repo contamination is the
@@ -40,6 +42,7 @@ import { spawnSync } from "child_process";
 import { homedir } from "os";
 import { resolveStateRoot } from "../lib/state-root";
 import { gbrainConfigDir } from "../lib/gbrain-exec";
+import { brainQueryTimeoutMs } from "../lib/gbrain-context-timeout";
 
 import { parseSkillManifest, type GbrainManifest, type GbrainManifestQuery, withErrorContext } from "../lib/gstack-memory-helpers";
 
@@ -75,6 +78,7 @@ const GSTACK_HOME = resolveStateRoot();
 // 500ms hard cap per Section 1C; overridable for slow/loaded environments
 // (test harnesses under CI load, cold CLI starts).
 const MCP_TIMEOUT_MS = Math.max(1, parseInt(process.env.GSTACK_BRAIN_TIMEOUT_MS || "", 10) || 500);
+const QUERY_TIMEOUT_MS = brainQueryTimeoutMs();
 const PAGE_SIZE_CAP = 10 * 1024; // 10KB per query result before truncation
 
 // ── CLI ────────────────────────────────────────────────────────────────────
@@ -240,7 +244,7 @@ function dispatchVector(q: GbrainManifestQuery, args: CliArgs): QueryResult {
   const limit = q.limit ?? args.limit;
   const result = spawnSync("gbrain", ["query", query, "--limit", String(limit)], {
     encoding: "utf-8",
-    timeout: MCP_TIMEOUT_MS,
+    timeout: QUERY_TIMEOUT_MS,
   });
 
   if (result.status !== 0) {
@@ -546,7 +550,7 @@ async function main(): Promise<void> {
   }
 
   if (args.explain) {
-    console.error(`[brain-context-load] mode=${mode} queries=${results.length}`);
+    console.error(`[brain-context-load] mode=${mode} queries=${results.length} query_timeout_ms=${QUERY_TIMEOUT_MS}`);
     for (const r of results) {
       const status = r.ok ? "OK" : "SKIP";
       console.error(`  ${status.padEnd(5)} ${r.query.id.padEnd(28)} kind=${r.query.kind.padEnd(10)} bytes=${r.bytes.toString().padStart(6)} dur=${r.duration_ms}ms${r.reason ? ` (${r.reason})` : ""}`);

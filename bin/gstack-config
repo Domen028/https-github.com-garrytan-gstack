@@ -114,6 +114,9 @@ CONFIG_HEADER='# gstack configuration — edit freely, changes take effect on ne
 #                           #   --publish-removals. See docs/gbrain-sync.md.
 #
 # ─── Transcript ingest (gbrain memory) ───────────────────────────────
+# brain_query_timeout_ms: 500 # Semantic context query budget. HydraDB fast: 10000;
+#                            # thinking: 30000. Does not enable cloud uploads.
+#
 # transcript_ingest_mode: off  # recent | all | off | new@<UTC> — consent for
 #                           #   /sync-gbrain to ingest Claude Code and Codex
 #                           #   session transcripts (every project repo policy
@@ -308,6 +311,7 @@ lookup_default() {
     #   user_slug_at_<endpoint-id>  — empty triggers resolve-user-slug
     #                                fallback chain (D4 A3) on first call.
     brain_trust_policy*) echo "unset" ;;
+    brain_query_timeout_ms) echo "500" ;;
     salience_allowlist) echo "" ;;
     user_slug_at_*) echo "" ;;
     # Read by skill preambles but missing from this table, so they fell through
@@ -724,6 +728,10 @@ $_gstack_legacy_root"
       echo "Error: key must contain only alphanumeric characters, underscores, and an optional @<endpoint-id> suffix" >&2
       exit 1
     fi
+    if [ "$KEY" = "brain_query_timeout_ms" ] && ! printf '%s' "$VALUE" | LC_ALL=C grep -qE '^([1-9][0-9]{0,4}|1[01][0-9]{4}|120000)$'; then
+      echo "Error: brain_query_timeout_ms must be an integer from 1 to 120000. Existing value left unchanged." >&2
+      exit 1
+    fi
     # Validate brain_trust_policy value domain (D4 / D11)
     if printf '%s' "$KEY" | grep -qE '^brain_trust_policy(@|$)' && \
        [ "$VALUE" != "personal" ] && [ "$VALUE" != "shared" ] && [ "$VALUE" != "unset" ]; then
@@ -1010,7 +1018,7 @@ $_gstack_legacy_root"
     echo "# ─── Active values (including defaults for unset keys) ───"
     report_root_disagreement
     for KEY in proactive routing_declined telemetry auto_upgrade update_check \
-               skill_prefix explain_level \
+               skill_prefix explain_level brain_query_timeout_ms \
                codex_reviews gstack_contributor skip_eng_review workspace_root \
                artifacts_sync_mode artifacts_sync_mode_prompted artifacts_sync_removals plan_tune_hooks \
                timeline_stop_hook design_detector design_detector_install_prompted memorable_recall \
@@ -1035,7 +1043,7 @@ $_gstack_legacy_root"
   defaults)
     echo "# gstack-config defaults"
     for KEY in proactive routing_declined telemetry auto_upgrade update_check \
-               skill_prefix explain_level \
+               skill_prefix explain_level brain_query_timeout_ms \
                codex_reviews gstack_contributor skip_eng_review workspace_root \
                artifacts_sync_mode artifacts_sync_mode_prompted artifacts_sync_removals plan_tune_hooks \
                timeline_stop_hook design_detector design_detector_install_prompted memorable_recall \
