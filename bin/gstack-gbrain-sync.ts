@@ -1662,6 +1662,9 @@ function runMemoryIngest(args: CliArgs, previous: SyncState, consent: Transcript
   };
 }
 
+export const NO_BASH_SUMMARY =
+  "skipped (no bash found; set GSTACK_GIT_BASH (old name: GSTACK_BASH) to your Git bash.exe. PowerShell: [Environment]::SetEnvironmentVariable('GSTACK_GIT_BASH', 'C:\\Program Files\\Git\\bin\\bash.exe', 'User'), then restart Claude Code; or add it to the \"env\" block of ~/.claude/settings.json)";
+
 function runBrainSyncPush(args: CliArgs): StageResult {
   const t0 = Date.now();
 
@@ -1689,7 +1692,7 @@ function runBrainSyncPush(args: CliArgs): StageResult {
       ran: false,
       ok: true,
       duration_ms: Date.now() - t0,
-      summary: "skipped (no bash found; set GSTACK_BASH to your Git bash.exe)",
+      summary: NO_BASH_SUMMARY,
     };
   }
 
