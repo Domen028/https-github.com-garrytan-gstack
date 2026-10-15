@@ -155,6 +155,11 @@ export const RESULT_CODES = {
     summary: 'a tool the installer needs before ./setup (git, curl, node, jq) is missing, or the Bun install recipe failed its checksum',
     fix: 'install the named tool, then re-run bin/gstack-capy-install',
   },
+  SETUP_PS1_EMPTY_ARGUMENT: {
+    anchor: 'setup-ps1-empty-argument',
+    summary: 'an argument given to .\\setup.ps1 is an empty string, which its Git Bash hand-off cannot carry, so nothing ran',
+    fix: 'drop the empty argument or give it a value, then run .\\setup.ps1 again',
+  },
   // C-stamp (plan C1, C2, C3, C5, C7): ship policy, restamp, tree receipt, ship receipt.
   POLICY_SOURCE_UNAVAILABLE: {
     anchor: 'policy-source-unavailable',
