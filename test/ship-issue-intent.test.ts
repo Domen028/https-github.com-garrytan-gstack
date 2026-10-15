@@ -172,6 +172,7 @@ describe('gstack-issue-links (bin): related PRs, flake validation, lookup failur
     expect(j.lines).toEqual(['Fixes #14', 'Refs #30', 'Supersedes #7', 'Contributed by @alice', 'Related: carol/repo#11 (@carol)']);
     expect(j.candidates.map((c: { issue: number }) => c.issue)).toEqual([30]);
     expect(JSON.parse(fs.readFileSync(out, 'utf8'))).toEqual({ fixes: [14], refs: [30], flakes: [], related: [{ pr: 7, author: 'alice', closes: [14], supersedes: true, credit: true }, { pr: 11, repo: 'carol/repo', author: 'carol', closes: [14] }] });
+    expect(runBin(repo, 'gstack-issue-links', ['--base', 'main', '--author', 'Alice'], env).out).toBe('Fixes #14\nRefs #30\nRelated: #9 (@me)\nRelated: carol/repo#11 (@carol)\n');
     expect(runBin(repo, 'gstack-issue-links', ['--base', 'main', '--supersedes', '99'], env)).toMatchObject({ status: EXIT.usage, err: expect.stringContaining('--supersedes #99 is not a Related PR (#7, carol/repo#11)') });
   });
 

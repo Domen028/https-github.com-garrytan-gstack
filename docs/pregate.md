@@ -340,7 +340,7 @@ held-out and transcript layout.
 
 ```
 gstack-issue-links [--base <ref>] [--issue <n>]... [--ci-run <id>]... [--supersedes <pr>]... [--credit <pr>]...
-                   [--no-auto-links] [--repo <owner/repo>] [--out issues.json] [--json]
+                   [--no-auto-links] [--author <login>] [--repo <owner/repo>] [--out issues.json] [--json]
 ```
 
 Reads `origin/<base>..HEAD`. `Fixes #N` only on explicit closure intent: a
@@ -361,7 +361,8 @@ that names that run (its `flake:json` `first_seen.run_id`, or this repository's
 `Flake: <test>` title). Two issues for the same test keep the lower number;
 every refused match is printed with its reason.
 
-Open PRs by other authors (not the `gh` user, not this branch) whose closing
+Open PRs by other authors (not `--author`, default the `gh` viewer, which is
+an app identity on hosts like Capy, so pass your login there; not this branch) whose closing
 set overlaps this PR's `Fixes` are `Related: #N (@author)`, read page by page
 from each issue's closing-PR references, in unattended runs too. `Supersedes #N`
 replaces that line and `Contributed by @author` is added (the credit lines of

@@ -3,7 +3,7 @@
  * gstack-issue-links — issue links by intent for /ship Step 18 (plan C6).
  *
  *   gstack-issue-links [--base <ref>] [--issue <n>]... [--ci-run <id>]... [--supersedes <pr>]... [--credit <pr>]...
- *                      [--no-auto-links] [--repo <owner/repo>] [--out <issues.json>] [--json]
+ *                      [--no-auto-links] [--author <login>] [--repo <owner/repo>] [--out <issues.json>] [--json]
  *
  * Reads `git log origin/<base>..HEAD` and classifies every issue mention:
  * `Fixes #N` only on explicit closure intent (a Fixes/Closes/Resolves trailer
@@ -37,6 +37,7 @@ const HELP = `gstack-issue-links — Fixes only on explicit closure intent; ever
   --supersedes <pr>   owner confirmed this PR supersedes a Related PR: Supersedes #N (repeatable)
   --credit <pr>       owner confirmed crediting a Related PR's author: Contributed by @author (repeatable)
   --no-auto-links     no Related lookup (open PRs by other authors closing a fixed issue)
+  --author <login>    this PR's author for that lookup (default: the gh viewer; pass it when gh runs as an app)
   --repo <owner/repo> repository for gh (default: the current remote)
   --out <file>        write the issues object (fixes, refs, flakes, related) for gstack-ship-receipt write --issues @file
   --json              JSON only on stdout
@@ -145,7 +146,7 @@ function main(argv: string[]): number {
   const links = resolveLinks(mentions, explicit, readable, flakes);
   const found = autoLinks && repo && links.fixes.length ? closingPrs(gh, repo, links.fixes) : undefined;
   if (found) {
-    const related = relatedPrs(found.closing, { repo: repo!, viewer: found.viewer, branch: git(['branch', '--show-current'], repoRoot)?.trim() || undefined });
+    const related = relatedPrs(found.closing, { repo: repo!, viewer: flags(argv, '--author')[0] ?? found.viewer, branch: git(['branch', '--show-current'], repoRoot)?.trim() || undefined });
     if (related.length) links.related = related;
   }
   for (const [kind, list] of Object.entries(confirmed)) {
