@@ -1490,6 +1490,24 @@ function logFreeRecovery(log: (line: string) => void, outcome: FreeShardOutcome,
   }
 }
 
+/**
+ * Backstop for fixtures that commit and then list, watch or remove `.git`:
+ * git's detached auto-maintenance child creates and deletes
+ * `.git/objects/maintenance.lock` after `git commit` has returned. Appends
+ * `maintenance.auto=false` and `gc.auto=0` after any inherited GIT_CONFIG_*
+ * pairs; a malformed inherited count is left untouched so git still rejects it.
+ */
+export function disableGitAutoMaintenance(env: NodeJS.ProcessEnv): void {
+  const inherited = (env.GIT_CONFIG_COUNT ?? '').trim();
+  if (inherited !== '' && !/^\d+$/.test(inherited)) return;
+  const count = inherited === '' ? 0 : Number(inherited);
+  env[`GIT_CONFIG_KEY_${count}`] = 'maintenance.auto';
+  env[`GIT_CONFIG_VALUE_${count}`] = 'false';
+  env[`GIT_CONFIG_KEY_${count + 1}`] = 'gc.auto';
+  env[`GIT_CONFIG_VALUE_${count + 1}`] = '0';
+  env.GIT_CONFIG_COUNT = String(count + 2);
+}
+
 /** One line per shard, printed after the run: `[test:free] shard i/N: M files, XXs, pass|fail|timed-out`. */
 function shardEpilogue(outcome: FreeShardOutcome, totalShards: number): string {
   return `[test:free] shard ${outcome.shard}/${totalShards}: ${outcome.files.length} files, `
@@ -1559,6 +1577,7 @@ export async function runFreeShard(
   // shards and prior daemons replace each other's state; override inherited state.
   env.BROWSE_STATE_FILE = path.join(stateDir, '.gstack', 'browse.json');
   env.GSTACK_FREE_SHARD_ID = randomUUID();
+  disableGitAutoMaintenance(env);
   const home = options.homeGuard ? options.homeGuard(files, env, stateDir) : guardFreeHome(files, env);
 
   const startedAt = Date.now();
