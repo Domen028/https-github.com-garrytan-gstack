@@ -271,17 +271,13 @@ export async function dockerExactImagePresent(
   assertExactCatalogImage(image);
   assertEndpoint(endpoint);
   const config = secureDirectory(join(home, 'docker-config'));
-  const result = await runDocker(
-    endpoint.executable,
-    ['image', 'inspect', '--format', '{{json .}}', image],
-    {
-      cwd: home,
-      env: dockerEnvironment(endpoint, config),
-      raw: true,
-      timeoutMs: dockerTimeout(deadline, 5_000),
-      maxBytes: 128 * 1024,
-    },
-  );
+  const result = await runDocker(endpoint.executable, ['image', 'inspect', '--format', '{{json .}}', image], {
+    cwd: home,
+    env: dockerEnvironment(endpoint, config),
+    raw: true,
+    timeoutMs: dockerTimeout(deadline, 5_000),
+    maxBytes: 128 * 1024,
+  });
   assertEndpoint(endpoint);
   if (deadlineExpired(deadline) || result.timedOut)
     throw new CsoError('DEADLINE', 'Exact image inspection reached its bounded image-provisioning deadline');
