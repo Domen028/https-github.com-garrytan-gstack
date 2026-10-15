@@ -125,23 +125,38 @@ if [ -f "$VERDICT" ]; then
   REC_RULE=$(gstack_install_verdict_field "$VERDICT" bun_rule) REC_BUN_INSTALL=$(gstack_install_verdict_field "$VERDICT" bun_install)
 fi
 LAUNCH_DIR="" RES_BIN="" RES_VER="" RES_RULE=""
-PINS_OUT="" PINS_MODE=none RUNNER="" PIN="" PIN_SRC="" PIN_EXACT=""
+PINS_OUT="" PINS_MODE=none RUNNER="" PIN="" PIN_SRC="" PIN_EXACT="" PIN_ALTS=""
 # read_pins RUNNER — the project's pins through the doctor's parser
 # (lib/runtime-pins.ts: engines, packageManager, .tool-versions, .bun-version,
 # CI lanes) when RUNNER can run it, else the package.json / .bun-version subset
-# read with jq. Sets PINS_MODE (parser|jq|none) and PIN_EXACT (the one exact Bun pin).
+# read with jq. Sets PINS_MODE (parser|jq|none) and PIN_EXACT, the exact Bun
+# to prefer: the one non-CI exact pin (two different ones conflict), else
+# among this platform's CI exact pins (alternatives; any one satisfies CI)
+# the install version when listed, else the highest verified one, else the
+# highest one.
 read_pins() {
-  RUNNER="$1" PINS_OUT="" PINS_MODE=none PIN="" PIN_SRC="" PIN_EXACT=""
+  RUNNER="$1" PINS_OUT="" PINS_MODE=none PIN="" PIN_SRC="" PIN_EXACT="" PIN_ALTS=""
   [ -n "$PROJECT" ] || return 0
   [ -n "$RUNNER" ] && [ -f "$ROOT/bin/gstack-runtime-pins.ts" ] && PINS_OUT=$("$RUNNER" "$ROOT/bin/gstack-runtime-pins.ts" --project "$PROJECT" 2>/dev/null)
   if printf '%s\n' "$PINS_OUT" | grep -q '^PINS_VERDICT: '; then
     PINS_MODE=parser
-    _exact=$(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN: bun \([^ ]*\) exact \([^ ]*\) lane=[a-z]*$/\1 \2/p')
-    [ -n "$_exact" ] || return 0
-    if [ "$(printf '%s\n' "$_exact" | cut -d' ' -f1 | sort -u | wc -l | tr -d ' ')" -gt 1 ]; then
+    _exact=$(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN_EXACT_REQUIRED: bun \([^ ]*\) \([^ ]*\)$/\1 \2/p')
+    if [ "$(printf '%s\n' "$_exact" | grep -c .)" -gt 1 ]; then
       stop RUNTIME_PIN_CONFLICT "Bun conflict: $PROJECT pins more than one exact Bun ($(printf '%s\n' "$_exact" | sed 's/^\([^ ]*\) \(.*\)$/\2 pins \1/' | tr '\n' ';' | sed 's/;$//; s/;/; /g'))" "make the project's exact Bun pins agree"
     fi
-    PIN_EXACT=$(printf '%s\n' "$_exact" | head -1 | cut -d' ' -f1) PIN_SRC="$PROJECT/$(printf '%s\n' "$_exact" | head -1 | cut -d' ' -f2 | sed 's/:[0-9]*$//')"
+    if [ -n "$_exact" ]; then
+      PIN_EXACT=${_exact%% *} PIN_SRC="$PROJECT/$(printf '%s' "${_exact#* }" | sed 's/:[0-9]*$//')"
+      return 0
+    fi
+    _alts=$(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN_CI_ALTERNATIVES: bun //p')
+    [ -n "$_alts" ] || return 0
+    case "$_alts" in *' '*) PIN_ALTS="$_alts" ;; esac
+    PIN_SRC="$PROJECT/.github/workflows (CI exact pins: $_alts)"
+    case " $_alts " in *" $INSTALL_VERSION "*) PIN_EXACT="$INSTALL_VERSION"; return 0 ;; esac
+    for _v in $(printf '%s\n' $_alts | sort -t. -k1,1nr -k2,2nr -k3,3nr); do
+      gstack_bun_archive_sha256 linux-x64 "$_v" >/dev/null && [ "$(gstack_bun_status "$_v")" = ok ] && { PIN_EXACT="$_v"; return 0; }
+    done
+    PIN_EXACT=$(printf '%s\n' $_alts | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
     return 0
   fi
   command -v jq >/dev/null 2>&1 || return 0
@@ -244,7 +259,7 @@ else
     resolve || conflict "bun $WANT in $STORE does not satisfy $PROJECT's pins $(pins_text) (judged: ${_gb_judged:-none})"
   fi
   [ -n "${GSTACK_BUN_INSTALL_VERSION:-}" ] && say "install version $INSTALL_VERSION from GSTACK_BUN_INSTALL_VERSION (default $GSTACK_BUN_DEFAULT)"
-  say "bun $RES_VER at $RES_BIN ($(gstack_bun_rule_text "$RES_RULE"); satisfies gstack's supported minimum $GSTACK_BUN_TESTED${PIN_EXACT:+ and the project pin $PIN_EXACT}$([ -z "$PIN_EXACT" ] && [ -n "$PIN" ] && printf ' and the project pin %s' "$PIN")$([ -z "$PIN_EXACT" ] && [ "$PINS_MODE" = parser ] && printf ' and the project pins'))"
+  say "bun $RES_VER at $RES_BIN ($(gstack_bun_rule_text "$RES_RULE"); satisfies gstack's supported minimum $GSTACK_BUN_TESTED$([ -n "$PIN_ALTS" ] && printf " and the project's CI pins (alternatives: %s)" "$PIN_ALTS" || printf '%s' "${PIN_EXACT:+ and the project pin $PIN_EXACT}")$([ -z "$PIN_EXACT" ] && [ -n "$PIN" ] && printf ' and the project pin %s' "$PIN")$([ -z "$PIN_EXACT" ] && [ "$PINS_MODE" = parser ] && printf ' and the project pins'))"
 fi
 if [ -n "$RES_BIN" ] && [ "$(gstack_realpath "$(command -v bun 2>/dev/null || echo /nonexistent)" 2>/dev/null)" != "$RES_BIN" ]; then
   LAUNCH_DIR=$(dirname "$RES_BIN")

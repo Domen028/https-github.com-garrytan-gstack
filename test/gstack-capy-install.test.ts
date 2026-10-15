@@ -437,6 +437,41 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     expect(outside.stdout).toContain(`GSTACK_LAUNCH: PATH=${bi}/bin:$PATH `);
   });
 
+  // Integration item 1: gstack's own CI pins 1.4.2 on every lane and 1.4.3 on
+  // the install-default job. They are alternatives, so the real checkout as
+  // --project certifies with either Bun; a repo whose CI pins only 1.4.3 still
+  // refuses 1.4.2.
+  test('the real gstack checkout as --project with a separate global install certifies with ~/.bun 1.4.2 and with 1.4.3; nothing is downloaded', () => {
+    for (const version of ['1.4.2', '1.4.3']) {
+      const f = fixture({ bun: '1.3.14' });
+      withPins(f);
+      realBun(path.join(f.home, '.bun/bin/bun'), version);
+      const r = run(f, ['--for', 'review', '--project', REPO], {}, f.home);
+      expect(r.status, r.stdout + r.stderr).toBe(0);
+      expect(r.stderr).not.toContain('RUNTIME_PIN_CONFLICT');
+      expect(r.stdout).toContain(`bun ${version} at ${f.home}/.bun/bin/bun ($BUN_INSTALL/bin; satisfies gstack's supported minimum 1.4.2 and the project's CI pins (alternatives: 1.4.2 1.4.3))`);
+      expect(f.calls().some(l => l.startsWith('curl '))).toBe(false);
+      expect(verdictFor(f, r)).toMatchObject({ project: REPO, bun_version: version, bun_rule: 'BUN_INSTALL' });
+      expect(run(f, ['--check', '--for', 'review', '--project', REPO], {}, f.home).status).toBe(0);
+    }
+  });
+
+  test('CI alternatives with nothing installed: the install default is published when it is one of them; a gbrain-like repo (CI 1.4.3 only) refuses ~/.bun 1.4.2 and installs 1.4.3', () => {
+    const f = fixture({ bun: '1.3.14' });
+    withPins(f);
+    const r = run(f, ['--for', 'review', '--project', REPO], { STUB_CURL_ZIP: zipFor(f, '1.4.3') }, f.home);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain(`bun 1.4.3 at ${store(f, '1.4.3')}/bun (`);
+    const g = fixture({ bun: '1.3.14' });
+    withPins(g);
+    realBun(path.join(g.home, '.bun/bin/bun'), '1.4.2');
+    const project = ciProject(g, 'gbrain', '1.4.3');
+    const gr = run(g, ['--for', 'review'], { STUB_CURL_ZIP: zipFor(g, '1.4.3') }, project);
+    expect(gr.status, gr.stdout + gr.stderr).toBe(0);
+    expect(gr.stdout).toContain(`judged: bun 1.4.2 at ${g.home}/.bun/bin/bun (BUN_INSTALL)`);
+    expect(gr.stdout).toContain(`bun 1.4.3 at ${store(g, '1.4.3')}/bun (the project's exact pin`);
+  });
+
   test('no installed Bun satisfies the pins: the line names the Bun actually judged, the exact pin is published in the store, and the next --check agrees', () => {
     const f = fixture({ bun: '1.3.14' });
     withPins(f);

@@ -21,7 +21,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { findInstallVerdict, readInstallVerdict, sourceRoot } from '../install-verdict';
 import { resultCodeSuffix } from '../result-codes';
-import { collectPins, evaluatePins, parseVersion, satisfies } from '../runtime-pins';
+import { collectPins, evaluatePins, exactPlan, parseVersion, satisfies } from '../runtime-pins';
 import { resolveStateRoot } from '../state-root';
 
 type Env = NodeJS.ProcessEnv;
@@ -106,16 +106,24 @@ function enginesBun(file: string): string | null {
   try { const v = JSON.parse(fs.readFileSync(file, 'utf8'))?.engines?.bun; return typeof v === 'string' && v.trim() ? v.trim() : null; } catch { return null; }
 }
 
-const PLATFORM_LANE: Record<string, string> = { linux: 'linux', darwin: 'macos', win32: 'windows' };
+const byVersionDesc = (a: string, b: string) => { const x = parseVersion(a)!, y = parseVersion(b)!; return y[0] - x[0] || y[1] - x[1] || y[2] - x[2]; };
 
-/** The project's pins as the resolver's eligibility hook, and its one applicable exact Bun pin. */
-export function projectBunPins(repoRoot: string | null): { pinExact: string | null; accept: (version: string) => boolean } {
+/**
+ * The project's pins as the resolver's eligibility hook, and the exact Bun to
+ * prefer (read_pins in bin/gstack-capy-install): the one non-CI exact pin,
+ * else among the CI alternatives the install version, the highest verified,
+ * or the highest.
+ */
+export function projectBunPins(repoRoot: string | null, env: Env = process.env): { pinExact: string | null; accept: (version: string) => boolean } {
   const gstackPin = enginesBun(path.join(GSTACK_ROOT, 'package.json'));
   const pins = repoRoot ? collectPins(repoRoot).filter(p => p.tool === 'bun') : [];
-  const here = PLATFORM_LANE[process.platform] ?? 'any';
-  const exact = [...new Set(pins.filter(p => p.kind === 'exact' && (p.lane === 'any' || p.lane === here)).map(p => p.constraint.replace(/^v/, '')))];
+  const plan = exactPlan(pins, 'bun');
+  const alts = plan.ciAlternatives.filter(v => parseVersion(v)).sort(byVersionDesc);
+  const installVersion = bunInstallVersion(env);
+  const pinExact = plan.required.length ? (plan.required.length === 1 && parseVersion(plan.required[0].version) ? plan.required[0].version : null)
+    : alts.find(v => v === installVersion) ?? alts.find(v => BUN_VERIFIED.includes(v) && bunStatusOk(v)) ?? alts[0] ?? null;
   return {
-    pinExact: exact.length === 1 && parseVersion(exact[0]) ? exact[0] : null,
+    pinExact,
     accept: (version: string) => (!gstackPin || satisfies(version, gstackPin) === true) && evaluatePins(pins, { bun: version }).failures.length === 0,
   };
 }
@@ -157,7 +165,7 @@ export function launchRuntime(repoRoot: string, env: NodeJS.ProcessEnv): LaunchR
   } else {
     verdict = 'ok';
   }
-  const { pinExact, accept } = projectBunPins(project);
+  const { pinExact, accept } = projectBunPins(project, env);
   const { resolution } = resolveBun({ store: bunStore(resolveStateRoot(env)), env, pinExact, accept });
   if (resolution) return launch(resolution.bin, resolution.version, `resolved: ${resolution.rule}`, verdict, verdictLine);
   return { dir: null, version: null, env, label: `PATH (no eligible Bun in the runtime store, $BUN_INSTALL/bin, ~/.bun/bin or PATH)${verdictLine ? `; ${verdictLine}` : ''}`, verdict, verdictLine };
