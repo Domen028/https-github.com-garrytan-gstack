@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.104.0] - 2026-10-15
 
 **The 2026-10-15 issue wave is fixed, with every adopted contributor patch kept under its author.** Twenty-odd field reports and community PRs from the week after v1.91.101.0 (`docs/designs/FIX_WAVE_2026_10_15.md`): an `/autoplan` run locked by a Claude Code 2.1.300 compaction, `/cso` scans that could not finish, auto-updates that left conflict markers or held every Windows install, Windows pregate and restamp unable to run gstack's own scripts, plan reviews that lost their native second opinion on Claude Code 2.1.277+, and a batch of maintenance fixes. Each was reproduced with a test that failed first on v1.91.101.0.
 
