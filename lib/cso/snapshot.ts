@@ -40,7 +40,8 @@ function containsDirectory(path: string, components: Set<string>, sequences: str
     parts.slice(0, -1).some((_, index) => sequence.every((part, offset) => parts[index + offset] === part)),
   );
 }
-function noReadPath(path: string): boolean {
+/** Host dependency trees: never read, copied, or counted, with or without --paths. */
+export function noReadPath(path: string): boolean {
   return containsDirectory(path, NO_READ_COMPONENTS, [['vendor', 'bundle']]);
 }
 function omittedPath(path: string): boolean {
@@ -63,7 +64,7 @@ export function snapshotManifestCapMessage(entries: number, bytes: number): stri
   return `Snapshot manifest cap exceeded: ${entries} source entries need a ${mib(bytes)} (${bytes} byte) manifest; the snapshot manifest cap is ${mib(SNAPSHOT_MANIFEST_LIMIT)}. One entry is recorded for ${COUNTED_SOURCE}. Next step: run /cso on a smaller checkout of the code you want audited, and add your entry count to ${CAPACITY_ISSUE}. No supported workaround raises this cap.`;
 }
 export function sourceCapMessage(bytes: number, files: number): string {
-  return `64 MiB source cap exceeded: ${files} source files hold about ${mib(bytes)} (${bytes} bytes); the source admission cap is ${mib(SOURCE_LIMIT)}. The full size of ${COUNTED_SOURCE} inside the --paths audit scope counts (the whole repository when --paths is not set), including files over 1 MiB whose payloads are withheld from the audit. Next step: rerun with --paths set to the comma-separated repo-relative directories you want audited (narrower ones if --paths is already set); snapshot-inputs coverage is then partial and the report lists every skipped path. Do not audit a hand-trimmed copy, which hides what was skipped. Add your measured size to ${CAPACITY_ISSUE}. No supported workaround raises this cap.`;
+  return `64 MiB source cap exceeded: ${files} source files hold about ${mib(bytes)} (${bytes} bytes); the source admission cap is ${mib(SOURCE_LIMIT)}. The full size of ${COUNTED_SOURCE} inside the --paths audit scope counts (the whole repository when --paths is not set), including files over 1 MiB whose payloads are withheld from the audit. Next step: rerun with --paths set to the comma-separated repo-relative directories you want audited (narrower ones if --paths is already set); snapshot-inputs coverage is then partial, the report counts every skipped path, and the run's snapshot manifest lists each one. Do not audit a hand-trimmed copy, which hides what was skipped. Add your measured size to ${CAPACITY_ISSUE}. No supported workaround raises this cap.`;
 }
 /** Transformation recorded for a source path outside the start --paths prefixes; its payload is never copied or assessed. */
 export const OUTSIDE_AUDIT_PATHS = 'withheld: outside the --paths audit scope';
@@ -372,7 +373,12 @@ export function assertOpenedFileContained(root: string, full: string, fd: number
   )
     throw new CsoError('SNAPSHOT_RACE', 'Opened source identity changed during containment validation');
 }
-function readStable(root: string, path: string, maxBytes = MAX_OUTPUT): { data: Buffer; mode: number } {
+function readStableWith<T>(
+  root: string,
+  path: string,
+  maxBytes: number,
+  read: (fd: number, size: number) => { bytes: number; value: T },
+): { value: T; mode: number } {
   const ancestors = directoryIdentities(root, path),
     full = containedFile(root, path),
     named = fs.lstatSync(full);
@@ -410,12 +416,7 @@ function readStable(root: string, path: string, maxBytes = MAX_OUTPUT): { data: 
         'MISSING_INPUT',
         `Source file exceeds the ${maxBytes}-byte snapshot admission limit: ${path}`,
       );
-    const buffer = Buffer.alloc(Math.min(maxBytes + 1, before.size + 1));
-    let bytes = 0,
-      count = 0;
-    while (bytes < buffer.length && (count = fs.readSync(fd, buffer, bytes, buffer.length - bytes, null)) > 0)
-      bytes += count;
-    const data = buffer.subarray(0, bytes),
+    const { bytes, value } = read(fd, before.size),
       after = fs.fstatSync(fd),
       current = fs.lstatSync(full);
     if (
@@ -432,10 +433,37 @@ function readStable(root: string, path: string, maxBytes = MAX_OUTPUT): { data: 
       throw new CsoError('SNAPSHOT_RACE', `Source changed while reading: ${path}`);
     assertOpenedFileContained(root, full, fd, after);
     assertDirectoryIdentities(ancestors, path);
-    return { data, mode: before.mode & 0o777 };
+    return { value, mode: before.mode & 0o777 };
   } finally {
     fs.closeSync(fd);
   }
+}
+function readStable(root: string, path: string, maxBytes = MAX_OUTPUT): { data: Buffer; mode: number } {
+  const { value, mode } = readStableWith(root, path, maxBytes, (fd, size) => {
+    const buffer = Buffer.alloc(Math.min(maxBytes + 1, size + 1));
+    let bytes = 0,
+      count = 0;
+    while (bytes < buffer.length && (count = fs.readSync(fd, buffer, bytes, buffer.length - bytes, null)) > 0)
+      bytes += count;
+    return { bytes, value: buffer.subarray(0, bytes) };
+  });
+  return { data: value, mode };
+}
+/** Stream a source file's Git blob hash in bounded chunks under readStable's identity checks. */
+function gitBlobStable(root: string, path: string, objectFormat: string, tick: () => void): string {
+  return readStableWith(root, path, Number.MAX_SAFE_INTEGER, (fd, size) => {
+    const hash = createHash(objectFormat).update(`blob ${size}\0`),
+      chunk = Buffer.alloc(Math.min(MAX_OUTPUT, size + 1));
+    let bytes = 0,
+      count = 0;
+    while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
+      tick();
+      bytes += count;
+      if (bytes > size) break;
+      hash.update(chunk.subarray(0, count));
+    }
+    return { bytes, value: hash.digest('hex') };
+  }).value;
 }
 async function resolveHeadCommit(repo: string, home: string): Promise<string | undefined> {
   try {
@@ -648,8 +676,6 @@ export async function capture(
       manifest.baseCommit = (await git(repo, ['rev-parse', '--verify', `${base}^{commit}`], home)).trim();
       guard();
     }
-    const gitBlobHash = (data: Buffer) =>
-      createHash(objectFormat).update(`blob ${data.length}\0`).update(data).digest('hex');
     const sourceCapError = () => {
       let measured = 0,
         files = 0;
@@ -685,7 +711,7 @@ export async function capture(
         // A comparison base must still see every out-of-scope change, so the
         // payload is hashed for changed-path detection but never retained.
         if (!dependency && manifest.baseCommit)
-          gitHashes.set(path, gitBlobHash(readStable(repo, path, Number.MAX_SAFE_INTEGER).data));
+          gitHashes.set(path, gitBlobStable(repo, path, objectFormat, admission.time));
         entries.push({
           path,
           pathId: snapshotPathId(repo, path),
@@ -712,7 +738,10 @@ export async function capture(
         mode,
       };
       entries.push(entry);
-      gitHashes.set(path, gitBlobHash(data));
+      gitHashes.set(
+        path,
+        createHash(objectFormat).update(`blob ${data.length}\0`).update(data).digest('hex'),
+      );
       gitModes.set(path, mode & 0o111 ? '100755' : '100644');
       if (data.length > MAX_OUTPUT) {
         entry.transformation = 'withheld: exceeds the 1 MiB redacting-reader limit';
@@ -778,13 +807,15 @@ export async function capture(
       for (const e of entries) {
         guard();
         if (e.originalHash === 'not-read') {
-          const current = fs.lstatSync(containedFile(repo, e.path));
+          const current = fs.lstatSync(containedFile(repo, e.path)),
+            compared = gitHashes.get(e.path);
           if (
             current.isSymbolicLink() ||
             !current.isFile() ||
             current.nlink !== 1 ||
             current.size !== e.bytes ||
-            (current.mode & 0o777) !== e.mode
+            (current.mode & 0o777) !== e.mode ||
+            (compared !== undefined && gitBlobStable(repo, e.path, objectFormat, admission.time) !== compared)
           )
             throw new CsoError('SNAPSHOT_RACE', `${message}: ${e.path}`);
         } else {
@@ -859,6 +890,7 @@ export async function capture(
             '-p',
             range,
             '--',
+            ...(auditPaths ?? []).map((prefix) => `:(literal)${prefix}`),
           ],
           home,
         );
@@ -867,7 +899,7 @@ export async function capture(
         atomicWriteSync(join(runDir, 'history.txt'), safe, { mode: 0o600 });
         writeJson(join(runDir, 'history-status.json'), {
           status: 'captured',
-          range,
+          range: auditPaths ? `${range}, limited to --paths ${auditPaths.join(', ')}` : range,
           commits: 'at most 100',
           bytes: Buffer.byteLength(safe),
         });
