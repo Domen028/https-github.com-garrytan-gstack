@@ -138,13 +138,13 @@ describe('capy skill bootstrapper (capy/skill/gstack/scripts/install.sh)', () =>
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(f.git(['rev-parse', '--is-shallow-repository'])).toBe('true');
     expect(install.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=1.0.0`]);
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=1.0.0`]);
 
     const next = f.run(['--check', '--for', 'autoplan']);
     expect(next.status, next.stdout + next.stderr).toBe(0);
     expect(next.stdout).not.toContain('upgraded');
     expect(next.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls().at(-1)).toBe(`installer --check --root ${f.root} --for autoplan lock= rev=1 min=1.0.1 from=`);
+    expect(f.calls().at(-1)).toBe(`installer --check --root ${f.root} --for autoplan lock= rev=2 min=1.0.1 from=`);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
   });
 
@@ -242,7 +242,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(r.stdout).toMatch(/^SELF_UPGRADE: done 1\.0\.1 -> 1\.0\.2$/m);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.c);
     expect(r.last).toBe('gstack: ok 1.0.2 for=autoplan');
-    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=1.0.1`]);
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=1.0.1`]);
     expect(fs.existsSync(path.join(f.root, '.git/gstack-upgrade.pending'))).toBe(false);
 
     const next = f.run(['--for', 'autoplan']);
@@ -250,7 +250,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(next.stdout).toMatch(/^SELF_UPGRADE: none \(current\)$/m);
     expect(next.stdout).not.toContain('SELF_UPGRADE: done');
     expect(next.last).toBe('gstack: ok 1.0.2 for=autoplan');
-    expect(f.calls().at(-1)).toBe(`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=`);
+    expect(f.calls().at(-1)).toBe(`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=`);
   });
 
   test('--check mode never moves a behind checkout: it names the gap and the fast-forwarding command, then certifies the installed revision', () => {
@@ -261,7 +261,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(r.stdout).not.toContain('SELF_UPGRADE');
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(r.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls()).toEqual([`installer --check --root ${f.root} --for autoplan lock= rev=1 min=1.0.1 from=`]);
+    expect(f.calls()).toEqual([`installer --check --root ${f.root} --for autoplan lock= rev=2 min=1.0.1 from=`]);
   });
 
   test('a dirty behind checkout is skipped with gstack-upgrade\'s reason and still ends ok: above the floor, the trailer is the doctor\'s', () => {
@@ -274,7 +274,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(fs.readFileSync(path.join(f.root, 'README.md'), 'utf8')).toBe('local edit\n');
     expect(r.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=1 min=1.0.1 from=`]);
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=`]);
   });
 
   test('GSTACK_CAPY_SELF_UPGRADE=off and GSTACK_CAPY_AUTO_UPGRADE=0 each disable the fast-forward by name and leave HEAD where it is', () => {
@@ -288,6 +288,23 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(auto.stdout).toMatch(/^SELF_UPGRADE: disabled \(GSTACK_CAPY_AUTO_UPGRADE\)$/m);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(auto.last).toBe('gstack: ok 1.0.1 for=autoplan');
+  });
+});
+
+// Plan A9: the `latest:` trailer note comes only from origin's VERSION the
+// bootstrapper read in this run; a FETCH_HEAD left by an earlier run never
+// reaches the installer.
+describe('capy skill bootstrapper: GSTACK_CAPY_REMOTE_VERSION', () => {
+  test('a fresh fetch exports origin\'s VERSION; a failed fetch exports nothing even with a stale FETCH_HEAD', () => {
+    const f = fixture({ cloneAt: 'B' });
+    write(path.join(f.root, 'bin/gstack-capy-install'), '#!/usr/bin/env bash\necho "gstack: ok $(cat "$(dirname "$0")/../VERSION") for=autoplan remote=${GSTACK_CAPY_REMOTE_VERSION:-none}"\n', 0o755);
+    const fresh = f.run(['--check', '--for', 'autoplan'], { GSTACK_CAPY_REMOTE_VERSION: 'from-parent' });
+    expect(fresh.last).toBe('gstack: ok 1.0.1 for=autoplan remote=1.0.2');
+    expect(f.git(['show', 'FETCH_HEAD:VERSION'])).toBe('1.0.2');
+    f.git(['remote', 'set-url', 'origin', `file://${f.host.base}/missing.git`]);
+    const stale = f.run(['--check', '--for', 'autoplan'], { GSTACK_CAPY_REMOTE_VERSION: 'from-parent' });
+    expect(stale.stdout).toContain('remote minimum unknown (fetch failed)');
+    expect(stale.last).toBe('gstack: ok 1.0.1 for=autoplan remote=none');
   });
 });
 

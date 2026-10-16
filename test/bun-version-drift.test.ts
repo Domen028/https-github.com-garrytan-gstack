@@ -28,7 +28,12 @@ const WORKFLOWS_DIR = path.join(ROOT, '.github', 'workflows');
 interface Pin {
   surface: string;
   version: string;
+  /** The workflow job the pin sits in (empty outside a workflow). */
+  job?: string;
 }
+
+/** The one job that runs on GSTACK_BUN_DEFAULT instead of the minimum (plan A-g). */
+const DEFAULT_BUN_JOB = 'quick-bun-default';
 
 function collectPins(): Pin[] {
   const pins: Pin[] = [];
@@ -37,7 +42,9 @@ function collectPins(): Pin[] {
     if (!/\.ya?ml$/.test(name)) continue;
     const source = fs.readFileSync(path.join(WORKFLOWS_DIR, name), 'utf-8');
     const lines = source.split('\n');
+    let job = '';
     for (let i = 0; i < lines.length; i++) {
+      job = lines[i].match(/^ {2}([A-Za-z0-9_-]+):\s*$/)?.[1] ?? job;
       if (!/uses:\s*oven-sh\/setup-bun@/.test(lines[i])) continue;
       // A pinned stanza is `with:` + `bun-version: <v>` within the next few
       // lines; an unpinned setup-bun is itself drift (installs latest).
@@ -46,6 +53,7 @@ function collectPins(): Pin[] {
       pins.push({
         surface: `${name}:${i + 1}`,
         version: m ? m[1] : '<unpinned setup-bun — installs latest>',
+        job,
       });
     }
   }
@@ -69,8 +77,8 @@ function collectPins(): Pin[] {
 }
 
 describe('bun version pins', () => {
-  test('every CI surface pins the same bun version', () => {
-    const pins = collectPins();
+  test('every CI surface pins the same bun version (the install-default job aside)', () => {
+    const pins = collectPins().filter(p => p.job !== DEFAULT_BUN_JOB);
     // Sanity: the scan found the known surfaces (a regex rot that finds
     // nothing must fail loudly, not vacuously pass).
     expect(pins.length).toBeGreaterThanOrEqual(6);
@@ -96,19 +104,40 @@ describe('bun version pins', () => {
   });
 });
 
-function bunVersionsFile(): { floor: string; tested: string } {
+function bunVersionsFile(): { floor: string; tested: string; installDefault: string; verified: string[] } {
   const src = fs.readFileSync(path.join(ROOT, 'bin', 'gstack-bun-version.sh'), 'utf-8');
   return {
     floor: src.match(/^GSTACK_BUN_FLOOR="([^"]+)"$/m)?.[1] ?? '<no GSTACK_BUN_FLOOR>',
     tested: src.match(/^GSTACK_BUN_TESTED="([^"]+)"$/m)?.[1] ?? '<no GSTACK_BUN_TESTED>',
+    installDefault: src.match(/^GSTACK_BUN_DEFAULT="([^"]+)"$/m)?.[1] ?? '<no GSTACK_BUN_DEFAULT>',
+    verified: (src.match(/^GSTACK_BUN_VERIFIED="([^"]+)"$/m)?.[1] ?? '').split(/\s+/).filter(Boolean),
   };
 }
+
+// Plan A2/A-g: the Capy install default is separate from the floor. It must be
+// a verified archive at or above the minimum, and exactly one CI job (the
+// quick free tier) runs on it so the default Bun is never untested.
+describe('install default Bun (A2, A-g)', () => {
+  const { tested, installDefault, verified } = bunVersionsFile();
+  test('GSTACK_BUN_DEFAULT is a verified archive and not below the supported minimum', () => {
+    expect(verified).toContain(installDefault);
+    expect(verified).toContain(tested);
+    expect(Bun.semver.order(installDefault, tested)).toBeGreaterThanOrEqual(0);
+  });
+  test('one CI job runs the quick free tier on GSTACK_BUN_DEFAULT, and the free-tests aggregate requires it', () => {
+    const onDefault = collectPins().filter(p => p.job === DEFAULT_BUN_JOB);
+    expect(onDefault.map(p => p.version)).toEqual([installDefault]);
+    const workflow = Bun.YAML.parse(fs.readFileSync(path.join(WORKFLOWS_DIR, 'free-tests.yml'), 'utf-8')) as { jobs: Record<string, { needs?: string[]; steps: { run?: string }[] }> };
+    expect(workflow.jobs[DEFAULT_BUN_JOB].steps.some(step => step.run?.includes('bun run test:quick'))).toBe(true);
+    expect(workflow.jobs['free-tests'].needs).toContain(DEFAULT_BUN_JOB);
+  });
+});
 
 describe('Bun requirement surfaces agree (E1)', () => {
   const { floor, tested } = bunVersionsFile();
 
-  test('tested version == every CI pin == engines.bun lower bound; floor sits below it', () => {
-    const ciVersions = [...new Set(collectPins().map((p) => p.version))];
+  test('tested version == every CI pin (the install-default job aside) == engines.bun lower bound; floor sits below it', () => {
+    const ciVersions = [...new Set(collectPins().filter((p) => p.job !== DEFAULT_BUN_JOB).map((p) => p.version))];
     expect(ciVersions).toEqual([tested]);
     const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8'));
     expect(pkg.engines?.bun).toBe(`>=${tested}`);

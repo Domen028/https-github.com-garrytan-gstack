@@ -13,8 +13,12 @@
 # compiled probe (a binary built with all four no-autoload flags, run beside a
 # .env): Bun 1.3.2 loads it, 1.3.3 and 1.4.0 do not.
 # GSTACK_BUN_TESTED is the supported minimum: the CI pin and engines.bun.
+# GSTACK_BUN_DEFAULT is what the Capy installer downloads when no project pin
+# decides (GSTACK_BUN_INSTALL_VERSION overrides it); it is a verified archive
+# at or above the minimum, and one CI job runs the quick tier on it.
 GSTACK_BUN_FLOOR="1.3.3"
 GSTACK_BUN_TESTED="1.4.2"
+GSTACK_BUN_DEFAULT="1.4.3"
 
 # gstack_bun_archive_sha256 TARGET [VERSION] — the SHA-256 of
 # https://github.com/oven-sh/bun/releases/download/bun-v$VERSION/bun-TARGET.zip
@@ -115,28 +119,95 @@ gstack_bun_incoming_hold() {
   echo "bun-too-old: found Bun $_gb_found at $(command -v bun); gstack ${_gb_ver:-update} needs $_gb_floor or newer"
 }
 
-# gstack_bun_launch_dir [exact] — the directory to put first on PATH so
-# gstack's `#!/usr/bin/env bun` bins run a supported Bun: the first of
-# $BUN_INSTALL/bin and $HOME/.bun/bin whose bun is ok (and equals <exact>
-# when given), unless the bun already first on PATH qualifies. Prints the
-# directory (callers read its version with "<dir>/bun --version"); prints
-# nothing and returns 1 when PATH's bun suffices or no candidate qualifies. Shared by
-# gstack-capy-install (the GSTACK_LAUNCH line) and gstack-doctor --check (the
-# runtime row's `found at ... (not on PATH)`).
-gstack_bun_launch_dir() {
-  _gb_path_bun=$(command -v bun 2>/dev/null || true)
-  if [ -n "$_gb_path_bun" ]; then
-    _gb_v=$(bun --version </dev/null 2>/dev/null | head -1)
-    if [ "$(gstack_bun_status "$_gb_v")" = ok ] && { [ -z "${1:-}" ] || [ "$_gb_v" = "$1" ]; }; then return 1; fi
-  fi
-  for _gb_dir in "${BUN_INSTALL:+$BUN_INSTALL/bin}" "${HOME:+$HOME/.bun/bin}"; do
-    [ -n "$_gb_dir" ] && [ -x "$_gb_dir/bun" ] || continue
-    [ "$_gb_dir/bun" = "$_gb_path_bun" ] && continue
-    _gb_v=$("$_gb_dir/bun" --version </dev/null 2>/dev/null | head -1)
-    [ "$(gstack_bun_status "$_gb_v")" = ok ] || continue
-    [ -z "${1:-}" ] || [ "$_gb_v" = "$1" ] || continue
-    printf '%s\n' "$_gb_dir"
-    return 0
+# gstack_bun_install_version — the Bun the installer downloads when no exact
+# project pin decides: GSTACK_BUN_INSTALL_VERSION when set, else
+# GSTACK_BUN_DEFAULT. Prints the version; returns 1 when it has no verified
+# archive or sits below the supported minimum (the caller refuses it).
+gstack_bun_install_version() {
+  _gb_iv="${GSTACK_BUN_INSTALL_VERSION:-$GSTACK_BUN_DEFAULT}"
+  printf '%s\n' "$_gb_iv"
+  case " $GSTACK_BUN_VERIFIED " in *" $_gb_iv "*) ;; *) return 1 ;; esac
+  [ "$(gstack_bun_status "$_gb_iv")" = ok ]
+}
+
+# gstack_bun_store STATE_ROOT — the versioned runtime store: verified archives
+# unpack to <store>/<version>/bun and are never replaced in place;
+# ~/.bun/bin and $BUN_INSTALL/bin are never written.
+gstack_bun_store() { printf '%s/runtimes/bun\n' "$1"; }
+
+# GSTACK_BUN_SHIM_MARKER — the second line of the per-directory `bun` and
+# `bunx` shims gstack-capy-install writes to ~/.local/bin. A file carrying it
+# is never a resolution candidate and is the only kind of file gstack replaces.
+GSTACK_BUN_SHIM_MARKER="# gstack-bun-shim: gstack-owned; delete this file to remove it"
+_gstack_bun_is_shim() { [ -f "$1" ] && head -c 512 "$1" 2>/dev/null | grep -aqF "$GSTACK_BUN_SHIM_MARKER"; }
+
+# gstack_realpath FILE — FILE with every symlink resolved (Bash 3.2: a
+# readlink loop and cd -P, no realpath(1)). Returns 1 when unresolvable.
+gstack_realpath() {
+  _gb_rp="$1" _gb_n=0
+  while [ -L "$_gb_rp" ]; do
+    [ "$_gb_n" -lt 40 ] || return 1
+    _gb_lk=$(readlink "$_gb_rp") || return 1
+    case "$_gb_lk" in /*) _gb_rp="$_gb_lk" ;; *) _gb_rp="$(dirname "$_gb_rp")/$_gb_lk" ;; esac
+    _gb_n=$((_gb_n + 1))
   done
+  _gb_rd=$(cd -P "$(dirname "$_gb_rp")" 2>/dev/null && pwd -P) || return 1
+  printf '%s/%s\n' "${_gb_rd%/}" "$(basename "$_gb_rp")"
+}
+
+_gstack_bun_try() { # RULE FILE ACCEPT
+  [ -n "$2" ] && [ -f "$2" ] && [ -x "$2" ] || return 1
+  _gstack_bun_is_shim "$2" && return 1
+  _gb_rp=$(gstack_realpath "$2") || return 1
+  case "$_gb_seen" in *"|$_gb_rp|"*) return 1 ;; esac
+  _gb_seen="$_gb_seen$_gb_rp|"
+  _gb_v=$("$_gb_rp" --version </dev/null 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9.+-')
+  if [ "$(gstack_bun_status "${_gb_v:-0}")" != ok ] || { [ -n "$3" ] && ! "$3" "$_gb_v" "$_gb_rp"; }; then
+    _gb_judged="${_gb_judged:+$_gb_judged, }bun ${_gb_v:-unknown} at $_gb_rp ($1)"
+    return 1
+  fi
+  _gb_bin="$_gb_rp" _gb_ver="$_gb_v" _gb_rule="$1"
+}
+
+# gstack_bun_resolve STORE [EXACT_PIN] [ACCEPT] — the one Bun resolution
+# contract, shared by gstack-capy-install (install and --check), the doctor,
+# the bun shim and install admission; resolveBun in lib/pregate/runtime.ts is
+# the TypeScript twin and test/bun-resolve.test.ts runs both on one layout.
+# Candidates, first eligible wins:
+#   pin          STORE/<EXACT_PIN>/bun (the project's exact pin)
+#   default      STORE/<gstack_bun_install_version>/bun
+#   BUN_INSTALL  $BUN_INSTALL/bin/bun
+#   home         $HOME/.bun/bin/bun
+#   PATH         every bun on PATH, in order
+# Eligible: it runs, reports a version at or above the supported minimum, and
+# `ACCEPT <version> <realpath>` (the caller's project-pin check) succeeds. A
+# shim-marked file is never a candidate; a realpath is judged once. Sets
+# _gb_bin (realpath), _gb_ver, _gb_rule and _gb_judged (the candidates that ran
+# and were refused, for messages); returns 1 with _gb_bin empty when none qualifies.
+gstack_bun_resolve() {
+  _gb_bin="" _gb_ver="" _gb_rule="" _gb_judged="" _gb_seen="|"
+  _gb_store="$1" _gb_accept="${3:-}"
+  [ -n "${2:-}" ] && _gstack_bun_try pin "$_gb_store/$2/bun" "$_gb_accept" && return 0
+  _gb_dv=$(gstack_bun_install_version) && _gstack_bun_try default "$_gb_store/$_gb_dv/bun" "$_gb_accept" && return 0
+  [ -n "${BUN_INSTALL:-}" ] && _gstack_bun_try BUN_INSTALL "$BUN_INSTALL/bin/bun" "$_gb_accept" && return 0
+  [ -n "${HOME:-}" ] && _gstack_bun_try home "$HOME/.bun/bin/bun" "$_gb_accept" && return 0
+  _gb_path="${PATH:-}:"
+  while [ -n "$_gb_path" ]; do
+    _gb_dir="${_gb_path%%:*}" _gb_path="${_gb_path#*:}"
+    [ -n "$_gb_dir" ] && _gstack_bun_try PATH "$_gb_dir/bun" "$_gb_accept" && return 0
+  done
+  _gb_bin="" _gb_ver="" _gb_rule=""
   return 1
+}
+
+# gstack_bun_rule_text RULE — why a resolution was chosen, for summaries.
+gstack_bun_rule_text() {
+  case "$1" in
+    pin) echo "the project's exact pin, from gstack's runtime store" ;;
+    default) echo "gstack's install default, from gstack's runtime store" ;;
+    BUN_INSTALL) echo "\$BUN_INSTALL/bin" ;;
+    home) echo "~/.bun/bin" ;;
+    PATH) echo "the first eligible bun on PATH" ;;
+    *) echo "$1" ;;
+  esac
 }
