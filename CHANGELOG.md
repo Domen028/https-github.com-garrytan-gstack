@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.106.0] - 2026-10-16
+## [1.91.107.0] - 2026-10-16
 
 **The GBRA-40 field list is fixed: install and check agree on one Bun, `rec` approves an autoplan gate in one word, and pregate never sits silent.** Eighteen Capy threads upgraded to v1.91.101.0 and reported 21 problems (`GBRA-40`, October 14). Each gstack item was reproduced with a test that failed first; the plan went through `/autoplan` (two gate revisions, Claude and GPT-6.1 Sol voices per phase) and two independent code reviews. Two items are Capy's (skills not mounted on some crew threads, Drive copies not re-synced) and are handed off, not worked around.
 
