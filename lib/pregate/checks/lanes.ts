@@ -5,8 +5,9 @@
  * (zero tests ran is a failure, exit 0 or not); platform lanes this machine
  * cannot run become persisted `requires-remote` obligations. A touched file
  * with no lane is `FAIL lanes — <file> has no test lane`, never a pass.
- * Planning and evidence Markdown is the docs/no-tests empty lane instead
+ * Markdown no test depends on is the docs/no-tests empty lane instead
  * (lib/pregate/docs-lane.ts): it does not fail, and unmapped code still does.
+ * A test that reads the file still selects that test.
  * Incidents: p0-4-pipe-hidden-failure (`false | tail` read as green),
  * p0-4-windows-lane-unrun (a Windows-only change merged with its lane unrun).
  */
