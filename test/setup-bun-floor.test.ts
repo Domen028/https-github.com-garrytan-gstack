@@ -60,38 +60,52 @@ function runSetupWithBun(version: string) {
   return { ...r, stub: path.join(stub, 'bun'), bunCalls, written };
 }
 
-function status(version: string, floor?: string): string {
-  const r = spawnSync('bash', ['-c', `. "$1"; gstack_bun_status "$2" ${floor ? '"$3"' : ''}`, '_', VERSIONS, version, floor ?? ''], {
+function status(version: string, floor?: string, shell = 'bash'): string {
+  const r = spawnSync(shell, ['-c', `. "$1"; gstack_bun_status "$2" ${floor ? '"$3"' : ''}`, '_', VERSIONS, version, floor ?? ''], {
     encoding: 'utf8',
     timeout: 10_000,
   });
   return r.stdout.trim();
 }
 
+const COMPARISON_TABLE: Record<string, string> = {
+  '1.3.2': 'too-old',
+  '1.3.3-canary.1': 'too-old',
+  '1.3.3': 'untested',
+  '1.3.14': 'untested',
+  '1.4.0-canary.20261001+abc123': 'untested',
+  '1.4.0': 'untested',
+  'v1.4.1': 'untested',
+  '1.4.2': 'ok',
+  '1.10.0': 'ok',
+  '2.0.0': 'ok',
+  '': 'malformed',
+  '1.4': 'malformed',
+  '1.4.0.1': 'malformed',
+  '1.4.0-': 'malformed',
+  'bun-dev (local build)': 'malformed',
+};
+
+function expectComparisonRule(shell: string) {
+  const got = Object.fromEntries(Object.keys(COMPARISON_TABLE).map((v) => [v, status(v, undefined, shell)]));
+  expect(got).toEqual(COMPARISON_TABLE);
+  // The updater passes the incoming release's floor explicitly.
+  expect(status('1.3.5', '1.3.6', shell)).toBe('too-old');
+  expect(status('1.3.6', '1.3.6', shell)).toBe('untested');
+}
+
+const HAS_ZSH = spawnSync('zsh', ['-c', 'true']).status === 0;
+
 describe.skipIf(process.platform === 'win32')('Bun floor (E1)', () => {
   test('comparison rule: numeric fields, build metadata ignored, a prerelease sorts below its release', () => {
-    const table: Record<string, string> = {
-      '1.3.2': 'too-old',
-      '1.3.3-canary.1': 'too-old',
-      '1.3.3': 'untested',
-      '1.3.14': 'untested',
-      '1.4.0-canary.20261001+abc123': 'untested',
-      '1.4.0': 'untested',
-      'v1.4.1': 'untested',
-      '1.4.2': 'ok',
-      '1.10.0': 'ok',
-      '2.0.0': 'ok',
-      '': 'malformed',
-      '1.4': 'malformed',
-      '1.4.0.1': 'malformed',
-      '1.4.0-': 'malformed',
-      'bun-dev (local build)': 'malformed',
-    };
-    const got = Object.fromEntries(Object.keys(table).map((v) => [v, status(v)]));
-    expect(got).toEqual(table);
-    // The updater passes the incoming release's floor explicitly.
-    expect(status('1.3.5', '1.3.6')).toBe('too-old');
-    expect(status('1.3.6', '1.3.6')).toBe('untested');
+    expectComparisonRule('bash');
+  });
+
+  // /gstack-upgrade sources this file in the agent's tool shell, which is zsh
+  // on a default macOS install. zsh does not word-split unquoted parameters;
+  // when the comparison relied on that, every version below the floor read `ok`.
+  test.skipIf(!HAS_ZSH)('comparison rule holds when the file is sourced from zsh', () => {
+    expectComparisonRule('zsh');
   });
 
   test('below the floor: refused with cause and fix, before anything is written', () => {

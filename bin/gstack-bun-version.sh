@@ -64,13 +64,16 @@ _gstack_bun_parse() {
 # release. Prerelease rule (semver): 1.3.3-canary.1 is below 1.3.3 and above
 # 1.3.2, so a prerelease of the floor itself is refused.
 _gstack_bun_below() {
+  # Named fields, not `set -- $_gb_core`: /gstack-upgrade sources this file in
+  # the agent's tool shell, which may be zsh, and zsh does not word-split an
+  # unquoted parameter, so every version compared as not below (fail open).
   _gstack_bun_parse "$2" || return 1
-  set -- "$1" $_gb_core
+  _gb_r1=$((10#$_gb_maj)); _gb_r2=$((10#$_gb_min)); _gb_r3=$((10#$_gb_pat))
   _gstack_bun_parse "$1" || return 1
-  set -- "$@" $_gb_core
-  [ "$5" -ne "$2" ] && { [ "$5" -lt "$2" ]; return; }
-  [ "$6" -ne "$3" ] && { [ "$6" -lt "$3" ]; return; }
-  [ "$7" -ne "$4" ] && { [ "$7" -lt "$4" ]; return; }
+  _gb_v1=$((10#$_gb_maj)); _gb_v2=$((10#$_gb_min)); _gb_v3=$((10#$_gb_pat))
+  [ "$_gb_v1" -ne "$_gb_r1" ] && { [ "$_gb_v1" -lt "$_gb_r1" ]; return; }
+  [ "$_gb_v2" -ne "$_gb_r2" ] && { [ "$_gb_v2" -lt "$_gb_r2" ]; return; }
+  [ "$_gb_v3" -ne "$_gb_r3" ] && { [ "$_gb_v3" -lt "$_gb_r3" ]; return; }
   [ -n "$_gb_pre" ]
 }
 
