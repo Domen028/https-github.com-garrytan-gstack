@@ -1443,15 +1443,64 @@ revision at or above the minimum. An interrupted install after the
 fast-forward leaves the trailer `fail`; the next install run completes it.
 
 <a id="capy-wrapper-stale"></a>
-### `gstack-capy-skill: owner action — Drive copy is wrapper <n>, minimum <m>; copy <root>/capy/skill/gstack/ (CAPY_WRAPPER_STALE)`
+### `FAIL wrapper — ... (CAPY_WRAPPER_STALE)` / `WARN wrapper — ...; owner action: ...` / `gstack-capy-skill: owner action — Drive copy is wrapper <n>, minimum <m>; ...`
 
-**Meaning.** The Capy skill folder that ran (the bootstrapper's
-`GSTACK_CAPY_WRAPPER`) is older than the checkout's `GSTACK_CAPY_MIN_WRAPPER`.
-The run continues through the checkout's own wrapper (`bin/gstack-capy-session`);
-only a checkout with no such wrapper refuses (`gstack: fail wrapper`).
+**Meaning.** The Capy skill folder is older than the checkout's
+`GSTACK_CAPY_MIN_WRAPPER` (`capy/support.env`). The doctor's `wrapper` row
+decides by the active wrapper's provenance (`GSTACK_CAPY_WRAPPER_REV` and
+`GSTACK_CAPY_WRAPPER_PATH`, exported by the bootstrapper): a current active
+wrapper passes, and a stale Drive copy elsewhere is a `WARN` row, an owner
+action that never fails the run. Without provenance (a direct
+`gstack-doctor --check`, or a pre-bootstrapper copy with no
+`GSTACK_CAPY_WRAPPER=` line, which reads as wrapper 0) it reads the Drive
+copies (`~/.capy/drive/*/skills/gstack/scripts/install.sh`, or only
+`GSTACK_CAPY_WRAPPER_PATH` when set) and fails only when every copy is stale,
+listing each with its revision. A stale active wrapper is a `WARN` too: an
+older copy still works (`capy/support.env`). `bin/gstack-upgrade` runs the
+installer with the checkout's own copy as the active wrapper and never leaves
+a pending reinstall when the wrapper row is the only failure.
 
-**Fix.** The owner copies `<checkout>/capy/skill/gstack/` over the skill folder
-(on Capy, the user-scope Drive `skills/gstack/`). Agents never write it.
+**Fix.** This session: run the checkout's own copy,
+`bash <checkout>/capy/skill/gstack/scripts/install.sh --check --for <skill>`;
+it carries current provenance, so it certifies with the stale Drive copy left
+unchanged. Owner: copy `<checkout>/capy/skill/gstack/` over the Drive skill
+folder (on Capy, the user-scope Drive `skills/gstack/`), or have Capy re-sync
+it. The message recurs every session until the Drive copy changes. Agents never
+write the skill folder.
+
+<a id="bun-resolution-drift"></a>
+### `FAIL runtime — bun resolution drifted: recorded bun <v> at <path> (<rule>), now <current>; changed: <what>; fix: ... (BUN_RESOLUTION_DRIFT)`
+
+**Meaning.** Install and `--check` resolve Bun through one contract
+(`gstack_bun_resolve` in `bin/gstack-bun-version.sh`, twinned by `resolveBun`
+in `lib/pregate/runtime.ts`): the project's exact pin and gstack's install
+default in the runtime store (`<state root>/runtimes/bun/<version>/bun`),
+`$BUN_INSTALL/bin`, `~/.bun/bin`, then PATH; the first Bun that satisfies
+gstack's minimum and every project pin wins. Install records the pick in the
+install verdict for this checkout and project (`bun_path`, `bun_version`,
+`bun_rule`). The recorded Bun is gone, reports another version (replaced in
+place), or no longer satisfies gstack's minimum and the project's pins. A
+different candidate that would now resolve first (a store Bun another
+project's install published, a changed `BUN_INSTALL`) is not drift: `--check`
+keeps the recorded Bun, prints `note: the recorded bun ... stays certified`
+and names the installer run that records the new pick. The pregate's lanes and
+guards (`lib/pregate/runtime.ts`) and the workflow start refuse with this code
+when the Bun the verdict recorded is gone or changed.
+
+**Fix.** Run the row's fix: the installer, which records the current pick, or,
+when nothing eligible remains, re-downloads a verified Bun into the store. The
+next `--check` passes.
+
+<a id="bun-install-version-invalid"></a>
+### `gstack-capy-install: GSTACK_BUN_INSTALL_VERSION=<v> is not a verified Bun at or above gstack's supported minimum ...; fix: ... (BUN_INSTALL_VERSION_INVALID)`
+
+**Meaning.** `GSTACK_BUN_INSTALL_VERSION` overrides the Bun the installer
+downloads when no exact project pin decides (`GSTACK_BUN_DEFAULT`, 1.4.3). It
+must be listed in `GSTACK_BUN_VERIFIED` (a SHA-256-verified archive) and sit at
+or above the supported minimum (`GSTACK_BUN_TESTED`). Nothing was installed.
+
+**Fix.** Unset the variable, or set it to one of the verified versions the
+message lists.
 
 <a id="install-unverified"></a>
 ### `INSTALL: fail verdict — <detail>; fix: ... (INSTALL_UNVERIFIED)`
@@ -2724,6 +2773,35 @@ pass and blocks publication.
 **Fix.** Pass `--allow-repo-commands`, install the tool, raise `--timeout`, or
 keep the tree still, then rerun.
 
+<a id="pregate-stalled"></a>
+### `PREGATE_STALLED`
+
+**Meaning.** A test command the lanes check (or a guard, or the `--remote`
+gate) launched wrote nothing to its log for the stall timeout (default 300 s,
+`stall_timeout_s` in the base branch's `.gstack/pregate.json`, or
+`--stall-timeout`). pregate killed its process group and names the last test
+file started. The check is incomplete, never pass.
+
+**Fix.** Open the printed log, find the hang in the named file (a blocked
+child, a server that never exits, a synchronous wait), fix it and rerun
+`gstack-pregate --stage tests`. A test that is legitimately quiet for longer
+needs a larger `--stall-timeout`; `0` disables the stall kill and leaves only
+`--timeout`.
+
+<a id="pregate-receipt-invalid"></a>
+### `PREGATE_RECEIPT_INVALID`
+
+**Meaning.** `gstack-pregate clear --remote pregate.json/remote_gate --receipt
+<file>` read the remote gate's output and its `PREGATE_REMOTE:` line is missing,
+names another tree than the one `pregate.json` tested, reports 0 tests, or
+reports failures. The obligation stays uncleared. A run URL alone never clears
+this obligation; a `test_backend/<backend>` obligation takes a run URL, recorded
+as attested rather than validated.
+
+**Fix.** Run the remote gate on the tree pregate tested and pass its output
+file with `--receipt`, or let `gstack-pregate --stage tests --remote --spend-cap
+<usd> --allow-repo-commands` run and validate it.
+
 <a id="pregate-stale"></a>
 ### `PREGATE_STALE`
 
@@ -2752,6 +2830,34 @@ could not be read through `gstack-issue-guard`.
 
 **Fix.** Check `gh auth status` and the number. Until it reads, the link is
 rendered as `Refs #N`, never `Fixes`.
+
+<a id="issue-lookup-failed"></a>
+### `ISSUE_LOOKUP_FAILED`
+
+**Meaning.** `gstack-issue-links` could not resolve the repository, list the open
+PRs that close an issue this PR fixes, search the flake issues naming a
+`--ci-run` id, or tell this PR's author: `gh` runs as an app (`…[bot]`) and
+neither the HEAD commit (unpushed, or not linked to a GitHub user) nor a
+user-owned repository names one, so the owner's own open PRs stay in the
+`Related:` lines. The closure and reference lines are still printed; `--json`
+lists each failure under `unavailable`.
+
+**Fix.** Check `gh auth status`, pass `--repo <owner/repo>` when the remote
+is not a GitHub repository and `--author <login>` when `gh` runs as an app,
+then rerun. If it still fails, say in the handoff
+which lookup is missing; never present the body as complete.
+
+<a id="issue-links-missing"></a>
+### `ISSUE_LINKS_MISSING`
+
+**Meaning.** `gstack-ship-receipt write --issues @issues.json --body <file>`
+found that the body lacks a `Fixes`, `Refs`, `Flake:`, `Related:`,
+`Supersedes` or `Contributed by` line the issues object records, so the PR
+body and its receipt would disagree. Nothing was written.
+
+**Fix.** Paste every line `gstack-issue-links` printed under `## Issues` in the
+body (or rerun `gstack-issue-links --out` if the issue set changed), then rerun
+the receipt write.
 
 ## Eval plans, lane ownership, evidence verification, the owner brief
 
@@ -3043,7 +3149,10 @@ incorporated or withdrawn; `export` refuses a `complete` run with one pending.
 **Fix.** Edit the plan, then `gstack-autoplan revise --out <dir> --plan <file>
 --incorporates <decision id,...>`. `revise` binds each named id to the old and
 new Implementation-plan hashes and refuses when the Implementation plan did
-not change; an id you do not name stays pending. To drop an accepted change
+not change; an id you do not name stays pending. A packaging or ordering change
+(its `APPLY:` line ends `no plan edit needed: revise --settle <id>`) is
+discharged with `gstack-autoplan revise --out <dir> --settle <id>` and reopens
+nothing. To drop an accepted change
 instead, `gstack-autoplan revise --out <dir> --withdraw <decision id>` records
 the withdrawal in the journal.
 
@@ -3058,6 +3167,100 @@ amendments), or it was already incorporated or withdrawn. Nothing was changed.
 **Fix.** Name only the ids the refusal lists after `pending:`. With none
 pending, revise without `--incorporates`:
 `gstack-autoplan revise --out <dir> --plan <file>`.
+
+<a id="amendment-not-settleable"></a>
+### `AMENDMENT_NOT_SETTLEABLE`
+
+**Meaning.** `gstack-autoplan revise --settle <id>` discharges an accepted change
+without a plan edit, which is honest only for a packaging or ordering change
+(the gate item's `changes` is `packaging` or `ordering`) on the plan the run
+already reviews: the plan the owner accepted it on, or one a later `revise`
+recorded. The named change alters scope, cost or direction, names no `changes`
+value, the plan file has edits no `revise` has recorded, or `--settle` came with
+a `--plan` that changes the Implementation plan while incorporating nothing.
+Nothing was changed.
+
+**Fix.** Edit the plan, then
+`gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>`,
+adding `--settle <id>` to settle packaging or ordering changes in the same call
+(or settle them after the revise). The `APPLY:` line for each change says which
+path it takes, and `NEXT:` lists the settle step first.
+
+<a id="gate-rec-stale"></a>
+### `GATE_REC_STALE`
+
+**Meaning.** `gstack-autoplan recommend` changed a recommendation after the gate
+was rendered, so a `rec` (or `all`) reply the owner gave to the earlier render
+would take recommendations they never saw. Every render prints
+`rec_hash=<h>`; once `recommend` has run, a `rec` answer must name the hash of
+the render the owner answered. The same refusal meets a `rec`/`all` reply to a
+gate written before `rec` existed (a `gate.json` with no `rec_rev`, from
+1.91.101.0 or earlier): that render told the owner `all` leaves items
+recommended `b` pending, and `all` now takes them.
+
+**Fix.** Render again (`gstack-gate render <dir>/gate.json --all`), relay it,
+and answer with `--rec-hash <h>` from that render. Explicit `<id><option>`
+tokens are never refused.
+
+<a id="checkpoint-invalid"></a>
+### `CHECKPOINT_INVALID`
+
+**Meaning.** `gstack-autoplan resume --out <dir> --from <checkpoint>` found no
+generation it can restore: a `checkpoint.json` is unreadable or not a
+schema_version 1 checkpoint, a listed file is missing, is not a regular file,
+escapes the generation (an `..` path or a symlinked directory), or does not
+match its recorded sha256; or the staged run does not pass
+`gstack-artifact validate`. `--from` naming a run's collection restores the
+newest generation that verifies, skipping corrupt newer ones; a root holding
+several runs must name one. Nothing was written to `--out`.
+
+**Fix.** `gstack-autoplan checkpoints --from <dir>` lists every generation
+with `hash=ok` or `hash=bad (<reason>)`; restore an intact one by passing its
+directory. With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set, every command that
+leaves the run at rest publishes a new generation and keeps the previous one.
+
+<a id="checkpoint-overlap"></a>
+### `CHECKPOINT_OVERLAP`
+
+**Meaning.** The checkpoint directory for this run and the run directory (or,
+on restore, the checkpoint and `--out` or its staging directory) are the same
+directory or one contains the other, after resolving symlinks. Copying one
+into the other would replace or delete the live run, so nothing was touched.
+A checkpoint refusal after a committed command prints `CHECKPOINT: failed …`
+on stderr and leaves that command's exit code alone.
+
+**Fix.** Point `GSTACK_AUTOPLAN_CHECKPOINT_DIR` (or `--from` / `--out`) at a
+directory outside the run, for example the private project-user Drive folder.
+
+<a id="checkpoint-target-exists"></a>
+### `CHECKPOINT_TARGET_EXISTS`
+
+**Meaning.** `resume --from` restores only into a missing or empty `--out`
+directory, and this one already holds files.
+
+**Fix.** Pass a new `--out` directory, or run `gstack-autoplan resume --out
+<dir>` without `--from` to resume the run already there.
+
+<a id="owner-reply-required"></a>
+### `OWNER_REPLY_REQUIRED`
+
+**Meaning.** An agent answered the gate (`--by agent:<id>`) without recording
+what the owner actually said. Nothing was applied.
+
+**Fix.** Pass the owner's words verbatim: `--owner-reply "<text>"`,
+`--owner-reply -` to read them from stdin, or `--owner-reply-file <path>`. They
+are stored on every decision row; when they parse under the gate grammar they
+must resolve to the same choices as `--reply`.
+
+<a id="gate-owner-reply-mismatch"></a>
+### `GATE_OWNER_REPLY_MISMATCH`
+
+**Meaning.** The owner's verbatim reply is itself a gate reply (for example
+`rec`), and it resolves to different choices than the tokens the agent relayed.
+Nothing was applied.
+
+**Fix.** Relay what the owner chose; passing their reply as `--reply` is always
+consistent. When the owner's words and your tokens disagree, ask the owner.
 
 <a id="gstack-version-changed"></a>
 ### `GSTACK_VERSION_CHANGED`

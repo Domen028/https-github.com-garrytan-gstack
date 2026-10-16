@@ -214,10 +214,10 @@ Only commit if there are changes. Stage the bootstrap's own files by name (confi
 ```
 
 Stage 1 (regen, secrets, strays, literals) is the two-minute preflight; stage 2
-runs the local lanes the touched files select under pipefail and prints
-`requires-remote` for platform lanes this machine cannot run. `fail` or
-`incomplete` blocks: fix, rerun (`--explain` shows each mapping). Step 18 refuses
-a stale `pregate.json`, so rerun it after the final stamp.
+runs the selected lanes under pipefail. `fail` or `incomplete` blocks: fix,
+rerun. `requires-remote` (other platforms; the remote gate under 8 cores) needs
+`gstack-pregate clear` or, under a user cap, `--remote --spend-cap <usd>`. Rerun
+after the final stamp; Step 18 refuses a stale one.
 
 Use the project's test commands discovered in Step 4 or documented in CLAUDE.md/AGENTS.md. Run every applicable suite; do not assume Rails or Vitest. The commands below are examples only for repositories that actually provide them. Use the same lane labels and exact commands again in Step 16.
 

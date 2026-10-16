@@ -127,6 +127,65 @@ describe('guards (CD1)', () => {
   });
 });
 
+// Integration item 8: under the admission condition (GSTACK_CAPY=1, or a
+// verdict exists for this checkout and project) the guards and lanes validate
+// the install verdict as workflow admission does and return incomplete before
+// launching anything; with neither, contributors and CI run as before.
+describe('guards and lanes: install verdict admission (integration item 8)', () => {
+  const GSTACK = path.resolve(import.meta.dir, '..');
+  const { installVerdictPath } = require('../lib/install-verdict') as typeof import('../lib/install-verdict');
+  const head = () => require('node:child_process').spawnSync('git', ['-C', GSTACK, 'rev-parse', 'HEAD'], { encoding: 'utf8', timeout: 10_000 }).stdout.trim();
+  const guard = { id: 'marker', when: ['lib/**'], command: 'touch ../guard-ran' };
+  const verdict = (repo: FixtureRepo, fields: Record<string, unknown>) => {
+    const project = fs.realpathSync(repo.work);
+    const file = installVerdictPath(fs.realpathSync(GSTACK), repo.home, project);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ schema_version: 2, checkout: fs.realpathSync(GSTACK), project, head: head(), for: 'ship', required: ['claude', 'codex', 'patch'], pins_planning_only: false, ok: true, trailer: 'gstack: ok', min_revision: '', launch_path: '', time: '', ...fields }));
+  };
+  const run = (repo: FixtureRepo, env: Record<string, string> = {}) => pregate(repo, ['--allow-repo-commands', '--stage', 'preflight', '--only', 'guards'], { GSTACK_STATE_ROOT: repo.home, ...env });
+  const ran = (repo: FixtureRepo) => fs.existsSync(path.join(repo.root, 'guard-ran'));
+
+  test('GSTACK_CAPY=1 without a verdict: guards incomplete INSTALL_UNVERIFIED and nothing launched; without GSTACK_CAPY the guard runs', () => {
+    const repo = guardedFixture({ ...BASE_PREGATE, guards: [guard] });
+    commit(repo, { 'lib/util.js': 'exports.x = 1;\n' });
+    const r = run(repo, { GSTACK_CAPY: '1' });
+    expect(r.status).toBe(EXIT.fail);
+    expect(checkRow(repo, 'guards')).toMatchObject({ status: 'incomplete', code: 'INSTALL_UNVERIFIED' });
+    expect(checkRow(repo, 'guards').detail).toContain('install verdict: no install verdict at');
+    expect(ran(repo)).toBe(false);
+    expect(run(repo, { GSTACK_CAPY: '' }).status).toBe(EXIT.ok);
+    expect(ran(repo)).toBe(true);
+  });
+
+  test('an existing verdict is enforced without GSTACK_CAPY: ok:false and a stale HEAD are INSTALL_UNVERIFIED, a gone recorded Bun is BUN_RESOLUTION_DRIFT, a valid one launches its Bun', () => {
+    const repo = guardedFixture({ ...BASE_PREGATE, guards: [guard] });
+    commit(repo, { 'lib/util.js': 'exports.x = 1;\n' });
+    verdict(repo, { ok: false, trailer: 'gstack: fail pins' });
+    expect(run(repo).status).toBe(EXIT.fail);
+    expect(checkRow(repo, 'guards')).toMatchObject({ status: 'incomplete', code: 'INSTALL_UNVERIFIED' });
+    expect(checkRow(repo, 'guards').detail).toContain('the install verdict says: gstack: fail pins');
+    verdict(repo, { head: '0'.repeat(40) });
+    expect(run(repo).status).toBe(EXIT.fail);
+    expect(checkRow(repo, 'guards').detail).toContain('the install verdict is for another HEAD');
+    verdict(repo, { pins_planning_only: true, for: 'autoplan' });
+    expect(run(repo).status).toBe(EXIT.fail);
+    expect(checkRow(repo, 'guards').detail).toContain('planning-only');
+    verdict(repo, { bun_path: path.join(repo.root, 'gone/bun'), bun_version: '1.4.3' });
+    expect(run(repo).status).toBe(EXIT.fail);
+    expect(checkRow(repo, 'guards')).toMatchObject({ status: 'incomplete', code: 'BUN_RESOLUTION_DRIFT' });
+    expect(checkRow(repo, 'guards').detail).toContain(`recorded bun 1.4.3 at ${repo.root}/gone/bun is gone`);
+    expect(ran(repo)).toBe(false);
+    const stub = path.join(fs.realpathSync(repo.root), 'pinned', 'bun');
+    fs.mkdirSync(path.dirname(stub), { recursive: true });
+    fs.writeFileSync(stub, `#!/bin/sh\n[ "$1" = --version ] && { echo 1.4.2; exit 0; }\nexec '${fs.realpathSync(process.execPath)}' "$@"\n`, { mode: 0o755 });
+    verdict(repo, { bun_path: stub, bun_version: '1.4.2' });
+    const ok = run(repo);
+    expect(ok.status, ok.out).toBe(EXIT.ok);
+    expect(ok.out).toContain(`runtime: bun 1.4.2 at ${stub} (recorded by the install verdict)`);
+    expect(ran(repo)).toBe(true);
+  });
+});
+
 describe('pregate config: sealed (CD4)', () => {
   test('`gstack-pregate validate` accepts a sealed policy and names each bad field', () => {
     expect(codes({ sealed: { paths: ['heldout/**'], transcripts: ['runs/**/transcript*.jsonl'], answer_markers: ['SEALED ANSWER:'], seed_patterns: ['seed=\\d+'], local_paths: true, visibility: 'private' } })).toEqual([]);
@@ -162,7 +221,7 @@ describe('lanes runtime and serial files (CD1)', () => {
     expect(r.status).toBe(EXIT.ok);
     expect(r.out).toContain('lanes:   bun=1.4.2');
     expect(r.out).not.toContain('bun=1.3.14');
-    expect(r.out).toContain(`lanes: runtime: bun 1.4.2 from ${host.bunInstallBin}`);
+    expect(r.out).toContain(`lanes: runtime: bun 1.4.2 at ${fs.realpathSync(host.bunInstallBin)}/bun (resolved: `);
   });
 
   test('serial-pattern test files run in their own process, apart from the unit files', () => {

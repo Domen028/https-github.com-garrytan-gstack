@@ -19,10 +19,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { canonicalRows, parseReceipt, parseRecordFindings, parseReviewResult, type CanonicalFinding } from './autoplan-reconcile';
-import { closePhase, finishGate } from './autoplan-gate';
+import { amendmentSteps, applyGuidance, closePhase, finishGate } from './autoplan-gate';
 import { GSTACK_VERSION } from './autoplan-migrate';
-import { driftLine, reviewHash, scaffold } from './autoplan-plan-text';
-import { PHASES, SNAPSHOT_TOOL, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
+import { driftLine, normalizeFindingFile, reviewHash, scaffold } from './autoplan-plan-text';
+import { PHASES, SNAPSHOT_TOOL, attemptFile, bindPromptResult, detectScope, driverFile, extractHeading, phaseOrder, reviewSkillFile, scopeLines, scopeSourceLabel, sectionLoadFor, snapshotTool, writePrompts, type Phase, type Scope, type ScopeFlags } from './autoplan-prompts';
 import { recoverRevise } from './autoplan-revise';
 import { FILES, RunError, journal, now, pendingAmendments, readDecisions, readJournal, readState, voiceTerminal, writeState, type AttemptState, type PhaseState, type RunState, type Voice, type VoiceState } from './autoplan-state';
 import { checkPlanReality, checkRealityRows, PLAN_REALITY_CHECKER } from './plan-reality';
@@ -167,7 +167,7 @@ function openPhase(state: RunState, phase: Phase, cwd: string): void {
   ps.outside = state.outside_enabled ? { status: 'pending', attempts: [] }
     : notRun ? { status: 'disabled', outcome: 'not_run', reason: notRun.reason, detail: notRun.detail } : { status: 'disabled' };
   ps.prompts = prompts;
-  journal(state.out, { event: 'phase_opened', phase, snapshot: snap.sha256, prompts });
+  journal(state.out, { event: 'phase_opened', phase, snapshot: snap.sha256, prompts: Object.fromEntries(Object.entries(prompts).map(([k, p]) => [k, path.relative(state.out, p)])) });
 }
 
 export function nextStep(o: NextOptions): NextResult {
@@ -178,7 +178,8 @@ export function nextStep(o: NextOptions): NextResult {
   if (state.deadline_at && Date.parse(state.deadline_at) < Date.now()) { state.status = 'interrupted'; writeState(state); lines.push(`DEADLINE: passed at ${state.deadline_at}`); return result; }
   const pending = pendingAmendments(state).map(a => a.decision);
   if (pending.length) {
-    throw new RunError('PLAN_AMEND_PENDING', `accepted at the gate but not in the plan: ${pending.join(', ')}; edit the plan, then gstack-autoplan revise --out ${state.out} --plan ${state.plan_input ?? state.plan_source} --incorporates ${pending.join(',')} (or --withdraw <id>)`, 3);
+    const each = pendingAmendments(state).map(a => `APPLY ${a.item ?? a.decision}: ${applyGuidance(a)}`).join('; ');
+    throw new RunError('PLAN_AMEND_PENDING', `accepted at the gate but not in the plan: ${pending.join(', ')} (${each}); ${amendmentSteps(state, state.out)} (or --withdraw <id>)`, 3);
   }
   const phase = currentPhase(state);
   if (!phase) { finishGate(state); writeState(state); return result; }
@@ -210,8 +211,9 @@ export function nextStep(o: NextOptions): NextResult {
     const estimate = o.estimateUsd ?? 0;
     try { reserve(path.join(state.out, FILES.spend), attempt, estimate, { cap: state.spend_cap_usd, label: `${phase}/${voice}` }); }
     catch (e: any) { if (e.code === 'SPEND_CAP_EXCEEDED') { state.attempt_counter--; writeState(state); throw new RunError('SPEND_CAP_EXCEEDED', e.message, 3); } throw e; }
-    const row: AttemptState = { attempt, state: 'dispatched', prompt: prompts[voice], result: prompts[voice === 'native' ? 'nativeResult' : 'outsideResult'], estimate_usd: estimate, dispatched_at: now() };
-    journal(state.out, { event: 'dispatched', attempt, phase, voice, snapshot: ps.snapshot, prompt: row.prompt, prompt_sha256: sha256File(row.prompt), result: row.result, estimate_usd: estimate });
+    const row: AttemptState = { attempt, state: 'dispatched', prompt: prompts[voice], result: path.join(state.out, attemptFile(phase, voice, attempt.slice(state.run.length + 1), 'md')), estimate_usd: estimate, dispatched_at: now() };
+    bindPromptResult(row.prompt, row.result);
+    journal(state.out, { event: 'dispatched', attempt, phase, voice, snapshot: ps.snapshot, prompt: path.relative(state.out, row.prompt), prompt_sha256: sha256File(row.prompt), result: path.relative(state.out, row.result), estimate_usd: estimate });
     (v.attempts ??= []).push(row);
     v.attempt = attempt; v.status = 'running';
     result.attempts.push({ attempt, voice, prompt: row.prompt, result: row.result, model_family: familyHint(state, voice), new: true });
@@ -292,6 +294,10 @@ export function submitResult(o: SubmitOptions): SubmitResult {
   }
   const open = resolveAttempt(v, o.attempt, phase, o.voice);
   const file = (o.record ?? o.result)!;
+  const owner = new RegExp(`^${phase}-${o.voice}\\.(a\\d+)\\.md$`).exec(path.basename(file));
+  if (owner && path.dirname(path.resolve(file)) === state.out && `${state.run}-${owner[1]}` !== open.attempt) {
+    throw new RunError('ATTEMPT_MISMATCH', `${path.basename(file)} is the result path of ${state.run}-${owner[1]}, not of the open attempt ${open.attempt} (result=${open.result})`, 3);
+  }
   if (!fs.existsSync(file)) throw new RunError('RESULT_RECEIPT_MISSING', `result file not found: ${file}`);
   const text = fs.readFileSync(file, 'utf8');
   let bind: ReturnType<typeof readRecord>;
@@ -309,19 +315,24 @@ export function submitResult(o: SubmitOptions): SubmitResult {
   else if (modelFamily(model) === 'unknown') conflict = `native model ${JSON.stringify(model)} has no recognized family`;
   if (conflict) throw new RunError('MODEL_FAMILY_CONFLICT', conflict, 3);
 
-  // Bind: immutable copy, per-voice canonical rows, journal, ledger, manifest. Nothing above this line wrote.
-  const bound = open.result;
+  // Bind: a sealed copy of the reviewer's bytes under an attempt-owned name the reviewer never writes, per-voice
+  // canonical rows, journal, ledger, manifest. Nothing above this line wrote; a later edit of `file` changes nothing bound.
+  const bound = path.join(state.out, attemptFile(phase, o.voice, open.attempt.slice(state.run.length + 1), 'bound.md'));
   const tmp = `${bound}.${process.pid}.tmp`;
-  fs.writeFileSync(tmp, text);
+  fs.writeFileSync(tmp, text, process.platform === 'win32' ? {} : { mode: 0o444 });
   fs.renameSync(tmp, bound);
-  const rows = canonicalRows(bind.findings, { run: state.run, phase, voice: o.voice, model });
+  if (process.env.GSTACK_AUTOPLAN_FAULT === 'submit-after-seal') throw new Error('fault injected: submit interrupted after sealing (GSTACK_AUTOPLAN_FAULT, tests only)');
+  const planFiles = [ps.snapshot_path, ps.snapshot_path && path.join(path.dirname(ps.snapshot_path), 'source-implementation.md'), state.active_plan].filter((p): p is string => !!p);
+  const pathCtx = { cwd: o.cwd, planFiles, planSource: state.plan_source, planName: path.basename(state.plan_input ?? state.plan_source) };
+  const rows = canonicalRows(bind.findings.map(f => { const { file, line, ...rest } = f; return { ...rest, ...normalizeFindingFile({ file, line }, pathCtx) }; }), { run: state.run, phase, voice: o.voice, model });
   fs.writeFileSync(`${bound}.findings.jsonl`, rows.map(r => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''));
   const sha = sha256File(bound);
+  const provider = o.runner ?? 'host-subagent';
   const receipt = { receipt: bind.receipt, findings_source: bind.source, reviewed_sha256: ps.snapshot, ...(bind.receipt === 'attested' ? { attest_reason: o.attest } : {}) };
-  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: bound, result_sha256: sha, model, runner: o.runner ?? null, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
+  journal(state.out, { event: 'submitted', attempt: open.attempt, phase, voice: o.voice, result: path.basename(bound), result_sha256: sha, model, runner: provider, findings: rows.length, usage_usd: o.usageUsd ?? 'unknown', ...receipt });
   settle(path.join(state.out, FILES.spend), open.attempt, o.usageUsd ?? 'unknown');
   open.state = 'submitted'; open.terminal_at = now();
-  Object.assign(v, { status: 'completed', model, provider: o.runner ?? (o.voice === 'native' ? 'host-subagent' : 'unknown'), output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: open.attempt, usage: { usd: o.usageUsd ?? 'unknown' }, ...receipt } satisfies Partial<VoiceState>);
+  Object.assign(v, { status: 'completed', model, provider, output: path.basename(bound), result_sha256: sha, findings: rows.length, attempt: open.attempt, usage: { usd: o.usageUsd ?? 'unknown' }, ...receipt } satisfies Partial<VoiceState>);
   if (bind.receipt === 'attested') (state.deviations ??= []).push(`receipt attested: ${phase} ${o.voice} ${open.attempt} bound from a hand-run record without a reviewer receipt (snapshot ${ps.snapshot.slice(0, 12)}; reason: ${o.attest})`);
   state.artifacts[path.basename(bound)] = { path: path.basename(bound), sha256: sha };
   if (o.voice === 'native') state.native_model = model; else state.outside_model = model;
@@ -337,7 +348,7 @@ export function submitResult(o: SubmitOptions): SubmitResult {
 function closeAndAdvance(state: RunState, phase: Phase, reconcile?: string): string[] {
   const close = closePhase(state, phase, { overridesFile: reconcile });
   if (!currentPhase(state)) finishGate(state); else state.status = 'running';
-  return [`PHASE_CLOSED: ${phase} confirmed=${close.consensus.confirmed} disagree=${close.consensus.disagree} new=${close.consensus.new} native_only=${close.consensus.native_only} coverage=${close.consensus.coverage}`];
+  return [`PHASE_CLOSED: ${phase} confirmed=${close.consensus.confirmed}${close.consensus.unverified ? ` unverified=${close.consensus.unverified}` : ''} disagree=${close.consensus.disagree} new=${close.consensus.new} native_only=${close.consensus.native_only} coverage=${close.consensus.coverage}`];
 }
 
 /**
@@ -395,17 +406,18 @@ export function resumeRun(out: string): ResumeResult {
     if (terminal.has(r.attempt)) {
       // A submit that journaled but died before run.json: re-bind from the journal and the file on disk.
       const sub = rows.find(x => x.event === 'submitted' && x.attempt === r.attempt);
-      if (sub && a && a.state !== 'submitted' && fs.existsSync(sub.result) && sha256File(sub.result) === sub.result_sha256) {
+      const result = sub && path.resolve(out, sub.result);
+      if (sub && result && a && a.state !== 'submitted' && fs.existsSync(result) && sha256File(result) === sub.result_sha256) {
         a.state = 'submitted'; a.terminal_at = sub.ts;
-        Object.assign(v!, { status: 'completed', model: sub.model, provider: sub.runner ?? 'unknown', output: path.basename(sub.result), result_sha256: sub.result_sha256, findings: sub.findings, attempt: sub.attempt,
+        Object.assign(v!, { status: 'completed', model: sub.model, provider: sub.runner ?? 'unknown', output: path.basename(result), result_sha256: sub.result_sha256, findings: sub.findings, attempt: sub.attempt,
           ...(sub.receipt ? { receipt: sub.receipt, findings_source: sub.findings_source, reviewed_sha256: sub.reviewed_sha256, ...(sub.attest_reason ? { attest_reason: sub.attest_reason } : {}) } : {}) });
-        state.artifacts[path.basename(sub.result)] = { path: path.basename(sub.result), sha256: sub.result_sha256 };
+        state.artifacts[path.basename(result)] = { path: path.basename(result), sha256: sub.result_sha256 };
         if (r.voice === 'native') state.native_model = sub.model; else state.outside_model = sub.model;
         rebound.push(r.attempt);
       }
       continue;
     }
-    if (!a) { (v!.attempts ??= []).push({ attempt: r.attempt, state: 'execution_unknown', prompt: r.prompt, result: r.result, estimate_usd: r.estimate_usd ?? 0, dispatched_at: r.ts }); v!.status = 'running'; }
+    if (!a) { (v!.attempts ??= []).push({ attempt: r.attempt, state: 'execution_unknown', prompt: path.resolve(out, r.prompt), result: path.resolve(out, r.result), estimate_usd: r.estimate_usd ?? 0, dispatched_at: r.ts }); v!.status = 'running'; }
     else if (a.state === 'dispatched') a.state = 'execution_unknown';
     else continue;
     journal(out, { event: 'execution_unknown', attempt: r.attempt, phase: r.phase, voice: r.voice, by: 'resume' });
@@ -416,7 +428,7 @@ export function resumeRun(out: string): ResumeResult {
     if (!ps?.snapshot || ps.closed_at) continue;
     if (ps.native?.status === 'completed' && voiceTerminal(ps.outside)) closePhase(state, phase, {});
   }
-  if (!currentPhase(state) && !['gate_pending', 'complete', 'incomplete', 'refused'].includes(state.status)) finishGate(state);
+  if (!currentPhase(state) && !['gate_pending', 'amend_pending', 'complete', 'incomplete', 'refused'].includes(state.status)) finishGate(state);
   else if (state.status === 'interrupted' || state.status === 'running' || state.status === 'awaiting_result') {
     const anyOpen = state.phase_order.some(p => (['native', 'outside'] as const).some(v => openAttempt(voiceState(state, p, v))));
     state.status = anyOpen ? 'awaiting_result' : 'running';
@@ -437,9 +449,14 @@ export function statusLines(state: RunState): string[] {
     const v = (voice: Voice) => { const s = ps[voice]; return `${voice}=${s?.status ?? 'pending'}${s?.model ? `:${s.model}` : ''}${s?.attempt ? `@${s.attempt}` : ''}`; };
     lines.push(`PHASE: ${p} ${ps.closed_at ? 'closed' : ps.snapshot ? 'open' : 'pending'} ${v('native')} ${v('outside')}${ps.consensus ? ` confirmed=${(ps.consensus as any).confirmed} disagree=${(ps.consensus as any).disagree} new=${(ps.consensus as any).new}` : ''}`);
   }
+  for (const a of pendingAmendments(state)) lines.push(`AMEND_PENDING: ${a.decision} ${a.item ?? ''}${a.changes ? ` changes=${a.changes}` : ''} -> ${applyGuidance(a)}`);
+  for (const p of state.phase_order) for (const voice of ['native', 'outside'] as const) {
+    const open = state.phases[p]?.[voice] && openAttempt(state.phases[p]![voice]!);
+    if (open) lines.push(`PENDING: ${open.attempt} phase=${p} voice=${voice} result=${open.result}`);
+  }
   if (fs.existsSync(path.join(state.out, FILES.spend))) lines.push(renderSpend(summarize(readLedger(path.join(state.out, FILES.spend)))));
   return lines;
 }
-export const TERMINAL: readonly RunStatus[] = ['complete', 'gate_pending', 'incomplete', 'refused', 'interrupted'];
+export const TERMINAL: readonly RunStatus[] = ['complete', 'gate_pending', 'amend_pending', 'incomplete', 'refused', 'interrupted'];
 export { SNAPSHOT_TOOL, RunError, FILES, readState, writeState, readJournal, journal };
 export type { RunState, Voice, VoiceState, AttemptState };

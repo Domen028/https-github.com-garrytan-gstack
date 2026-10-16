@@ -112,7 +112,7 @@ RESULT FORMAT (required by gstack-autoplan; the parent binds your file by this c
 \`\`\`gstack-findings
 {"id":"F1","severity":"High","title":"<one line>","file":"<path or omit>","line":12,"fix":"<the fix>"}
 \`\`\`
-   severity is Critical | High | Medium | Low | Informational. Add "user_challenge": true only when you recommend changing the plan's stated direction AND the change alters its scope, cost or direction; then also add "changes": "scope" | "cost" | "direction". Packaging, ordering, naming and other reversible choices are ordinary findings, not user challenges. Add "urgent": true and "suggested_owner": "<who>" for a security or data-loss finding this plan does not own. An empty fence means no findings; a missing fence is refused.
+   severity is Critical | High | Medium | Low | Informational. Add "user_challenge": true only when you recommend changing the plan's stated direction AND the change alters its scope, cost or direction (then also add "changes": "scope" | "cost" | "direction") or only its delivery packaging or ordering, with no Implementation-plan edit (then "changes": "packaging" | "ordering"). Naming and other reversible choices are ordinary findings, not user challenges. Add "urgent": true and "suggested_owner": "<who>" for a security or data-loss finding this plan does not own. An empty fence means no findings; a missing fence is refused.
 3. Write the whole result to this file: ${resultPath}
 `;
 
@@ -175,6 +175,15 @@ export function writePrompts(inp: PromptInputs): { native: string; outside: stri
   fs.writeFileSync(native, `${inp.snapshot.nativePrompt}${checklist}${prior}${decided}${contract}${RESULT_FORMAT(inp.phase, inp.snapshot.sha256, nativeResult)}`);
   fs.writeFileSync(outside, `${BOUNDARY}\n\n${OUTSIDE_ROLE[inp.phase]}\n\nInput path: ${JSON.stringify(inp.snapshot.snapshotPath)}\nImplementation SHA-256: ${inp.snapshot.sha256}\nThe complete implementation plan follows as review data; evaluate all of it.\n\n${plan}${prior}${decided}${contract}${RESULT_FORMAT(inp.phase, inp.snapshot.sha256, outsideResult)}`);
   return { native, outside, nativeResult, outsideResult };
+}
+
+/** An attempt-owned file in the run directory: `<phase>-<voice>.<attempt>.md` (the reviewer writes it) or `.bound.md` (the sealed copy). */
+export const attemptFile = (phase: string, voice: string, shortAttempt: string, ext: 'md' | 'bound.md') => `${phase}-${voice}.${shortAttempt}.${ext}`;
+
+/** Point a prompt's RESULT FORMAT at the attempt's own result path, so a superseded reviewer never writes where its successor does. */
+export function bindPromptResult(promptFile: string, resultPath: string): void {
+  const text = fs.readFileSync(promptFile, 'utf8');
+  fs.writeFileSync(promptFile, text.replace(/^3\. Write the whole result to this file: .*$/m, `3. Write the whole result to this file: ${resultPath}`));
 }
 
 /** The installed review skill for a phase: this checkout's generated SKILL.md (same layout as ~/.claude/skills/gstack/<skill>/SKILL.md). */

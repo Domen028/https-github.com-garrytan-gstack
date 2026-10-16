@@ -51,6 +51,7 @@ API_TIMEOUT="${UBI_API_TIMEOUT:-120}"
 CREATE_GRACE="${UBI_CREATE_GRACE:-180}"
 DOWN_TIMEOUT="${UBI_DOWN_TIMEOUT:-900}"
 POLL="${UBI_POLL_SECONDS:-5}"
+ALLOWED_STORAGE="${UBI_ALLOWED_STORAGE:-320 640}"
 PREFIX="ubirun"
 if [ -n "${UBI_VM_RECORD:-}" ]; then VM_RECORD="$UBI_VM_RECORD"
 elif [ -d "$HOME/.capy/work" ]; then VM_RECORD="$HOME/.capy/work/ubi-runner/vms.tsv"
@@ -229,6 +230,14 @@ new_name() { echo "$PREFIX-$OWNER-$(date +%s)-$(head -c4 /dev/urandom | od -An -
 
 valid_name() { [[ "$1" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; }
 
+# check_storage GIB: Ubicloud accepts only these disk sizes; refuse before any API call.
+check_storage() {
+  case " $ALLOWED_STORAGE " in
+    *" $1 "*) [ -n "$1" ] && return 0 ;;
+  esac
+  die "invalid storage '$1' GiB (allowed: $ALLOWED_STORAGE; set UBI_ALLOWED_STORAGE when Ubicloud adds sizes)"
+}
+
 UP_NAME=""
 UP_READY=""
 cmd_up() {
@@ -238,7 +247,7 @@ cmd_up() {
       -s|--size) size=$2; shift 2 ;;
       -l|--location) location=$2; shift 2 ;;
       -n|--name) name=$2; shift 2 ;;
-      -S|--storage) storage=$2; shift 2 ;;
+      -S|--storage) check_storage "$2"; storage=$2; shift 2 ;;
       -b|--image) image=$2; shift 2 ;;
       *) die "up: unknown option $1" ;;
     esac
@@ -430,7 +439,8 @@ cmd_run() {
   local up_args=() src=. dest="" setup="" keep=0 pulls=() envs=()
   while [ $# -gt 0 ]; do
     case $1 in
-      -s|--size|-l|--location|-n|--name|-S|--storage|-b|--image) up_args+=("$1" "$2"); shift 2 ;;
+      -S|--storage) check_storage "$2"; up_args+=("$1" "$2"); shift 2 ;;
+      -s|--size|-l|--location|-n|--name|-b|--image) up_args+=("$1" "$2"); shift 2 ;;
       --src) src=$2; shift 2 ;;
       --dest) dest=$2; shift 2 ;;
       --setup) setup=$2; shift 2 ;;
@@ -498,6 +508,7 @@ usage: ubi-runner.sh <command> [args]
                          up + sync + setup + command + pull + destroy; exits with COMMAND's status
   up [-s SIZE] [-l LOCATION] [-n NAME] [-S STORAGE_GIB] [-b IMAGE]
                          create a VM and wait for SSH; prints its name
+                         (STORAGE_GIB: one of $ALLOWED_STORAGE)
   ssh NAME [COMMAND]     shell or login-shell command on the VM (user ubi, passwordless sudo)
   sync NAME [SRC] [DEST] stream a checkout (tracked + untracked-unignored + .git)
   pack [SRC]             write that checkout tarball to stdout
@@ -516,7 +527,8 @@ VMs are named $PREFIX-<owner>-<epoch>-<suffix>; set UBI_OWNER (e.g. your thread
 code) to tag them, otherwise a per-machine id is used.
 defaults: size=$DEFAULT_SIZE location=$DEFAULT_LOCATION (env UBI_SIZE, UBI_LOCATION)
 env: UBI_GC_HOURS (unset/0: no sweep on up), UBI_CREATE_GRACE (${CREATE_GRACE}s),
-     UBI_DOWN_TIMEOUT (${DOWN_TIMEOUT}s), UBI_API_TIMEOUT (${API_TIMEOUT}s), UBI_VM_RECORD (scratch VM-id file)
+     UBI_DOWN_TIMEOUT (${DOWN_TIMEOUT}s), UBI_API_TIMEOUT (${API_TIMEOUT}s), UBI_VM_RECORD (scratch VM-id file),
+     UBI_ALLOWED_STORAGE (the -S sizes Ubicloud accepts; default "320 640")
 EOF
 }
 

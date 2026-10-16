@@ -203,10 +203,11 @@ export interface RealityCheck {
  * measured/costs/takes/took. Receipts, versions and ids are removed before matching, so they never count.
  */
 const MEASURED_RE = /\$\s?\d|\b\d[\d,]*(?:\.\d+)?\s?[kKM]?\s?(?:ms|s|%|USD|tokens?|MB|GB)(?![\w])|\b\d[\d,]*(?:\.\d+)?\s?[×x](?![\w])|\b(?:measured|costs?|takes|take|took)\b\W+(?:[A-Za-z]+\W+){0,3}?\$?\d/i;
-const NOT_A_QUANTITY_RE = new RegExp(`${RECEIPT_RE.source}|\\bv?\\d+(?:\\.\\d+){2,}\\b|#\\d+|\\b[A-Za-z]+\\d+[a-z]?\\b`, 'g');
+const ITEM_REF_RE = /\b(?:items?|sections?)\s+\d+(?:\s*[–-]\s*\d+)?(?:\s*(?:,|and)\s*\d+(?:\s*[–-]\s*\d+)?)*|§\s?\d+(?:\.\d+)*/;
+const NOT_A_QUANTITY_RE = new RegExp(`${RECEIPT_RE.source}|${ITEM_REF_RE.source}|\\bv?\\d+(?:\\.\\d+){2,}\\b|#\\d+|\\b[A-Za-z]+\\d+[a-z]?\\b`, 'g');
 const EXEMPT_TAG_RE = /\[(?:estimated|re-measure before gate)\]/i;
 const SCRIPT_RE = /(?:^|[\s(`"'])(?:\.?[\w-]+\/)*[\w.-]+\.(?:ts|js|mjs|cjs|sh|py|rb|go)\b|(?:^|[\s(`"'])(?:bin|scripts)\/[\w.-]+/;
-const COMMAND_RE = /`[^`]*\s[^`]*`/;
+const COMMAND_RE = /`(?!\s*\$?\d)[^`]*\s[^`]*`/;
 const RULE_CLAIM_RE = /\b(?:decision rule|rules? (?:was |were )?written first|pre-?registered rule)\b/i;
 const QUOTED_RULE_RE = /"[^"]{8,}"|\u201c[^\u201d]{8,}\u201d/;
 const LINK_RE = /(?<![\w./-])\.?[A-Za-z~$][\w./~$@-]*:\d+/;
@@ -228,23 +229,32 @@ export function splitClauses(text: string): string[] {
   return out.map(c => c.trim()).filter(Boolean);
 }
 
-/** Clauses of one line that state a measured number and carry no receipt of their own. */
-export function unreceiptedNumbers(line: string): string[] {
-  return splitClauses(line).filter(c => MEASURED_RE.test(c.replace(NOT_A_QUANTITY_RE, ' '))
+const QUOTED_SPAN_RE = /"([^"]+)"|\u201c([^\u201d]+)\u201d/g;
+const BACKTICK_SPAN_RE = /`[^`]*`/g;
+
+/**
+ * Clauses of one line that state a measured number and carry no receipt of their own. With `quotedFrom` (the
+ * reviewed plan, reviewer scope only), a span quoted verbatim from it is the plan's number, not the reviewer's claim.
+ */
+export function unreceiptedNumbers(line: string, quotedFrom?: string): string[] {
+  const text = quotedFrom ? line.replace(QUOTED_SPAN_RE, (span, a, b) => (quotedFrom.includes((a ?? b) as string) ? '""' : span)) : line;
+  return splitClauses(text).filter(c => MEASURED_RE.test(c.replace(NOT_A_QUANTITY_RE, ' '))
     && !RECEIPT_RE.test(c) && !SCRIPT_RE.test(c) && !COMMAND_RE.test(c) && !EXEMPT_TAG_RE.test(c));
 }
 
-/** A rule claim needs the rule: a quoted span, a file:line link on the line, or a fenced or quoted block right after it. */
-function ruleUnquoted(lines: string[], i: number): boolean {
+/** A rule claim needs the rule: a quoted span, a file:line link on the line, or a fenced or quoted block right after it. Plan scope ignores phrases inside backticks (a phrase named, not claimed). */
+function ruleUnquoted(lines: string[], i: number, scope: 'plan' | 'review' = 'review'): boolean {
   const line = lines[i]!;
-  if (!RULE_CLAIM_RE.test(line) || QUOTED_RULE_RE.test(line) || LINK_RE.test(line)) return false;
+  if (!RULE_CLAIM_RE.test(scope === 'plan' ? line.replace(BACKTICK_SPAN_RE, ' ') : line) || QUOTED_RULE_RE.test(line) || LINK_RE.test(line)) return false;
   const after = lines.slice(i + 1).find(l => l.trim());
   return !after || !/^\s*(?:```|~~~|>)/.test(after);
 }
 
 const verdictFor = (ok: boolean, sessionKind?: string): RealityVerdict => (ok ? 'complete' : sessionKind === 'unattended' ? 'incomplete' : 'repair');
 
-export interface CheckOptions { phase: string; scopes?: readonly string[]; sessionKind?: string }
+export interface CheckOptions { phase: string; scopes?: readonly string[]; sessionKind?: string;
+  /** The reviewed plan snapshot: a number inside a span quoted verbatim from it needs no receipt of its own. */
+  planText?: string }
 
 /** Deterministic: which required rows the review carries. The verdict word depends on the session kind only. */
 export function checkRealityRows(reviewText: string, o: CheckOptions): RealityCheck {
@@ -267,7 +277,7 @@ export function checkRealityRows(reviewText: string, o: CheckOptions): RealityCh
     if (metric && l.metrics[metric] !== undefined) metrics[metric] = l.metrics[metric]!;
   }
   const rows = lines.filter(l => rowById(l.id) && l.status !== 'n/a');
-  const numbers = rows.flatMap(l => unreceiptedNumbers(l.rest));
+  const numbers = rows.flatMap(l => unreceiptedNumbers(l.rest, o.planText));
   const rawLines = reviewText.split('\n');
   const unquoted = rows.filter(l => ruleUnquoted(rawLines, l.line - 1)).map(l => rawLines[l.line - 1]!.trim());
   const verdict = verdictFor(missing.length === 0 && unreceipted.length === 0 && numbers.length === 0 && unquoted.length === 0, o.sessionKind);
@@ -283,7 +293,7 @@ export function checkRealityRows(reviewText: string, o: CheckOptions): RealityCh
 }
 
 /** Bumped whenever checkPlanReality's rules change, so a cached verdict keyed on the plan hash is recomputed. */
-export const PLAN_REALITY_CHECKER = 'plan-reality/2';
+export const PLAN_REALITY_CHECKER = 'plan-reality/3';
 export interface PlanRealityCheck { checker: string; unreceipted_numbers: string[]; unquoted: string[]; numberLines: string[]; verdict: RealityVerdict; line: string }
 
 /**
@@ -299,11 +309,38 @@ export function checkPlanReality(planText: string, o: { sessionKind?: string } =
     if (delimiter && (!fence || delimiter.startsWith(fence))) { fence = fence ? null : delimiter; return; }
     if (fence || /^\s*<!--/.test(line)) return;
     numbers.push(...unreceiptedNumbers(line));
-    if (ruleUnquoted(lines, i)) unquoted.push(line.trim());
+    if (ruleUnquoted(lines, i, 'plan')) unquoted.push(line.trim());
   });
   const verdict = verdictFor(numbers.length === 0 && unquoted.length === 0, o.sessionKind);
   return { checker: PLAN_REALITY_CHECKER, unreceipted_numbers: numbers, unquoted, numberLines: numbers.map(c => `NUMBER_UNRECEIPTED: ${c}`), verdict,
     line: `PLAN_REALITY: scope=plan unreceipted_numbers=${numbers.length} unquoted=${unquoted.length} verdict=${verdict}` };
+}
+
+const VAGUE_RE = /\b(minimum (?:detectable )?effect|margins?|decision rule|dollar cost|cost in dollars|USD cost)\b/i;
+const DETAIL_AFTER_RE = /^\s*(?:[-*+]\s|\d+[.)]\s|\||```|~~~|>)/;
+
+/**
+ * PLAN_REALITY flags for the gate (advisory, never blocking): a plan line naming a minimum effect, a margin, a
+ * decision rule or a dollar cost with no number on it (item references and phrases in backticks do not count)
+ * and no arm list, table, quoted rule or block right after it. `line` is 1-based in `planText`.
+ */
+export function vaguePlanTerms(planText: string): Array<{ phrase: string; line: number; text: string }> {
+  const lines = planText.split('\n');
+  const out: Array<{ phrase: string; line: number; text: string }> = [];
+  let fence: string | null = null;
+  lines.forEach((raw, i) => {
+    const delimiter = /^\s{0,3}(`{3,}|~{3,})/.exec(raw)?.[1];
+    if (delimiter && (!fence || delimiter.startsWith(fence))) { fence = fence ? null : delimiter; return; }
+    if (fence || /^\s*<!--/.test(raw)) return;
+    const prose = raw.replace(BACKTICK_SPAN_RE, ' ');
+    const m = VAGUE_RE.exec(prose);
+    if (!m) return;
+    if (/\d/.test(prose.replace(NOT_A_QUANTITY_RE, ' ')) || QUOTED_RULE_RE.test(prose)) return;
+    const after = lines.slice(i + 1).find(l => l.trim());
+    if (after && DETAIL_AFTER_RE.test(after)) return;
+    out.push({ phrase: m[1]!.toLowerCase(), line: i + 1, text: raw.trim() });
+  });
+  return out;
 }
 
 /** The example line every template quotes; one grammar, stated once. */

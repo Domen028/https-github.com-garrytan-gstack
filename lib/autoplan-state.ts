@@ -20,7 +20,13 @@ export interface VoiceState extends VoiceOutcome {
   receipt?: 'verified' | 'attested'; attest_reason?: string; findings_source?: 'fence' | 'table' | 'list' | 'none'; reviewed_sha256?: string;
 }
 /** An accepted plan change (gate option with changes_plan) the plan must absorb before the run continues. */
-export interface Amendment { decision: string; title: string; chosen: string; text: string; gate_rev: number; status: 'pending' | 'incorporated' | 'withdrawn'; at: string; settled_at?: string }
+export interface Amendment {
+  decision: string; title: string; chosen: string; text: string; gate_rev: number; status: 'pending' | 'incorporated' | 'withdrawn' | 'settled'; at: string; settled_at?: string;
+  /** The gate item's `changes` and phase: packaging/ordering changes settle without a plan edit (`revise --settle`). */
+  changes?: string; phase?: string; item?: string;
+  /** The reviewed Implementation-plan hash of the active plan when the owner accepted it: `--settle` evidence. */
+  plan_sha256?: string;
+}
 export interface PhaseState {
   snapshot?: string; snapshot_dir?: string; snapshot_path?: string; methodology?: string; opened_at?: string; closed_at?: string;
   native?: VoiceState; outside?: VoiceState; consensus?: Record<string, unknown>; skipped?: string;
@@ -77,7 +83,7 @@ export function readState(out: string): RunState {
   state.out = path.resolve(out);
   if (previous && previous !== state.out) {
     const reroot = (p: string | undefined) => (p && p.startsWith(previous + path.sep) ? path.join(state.out, path.relative(previous, p)) : p);
-    state.active_plan = reroot(state.active_plan)!; state.restore = reroot(state.restore)!;
+    state.active_plan = reroot(state.active_plan)!; state.restore = reroot(state.restore)!; state.plan_source = reroot(state.plan_source)!; state.plan_input = reroot(state.plan_input);
     for (const ps of Object.values(state.phases)) {
       ps.snapshot_dir = reroot(ps.snapshot_dir); ps.snapshot_path = reroot(ps.snapshot_path); ps.methodology = reroot(ps.methodology);
       if (ps.prompts) for (const k of Object.keys(ps.prompts) as Array<keyof typeof ps.prompts>) ps.prompts[k] = reroot(ps.prompts[k])!;

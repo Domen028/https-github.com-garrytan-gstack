@@ -4,8 +4,8 @@
 # freshness test is test/doctor-components.test.ts. Sourced by
 # bin/gstack-doctor-check.sh; Bash 3.2 builtins only.
 
-GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision"
-GSTACK_DOCTOR_CORE="runtime pins state-root privacy cores revision"
+GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision wrapper"
+GSTACK_DOCTOR_CORE="runtime pins state-root privacy cores revision wrapper"
 GSTACK_DOCTOR_HOSTS="claude codex"
 GSTACK_DOCTOR_OPTIONAL="codex-cli cso"
 GSTACK_DOCTOR_SKILLS="autoplan plan-ceo-review plan-eng-review plan-design-review plan-devex-review plan-tune office-hours spec review ship investigate codex cso browse qa qa-only design-review design-consultation design-html devex-review scrape skillify canary benchmark make-pdf diagram pair-agent open-gstack-browser setup-browser-cookies connect-chrome land-and-deploy benchmark-models careful claude-code context-restore context-save design-shotgun deslop-shared-libs document-generate document-release eval-plan freeze gstack-upgrade guard health ios-clean ios-design-review ios-fix ios-qa ios-sync landing-report learn retro setup-deploy setup-gbrain sync-gbrain test-audit unfreeze"
@@ -27,6 +27,7 @@ gstack_doctor_component_title() {
     privacy) printf '%s' 'privacy' ;;
     cores) printf '%s' 'cores' ;;
     revision) printf '%s' 'revision' ;;
+    wrapper) printf '%s' 'Capy skill copy (bootstrapper revision)' ;;
     *) return 1 ;;
   esac
 }
@@ -47,6 +48,7 @@ gstack_doctor_component_kind() {
     privacy) printf '%s' 'core' ;;
     cores) printf '%s' 'core' ;;
     revision) printf '%s' 'core' ;;
+    wrapper) printf '%s' 'core' ;;
     *) return 1 ;;
   esac
 }
@@ -160,9 +162,13 @@ gstack_result_anchor() {
     PREGATE_NO_LANE) printf '%s' 'pregate-no-lane' ;;
     PREGATE_LANE_FAILED) printf '%s' 'pregate-lane-failed' ;;
     PREGATE_INCOMPLETE) printf '%s' 'pregate-incomplete' ;;
+    PREGATE_STALLED) printf '%s' 'pregate-stalled' ;;
+    PREGATE_RECEIPT_INVALID) printf '%s' 'pregate-receipt-invalid' ;;
     PREGATE_STALE) printf '%s' 'pregate-stale' ;;
     PREGATE_REMOTE_UNCLEARED) printf '%s' 'pregate-remote-uncleared' ;;
     ISSUE_UNREADABLE) printf '%s' 'issue-unreadable' ;;
+    ISSUE_LOOKUP_FAILED) printf '%s' 'issue-lookup-failed' ;;
+    ISSUE_LINKS_MISSING) printf '%s' 'issue-links-missing' ;;
     PREREG_INCOMPLETE) printf '%s' 'prereg-incomplete' ;;
     EVAL_PRICE_MISSING) printf '%s' 'eval-price-missing' ;;
     EVAL_DRY_RUN_FAILED) printf '%s' 'eval-dry-run-failed' ;;
@@ -185,6 +191,13 @@ gstack_result_anchor() {
     PLAN_SECTIONS_INVALID) printf '%s' 'plan-sections-invalid' ;;
     PLAN_AMEND_PENDING) printf '%s' 'plan-amend-pending' ;;
     AMENDMENT_UNKNOWN) printf '%s' 'amendment-unknown' ;;
+    AMENDMENT_NOT_SETTLEABLE) printf '%s' 'amendment-not-settleable' ;;
+    GATE_REC_STALE) printf '%s' 'gate-rec-stale' ;;
+    CHECKPOINT_INVALID) printf '%s' 'checkpoint-invalid' ;;
+    CHECKPOINT_OVERLAP) printf '%s' 'checkpoint-overlap' ;;
+    CHECKPOINT_TARGET_EXISTS) printf '%s' 'checkpoint-target-exists' ;;
+    OWNER_REPLY_REQUIRED) printf '%s' 'owner-reply-required' ;;
+    GATE_OWNER_REPLY_MISMATCH) printf '%s' 'gate-owner-reply-mismatch' ;;
     GSTACK_VERSION_CHANGED) printf '%s' 'gstack-version-changed' ;;
     ARTIFACT_GATE_UNSETTLED) printf '%s' 'artifact-gate-unsettled' ;;
     UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;
@@ -192,6 +205,8 @@ gstack_result_anchor() {
     UPGRADE_FETCH_FAILED) printf '%s' 'upgrade-fetch-failed' ;;
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
     CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;
+    BUN_RESOLUTION_DRIFT) printf '%s' 'bun-resolution-drift' ;;
+    BUN_INSTALL_VERSION_INVALID) printf '%s' 'bun-install-version-invalid' ;;
     INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
     BROWSE_TAB_UNRECOVERABLE) printf '%s' 'browse-tab-unrecoverable' ;;
     BUN_VERSION_UNREADABLE) printf '%s' 'bun-version-unreadable' ;;

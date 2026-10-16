@@ -531,6 +531,7 @@ function runSummary(reason: string, telemetry: 'ok' | 'fail' | 'missing', prelud
       'log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }',
       `SOURCE_GSTACK_DIR="${tmp}"`,
       `_PW_FAIL_REASON="${reason}"`,
+      extractFn('_setup_ready_line'),
       ...prelude,
       tail,
       'echo "REACHED_END=1"',
