@@ -595,10 +595,6 @@ category, Step 5.8's record and the final report.
 
 `~/.claude/skills/gstack/bin/gstack-banned-terms check --base <base>`: each `BANNED_TERM:` line (term, file:line, allowed locations) is a Step 4 finding; `none` means the repo keeps no list.
 
-### Approval classes
-
-`~/.claude/skills/gstack/bin/gstack-approval-classes check --base <base>`: each declared `APPROVAL_CLASS:` line is a Step 4 finding that the change needs the owner's approval; carry its `APPROVAL_SCOPE: <class>@<digest12>` token into the finding, because /ship's receipt refuses (`APPROVAL_CITATION_MISSING`) until the PR body cites an approval bound to it. `(built-in, report-only)` lines are informational; `none` means the repo declares no classes.
-
 ### Slop scan (advisory)
 
 Scan changed files for empty catches, redundant `return await` and needless abstractions:
