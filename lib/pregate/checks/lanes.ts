@@ -5,6 +5,8 @@
  * (zero tests ran is a failure, exit 0 or not); platform lanes this machine
  * cannot run become persisted `requires-remote` obligations. A touched file
  * with no lane is `FAIL lanes — <file> has no test lane`, never a pass.
+ * Planning and evidence Markdown is the docs/no-tests empty lane instead
+ * (lib/pregate/docs-lane.ts): it does not fail, and unmapped code still does.
  * Incidents: p0-4-pipe-hidden-failure (`false | tail` read as green),
  * p0-4-windows-lane-unrun (a Windows-only change merged with its lane unrun).
  */
@@ -99,6 +101,7 @@ function unfinished(ctx: PregateContext, r: Awaited<ReturnType<typeof runLocal>>
 
 function describe(sel: Selection): string[] {
   const lines = sel.noLane.map(f => `FAIL lanes — ${f} has no test lane`);
+  if (sel.emptyLane.length) lines.push(`docs/no-tests (empty lane): ${sel.emptyLane.join(' ')}`);
   for (const r of sel.remote) lines.push(`requires-remote ${r.lane} (${r.platform}): ${r.tests.length} test(s) — ${r.tests.slice(0, 8).join(' ')}${r.tests.length > 8 ? ' …' : ''}`);
   lines.push(`Tiers ran: ${sel.tiersRan.join(' ') || '(none)'}; requires-remote: ${[...new Set(sel.remote.map(r => r.platform))].join(' ') || 'none'}`);
   return lines;
@@ -182,9 +185,14 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
   const lines = describe(sel);
   const base: CheckResult = { id: 'lanes', stage: 'tests', status: 'pass', inputs, lines, remote: sel.remote };
   if (sel.noLane.length) {
-    return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: 'add a test that names the file, or declare its lane (or []) under dependencies in .gstack/pregate.json' };
+    return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: 'add a test that names the file, or declare its lane (or []) under dependencies — or empty_lanes for other documentation — in .gstack/pregate.json' };
   }
-  if (sel.tests.length === 0) return { ...base, detail: ctx.touched.length ? 'nothing touched selects a test' : 'no touched files' };
+  if (sel.tests.length === 0) {
+    const detail = sel.emptyLane.length
+      ? `docs/no-tests: ${sel.emptyLane.length} documentation file(s); nothing touched selects a test`
+      : ctx.touched.length ? 'nothing touched selects a test' : 'no touched files';
+    return { ...base, detail };
+  }
   if (ctx.remote && sel.localTests.length) return runRemote(ctx, sel, base);
   const smallMachine = ctx.cores < SMALL_MACHINE_CORES && sel.localTests.length > 0 && (ctx.config.remote_gate || ctx.testBackend !== 'local');
   if (smallMachine) {
