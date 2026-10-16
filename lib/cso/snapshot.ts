@@ -63,7 +63,12 @@ export function snapshotManifestCapMessage(entries: number, bytes: number): stri
   return `Snapshot manifest cap exceeded: ${entries} source entries need a ${mib(bytes)} (${bytes} byte) manifest; the snapshot manifest cap is ${mib(SNAPSHOT_MANIFEST_LIMIT)}. One entry is recorded for ${COUNTED_SOURCE}. Next step: run /cso on a smaller checkout of the code you want audited, and add your entry count to ${CAPACITY_ISSUE}. No supported workaround raises this cap.`;
 }
 export function sourceCapMessage(bytes: number, files: number): string {
-  return `64 MiB source cap exceeded: ${files} source files hold about ${mib(bytes)} (${bytes} bytes); the source admission cap is ${mib(SOURCE_LIMIT)}. The full size of ${COUNTED_SOURCE} counts, including files over 1 MiB whose payloads are withheld from the audit. Next step: run /cso on a smaller checkout of the code you want audited, and add your measured size to ${CAPACITY_ISSUE}. No supported workaround raises this cap.`;
+  return `64 MiB source cap exceeded: ${files} source files hold about ${mib(bytes)} (${bytes} bytes); the source admission cap is ${mib(SOURCE_LIMIT)}. The full size of ${COUNTED_SOURCE} inside the --paths audit scope counts (the whole repository when --paths is not set), including files over 1 MiB whose payloads are withheld from the audit. Next step: rerun with --paths set to the comma-separated repo-relative directories you want audited (narrower ones if --paths is already set); snapshot-inputs coverage is then partial and the report lists every skipped path. Do not audit a hand-trimmed copy, which hides what was skipped. Add your measured size to ${CAPACITY_ISSUE}. No supported workaround raises this cap.`;
+}
+/** Transformation recorded for a source path outside the start --paths prefixes; its payload is never copied or assessed. */
+export const OUTSIDE_AUDIT_PATHS = 'withheld: outside the --paths audit scope';
+export function inAuditPaths(path: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 export function readSnapshotManifest(runDir: string): SnapshotManifest {
   return readJson(join(runDir, 'snapshot.json'), SNAPSHOT_MANIFEST_LIMIT) as SnapshotManifest;
@@ -589,6 +594,7 @@ export async function capture(
   base?: string,
   requiredAncestor?: string,
   limits: SnapshotCaptureLimits = {},
+  auditPaths?: readonly string[],
 ): Promise<SnapshotManifest> {
   repo = fs.realpathSync(repo);
   const state = fs.realpathSync(runDir),
@@ -620,6 +626,10 @@ export async function capture(
     guard();
     const list = await paths(repo, home, headCommit, admission);
     guard();
+    const unmatched = auditPaths?.find((prefix) => !list.some((path) => inAuditPaths(path, [prefix])));
+    if (unmatched !== undefined)
+      throw new CsoError('INVALID_ARGUMENT', `--paths entry matches no source file: ${unmatched}`);
+    const outsideAudit = (path: string) => auditPaths !== undefined && !inAuditPaths(path, auditPaths);
     await rejectSpecialFiles(repo, home, admission);
     guard();
     const manifest: SnapshotManifest = {
@@ -638,11 +648,13 @@ export async function capture(
       manifest.baseCommit = (await git(repo, ['rev-parse', '--verify', `${base}^{commit}`], home)).trim();
       guard();
     }
+    const gitBlobHash = (data: Buffer) =>
+      createHash(objectFormat).update(`blob ${data.length}\0`).update(data).digest('hex');
     const sourceCapError = () => {
       let measured = 0,
         files = 0;
       for (const candidate of list) {
-        if (noReadPath(candidate)) continue;
+        if (noReadPath(candidate) || outsideAudit(candidate)) continue;
         try {
           measured += fs.lstatSync(join(repo, candidate)).size;
           files++;
@@ -662,20 +674,27 @@ export async function capture(
         }
         throw error;
       } // tracked deletions are represented by absence and the diff manifest
-      // Host dependency trees aren't copied or read. Their omission is still explicit.
-      if (noReadPath(path)) {
+      // Host dependency trees and paths outside --paths aren't copied, assessed,
+      // or counted toward the source cap. Their omission is still explicit.
+      const dependency = noReadPath(path);
+      if (dependency || outsideAudit(path)) {
         const stat = fs.lstatSync(containedFile(repo, path));
         if (stat.isSymbolicLink() || !stat.isFile())
           throw new CsoError('UNSAFE_PATH', `Special source input: ${path}`);
         gitModes.set(path, stat.mode & 0o111 ? '100755' : '100644');
-        const reason = exclusion(path) ?? 'host dependency input';
+        // A comparison base must still see every out-of-scope change, so the
+        // payload is hashed for changed-path detection but never retained.
+        if (!dependency && manifest.baseCommit)
+          gitHashes.set(path, gitBlobHash(readStable(repo, path, Number.MAX_SAFE_INTEGER).data));
         entries.push({
           path,
           pathId: snapshotPathId(repo, path),
           originalHash: 'not-read',
           bytes: stat.size,
           mode: stat.mode & 0o777,
-          transformation: `excluded: ${reason}`,
+          transformation: dependency
+            ? `excluded: ${exclusion(path) ?? 'host dependency input'}`
+            : OUTSIDE_AUDIT_PATHS,
         });
         guard();
         continue;
@@ -693,10 +712,7 @@ export async function capture(
         mode,
       };
       entries.push(entry);
-      gitHashes.set(
-        path,
-        createHash(objectFormat).update(`blob ${data.length}\0`).update(data).digest('hex'),
-      );
+      gitHashes.set(path, gitBlobHash(data));
       gitModes.set(path, mode & 0o111 ? '100755' : '100644');
       if (data.length > MAX_OUTPUT) {
         entry.transformation = 'withheld: exceeds the 1 MiB redacting-reader limit';
