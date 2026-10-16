@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.102.0] - 2026-10-14
+## [1.91.106.0] - 2026-10-16
 
 **The GBRA-40 field list is fixed: install and check agree on one Bun, `rec` approves an autoplan gate in one word, and pregate never sits silent.** Eighteen Capy threads upgraded to v1.91.101.0 and reported 21 problems (`GBRA-40`, October 14). Each gstack item was reproduced with a test that failed first; the plan went through `/autoplan` (two gate revisions, Claude and GPT-6.1 Sol voices per phase) and two independent code reviews. Two items are Capy's (skills not mounted on some crew threads, Drive copies not re-synced) and are handed off, not worked around.
 
@@ -26,6 +26,51 @@
 - New CI job `quick-bun-default` runs the quick tier on `GSTACK_BUN_DEFAULT`; `test/bun-version-drift.test.ts` pins it and `free-tests` requires it.
 - New tests: `test/bun-resolve.test.ts`, `test/autoplan-checkpoint.test.ts`, `test/autoplan-pairing.test.ts` (with this run's real pairs as fixtures), `test/pregate-supervise.test.ts`, `test/pregate-remote.test.ts`; many existing suites gained regressions.
 - The ship parity union cap is 1.6488 (measured), and the Capy skill's eager budget is 2601 tokens for its new autoplan checklist.
+
+## [1.91.105.0] - 2026-10-16
+
+**The free suite stops needing its retry pass.
+The health report tells the truth.**
+
+Six of 46 main runs last week needed the free suite's serial retry pass to go green. Five test files caused it, and three shared one cause: since git 2.29, every `git commit` starts a background `git maintenance run` that creates and deletes `.git/objects/maintenance.lock` after the commit has returned, so a test that lists, watches or deletes `.git` right afterwards sees a file that is there one moment and gone the next. Those fixtures now turn auto-maintenance off, and the free runner does it for every test child as a backstop. The other two flakes were a fixed-count poll and a smoke test that called live GitHub. `gstack-timeline-read` now refuses filters it cannot apply instead of returning everything.
+
+### The numbers that matter
+
+Measured with the repo's own reproducer (`scripts/ship-measure.ts free`, flaky retry off), before on 47d639a and after on this branch. Commands and per-file counts are in the PR body.
+
+| Measurement | Before | After |
+|---|---|---|
+| The five ledger files, 16-vCPU Ubicloud VM (`bun run test:ubicloud --diagnostic`) | 197/200 reruns clean | 600/600 |
+| The three git fixtures under commit load, local runner env | 37/200 clean | 200/200 |
+| Next-version smoke test, live GitHub calls | one `gh api` per open PR, one after another (27 PRs at 1.2 s: 32.6 s, past its 30 s limit) | none (runs in about 60 ms) |
+| Weekly health: unseeded free test files | 164 (enforced check failing) | 0 |
+| Weekly health: Windows wall population | dispatch recordings on main ("n/a (0 runs)" on Oct 12) | 78 successful PR runs, 9.2 min p50 (7 days to 2026-10-15) |
+
+The headline number is the first row: three of 200 clean-tree reruns failed before, none of 600 after.
+
+### What this means for you
+
+When the free suite goes red now, it is far more likely to be your change. Read the failure, not the retry ledger.
+
+### Itemized changes
+
+#### Fixed
+
+- **If you run `gstack-timeline-read --since` or `--branch` without a value,** you get exit 2 and `--since must be a relative time like "7 days ago" (got no value); accepted: ...` (or `--branch must be a branch name (got flag '--limit')`) instead of a crash.
+- **If you pass `--since yesterday` or `--since "2 weeks"`,** you get exit 2 naming what it got, instead of your whole unfiltered history. Accepted forms: `7 days ago` (minute, hour, day, week, month), `7d` / `24h` / `2w`, and ISO dates `2026-10-01` or `2026-10-01T10:00:00Z`.
+- **If you pass an argument `gstack-timeline-read` does not know,** it exits 2 with the usage line instead of ignoring it. `--help` prints the usage line.
+
+#### Changed
+
+- **If you read the weekly test-health report,** "Free-suite and Windows wall" now measures successful Windows runs on pull requests, says so (`windows-free-tests (successful PR runs) 9.2 min (78 runs)`), and prints `no successful PR runs in window` when there are none. It used to average the dispatch-only duration recordings on main.
+- **If the health report says the duration seed is stale,** its fix line now names what the refresh needs (`UBICLOUD_API_KEY`, then `bun run test:ubicloud --record-durations`, which copies the seed back into your checkout) and tells contributors without the key to leave it to a maintainer. It no longer offers a CI recording, which does not exist.
+
+#### For contributors
+
+- The free runner appends `maintenance.auto=false` and `gc.auto=0` to every shard child's `GIT_CONFIG_*` pairs (`test/test-free-shards-git-maintenance.test.ts`). Fixtures that build their own git environment set the keys themselves; `docs/TESTING_INTERNALS.md#flake-ledger` has the rule and a recipe for reproducing a ledger entry from a CI run's `free-plan` artifact.
+- The zombie publication-lock test synchronizes on a PID line its Python parent prints after `os.waitid(..., WNOWAIT)`, and the next-version smoke test runs the real CLI against a fake `gh` that logs and checks every call.
+- `scripts/free-test-durations.json` is refreshed from a Ubicloud recording of this tree.
+- No community contributions in this release.
 
 ## [1.91.101.0] - 2026-10-13
 

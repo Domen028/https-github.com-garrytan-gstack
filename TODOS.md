@@ -88,9 +88,6 @@ Left open by the office-hours tier fix (#2801, #879, #1049, #1958, #1723, #1651 
   follows the carried `SESSION_TIER` through Phase 6 (first run gets the
   introduction, second run asks about the earlier assignment). No office-hours
   quality judge exists either. **Effort:** M. **Priority:** P2.
-- **`gstack-timeline-read --since`/`--branch` without a value** — both still
-  read an unbound `$2` under `set -u` and crash with exit 1, the class #1723
-  fixed for `--limit`. **Effort:** S. **Priority:** P3.
 
 ### P3: Oct 8 fix wave, safety hooks follow-ups (filed 2026-10-08)
 
@@ -5394,3 +5391,65 @@ skills were told is fenced.
   Guard both writes. Effort S.
 
 **Priority:** P3. **Depends on:** none.
+
+### P1–P2: fix wave 2 follow-ups (filed 2026-10-15)
+
+From the free-suite health wave (flaky-pass fixes, #3154 seed refresh). Owner
+Garry for each; revisit 2026-10-29 unless a date says otherwise.
+
+- **`gstack-next-version` fetches claimed slots one PR at a time** —
+  `GH_API_CONCURRENCY = 10` (bin/gstack-next-version:90), but its async workers
+  call `spawnSync`, so the per-PR `gh api` calls run serially: 8 stubbed PRs at
+  0.5 s each took 4160 ms instead of about 500 ms (4108 ms on a rerun), and 27
+  open PRs at about 1.2 s each pass the 30 s that callers allow, which is how the
+  old live smoke test failed. Every `/ship` slot allocation pays this. Fix:
+  async spawn with bounded overlap, verified by a delayed fake `gh`. Changing the
+  CLI selects 108 paid cases and 24 judges, so it ships as its own priced PR on
+  Garry's call. **Effort:** S. **Priority:** P1.
+- **Standing Linux duration-seed recorder** — the seed refresh in this wave
+  keeps CEO-10 green for days, not weeks: main gains about 15 free test files a
+  day against a limit of 5 unseeded, so the weekly health run goes red again
+  until a recorder lands. Design: a scheduled `free-durations-record.yml` that
+  records on the standard runner and updates one seed PR before the Monday
+  health run, or the `free-plan` job consuming the latest recording artifact once
+  #3190 (owner of `free-tests.yml`) lands. Agree the design with the owner of
+  `free-tests.yml` before 2026-10-29. **Effort:** M. **Priority:** P1.
+- **PR full-fallback and recorded spend (audit next step)** — 2026-10-15:
+  full-fallback 45.9% of PR runs, $73.52 recorded PR-lane spend per merged PR,
+  push-to-verdict p50 11.4 min (target 3–5 min). The pre-change spend baseline
+  was never recorded, so the 50% reduction verdict is unavailable
+  (docs/test-audit-2026-10.md, "Post-merge follow-up"). Next step, from the
+  audit's selection replay: touchfile mappings for `bin/`, `lib/`, `hosts/` and
+  `make-pdf/`, so a branch touching them stops selecting every case. Candidate
+  headline for the next wave. **Effort:** M. **Priority:** P1.
+- **Free flaky-pass target follow-ups (2026-10-22 and 2026-10-29)** — read
+  main's `flake-ledger-*` artifacts (`bun run test:health --since-days 7`) and
+  check the free-suite flaky-pass rate is under 5% of main runs; a file still in
+  the ledger gets a named cause or a new entry here. **Effort:** S. **Priority:** P1.
+- **`createQAFunctionalFixture` sets git auto-maintenance off itself** — its
+  repos inherit the free runner's backstop keys in CI, but a direct `bun test`
+  run still races `.git/objects/maintenance.lock` during observer setup.
+  The helper selects 22 paid cases, so this is a priced follow-up.
+  **Effort:** S. **Priority:** P2.
+- **`test:ubicloud --diagnostic` cannot give clean counts for two ledger
+  shards** — `ship-measure free` reruns set a private `HOME` under `/tmp` and
+  `GSTACK_STATE_ROOT`, so `browse/test/path-validation.test.ts` (its upload
+  fixture builds an "outside" directory under `os.userInfo().homedir`, which
+  Bun takes from `HOME`) and `browse/test/pair-agent-tunnel-eval.test.ts` (its
+  denial log follows the inherited state root, not its fake `HOME`) fail 30/30
+  in diagnostic mode while passing in the normal suite. Ledger shards that hold
+  them can never report `passed = n`. **Effort:** S. **Priority:** P2.
+- **`test/plan-seed-submission.test.ts` reads its fake CLI's events after a
+  fixed 50 ms sleep** — "actual PTY launcher carries placeholder styling into
+  owned seed submission: xterm-256color" sends `/plan-eng-review\r`, sleeps
+  50 ms and expects the `slash` event already in `events.jsonl`; under the
+  16-worker duration recording on 2026-10-15 the event had not landed
+  (`['paste', 'enter', 'end_turn']`). Wait for the CLI's own write instead of a
+  timer (docs/TESTING_INTERNALS.md#flake-ledger). **Effort:** S. **Priority:** P2.
+- **Split the free files the 2026-10-15 seed put over 60 s** —
+  `test/setup-install-registry.test.ts` (82 s), `test/host-renders-prune.test.ts`
+  (64 s) and `test/setup-codex-scope.test.ts` (60.4 s) are allowlisted with this
+  todo in `scripts/free-test-seed-allowlist.json`; `test/brain-sync.test.ts`
+  (57 s) and `test/setup-codex-scope-namespaces.test.ts` (57 s) are next. Split
+  each by describe block, rerun `bun run test:ubicloud --record-durations` and
+  delete the entries. **Effort:** S each. **Priority:** P2.

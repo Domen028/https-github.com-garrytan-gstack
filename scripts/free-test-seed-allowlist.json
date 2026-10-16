@@ -1,6 +1,9 @@
 {
   "entries": [
     {"file": "test/host-conformance.test.ts", "reason": "real ./setup per host and layout; the time is setup's own skill-linking loop, not fixture copies (shared fixture landed in W6c)"},
-    {"file": "test/shared-libs-stage-actor.test.ts", "reason": "re-runs the paid shared-libs runner body against git fixture repos per test; owned by the paid-harness value-bar review"}
+    {"file": "test/shared-libs-stage-actor.test.ts", "reason": "re-runs the paid shared-libs runner body against git fixture repos per test; owned by the paid-harness value-bar review"},
+    {"file": "test/setup-install-registry.test.ts", "reason": "82s in the 2026-10-15 recording (58s on 2026-10-04): 11 cases each run the real ./setup, gstack-relink, gstack-config and gstack-uninstall against throwaway checkouts", "todo": "split by describe block so the packer can balance it, then rerun bun run test:ubicloud --record-durations (TODOS.md, fix wave 2 follow-ups)"},
+    {"file": "test/host-renders-prune.test.ts", "reason": "64s in the 2026-10-15 recording (unseeded before): every case runs a real ./setup or the gstack-upgrade migration over host render dirs", "todo": "split by describe block so the packer can balance it, then rerun bun run test:ubicloud --record-durations (TODOS.md, fix wave 2 follow-ups)"},
+    {"file": "test/setup-codex-scope.test.ts", "reason": "60.4s in the 2026-10-15 recording (48s on 2026-10-04): Codex install scope through the real ./setup", "todo": "split by describe block so the packer can balance it, then rerun bun run test:ubicloud --record-durations (TODOS.md, fix wave 2 follow-ups)"}
   ]
 }
