@@ -82,7 +82,7 @@ For each conditional specialist that passed scope gating, check the \`gstack-spe
 - If tagged \`[GATE_CANDIDATE]\` (0 findings in 10+ dispatches): skip it. Print: "[specialist] auto-gated (0 findings in N reviews)."
 - If tagged \`[NEVER_GATE]\`: always dispatch regardless of hit rate.
 
-**Force flags:** \`--<specialist>\` (e.g. \`--state-machines\`) or \`--all-specialists\` in the prompt force-includes it.
+**Force flags:** \`--<specialist>\` (e.g. \`--simplification\`) or \`--all-specialists\` in the prompt force-includes it.
 
 Note which specialists were selected, gated, and skipped. Print the selection:
 "Dispatching N specialists: [names]. Skipped: [names] (scope not detected). Gated: [names] (0 findings in N+ reviews)."`;
