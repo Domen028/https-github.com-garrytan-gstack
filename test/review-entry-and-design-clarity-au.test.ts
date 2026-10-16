@@ -96,6 +96,21 @@ test('scoring and section dependencies are explicit while existing clean and pas
   expect(section).toContain('After Pass 7: offer the mockup update below when applicable, resolve deferred TODO proposals, reconcile approvals, then synthesize tasks and the Completion Summary.');
 });
 
+test('the design Completion Summary is its own section above the report, so the next review\'s rewrite keeps it (#3219)', () => {
+  const rendered = fs.readFileSync(path.join(root, 'plan-design-review/sections/review-sections.md'), 'utf8');
+  const summary = compact(between(rendered, '### Completion Summary', '**Overall design score:**'));
+  expect(summary).toContain('its own `## Design Review Completion Summary` section');
+  expectMentions(summary, [['above', 'terminal', 'GSTACK REVIEW REPORT']], 'summary placement');
+  expectMentions(summary, [['never', 'inside', 'regenerates everything']], 'summary placement');
+  expect(compact(rendered)).toContain('through either the next \\`## \\` heading or end of file');
+  const nextReviewRewrite = (plan: string) =>
+    plan.replace(/^## GSTACK REVIEW REPORT\n[\s\S]*?(?=^## |(?![\s\S]))/m, '') + '## GSTACK REVIEW REPORT\n| Eng Review | CLEAR |\n';
+  const report = '## GSTACK REVIEW REPORT\n| Design Review | ISSUES OPEN |\n';
+  const box = 'Pass 1  (Info Arch)  | 4/10 → 8/10 after fixes\n';
+  expect(nextReviewRewrite(`# Plan\n\n## Design Review Completion Summary\n${box}\n${report}`)).toContain(box);
+  expect(nextReviewRewrite(`# Plan\n\n${report}\n### Completion Summary\n${box}`)).not.toContain(box);
+});
+
 test('new regression and changed preamble sources select all Design and Eng owners', () => {
   for (const map of [E2E_TOUCHFILES, LLM_JUDGE_TOUCHFILES]) {
     const affected = selectTests(['plan-design-review/SKILL.md.tmpl', 'plan-eng-review/SKILL.md.tmpl'], map, []).selected;
