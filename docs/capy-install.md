@@ -49,7 +49,11 @@ git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.lo
    `SELF_UPGRADE: disabled (<variable>)`. `--check` never moves the checkout;
    behind origin it prints `gstack-capy-session: behind origin/<branch>:
    <installed> -> <remote> (<n> commits); fix: bash <skill>/scripts/install.sh
-   [--for <skill>] (fast-forwards)` and the agent runs that fix.
+   [--for <skill>] (fast-forwards)` and the agent runs that fix. Whenever the
+   session ends behind origin (`--check`, or a self-upgrade that was skipped or
+   disabled), the ok trailer also says so, because lanes relay only the
+   trailer: `behind=<n> (latest: <ver>); fix: <command>` (see the trailer
+   grammar below).
 4. When the fetch fails (offline), the bootstrapper says `remote minimum
    unknown (fetch failed)` and checks the local install only; it never claims
    the minimum, and nothing is fast-forwarded.
@@ -192,13 +196,18 @@ The last line is the trailer:
 gstack: ok 1.91.96.0 for=autoplan
 gstack: ok 1.91.96.0 for=review (requested: v1.91.90.0 (run <checkout>/bin/gstack-upgrade to move); latest: 1.91.101.0 available)
 gstack: ok 1.91.96.0 for=autoplan (pins: skipped (planning-only))
+gstack: ok 1.91.101.0 for=autoplan (behind=12 (latest: 1.91.107.0); fix: bash <skill>/scripts/install.sh --for autoplan)
 gstack: fail runtime,pins
 ```
 
 An ok trailer carries at most one parenthesised note group, `; `-separated,
 in this order: `requested: …` (an existing checkout at another revision than
-`--revision`), `pins: skipped (planning-only|no project)`, and `latest: <ver>
-available` (origin's default branch has a newer VERSION; the bootstrapper
+`--revision`), `pins: skipped (planning-only|no project)`, then either
+`behind=<n> (latest: <ver>)` followed by `fix: <command>` (the session ended
+<n> commits behind origin's default branch after a fetch that succeeded in this
+run; `bin/gstack-capy-session` exports `GSTACK_CAPY_BEHIND`, `_BEHIND_TO` and
+`_BEHIND_FIX`, so this works with every bootstrapper revision), or `latest:
+<ver> available` (origin's default branch has a newer VERSION; the bootstrapper
 exports it as `GSTACK_CAPY_REMOTE_VERSION` only after a fetch that succeeded
 in this run). A fail trailer never carries notes. Match `^gstack: ok ` or
 `^gstack: fail `; never parse past the first space after the version.
