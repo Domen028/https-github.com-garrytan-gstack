@@ -213,6 +213,11 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    PREREG_DIAGNOSTIC_UNTESTED) printf '%s' 'prereg-diagnostic-untested' ;;
+    EVAL_MODELS_INVALID) printf '%s' 'eval-models-invalid' ;;
+    EVAL_MODEL_DENIED) printf '%s' 'eval-model-denied' ;;
+    EVAL_MODEL_OLD_GENERATION) printf '%s' 'eval-model-old-generation' ;;
+    EVAL_MODEL_GENERATION_UNRESOLVED) printf '%s' 'eval-model-generation-unresolved' ;;
     *) return 1 ;;
   esac
 }

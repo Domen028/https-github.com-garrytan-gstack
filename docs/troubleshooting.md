@@ -3334,3 +3334,67 @@ unset, not in bare mode). Then re-run the review.
 
 **Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
 review — outside voice)` when the provider runs.
+
+<a id="prereg-diagnostic-untested"></a>
+### `PREREG_DIAGNOSTIC_UNTESTED`
+
+**Meaning.** `gstack-eval-plan prereg --check <file> --allow-repo-commands` ran
+the preregistration's declared summarizer (`## Diagnostics`: `summarizer:`,
+`fixture:` and one `| diagnostic | expected |` row each) on its synthetic
+fixture. Its result did not match the preregistered definitions: a count
+differed (`mismatch`), a declared diagnostic was absent (`missing`), it
+reported one nobody preregistered (`undeclared`), or the summarizer failed,
+timed out, or did not end its stdout with one JSON object of counts. Each
+`PREREG_DIAGNOSTIC:` line names one diagnostic. This is the gbrain-evals #162
+(D7) shape, where two diagnostic counts needed a post-paid amendment.
+
+**Fix.** Fix the summarizer, or correct the definition (the expected count or
+the fixture), until every line says `ok`. Then commit the freeze. The
+`PREREG_DIAGNOSTICS:` line's `sha256` binds the fixture you tested. Without
+`--allow-repo-commands`, the command lists the summarizer
+(`PREREG_COMMAND:`) and exits 3 (`REPO_COMMANDS_NOT_ALLOWED`), because the
+summarizer is a repository command.
+
+<a id="eval-models-invalid"></a>
+### `EVAL_MODELS_INVALID`
+
+**Meaning.** `.gstack/eval-models.json` could not be read or failed
+validation. Causes include JSON errors, `schema_version` other than 1, a
+missing or empty `allow`, an unknown key or scope, a glob in `families`, an id
+in two families, or a family that lists gstack's current catalog model after an
+older id. It also fires when `origin/<base>` cannot be resolved while a
+working-tree copy exists. While the rules are invalid, no arm passes.
+
+**Fix.** Correct the file as the line says (`docs/eval-models.md`) in a
+reviewed PR, or fetch the base branch. To test an unmerged edit, use
+`--models-from head`.
+
+<a id="eval-model-denied"></a>
+### `EVAL_MODEL_DENIED`
+
+**Meaning.** An arm's model matched `deny` or its scope's `deny`, matched no
+`allow` entry (unknown ids fail closed), or matched no entry of its scope's
+`allow` list. The `EVAL_MODEL:` line names the rule.
+
+**Fix.** Pick a model the rules allow for that scope. For a smoke run, pass
+`--scope smoke` (`price-gate` uses each call row's scope). To change the rule,
+edit `.gstack/eval-models.json` in a reviewed PR.
+
+<a id="eval-model-old-generation"></a>
+### `EVAL_MODEL_OLD_GENERATION`
+
+**Meaning.** The rules declare `families` (newest first), and an arm uses an id
+that is not the first one in its family.
+
+**Fix.** Use the family's newest id, which the `EVAL_MODEL:` line names. If the
+order is wrong, fix `families` in a reviewed PR.
+
+<a id="eval-model-generation-unresolved"></a>
+### `EVAL_MODEL_GENERATION_UNRESOLVED`
+
+**Meaning.** The rules declare `families`, so every arm must be its family's
+newest generation. This arm's model is in no family, so its generation cannot be
+checked, and the arm fails instead of passing unchecked.
+
+**Fix.** Add the model to its family (newest first) in
+`.gstack/eval-models.json` in a reviewed PR, or use a model a family lists.
