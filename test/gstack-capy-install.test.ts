@@ -269,6 +269,16 @@ describe('gstack-capy-install', () => {
     expect(lastLine(failed.stdout)).toBe('gstack: fail codex');
   });
 
+  test('trailer grammar: behind=<n> and its fix replace latest, after requested and pins; never on a fail trailer', () => {
+    const f = fixture();
+    const behind = { GSTACK_CAPY_BEHIND: '5', GSTACK_CAPY_BEHIND_TO: '1.2.8', GSTACK_CAPY_BEHIND_FIX: 'bash /s/install.sh --for autoplan', GSTACK_CAPY_REMOTE_VERSION: '1.2.8' };
+    expect(lastLine(run(f, [], behind).stdout)).toBe('gstack: ok 1.2.3 for=autoplan (behind=5 (latest: 1.2.8); fix: bash /s/install.sh --for autoplan)');
+    const all = run(f, ['--revision', 'v9.9.9.9'], { ...behind, STUB_PINS_SKIP: 'planning-only; repo pins differ: x' });
+    expect(all.status, all.stdout + all.stderr).toBe(0);
+    expect(lastLine(all.stdout)).toBe(`gstack: ok 1.2.3 for=autoplan (requested: v9.9.9.9 (run ${f.root}/bin/gstack-upgrade to move); pins: skipped (planning-only); behind=5 (latest: 1.2.8); fix: bash /s/install.sh --for autoplan)`);
+    expect(lastLine(run(f, [], { ...behind, STUB_DOCTOR_FAIL: '1' }).stdout)).toBe('gstack: fail codex');
+  });
+
   test('--root clones when the directory is absent and refuses a non-gstack directory', () => {
     const f = fixture();
     const clone = path.join(f.base, 'clone');
