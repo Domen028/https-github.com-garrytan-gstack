@@ -752,6 +752,7 @@ Write ${dir}/review-output.md with only the selection line, the SPECIALIST REVIE
 
 describeIfSelected('Review Army: Simplification activation', ['review-army-simplification'], () => {
   let dir: string;
+  let observations: string;
 
   beforeAll(() => {
     const repo = setupRepo('army-simplification');
@@ -769,24 +770,27 @@ describeIfSelected('Review Army: Simplification activation', ['review-army-simpl
     repo.run('git', ['add', '.']);
     repo.run('git', ['commit', '-m', 'add date utils']);
 
-    copyReviewFiles(dir);
+    observations = stageReviewArmySession(dir, `SCOPE_FRONTEND=false
+SCOPE_BACKEND=true
+SCOPE_PROMPTS=false
+SCOPE_TESTS=false
+SCOPE_DOCS=false
+SCOPE_CONFIG=false
+SCOPE_MIGRATIONS=false
+SCOPE_API=false
+SCOPE_AUTH=false`, ['simplification'], ['simplification']);
   });
 
   afterAll(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch {} });
 
   testConcurrentIfSelected('review-army-simplification', async () => {
     const result = await runSkillTest({
-      prompt: `You are in a git repo on a feature branch that adds a JS utility file.
-Read review-SKILL.md for instructions. Also read review-checklist.md.
-The specialist checklists are in review-specialists/ (testing.md, simplification.md, etc.).
+      prompt: `You are the /review parent on branch feature/date-utils, a JS utility change. The caller invoked /review --simplification.
+${reviewArmyScope(observations, 'its Step 4.6 merge')}
+Selection: --simplification force-includes the Simplification specialist; the recorded DIFF_LINES is below its size gate, so only the flag selects it. Dispatch no other specialist.
+The checklist for this capture is review-specialists/simplification.md. Instead of launching a subagent, read it and apply it yourself against the recorded diff.
 
-Skip the preamble, lake intro, telemetry sections.
-Run Step 4.5 (Review Army) only.
-The base branch is main. The diff is over 100 lines, so the Simplification specialist should activate.
-
-For the specialist dispatch, read review-specialists/simplification.md and apply it against the diff.
-
-Write your findings to ${dir}/review-output.md`,
+Write ${dir}/review-output.md with only the selection line and the SPECIALIST REVIEW block with its PR Quality Score and Simplification footer, in at most 30 lines. After saving the report, finish with a brief acknowledgement rather than repeating the findings in the final response.`,
       workingDirectory: dir,
       maxTurns: 20,
       timeout: 180_000,
