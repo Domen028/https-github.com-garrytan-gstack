@@ -10,7 +10,7 @@ import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import {
-  COMPONENT_IDS, CORE_IDS, DOCTOR_COMPONENTS, SKILL_REQUIREMENTS, renderDoctorComponentsSh,
+  COMPONENT_IDS, CORE_IDS, DOCTOR_COMPONENTS, INSTALL_PROFILES, SKILL_REQUIREMENTS, renderDoctorComponentsSh,
 } from '../lib/doctor-components';
 import { RESULT_CODES } from '../lib/result-codes';
 import { DOCTOR_COMPONENTS_RELPATH } from '../scripts/gen-doctor-components';
@@ -33,10 +33,15 @@ describe('doctor component table', () => {
     }
   });
 
-  test('every skill directory in the repo is classified, and no classified skill is missing', () => {
+  test('every skill directory in the repo is classified, and no classified skill is missing (install profiles are the only other rows)', () => {
     const skills = fs.readdirSync(ROOT).filter(d => fs.existsSync(path.join(ROOT, d, 'SKILL.md.tmpl'))).sort();
     expect(skills.length).toBeGreaterThan(40);
-    expect(Object.keys(SKILL_REQUIREMENTS).sort()).toEqual(skills);
+    expect(Object.keys(SKILL_REQUIREMENTS).filter(s => !INSTALL_PROFILES.includes(s)).sort()).toEqual(skills);
+    expect(INSTALL_PROFILES).toEqual(['review-voice']);
+    for (const profile of INSTALL_PROFILES) {
+      expect(skills, `${profile} is an install profile, not a skill`).not.toContain(profile);
+      expect(SKILL_REQUIREMENTS[profile]?.requires).toEqual(['helpers']);
+    }
   });
 
   test('the Bash render answers the same questions as the table, and refuses unknown names', () => {
