@@ -11,6 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { formatEvalCalls } from '../lib/eval-plan';
 import { lintArmModels, parseEvalModels, type ArmUse, type EvalModelRules } from '../lib/eval-models';
+import { RESULT_CODES } from '../lib/result-codes';
 import { capyHost, type CapyHost } from './helpers/capy-host';
 
 const BIN = path.resolve(import.meta.dir, '..', 'bin', 'gstack-eval-plan');
@@ -79,6 +80,20 @@ describe('parseEvalModels', () => {
     const p = parseEvalModels(JSON.stringify({ schema_version: 1, allow: ['*'], families: { 'claude-opus': ['claude-opus-5', 'claude-opus-5-5'] } }));
     expect('errors' in p && p.errors).toEqual([expect.stringMatching(/^families\.claude-opus lists claude-opus-5 before claude-opus-5-5, gstack's current anthropic smart model \(lib\/model-catalog\.ts, verified \d{4}-\d{2}-\d{2}\); list newest first$/)]);
     expect('rules' in parseEvalModels(JSON.stringify(GBRAIN_RULES))).toBe(true);
+  });
+});
+
+describe('eval-plan/SKILL.md', () => {
+  test('names only result codes the table defines and flags the bin accepts for the diagnostics run and the model rules', () => {
+    const skill = fs.readFileSync(path.resolve(import.meta.dir, '..', 'eval-plan', 'SKILL.md'), 'utf8');
+    const codes = [...new Set([...skill.matchAll(/\b(PREREG_[A-Z_]+|EVAL_MODELS?_[A-Z_]+)\b/g)].map(m => m[1]!))];
+    expect(codes).toEqual(expect.arrayContaining(['PREREG_DIAGNOSTIC_UNTESTED', 'EVAL_MODEL_DENIED', 'EVAL_MODEL_OLD_GENERATION', 'EVAL_MODEL_GENERATION_UNRESOLVED']));
+    expect(codes.filter(c => !(c in RESULT_CODES) && !['PREREG_DIAGNOSTIC', 'EVAL_MODEL'].includes(c))).toEqual([]);
+    expect(skill).toContain('prereg --check <path> --allow-repo-commands');
+    expect(skill).toContain('--scope smoke');
+    const help = spawnSync(BIN, ['--help'], { encoding: 'utf8', timeout: 30_000 }).stdout;
+    expect(help).toContain('prereg --check <file> [--allow-repo-commands]');
+    expect(help).toContain('--scope smoke|full');
   });
 });
 
