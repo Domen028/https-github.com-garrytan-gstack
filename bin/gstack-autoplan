@@ -33,7 +33,7 @@ import * as path from 'node:path';
 import { amendmentSteps, answerGate, closeDeferred, finishGate, recommendGate } from '../lib/autoplan-gate';
 import { changeBudget, liftStop } from '../lib/autoplan-budget';
 import { ANSWERED_BY_RE } from '../lib/gate-list';
-import { checkpointLines, checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
+import { checkpointLines, checkpointRun, restoreCheckpoint, type CheckpointMoment } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
 import { exportPublic } from '../lib/autoplan-public';
@@ -148,10 +148,13 @@ function mutating(out: string, json: boolean, fn: () => number): number {
   });
 }
 
+/** Set by a command whose success is a checkpoint moment beyond rest: a bound voice, a phase transition, the first next. */
+let moment: CheckpointMoment | undefined;
+
 /** A checkpoint never changes a committed command's outcome: a failure is a stderr warning, the exit code stands. */
 function checkpointQuietly(out: string): void {
   try {
-    const line = checkpointRun(out);
+    const line = checkpointRun(out, process.env, moment);
     if (line) process.stderr.write(line + '\n');
   } catch (e: any) {
     process.stderr.write(`CHECKPOINT: failed for ${out}: ${e instanceof RunError ? `${e.detail} (${e.code})` : e?.message ?? e}; the command's result stands, the previous checkpoint stays current\n`);
@@ -166,7 +169,8 @@ function emit(json: boolean, lines: string[], payload: Record<string, unknown>):
 function doNext(out: string, rest: string[], json: boolean): number {
   const cwd = process.cwd();
   const initLines: string[] = [];
-  if (!fs.existsSync(path.join(out, FILES.run))) {
+  const fresh = !fs.existsSync(path.join(out, FILES.run));
+  if (fresh) {
     const plan = flag(rest, '--plan');
     if (!plan) throw new RunError('RUN_NOT_INITIALIZED', `${out} has no run.json; pass --plan <file> on the first next`, 3);
     const ui = rest.includes('--ui') ? true : rest.includes('--no-ui') ? false : undefined;
@@ -177,6 +181,7 @@ function doNext(out: string, rest: string[], json: boolean): number {
   }
   const redispatch = rest.flatMap((a, i) => (a === '--redispatch' && rest[i + 1] ? [rest[i + 1]!] : []));
   const r = nextStep({ out, cwd, estimateUsd: num(rest, '--estimate-usd'), redispatch });
+  moment = fresh ? 'init' : r.attempts.some(a => a.new) || r.lines.some(l => l.startsWith('PHASE_DEFERRED: ')) ? 'transition' : undefined;
   const status = r.state.status;
   const lines = [...initLines, ...r.lines];
   if (status === 'gate_pending') lines.push(`GATE: gate_rev=${r.state.gate_rev} render with: gstack-gate render ${path.join(out, 'gate.json')}`);
@@ -194,6 +199,7 @@ function doSubmit(out: string, rest: string[], json: boolean): number {
   const outcome = unavailable !== undefined || failed !== undefined;
   if (outcome && (voice !== 'outside' || result || record || (unavailable !== undefined && failed !== undefined))) return usage('--unavailable|--failed "<reason>" records the outside voice only, without --result or --record');
   if (!outcome && (!!result === !!record || !model)) return usage('submit needs exactly one of --result <file> | --record <file>, and --model <id>');
+  moment = 'bound';
   const r = submitResult({ out, phase, voice, result: result ? path.resolve(result) : undefined, record: record ? path.resolve(record) : undefined, model, attempt, attest: flag(rest, '--attest'),
     unavailable, failed, runner: flag(rest, '--runner'), usageUsd: num(rest, '--usage-usd'), reconcile: flag(rest, '--reconcile'), cwd: process.cwd() });
   const status = r.state.status;
@@ -227,6 +233,7 @@ function doClose(out: string, rest: string[], json: boolean): number {
   const stopped = state.status === 'incomplete' && !!state.stop;
   if (!stopped && !['running', 'awaiting_result', 'interrupted'].includes(state.status)) throw new RunError('PHASE_NOT_AWAITING', `run is ${state.status}; close works on a running or budget-stopped run`, 3);
   const r = closeDeferred(state, phase as Phase, { reason: reason.trim(), by, cause: 'owner' });
+  moment = 'transition';
   const lines = [...r.lines, ...(stopped ? liftStop(state, `${phase} closed deferred by ${by}`) : [])];
   if (!currentPhase(state)) { finishGate(state); lines.push(`GATE: gate_rev=${state.gate_rev} render with: gstack-gate render ${path.join(out, 'gate.json')}`); }
   else { state.status = 'running'; lines.push(`NEXT: gstack-autoplan next --out ${out}`); }

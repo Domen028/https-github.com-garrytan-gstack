@@ -9,7 +9,12 @@
  * previous generation stays until the switch commits, so an interrupted
  * publish leaves the last checkpoint current. A generation never replaces a
  * newer one (higher run revision). Publication and restore hold the
- * collection's `.lock`; restore also holds `<out>.lock`.
+ * collection's `.lock`; restore also holds `<out>.lock`. Field list 2, W7:
+ * a generation is also published after each bound voice and each phase
+ * transition (so a restored run never redispatches a bound voice); on Capy
+ * with no directory set the runner prints the export line naming the private
+ * project-user Drive folder, and uses that folder only after `gstack-config
+ * set autoplan_checkpoint drive`.
  *
  * Restore picks the named generation, or the newest generation that verifies
  * when `--from` names the collection (or a root holding one run). It refuses
@@ -23,6 +28,8 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { sha256File, validateRun } from './headless-artifacts';
 import { FILES, RunError, journal, now, readState, type RunState } from './autoplan-state';
+import { repoRoot } from './autoplan-plan-text';
+import { readConfigKey } from './state-root';
 
 const MANIFEST = 'checkpoint.json';
 const CURRENT = 'current.json';
@@ -95,17 +102,47 @@ function newestRevision(collection: string): number {
   return Math.max(-1, ...fs.readdirSync(dir).map(g => { try { return Number(JSON.parse(fs.readFileSync(path.join(dir, g, MANIFEST), 'utf8')).revision); } catch { return -1; } }).filter(Number.isFinite));
 }
 
-/** Where checkpoints go: GSTACK_AUTOPLAN_CHECKPOINT_DIR, else nothing. */
-export function checkpointRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  return env.GSTACK_AUTOPLAN_CHECKPOINT_DIR || undefined;
+/**
+ * The private project-user Drive folder on a Capy machine (GSTACK_CAPY=1): `<drive>/autoplan-checkpoints` under the one
+ * `~/.capy/drive/project-user-*` folder, or the one naming `repo` when there are several; undefined otherwise.
+ */
+export function capyDriveFolder(env: NodeJS.ProcessEnv = process.env, repo?: string): string | undefined {
+  if (env.GSTACK_CAPY !== '1') return undefined;
+  const drive = path.join(env.HOME || os.homedir(), '.capy', 'drive');
+  let folders: string[];
+  try { folders = fs.readdirSync(drive).filter(d => d.startsWith('project-user-') && fs.statSync(path.join(drive, d)).isDirectory()); } catch { return undefined; }
+  if (folders.length > 1 && repo) folders = folders.filter(d => d.startsWith(`project-user-${repo}-`));
+  return folders.length === 1 ? path.join(drive, folders[0]!, 'autoplan-checkpoints') : undefined;
 }
 
-/** Publish a generation when the env opts in and the run is at rest; returns the CHECKPOINT line, or nothing. */
-export function checkpointRun(out: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const root = checkpointRoot(env);
-  if (!root || !fs.existsSync(path.join(out, FILES.run))) return undefined;
+/** Where checkpoints go: GSTACK_AUTOPLAN_CHECKPOINT_DIR, else the Capy Drive folder when `gstack-config set autoplan_checkpoint drive` opted in. */
+export function checkpointRoot(env: NodeJS.ProcessEnv = process.env, repo?: string): string | undefined {
+  if (env.GSTACK_AUTOPLAN_CHECKPOINT_DIR) return env.GSTACK_AUTOPLAN_CHECKPOINT_DIR;
+  return readConfigKey('autoplan_checkpoint', env) === 'drive' ? capyDriveFolder(env, repo) : undefined;
+}
+
+/** On Capy with no checkpoint directory: the exact line that makes the run survive machine replacement. */
+export function checkpointNotice(env: NodeJS.ProcessEnv, repo?: string): string | undefined {
+  if (env.GSTACK_CAPY !== '1') return undefined;
+  const dir = capyDriveFolder(env, repo);
+  return `CHECKPOINT: unset; to survive machine replacement: export GSTACK_AUTOPLAN_CHECKPOINT_DIR=${dir ?? '<a private project-user Drive folder>'}${dir ? ' (or for every run: gstack-config set autoplan_checkpoint drive)' : ''}`;
+}
+
+/** A checkpoint beyond the at-rest ones: after a bound voice, after a phase transition, and the notice at the first next. */
+export type CheckpointMoment = 'bound' | 'transition' | 'init';
+const repoOf = (state: RunState) => { const input = state.plan_input ?? state.plan_source; const root = input ? repoRoot(path.dirname(input)) : undefined; return root ? path.basename(root) : undefined; };
+
+/**
+ * Publish a generation when a checkpoint directory is set (or Drive opted in) and the run is at rest, or at a
+ * `moment` (a bound voice, a phase transition); returns the CHECKPOINT line, the unset notice on Capy, or nothing.
+ */
+export function checkpointRun(out: string, env: NodeJS.ProcessEnv = process.env, moment?: CheckpointMoment): string | undefined {
+  if (!fs.existsSync(path.join(out, FILES.run))) return undefined;
   const state = readState(out);
-  if (!AT_REST.includes(state.status)) return undefined;
+  const atRest = AT_REST.includes(state.status);
+  if (!atRest && !moment) return undefined;
+  const root = checkpointRoot(env, repoOf(state));
+  if (!root) return atRest || moment === 'init' ? checkpointNotice(env, repoOf(state)) : undefined;
   const collection = path.join(path.resolve(root), state.run);
   refuseOverlap('the checkpoint directory overlaps the run directory', collection, state.out);
   return exclusive(path.join(collection, '.lock'), () => {
@@ -219,6 +256,9 @@ export function restoreCheckpoint(from: string, out: string): string[] {
         lines.push(`PLAN_INPUT: ${m.plan_input.original} is missing; restored the checkpoint copy to ${path.join(target, m.plan_input.file)}`);
       } else if (m.plan_input && sha256File(m.plan_input.original) !== m.plan_input.sha256) lines.push(`PLAN_INPUT: ${m.plan_input.original} differs from the checkpoint copy; kept the file on disk`);
       const v = validateRun(runFile);
+      // A mid-run generation (after a bound voice or a transition) is unfinished by design: only its integrity must hold.
+      if (!AT_REST.includes(m.status)) v.errors = v.errors.filter(e => !['ARTIFACT_RUN_INTERRUPTED', 'ARTIFACT_REVIEWER_MISSING', 'ARTIFACT_GUARD_LINE_MISSING'].includes(e.code));
+      v.valid = v.errors.length === 0;
       if (!v.valid) throw new RunError('CHECKPOINT_INVALID', `${gen.dir}: the staged run does not validate: ${v.errors.slice(0, 3).map(e => `${e.code} ${e.path}: ${e.message}`).join('; ')}`, 3);
       if (fs.existsSync(target)) fs.rmdirSync(target);
       fs.mkdirSync(path.dirname(target), { recursive: true });

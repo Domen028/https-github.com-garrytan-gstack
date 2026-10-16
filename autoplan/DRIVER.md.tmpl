@@ -39,8 +39,10 @@ line yourself; gstack never writes the plan.
 
 - Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
   hand is not an autoplan run: do not present it as one.
-- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder so a run at rest
-  survives machine replacement; restore with `resume --out <new dir> --from <dir>/<run>`.
+- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder (or opt every run in
+  with `gstack-config set autoplan_checkpoint drive`) so a run survives machine replacement: a
+  generation is published at rest, after each bound voice and after each phase transition; restore
+  with `resume --out <new dir> --from <dir>/<run>`, which never redispatches a bound voice.
 
 ### Commands
 

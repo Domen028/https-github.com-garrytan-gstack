@@ -42,8 +42,10 @@ line yourself; gstack never writes the plan.
 
 - Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
   hand is not an autoplan run: do not present it as one.
-- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder so a run at rest
-  survives machine replacement; restore with `resume --out <new dir> --from <dir>/<run>`.
+- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder (or opt every run in
+  with `gstack-config set autoplan_checkpoint drive`) so a run survives machine replacement: a
+  generation is published at rest, after each bound voice and after each phase transition; restore
+  with `resume --out <new dir> --from <dir>/<run>`, which never redispatches a bound voice.
 
 ### Commands
 
@@ -145,6 +147,6 @@ Behavior-change notices. Every user-visible behavior change outside the plan's o
 
 Spend caps. Each lane runs under the `--spend-cap` the coordinator names; a lane that reaches it stops `incomplete` (`STOP: reason=budget_exhausted`) and reports spent, reserved and unknown charges. Paid evals are never retried to change a verdict; a rerun needs a named repair. Host-subagent spend is reported as `unknown`, never zero.
 
-Before done. A lane runs `gstack-pregate run --allow-repo-commands` on its branch and reports done only after it passes. In a repo whose `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push, because a PR tool may not run local hooks.
+Before done. A lane pushes a WIP commit to its branch after each step and gates a pushed SHA. It runs `gstack-pregate run --allow-repo-commands` on its branch and reports done only after it passes. Where `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push.
 
 Handoff format. A lane reports in this order, identifiers first: PR URL (or `no PR` with branch and SHA), `GSTACK_RESULT` line, the `gstack: ok|fail <rev>` line, the `PREGATE:` line, gate summary (lanes passed/failed/skipped), behavior changes (or `none`), spend (spent/reserved/unknown), then what it could not verify. Full thread ids (`jam_…`), never short codes, in every cross-thread message. Prose after the identifiers may be truncated; nothing before them may be.
