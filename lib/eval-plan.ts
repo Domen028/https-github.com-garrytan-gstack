@@ -17,13 +17,14 @@ import { modelsMain } from './model-policy-cli';
 import { isConfigUnavailable, loadConfigFromBase } from './pregate/config';
 import { EXCLUDED_BILLING_CATEGORIES, estimateCostUsd, hasPricing, PRICING, pricingRow } from './pricing';
 import type { ResultCodeName } from './result-codes';
+import type { ModelRulesCheck } from './eval-models';
 import { readLedger, release, reserve, settle, SpendCapExceeded, summarize, type SpendLedger, type SpendSummary } from './spend-ledger';
 
 // ---------------------------------------------------------------------------
 // preregistration
 // ---------------------------------------------------------------------------
 export const PREREG_SECTIONS = ['Bars', 'Arms', 'Decoys', 'Stop rules', 'Held-out exposure'] as const;
-export interface PreregCheck { ok: boolean; present: string[]; missing: string[]; empty: string[] }
+export interface PreregCheck { ok: boolean; present: string[]; missing: string[]; empty: string[]; diagnostics: PreregDiagnostics | null }
 
 export function preregTemplate(title = 'Eval preregistration'): string {
   return `# ${title}
@@ -42,22 +43,103 @@ export function preregTemplate(title = 'Eval preregistration'): string {
 
 ## Held-out exposure
 <!-- Every held-out set this plan touches: | set | prior exposure (which runs, which models) | reservation (what this run may read) | -->
+<!-- Optional: a \`## Diagnostics\` section declares the summarizer (\`summarizer: <command naming {fixture}>\`), its synthetic records (\`fixture: <path>\`) and one | diagnostic | expected | row per diagnostic; \`prereg --check --allow-repo-commands\` runs it. -->
 `;
 }
 
-export function checkPrereg(text: string): PreregCheck {
+/** A section's content lines (blank lines and one-line `<!-- -->` guidance dropped); null when the heading is absent. */
+function sectionBody(text: string, name: string): string[] | null {
   const lines = text.split('\n');
   const headings = lines.map((l, i) => ({ i, m: /^#{1,6}\s+(.+?)\s*$/.exec(l) })).filter(x => x.m) as Array<{ i: number; m: RegExpExecArray }>;
+  const idx = headings.findIndex(h => h.m[1]!.toLowerCase().replace(/[^a-z]/g, '') === name.toLowerCase().replace(/[^a-z]/g, ''));
+  if (idx < 0) return null;
+  const end = idx + 1 < headings.length ? headings[idx + 1]!.i : lines.length;
+  return lines.slice(headings[idx]!.i + 1, end).filter(l => l.trim() && !/^\s*<!--.*-->\s*$/.test(l));
+}
+
+export function checkPrereg(text: string): PreregCheck {
   const present: string[] = []; const missing: string[] = []; const empty: string[] = [];
   for (const name of PREREG_SECTIONS) {
-    const idx = headings.findIndex(h => h.m[1]!.toLowerCase().replace(/[^a-z]/g, '') === name.toLowerCase().replace(/[^a-z]/g, ''));
-    if (idx < 0) { missing.push(name); continue; }
-    const start = headings[idx]!.i + 1;
-    const end = idx + 1 < headings.length ? headings[idx + 1]!.i : lines.length;
-    const body = lines.slice(start, end).filter(l => l.trim() && !/^\s*<!--.*-->\s*$/.test(l));
-    if (body.length === 0) empty.push(name); else present.push(name);
+    const body = sectionBody(text, name);
+    if (body === null) missing.push(name); else if (body.length === 0) empty.push(name); else present.push(name);
   }
-  return { ok: missing.length === 0 && empty.length === 0, present, missing, empty };
+  const diagnostics = parsePreregDiagnostics(text);
+  return { ok: missing.length === 0 && empty.length === 0 && !diagnostics?.errors.length, present, missing, empty, diagnostics };
+}
+
+// ---------------------------------------------------------------------------
+// preregistered diagnostics: the declared summarizer on a declared synthetic fixture
+// ---------------------------------------------------------------------------
+/** Placeholder the summarizer command names the fixture by; it runs as "$GSTACK_PREREG_FIXTURE", never spliced into the shell text. */
+export const PREREG_FIXTURE_PLACEHOLDER = '{fixture}';
+export const PREREG_SUMMARIZER_TIMEOUT_MS = 300_000;
+export interface PreregDiagnostics { summarizer: string | null; fixture: string | null; expected: Array<{ name: string; count: number }>; errors: string[] }
+export interface DiagnosticRow { name: string; expected: number | null; got: number | null; status: 'ok' | 'mismatch' | 'missing' | 'undeclared' }
+export interface PreregDiagnosticRun { ok: boolean; command: string; fixture: string; fixture_sha256: string | null; exit: number | null; rows: DiagnosticRow[]; error: string | null }
+
+/**
+ * The optional `## Diagnostics` section: `summarizer: <command naming {fixture}>`,
+ * `fixture: <repo-relative path>` and a `| diagnostic | expected |` table with one
+ * row per preregistered diagnostic. Absent or empty: nothing declared (null).
+ */
+export function parsePreregDiagnostics(text: string): PreregDiagnostics | null {
+  const body = sectionBody(text, 'Diagnostics');
+  if (!body?.length) return null;
+  const d: PreregDiagnostics = { summarizer: null, fixture: null, expected: [], errors: [] };
+  const value = (raw: string) => raw.trim().replace(/^`(.+)`$/, '$1').trim();
+  for (const line of body) {
+    const kv = /^\s*(?:[-*]\s+)?(summarizer|fixture):\s*(.+)$/i.exec(line);
+    if (kv) { d[kv[1]!.toLowerCase() as 'summarizer' | 'fixture'] = value(kv[2]!); continue; }
+    const row = /^\s*\|(.+)\|\s*$/.exec(line);
+    if (!row || /^[\s:|-]+$/.test(row[1]!)) continue;
+    const cells = row[1]!.split('|').map(value);
+    if (cells[0]!.toLowerCase() === 'diagnostic') continue;
+    if (cells.length < 2 || !cells[0] || !/^\d+$/.test(cells[1]!)) { d.errors.push(`row ${JSON.stringify(line.trim())}: needs | <diagnostic> | <expected count, a non-negative integer> |`); continue; }
+    if (d.expected.some(e => e.name === cells[0])) { d.errors.push(`diagnostic ${cells[0]} is declared twice`); continue; }
+    d.expected.push({ name: cells[0]!, count: Number(cells[1]) });
+  }
+  if (!d.summarizer) d.errors.push('no summarizer: line (the command that summarizes the run records)');
+  else if (!d.summarizer.includes(PREREG_FIXTURE_PLACEHOLDER)) d.errors.push(`the summarizer command never names the fixture (${PREREG_FIXTURE_PLACEHOLDER})`);
+  if (!d.fixture) d.errors.push('no fixture: line (the synthetic records file the summarizer runs on)');
+  if (!d.expected.length) d.errors.push('no | diagnostic | expected | rows');
+  return d;
+}
+
+/**
+ * Run the declared summarizer on the declared fixture (a repo command: the
+ * caller gates it on --allow-repo-commands). Its last non-empty stdout line is
+ * one JSON object of diagnostic name to count; every declared diagnostic must
+ * appear with its expected count and nothing undeclared may appear.
+ */
+export function runPreregDiagnostics(d: PreregDiagnostics, repoRoot: string, env: NodeJS.ProcessEnv = process.env): PreregDiagnosticRun {
+  const command = d.summarizer!.split(PREREG_FIXTURE_PLACEHOLDER).join('"$GSTACK_PREREG_FIXTURE"');
+  const fixture = path.resolve(repoRoot, d.fixture!);
+  const run: PreregDiagnosticRun = { ok: false, command, fixture: d.fixture!, fixture_sha256: null, exit: null, rows: [], error: null };
+  if (!fs.existsSync(fixture) || !fs.statSync(fixture).isFile()) return { ...run, error: `declared fixture ${d.fixture} is not a file under ${repoRoot}` };
+  run.fixture_sha256 = createHash('sha256').update(fs.readFileSync(fixture)).digest('hex');
+  const r = spawnSync('sh', ['-c', command], { cwd: repoRoot, env: { ...env, GSTACK_PREREG_FIXTURE: fixture }, encoding: 'utf8', timeout: PREREG_SUMMARIZER_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+  run.exit = r.status;
+  if (r.status === null) return { ...run, error: r.signal ? `summarizer did not finish within ${PREREG_SUMMARIZER_TIMEOUT_MS / 1000} s (${r.signal})` : `summarizer did not start: ${r.error?.message ?? 'unknown error'}` };
+  const tail = (r.stderr ?? '').trim().split('\n').slice(-1)[0] ?? '';
+  if (r.status !== 0) return { ...run, error: `summarizer exited ${r.status}${tail ? `: ${tail}` : ''}` };
+  const last = (r.stdout ?? '').trim().split('\n').filter(l => l.trim()).slice(-1)[0] ?? '';
+  let counts: Record<string, unknown> | null = null;
+  try { const v = JSON.parse(last); counts = v && typeof v === 'object' && !Array.isArray(v) ? v : null; } catch { counts = null; }
+  if (!counts) return { ...run, error: `the summarizer's last stdout line is not a JSON object of diagnostic counts (${JSON.stringify(last.slice(0, 120))})` };
+  const bad = Object.entries(counts).filter(([, v]) => !Number.isInteger(v) || (v as number) < 0).map(([k]) => k);
+  if (bad.length) return { ...run, error: `the summarizer reported non-count values for ${bad.join(', ')}` };
+  for (const e of d.expected) {
+    const got = counts[e.name] === undefined ? null : counts[e.name] as number;
+    run.rows.push({ name: e.name, expected: e.count, got, status: got === null ? 'missing' : got === e.count ? 'ok' : 'mismatch' });
+  }
+  for (const [name, got] of Object.entries(counts)) if (!d.expected.some(e => e.name === name)) run.rows.push({ name, expected: null, got: got as number, status: 'undeclared' });
+  return { ...run, ok: run.rows.every(row => row.status === 'ok') };
+}
+
+export function renderPreregDiagnostics(run: PreregDiagnosticRun): string {
+  const rows = run.rows.map(r => `PREREG_DIAGNOSTIC: ${r.name} expected=${r.expected ?? 'undeclared'} got=${r.got ?? 'none'} ${r.status}`);
+  rows.push(`PREREG_DIAGNOSTICS: ${run.ok ? 'ok' : 'untested'} n=${run.rows.filter(r => r.status !== 'undeclared').length} fixture=${run.fixture}${run.fixture_sha256 ? ` sha256=${run.fixture_sha256.slice(0, 12)}` : ''}${run.error ? ` error=${JSON.stringify(run.error)}` : ''}`);
+  return rows.join('\n') + '\n';
 }
 
 // ---------------------------------------------------------------------------
@@ -137,10 +219,12 @@ export interface DryRunResult {
     price_table: { ok: boolean; missing: string[] }; output_budget: { ok: boolean; budget: number; floor: number }; retry_prompt: { ok: boolean; text: string | null };
     /** Present with `cap`: one call per arm (the largest row's input plus the output budget), priced, fits under the cap. */
     reservation_fits_cap?: { ok: boolean; cap: number; max_input_tokens: number; per_arm: Record<string, number | null> };
+    /** Present when the caller linted the arms against .gstack/eval-models.json (lib/eval-models.ts). */
+    model_rules?: { ok: boolean; source: string; refused: string[] };
   };
   per_item_usd: Record<string, number | null>; excluded_billing: readonly string[]; pass: boolean; stub: 'stub-model (no network, $0)';
 }
-export interface DryRunOptions { input: string; arms: string[]; fields?: string[]; outputBudget?: number; retryPrompt?: string; maxRows?: number; cap?: number }
+export interface DryRunOptions { input: string; arms: string[]; fields?: string[]; outputBudget?: number; retryPrompt?: string; maxRows?: number; cap?: number; modelRules?: ModelRulesCheck }
 
 /** Four bytes per token, the estimator every gstack admission uses. */
 export const estimateTokens = (text: string) => Math.ceil(Buffer.byteLength(text, 'utf8') / 4);
@@ -179,9 +263,10 @@ export function dryRun(o: DryRunOptions): DryRunResult {
     for (const a of o.arms) perArm[a] = hasPricing(a) ? estimateCostUsd({ input: maxInput, output: budget }, a) : null;
     checks.reservation_fits_cap = { ok: Object.values(perArm).every(v => v === null || v <= o.cap!), cap: o.cap, max_input_tokens: maxInput, per_arm: perArm };
   }
+  if (o.modelRules) checks.model_rules = { ok: o.modelRules.ok, source: o.modelRules.source, refused: o.modelRules.errors.map(e => e.message) };
   return {
     schema_version: 1, input: o.input, rows, bad_rows: bad, est_input_tokens: inputTokens, est_output_tokens: rows * budget, arms: o.arms, checks, per_item_usd: perItem,
-    excluded_billing: EXCLUDED_BILLING_CATEGORIES, pass: rows > 0 && bad.length === 0 && checks.price_table.ok && checks.output_budget.ok && checks.retry_prompt.ok && (checks.reservation_fits_cap?.ok ?? true), stub: 'stub-model (no network, $0)',
+    excluded_billing: EXCLUDED_BILLING_CATEGORIES, pass: rows > 0 && bad.length === 0 && checks.price_table.ok && checks.output_budget.ok && checks.retry_prompt.ok && (checks.reservation_fits_cap?.ok ?? true) && (checks.model_rules?.ok ?? true), stub: 'stub-model (no network, $0)',
   };
 }
 
@@ -193,6 +278,7 @@ export function renderDryRun(r: DryRunResult): string {
     `CHECK: output-budget ${r.checks.output_budget.ok ? 'ok' : 'too small'} (${r.checks.output_budget.budget} tokens; reasoning floor ${r.checks.output_budget.floor})`,
     `CHECK: retry-prompt ${r.checks.retry_prompt.ok ? `ok — ${JSON.stringify(r.checks.retry_prompt.text)}` : 'missing (pass --retry-prompt <file> with the exact text the run will send)'}`,
     ...(r.checks.reservation_fits_cap ? [renderReservationCheck(r.checks.reservation_fits_cap, r.checks.output_budget.budget)] : []),
+    ...(r.checks.model_rules ? [`CHECK: model-rules ${r.checks.model_rules.ok ? 'ok' : `refused ${r.checks.model_rules.refused.join('; ') || 'invalid rules'}`} (source ${r.checks.model_rules.source})`] : []),
     ...Object.entries(r.per_item_usd).map(([m, usd]) => `ESTIMATE: ${m} per_item=${usd === null ? 'unknown (no price)' : `$${usd.toFixed(4)}`} (estimate: excludes ${r.excluded_billing.length} billing categories, see lib/pricing.ts)`),
     `DRY_RUN_RESULT: ${r.pass ? 'pass' : 'fail'}`,
   ];

@@ -656,6 +656,33 @@ export const RESULT_CODES = {
     summary: 'a plan review ran without its second opinion: the outside provider did not run or failed, and the bounded native Plan reviewer was not offered or did not finish within five minutes',
     fix: 'repair the provider the line names (install it, or log in with `codex login`); for the native fallback use Claude Code 2.1.277 or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` unset), then re-run the review',
   },
+  // Field list 2 (2026-10-16), W8: preregistered diagnostics run before the freeze commit.
+  PREREG_DIAGNOSTIC_UNTESTED: {
+    anchor: 'prereg-diagnostic-untested',
+    summary: 'the declared summarizer, run on the declared synthetic fixture, did not report every preregistered diagnostic at its expected count',
+    fix: 'fix the summarizer or the declared definition (expected count, fixture) until every PREREG_DIAGNOSTIC line says ok, then commit the freeze; never freeze a diagnostic the summarizer has not counted',
+  },
+  // Field list 2 (2026-10-16), W9: .gstack/eval-models.json.
+  EVAL_MODELS_INVALID: {
+    anchor: 'eval-models-invalid',
+    summary: 'the eval model rules (.gstack/eval-models.json) are unreadable or invalid, so no arm can be checked',
+    fix: 'fix what the line names (docs/eval-models.md: schema_version 1, a non-empty allow, optional deny, scopes and families newest first), or fetch the base branch; no arm passes until the rules parse',
+  },
+  EVAL_MODEL_DENIED: {
+    anchor: 'eval-model-denied',
+    summary: 'an arm names a model the eval model rules deny, or one no allow entry covers for its scope',
+    fix: 'pick a model the rules allow for that scope (the EVAL_MODEL line names the rule), or change .gstack/eval-models.json in a reviewed PR',
+  },
+  EVAL_MODEL_OLD_GENERATION: {
+    anchor: 'eval-model-old-generation',
+    summary: 'an arm names an older generation of a model family the eval model rules order newest first',
+    fix: 'use the newest id of the family the EVAL_MODEL line names, or reorder families in .gstack/eval-models.json in a reviewed PR',
+  },
+  EVAL_MODEL_GENERATION_UNRESOLVED: {
+    anchor: 'eval-model-generation-unresolved',
+    summary: 'the eval model rules declare families (newest generation only) and an arm names a model in none of them, so its generation cannot be checked',
+    fix: 'add the model to its family in .gstack/eval-models.json (newest first) in a reviewed PR, or pick a model a family lists',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;
