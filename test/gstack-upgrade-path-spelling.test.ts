@@ -27,7 +27,7 @@ const write = (file: string, text: string, mode = 0o644) => {
 };
 
 /** PATH entries that make this host look like Git Bash: MINGW uname, a cygpath mapping /x to C:/msys64/x, and a git whose --show-toplevel answers the native spelling. */
-function msysShim(base: string): string {
+function msysShim(base: string, realPath: string): string {
   const shim = path.join(base, 'msys-shim');
   write(path.join(shim, 'uname'), '#!/usr/bin/env bash\necho MINGW64_NT-10.0\n', 0o755);
   write(path.join(shim, 'cygpath'), [
@@ -41,6 +41,7 @@ function msysShim(base: string): string {
   ].join('\n') + '\n', 0o755);
   write(path.join(shim, 'git'), [
     '#!/usr/bin/env bash',
+    `export PATH='${realPath}'`,
     'case " $* " in',
     `  *" rev-parse --show-toplevel "*) out=$('${REAL_GIT}' "$@") || exit $?; printf 'C:/msys64%s\\n' "$out" ;;`,
     `  *) exec '${REAL_GIT}' "$@" ;;`,
@@ -78,7 +79,7 @@ function fixture(sub = '') {
   write(path.join(seed, sub, 'VERSION'), '1.0.1\n');
   git(['commit', '-qam', 'B'], seed);
   git(['push', '-q', bare, 'main'], seed);
-  const env = { ...host.env, PATH: `${msysShim(host.base)}${path.delimiter}${host.env.PATH}` };
+  const env = { ...host.env, PATH: `${msysShim(host.base, host.env.PATH)}${path.delimiter}${host.env.PATH}` };
   const check = () => spawnSync('bash', [path.join(clone, sub, 'bin/gstack-upgrade'), '--check'], { cwd: host.home, encoding: 'utf8', env, timeout: 60_000 });
   return { check, head: () => git(['rev-parse', 'HEAD'], clone) };
 }
