@@ -39,6 +39,10 @@ line yourself; gstack never writes the plan.
 
 - Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
   hand is not an autoplan run: do not present it as one.
+- Every prompt ends with a `GSTACK TRAILER` block: the reviewer runs the `--for review-voice`
+  install on its own machine (no ./setup, no skills; seconds when warm) and starts its reply
+  with the `gstack:` line. Never tell a reviewer that no install is needed; relay each
+  reviewer's line with its result, and treat a missing line as `gstack: fail not-installed`.
 - Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder (or opt every run in
   with `gstack-config set autoplan_checkpoint drive`) so a run survives machine replacement: a
   generation is published at rest, after each bound voice and after each phase transition; restore

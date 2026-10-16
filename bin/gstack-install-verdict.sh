@@ -23,7 +23,9 @@
 # checkout or HEAD, or narrower than the workflow (a component it needs, or a
 # planning-only pins SKIP for a workflow that runs the repo's tests), when a
 # workflow that runs the repo's tests starts in a project the verdict did not
-# check, and when the Bun running is not the one the verdict recorded. Other
+# check, and when the Bun running is not the one the verdict recorded. A
+# verdict for an install profile (for=review-voice) refuses every workflow with
+# the full-install --for <skill> command. Other
 # spawned sessions (ambient OpenClaw) only warn. GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1
 # admits anyway and says so.
 
@@ -146,6 +148,10 @@ gstack_install_admission() {
         for id in $(gstack_doctor_skill_requires "$skill" 2>/dev/null); do
           case " $(gstack_install_verdict_field "$file" required) " in *" $id "*) ;; *) detail="the install verdict certified for=$(gstack_install_verdict_field "$file" for), which does not cover $id that $skill needs"; break ;; esac
         done
+        if [ -n "$detail" ] && gstack_doctor_install_profile "$(gstack_install_verdict_field "$file" for)"; then
+          detail="$detail ($(gstack_install_verdict_field "$file" for) certifies only the read-only helpers)"
+          fix="run GSTACK_CAPY_ROOT=$src bash $src/capy/skill/gstack/scripts/install.sh --for $skill (the full install: ./setup and host profiles), then launch with the GSTACK_LAUNCH line it prints"
+        fi
       fi
       v_bun=$(gstack_install_verdict_field "$file" bun_path)
       if [ -z "$detail" ] && [ -n "$v_bun" ]; then
