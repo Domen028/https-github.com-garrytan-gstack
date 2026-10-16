@@ -15,7 +15,9 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { SHIP_QUEUE_KEYS_VERSION } from '../lib/ship-policy';
+import { receiptDigest } from '../lib/ship-queue';
 import { applyStampPatch } from '../lib/ship-queue-gate';
+import type { TreeReceipt } from '../lib/tree-receipt';
 import { BASE_POLICY, BIN, cleanup, makeFixtureRepo, makePr, mergeMain, mergeToMain, restamp, runBin, type FixtureRepo } from './helpers/restamp-fixture';
 import { coordinatorClone, ghQueueShim } from './helpers/ship-queue-fixture';
 
@@ -279,4 +281,21 @@ describe('ready', () => {
     fs.appendFileSync(path.join(repo.work, 'pr-a.txt'), 'dirty\n');
     expect(queue(repo, ['ready', '--pr', '1'], shim(moved, green)).err).toMatch(/uncommitted tracked changes: pr-a\.txt.*\(QUEUE_NOT_READY\)/);
   }, 180_000);
+});
+
+describe('receipt digest', () => {
+  const receipt = (files: Array<{ path: string; rule: string; verdict: string }>, extra: Partial<TreeReceipt> = {}) => ({
+    gated_tree: 'a'.repeat(40), current_tree: 'b'.repeat(40), old_version: '1.2.3.0', new_version: '1.2.4.0',
+    files, tree: 'same-modulo-stamps', stamp_diff: '-1.2.3.0\n+1.2.4.0', ...extra,
+  }) as unknown as TreeReceipt;
+  const files = [{ path: 'VERSION', rule: 'version', verdict: 'stamp-only' }, { path: 'CHANGELOG.md', rule: 'changelog', verdict: 'stamp-only' }];
+
+  test('binds the proof fields and ignores file order, so verify compares the same receipt from any clone', () => {
+    const d = receiptDigest(receipt(files));
+    expect(d).toMatch(/^[0-9a-f]{64}$/);
+    expect(receiptDigest(receipt([...files].reverse()))).toBe(d);
+    expect(receiptDigest(receipt([files[0], { ...files[1], verdict: 'changed' }]))).not.toBe(d);
+    expect(receiptDigest(receipt(files, { current_tree: 'c'.repeat(40) }))).not.toBe(d);
+    expect(receiptDigest(receipt(files, { new_version: '1.2.5.0' }))).not.toBe(d);
+  });
 });
