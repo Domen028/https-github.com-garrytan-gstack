@@ -35,7 +35,8 @@ export interface DecisionRow {
   schema_version: 1; run: string; id: string; title: string; options: string[]; recommended: string | null;
   kind: DecisionKind; status: DecisionStatus; gate_rev: number; label?: string; phase?: string;
   default_if_unanswered?: string | null; chosen?: string | null; answered_at?: string; reply?: string;
-  source?: string; cost?: string;
+  /** Who answered: `human` or `agent:<id>` (required in unattended runs). */
+  answered_by?: string; source?: string; cost?: string;
   /** Why the recommendation (gate items built by gstack-autoplan), what a user challenge changes, and the carry-forward identity. */
   recommended_basis?: string; changes?: string; origin?: string; carried_from?: string; chosen_text?: string;
 }

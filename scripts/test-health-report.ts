@@ -138,7 +138,7 @@ export function flakeCheck(window: FlakeWindow | Error): Check {
 
 export function unseededCheck(root: string): Check {
   const base = { id: 'unseeded-free-files', title: 'Free test files missing from the duration seed (CEO-10)',
-    fix: 'Refresh the seed: `bun run test:ubicloud --record-durations` (or a CI recording; a 4-core laptop recording is not acceptable), then commit scripts/free-test-durations.json (docs/TESTING_INTERNALS.md#free-suite-duration-seed).' };
+    fix: 'Refresh the seed with UBICLOUD_API_KEY set: `bun run test:ubicloud --record-durations` times every free file on a CI-mirrored VM and copies scripts/free-test-durations.json back into this checkout; commit it (docs/TESTING_INTERNALS.md#free-suite-duration-seed). Without UBICLOUD_API_KEY, leave the refresh to a maintainer: a 4-core laptop or sandbox recording skips or slows browser and display tests, so it is not accepted.' };
   const durations = loadFreeTestDurations(root);
   if (!durations) return { ...base, status: 'unavailable', detail: 'unavailable: scripts/free-test-durations.json is missing or unreadable; next: refresh the seed' };
   const unseeded = unseededFreeFiles(collectFreeTestFiles(root), durations);
@@ -243,12 +243,13 @@ export function collectHealth(inputs: HealthInputs): HealthReport {
       detail: window.files.slice(0, 15).map(file => `${file.file}: ${file.flakyRuns}/${window.runs} runs (${pct(file.rate)})${file.failing ? ' FAIL > 5%' : ''}`) };
   }));
 
-  metrics.push(metric('free-wall', 'Free-suite and Windows wall', 'p50 of run_started_at to updated_at for successful main runs of free-tests.yml and windows-free-tests.yml', () => {
-    const wall = (workflow: string) => {
-      const walls = listWorkflowRuns(client, repo, workflow, { since, branch: 'main' }).filter(run => run.conclusion === 'success').map(run => span(run.startedAt, run.updatedAt)!);
-      return `${minutes(percentile(walls, 0.5))} (${walls.length} runs)`;
-    };
-    return { value: `free-tests ${wall('free-tests.yml')}; windows-free-tests ${wall('windows-free-tests.yml')}` };
+  metrics.push(metric('free-wall', 'Free-suite and Windows wall', 'p50 of run_started_at to updated_at for successful main runs of free-tests.yml and successful pull_request runs of windows-free-tests.yml (its workflow_dispatch duration recordings excluded)', () => {
+    const walls = (workflow: string, filter: { branch?: string; event?: string }) =>
+      listWorkflowRuns(client, repo, workflow, { since, ...filter }).filter(run => run.conclusion === 'success').map(run => span(run.startedAt, run.updatedAt)!);
+    const free = walls('free-tests.yml', { branch: 'main' });
+    const windows = walls('windows-free-tests.yml', { event: 'pull_request' });
+    const windowsValue = windows.length ? `${minutes(percentile(windows, 0.5))} (${windows.length} runs)` : 'no successful PR runs in window';
+    return { value: `free-tests ${minutes(percentile(free, 0.5))} (${free.length} runs); windows-free-tests (successful PR runs) ${windowsValue}` };
   }));
 
   metrics.push(metric('free-serial', 'Free-suite serial time', 'sum of scripts/free-test-durations.json (the committed seed)', () => {

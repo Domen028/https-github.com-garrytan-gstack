@@ -150,7 +150,7 @@ describe('drift hints', () => {
   test('answer prints PLAN_SOURCE_CHANGED when a reply reopens phases after the source plan changed', () => {
     const s = gated();
     fs.writeFileSync(s.plan, V2);
-    const res = r.ap(['answer', '--out', s.out, '--gate-rev', '1', '--reply', 'all except p1d']);
+    const res = r.ap(['answer', '--by', 'human', '--out', s.out, '--gate-rev', '1', '--reply', 'all except p1d']);
     expect(res.stdout).toMatch(/^REOPENED: ceo,eng \(Eng last\)/m);
     expect(res.stdout).toMatch(/^PLAN_SOURCE_CHANGED: .* differs from the reviewed plan; run gstack-autoplan revise --out \S+ --plan \S+$/m);
   });

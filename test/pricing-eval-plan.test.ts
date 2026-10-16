@@ -448,4 +448,13 @@ describe('pricing rows with fetched sources (2026-10-12)', () => {
     expect(estimateCostUsd({ input: 1_000_000, output: 0 }, 'voyage:voyage-4')).toBe(0.06);
     expect(hasPricing('voyage-4-nano')).toBe(false);
   });
+
+  test('every model in a gbrain `eval longmemeval --call-plan` file is priced: dated Claude snapshots, the judge and the reranker', () => {
+    expect(pricingRow('anthropic:claude-haiku-4-5-20251001')).toBe(PRICING['claude-haiku-4-5']);
+    expect(estimateCostUsd({ input: 1_000_000, output: 1_000_000 }, 'openai:gpt-4o')).toBe(12.5);
+    expect(hasPricing('gpt-4o-2024-05-13')).toBe(false);
+    expect(estimateCostUsd({ input: 1_000_000, output: 0 }, 'voyage:rerank-2.5')).toBe(0.05);
+    expect(estimateCostUsd({ input: 1_000_000, output: 0 }, 'rerank-2.5-lite')).toBe(0.02);
+    expect(hasPricing('claude-haiku-4-5-2025100')).toBe(false);
+  });
 });

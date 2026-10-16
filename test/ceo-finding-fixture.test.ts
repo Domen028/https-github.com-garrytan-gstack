@@ -384,7 +384,7 @@ describe('CEO finding fixture establishes scope before launch', () => {
       expect(fs.readFileSync(path.join(cwd, 'CLAUDE.md'), 'utf8')).toContain('Read it before\nchoosing review scope');
       fs.writeFileSync(path.join(state, 'config.yaml'), 'update_check: false\nrouting_declined: false\n');
       const output = execFileSync(path.join(ROOT, 'bin', 'gstack-skill-start'), ['--skill', 'plan-ceo-review'], {
-        cwd, env: { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: state }, encoding: 'utf8', timeout: 10_000,
+        cwd, env: { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: state, GSTACK_LEASE_DIR: path.join(state, 'gstack-leases') }, encoding: 'utf8', timeout: 10_000,
       });
       expect(output).toContain('HAS_ROUTING: yes');
       expect(output).not.toContain('GSTACK_INSTRUCTION_BEGIN: routing-injection');

@@ -5,7 +5,7 @@ Three layers, each owned by gstack:
 | Layer | Where | Job |
 |---|---|---|
 | Bootstrapper | `capy/skill/gstack/scripts/install.sh` (copied once into the owner's Drive skill folder; frozen) | clone when absent; fetch origin's default branch and read the supported minimum from `FETCH_HEAD:capy/support.env`; in install mode fast-forward a clean, unpinned checkout below it; exec the full wrapper |
-| Full wrapper | `bin/gstack-capy-session` (moves with the checkout) | map the session start onto the installer: `--check` certifies, otherwise install or repair |
+| Full wrapper | `bin/gstack-capy-session` (moves with the checkout) | map the session start onto the installer: `--check` certifies (and reports a checkout behind origin), otherwise fast-forward a checkout behind origin (`bin/gstack-upgrade --ff-only-no-reinstall`), then install or repair |
 | Installer | `bin/gstack-capy-install` | Bun, both host profiles, the doctor, the install verdict, the launch line, the trailer |
 
 The vendored skill (`capy/skill/gstack/SKILL.md`) tells a Capy agent how to use
@@ -36,9 +36,23 @@ git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.lo
    checkout is never moved; the trailer names the cause and the exact commands
    ([REVISION_BELOW_MINIMUM](troubleshooting.md#revision-below-minimum)).
    `GSTACK_CAPY_AUTO_UPGRADE=0` disables the fast-forward.
-3. When the fetch fails (offline), the bootstrapper says `remote minimum
+3. The minimum is the floor, not the trigger. Above it, a checkout behind
+   origin's default branch still moves at install-mode session start: the
+   full wrapper runs `bin/gstack-upgrade --ff-only-no-reinstall` (every
+   refusal of `gstack-upgrade` applies), prints `SELF_UPGRADE: done <old> ->
+   <new>` and re-execs the new checkout's wrapper, which installs from the
+   new revision (`GSTACK_CAPY_UPGRADED_FROM` set, so setup is never skipped).
+   A refusal prints `SELF_UPGRADE: skipped (<reason>)` and the session
+   continues on the installed revision; the trailer stays the doctor's.
+   `SELF_UPGRADE: none (current)` when nothing is ahead;
+   `GSTACK_CAPY_SELF_UPGRADE=off` (or `GSTACK_CAPY_AUTO_UPGRADE=0`) prints
+   `SELF_UPGRADE: disabled (<variable>)`. `--check` never moves the checkout;
+   behind origin it prints `gstack-capy-session: behind origin/<branch>:
+   <installed> -> <remote> (<n> commits); fix: bash <skill>/scripts/install.sh
+   [--for <skill>] (fast-forwards)` and the agent runs that fix.
+4. When the fetch fails (offline), the bootstrapper says `remote minimum
    unknown (fetch failed)` and checks the local install only; it never claims
-   the minimum.
+   the minimum, and nothing is fast-forwarded.
 
 The upgrade target is always the tip of the default branch: every commit there
 is a stamped release that passed CI. Recovery runs forward, never back: an
@@ -54,6 +68,14 @@ and reinstalls (`bin/gstack-capy-install` on a Capy install, else `./setup
 --refresh-registered`). It refuses a dirty, diverged or pinned checkout with
 [UPGRADE_REFUSED](troubleshooting.md#upgrade-refused) and never stashes or
 resets.
+
+Several agents sharing one checkout (eight Capy subagents on a machine) hold
+workflow leases on it: every `bin/gstack-skill-start` touches
+`<git dir>/gstack-leases/<harness pid>` (`bin/gstack-lease touch`; pruned after
+120 minutes). `bin/gstack-upgrade`, and so the session-start self-upgrade,
+refuses with [UPGRADE_BUSY](troubleshooting.md#upgrade-busy) while a lease
+whose pid is alive and outside its own process chain exists;
+`bin/gstack-lease list` shows them and `GSTACK_UPGRADE_FORCE=1` overrides.
 
 ## What the installer does
 
@@ -194,7 +216,7 @@ git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.lo
 
 and snapshots capture `$HOME` (the checkout, `~/.bun/bin`, both host
 profiles). Each session then pays only the `--check`. A baked revision still
-moves forward at session start when it falls below the supported minimum, and
+moves forward at install-mode session start whenever it is behind origin, and
 the baked `~/.bun/bin` reaches workflows through the `GSTACK_LAUNCH` line. The
 project Setup is shared by every thread in the project, so changing it is the
 project's decision.
@@ -203,8 +225,10 @@ project's decision.
 
 `capy/support.env` holds `GSTACK_MIN_REVISION` and `GSTACK_CAPY_MIN_WRAPPER`.
 Raise `GSTACK_MIN_REVISION` only for install-honesty or security fixes, at
-stamp time, to the VERSION being released: every machine below it is
-fast-forwarded at its next session start. It never exceeds VERSION
+stamp time, to the VERSION being released: it is the floor below which the
+trailer fails and the bootstrapper itself fast-forwards (a checkout above it
+that is behind origin is fast-forwarded by the checkout's own wrapper, so the
+floor is not what keeps machines current). It never exceeds VERSION
 (test/capy-skill-wrapper.test.ts). Raise `GSTACK_CAPY_MIN_WRAPPER` together with
 `GSTACK_CAPY_WRAPPER` in the bootstrapper when the bootstrapper itself
 changes; older Drive copies keep working and print an owner action

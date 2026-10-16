@@ -45,10 +45,11 @@ function fixture(opts: { playwright?: boolean } = {}) {
       '} };',
     ].join('\n'));
   }
-  // `bunx playwright install chromium` "installs" by writing the marker and logging its argv.
-  write(path.join(stub, 'bunx'), `#!/usr/bin/env bash\necho "$*" >> "${base}/bunx-calls"\ncase "$*" in *"playwright install"*) touch "${marker}" ;; *) exit 9 ;; esac\n`, 0o755);
-  write(path.join(stub, 'bun'), '#!/usr/bin/env bash\n[ "$1" = --version ] && { echo 1.4.2; exit 0; }\nexit 0\n', 0o755);
-  const env: Record<string, string> = { PATH: `${stub}${path.delimiter}${process.env.PATH ?? ''}`, HOME: base, TMPDIR: base, GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: '20' };
+  // A winget-shaped Bun (#3131): `bun` and no `bunx` anywhere on PATH. `bun x playwright install chromium`
+  // "installs" by writing the marker and logging its argv.
+  write(path.join(stub, 'bun'), `#!/usr/bin/env bash\n[ "$1" = --version ] && { echo 1.4.2; exit 0; }\n[ "$1" = x ] || exit 0\nshift\necho "$*" >> "${base}/bunx-calls"\ncase "$*" in *"playwright install"*) touch "${marker}" ;; *) exit 9 ;; esac\n`, 0o755);
+  const rest = (process.env.PATH ?? '').split(path.delimiter).filter((d) => d && !fs.existsSync(path.join(d, 'bunx')));
+  const env: Record<string, string> = { PATH: [stub, ...rest].join(path.delimiter), HOME: base, TMPDIR: base, GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT: '20' };
   const run = (args: string[] = [], extra: Record<string, string> = {}) =>
     spawnSync('bash', [path.join(root, 'bin/gstack-browser-ensure'), ...args], { encoding: 'utf8', env: { ...env, ...extra }, timeout: 60_000 });
   return { base, root, marker, run, calls: () => fs.existsSync(path.join(base, 'bunx-calls')) ? fs.readFileSync(path.join(base, 'bunx-calls'), 'utf8') : '' };
@@ -104,14 +105,34 @@ describe('gstack-browser-ensure', () => {
 
   test('an installer failure is BROWSER_UNAVAILABLE with the exit code; usage errors exit 2; --help exits 0', () => {
     const f = fixture();
-    fs.writeFileSync(path.join(f.base, 'stub/bunx'), '#!/usr/bin/env bash\nexit 7\n');
+    fs.writeFileSync(path.join(f.base, 'stub/bun'), '#!/usr/bin/env bash\nexit 7\n');
     const r = f.run();
     expect(r.status).toBe(1);
-    expect(lastLine(r.stdout)).toBe('BROWSER_UNAVAILABLE bunx playwright install chromium exited 7 (offline, proxy, or blocked download?)');
+    expect(lastLine(r.stdout)).toBe(`BROWSER_UNAVAILABLE ${path.join(f.base, 'stub/bun')} x playwright install chromium exited 7 (offline, proxy, or blocked download?)`);
     expect(f.run(['--bogus']).status).toBe(2);
     const help = f.run(['--help']);
     expect(help.status).toBe(0);
     expect(help.stdout).toContain('--check');
+  });
+});
+
+describe('gstack-browser-ensure with a winget-shaped Bun (#3131)', () => {
+  test('the install runs as `bun x` when no bunx exists, then re-probes to BROWSER_OK', () => {
+    const f = fixture();
+    const r = f.run();
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(lastLine(r.stdout)).toBe('BROWSER_OK node 141.0.7390.37');
+    expect(f.calls().trim()).toBe('playwright install chromium');
+  });
+
+  test('exit 127 names the resolved bun and Bun from bun.sh, not the network', () => {
+    const f = fixture();
+    fs.writeFileSync(path.join(f.base, 'stub/bun'), '#!/usr/bin/env bash\nexit 127\n');
+    const r = f.run();
+    expect(r.status).toBe(1);
+    expect(lastLine(r.stdout)).toBe(`BROWSER_UNAVAILABLE ${path.join(f.base, 'stub/bun')} x playwright install chromium exited 127 (command not found)`);
+    expect(r.stderr).toContain('fix: install Bun from bun.sh (winget Bun ships no bunx), then re-run');
+    expect(r.stderr).not.toContain('Playwright CDN');
   });
 });
 

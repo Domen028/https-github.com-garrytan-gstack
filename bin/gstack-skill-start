@@ -52,22 +52,14 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$SKILL_NAME" ] || SKILL_NAME="unknown"
 
-# Harness pid: walk up from the calling shell past shell wrappers. Claude
-# Code runs this under a per-call `bash -c`, whose parent is the harness; a
-# host that execs the command directly is already the parent. Without a
-# usable ps (some Windows shells) the immediate parent stands.
+# Harness pid: walk up from the calling shell past shell wrappers
+# (bin/gstack-harness-pid.sh, shared with bin/gstack-lease so the install
+# lease and the session marker name the same pid). Without the helper the
+# immediate parent stands.
+# shellcheck source=bin/gstack-harness-pid.sh
+. "$(dirname "$0")/gstack-harness-pid.sh" 2>/dev/null || gstack_harness_pid() { printf '%s\n' "$1"; }
 if [ -z "$PARENT_PID" ]; then
-  PARENT_PID="$PPID"
-  _hops=0
-  while [ "$_hops" -lt 8 ]; do
-    _comm=$(ps -o comm= -p "$PARENT_PID" 2>/dev/null | head -1) || break
-    _comm=${_comm##*/}; _comm=${_comm#-}
-    case "$_comm" in bash|sh|zsh|dash|ksh|mksh|ash|fish|busybox) ;; *) break ;; esac
-    _up=$(ps -o ppid= -p "$PARENT_PID" 2>/dev/null | tr -d ' ')
-    case "$_up" in ''|*[!0-9]*|0|1) break ;; esac
-    PARENT_PID="$_up"
-    _hops=$((_hops + 1))
-  done
+  PARENT_PID=$(gstack_harness_pid "$PPID")
 fi
 
 _SCRIPT_DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd)
@@ -127,6 +119,9 @@ fi
 mkdir -p "$_GH/sessions" 2>/dev/null || true
 touch "$_GH/sessions/$PARENT_PID" 2>/dev/null || true
 find "$_GH/sessions" -mmin +120 -type f -exec rm {} + 2>/dev/null || true
+# The install-scoped twin (bin/gstack-lease): what bin/gstack-upgrade reads
+# before moving a checkout other sessions share. Fail-open.
+"$_BIN/gstack-lease" touch --pid "$PARENT_PID" >/dev/null 2>&1 || true
 _SESSIONS=$(find "$_GH/sessions" -mmin -120 -type f 2>/dev/null | wc -l | tr -d ' ')
 
 _PROACTIVE=$("$_BIN/gstack-config" get proactive 2>/dev/null || echo "true")

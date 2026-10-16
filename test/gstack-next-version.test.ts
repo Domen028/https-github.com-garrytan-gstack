@@ -932,35 +932,90 @@ describe("width pinned on failed base read (3-digit repos)", () => {
 
 describe("integration (smoke)", () => {
   const SMOKE_SCRIPT = join(import.meta.dir, "..", "bin", "gstack-next-version");
-  // Bumps timeout to 30s — the test spawns a real `bun run` subprocess that
-  // does a `gh pr list` against the live GitHub API to inspect claimed slots.
-  // Network latency makes 5s tight on developer machines.
+  const FAKE_OWNER = "fixture-owner";
+  const CLAIM = { pr: 41, branch: "fixture/claim", version: "1.6.4.0", url: "https://github.com/fixture-owner/repo/pull/41" };
+  // A named fake `gh` first on PATH answers every call the CLI makes in this
+  // checkout and logs each argv; anything else exits 2 so a fixture gap cannot
+  // silently change the path. The live GitHub API is never called.
+  function fakeGh(dir: string): { calls: () => string[][]; glabCalls: () => string } {
+    const log = join(dir, "gh-calls.log");
+    const glabLog = join(dir, "glab-calls.log");
+    const prList = JSON.stringify([{ number: CLAIM.pr, headRefName: CLAIM.branch, headRepositoryOwner: { login: FAKE_OWNER }, url: CLAIM.url, isDraft: false }]);
+    const content = Buffer.from(`${CLAIM.version}\n`).toString("base64");
+    writeFileSync(join(dir, "gh"), [
+      "#!/bin/sh",
+      `printf '%s\\037' "$@" >> '${log}'; printf '\\n' >> '${log}'`,
+      'case "$*" in',
+      '  "auth status") exit 0 ;;',
+      '  "pr view --json number -q .number") exit 1 ;;',
+      `  "pr list --state open --base main --limit 200 --json number,headRefName,headRepositoryOwner,url,isDraft") printf '%s\\n' '${prList}'; exit 0 ;;`,
+      `  "repo view --json owner -q .owner.login") echo '${FAKE_OWNER}'; exit 0 ;;`,
+      `  "api repos/{owner}/{repo}/contents/VERSION?ref=${encodeURIComponent(CLAIM.branch)} -q .content") echo '${content}'; exit 0 ;;`,
+      "esac",
+      `echo "FAKE_GH_UNHANDLED $*" >> '${log}'`,
+      'echo "FAKE_GH_UNHANDLED $*" >&2',
+      "exit 2",
+      "",
+    ].join("\n"), { mode: 0o755 });
+    writeFileSync(join(dir, "glab"), `#!/bin/sh\necho "$*" >> '${glabLog}'\nexit 1\n`, { mode: 0o755 });
+    return {
+      calls: () => readFileSync(log, "utf8").trimEnd().split("\n").map((line) => line.split("\x1f").filter(Boolean)),
+      glabCalls: () => { try { return readFileSync(glabLog, "utf8"); } catch { return ""; } },
+    };
+  }
+
   test("CLI runs against real repo and emits parseable JSON", async () => {
-    const proc = Bun.spawnSync([
-      "bun",
-      "run",
-      "./bin/gstack-next-version",
-      "--base",
-      "main",
-      "--bump",
-      "patch",
-      "--current-version",
-      "1.6.3.0",
-      "--workspace-root",
-      "null", // skip sibling scan in CI
-    ], { timeout: 30_000 });
-    const out = new TextDecoder().decode(proc.stdout);
-    const parsed = JSON.parse(out);
-    expect(parsed).toHaveProperty("version");
-    expect(parseVersion(parsed.version)).not.toBeNull();
-    expect(parsed).toHaveProperty("bump", "patch");
-    expect(parsed).toHaveProperty("host");
-    expect(["github", "gitlab", "unknown"]).toContain(parsed.host);
-    expect(parsed).toHaveProperty("claimed");
-    expect(Array.isArray(parsed.claimed)).toBe(true);
-    expect(parsed).toHaveProperty("siblings");
-    expect(parsed.siblings).toEqual([]); // --workspace-root null disabled scanning
-    expect(parsed).toHaveProperty("version_path", "VERSION"); // default when no config + no flag
+    const stubDir = mkdtempSync(join(tmpdir(), "nextver-smoke-gh-"));
+    try {
+      const gh = fakeGh(stubDir);
+      const proc = Bun.spawnSync([
+        "bun",
+        "run",
+        "./bin/gstack-next-version",
+        "--base",
+        "main",
+        "--bump",
+        "patch",
+        "--current-version",
+        "1.6.3.0",
+        "--workspace-root",
+        "null", // skip sibling scan in CI
+      ], { timeout: 30_000, env: { ...process.env, PATH: `${stubDir}:${process.env.PATH ?? ""}` } });
+      const stderr = new TextDecoder().decode(proc.stderr);
+      expect(proc.exitCode, stderr).toBe(0);
+      const out = new TextDecoder().decode(proc.stdout);
+      const parsed = JSON.parse(out);
+      expect(parsed).toHaveProperty("version");
+      expect(parseVersion(parsed.version)).not.toBeNull();
+      expect(parsed).toHaveProperty("bump", "patch");
+      expect(parsed).toHaveProperty("host");
+      expect(["github", "gitlab", "unknown"]).toContain(parsed.host);
+      expect(parsed).toHaveProperty("claimed");
+      expect(Array.isArray(parsed.claimed)).toBe(true);
+      expect(parsed).toHaveProperty("siblings");
+      expect(parsed.siblings).toEqual([]); // --workspace-root null disabled scanning
+      expect(parsed).toHaveProperty("version_path", "VERSION"); // default when no config + no flag
+
+      const remote = execFileSync("git", ["remote", "get-url", "origin"], { cwd: join(import.meta.dir, ".."), encoding: "utf8", timeout: 10_000 }).trim();
+      expect(gh.calls()).toEqual([
+        ...(remote.includes("github.com") ? [] : [["auth", "status"]]),
+        ["pr", "view", "--json", "number", "-q", ".number"],
+        ["pr", "list", "--state", "open", "--base", "main", "--limit", "200", "--json", "number,headRefName,headRepositoryOwner,url,isDraft"],
+        ["repo", "view", "--json", "owner", "-q", ".owner.login"],
+        ["api", `repos/{owner}/{repo}/contents/VERSION?ref=${encodeURIComponent(CLAIM.branch)}`, "-q", ".content"],
+      ]);
+      expect(gh.calls().flat().join(" ")).not.toContain("FAKE_GH_UNHANDLED");
+      expect(stderr).not.toContain("FAKE_GH_UNHANDLED");
+      expect(gh.glabCalls()).toBe("");
+      expect(parsed.host).toBe("github");
+      expect(parsed.offline).toBe(false);
+      expect(parsed.fallback).toBeNull();
+      expect(parsed.warnings).toEqual([]);
+      expect(parsed.claimed).toEqual([CLAIM]); // the canned PR's owner matches the canned repo owner
+      expect(parsed.version).toBe("1.6.5.0"); // the canned claim on 1.6.4.0 is skipped
+    } finally {
+      rmSync(stubDir, { recursive: true, force: true });
+    }
   }, 30_000); // Headroom over the 4-5s wall time of the spawned process under load
 
   test("CLI runs with --version-path and surfaces it in JSON output", async () => {

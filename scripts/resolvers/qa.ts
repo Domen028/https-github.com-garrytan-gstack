@@ -185,7 +185,7 @@ pass/fail/blocked/not run/inconclusive/not applicable (reason).
 | Contract | Observe |
 |---|---|
 | Successful execution | Expected return/output and final business effect, not just launch/acceptance |
-| Invalid/missing input | Declared rejection, correct status and no forbidden state change |
+| Invalid/missing input | One probe per documented input rule (allowed characters, format, sign, range, arity): declared rejection, correct status and no forbidden state change |
 | Authentication/authorization | Valid identity, missing/invalid identity, wrong owner/role and durable no-effect boundary |
 | CLI process contract | Exact exit code, stdout and stderr separately; resulting file/state changes |
 | State transitions | Initial, intermediate and completed/failed states and their permitted transitions |
@@ -228,12 +228,13 @@ ${setup ? 'Read `sections/browser-setup.md` in full unless already completed;\n'
 
 export function generateQAReviewPreflight(ctx: TemplateContext): string {
   sectionPath(ctx, 'qa', 'exploratory');
-  return `> **STOP.** Before any probe, including plan checks, complete the ordered scope/method Reads below in earlier responses. Never batch a probe (capture included) with its prerequisite Read; templates cannot replace Reads.
+  return `> **STOP.** Before any probe, including plan checks, complete the ordered scope/method Reads in earlier responses. Never batch a probe (capture, guard start, plan check) with a Read.
 ${ctx.skillName === 'review' ? 'Step 4 is read-only: defer charters, setup and probes to Step 4.7.\n' : ''}
-{{QA_RESOURCE:exploratory}}
-After exploratory returns, Read scope then selected methods in order; it is only the entrypoint.
+1. {{QA_RESOURCE:exploratory}}
+2. Then Read QA's \`sections/scope.md\` in full; pick surfaces.
+3. Then Read each listed method in full; the entrypoint alone completes nothing.
 
-QA's \`sections/...\` and \`templates/...\` paths resolve from installed QA SKILL.md, not the caller or product directory.`;
+QA's \`sections/...\` and \`templates/...\` paths resolve from installed QA SKILL.md, not caller/product.`;
 }
 
 export function generateQAReview(ctx: TemplateContext): string {

@@ -105,6 +105,7 @@ gstack_result_anchor() {
     REVIEW_STATUS_MISMATCH) printf '%s' 'review-status-mismatch' ;;
     GATE_REV_STALE) printf '%s' 'gate-rev-stale' ;;
     GATE_REPLY_UNPARSED) printf '%s' 'gate-reply-unparsed' ;;
+    ANSWER_BY_REQUIRED) printf '%s' 'answer-by-required' ;;
     COMPONENT_MISSING) printf '%s' 'doctor-component-missing' ;;
     RUNTIME_BELOW_MINIMUM) printf '%s' 'doctor-runtime-below-minimum' ;;
     PROJECT_PIN_MISMATCH) printf '%s' 'doctor-project-pin-mismatch' ;;
@@ -112,6 +113,7 @@ gstack_result_anchor() {
     RUNTIME_PIN_CONFLICT) printf '%s' 'capy-install-runtime-conflict' ;;
     BROWSER_UNAVAILABLE) printf '%s' 'browser-ensure-failed' ;;
     INSTALL_PREFLIGHT_FAILED) printf '%s' 'capy-install-preflight-failed' ;;
+    SETUP_PS1_EMPTY_ARGUMENT) printf '%s' 'setup-ps1-empty-argument' ;;
     POLICY_SOURCE_UNAVAILABLE) printf '%s' 'policy-source-unavailable' ;;
     POLICY_INVALID) printf '%s' 'policy-invalid' ;;
     POLICY_CONTAINMENT) printf '%s' 'policy-containment' ;;
@@ -186,10 +188,16 @@ gstack_result_anchor() {
     GSTACK_VERSION_CHANGED) printf '%s' 'gstack-version-changed' ;;
     ARTIFACT_GATE_UNSETTLED) printf '%s' 'artifact-gate-unsettled' ;;
     UPGRADE_REFUSED) printf '%s' 'upgrade-refused' ;;
+    UPGRADE_BUSY) printf '%s' 'upgrade-busy' ;;
     UPGRADE_FETCH_FAILED) printf '%s' 'upgrade-fetch-failed' ;;
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
     CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;
     INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
+    BROWSE_TAB_UNRECOVERABLE) printf '%s' 'browse-tab-unrecoverable' ;;
+    BUN_VERSION_UNREADABLE) printf '%s' 'bun-version-unreadable' ;;
+    BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
+    IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
+    OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
     *) return 1 ;;
   esac
 }

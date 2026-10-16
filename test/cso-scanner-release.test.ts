@@ -136,7 +136,7 @@ describe('CSO scanner qualification workflow', () => {
     else expect(scannerBuildMatrix(inputs).include).toHaveLength(12);
     const dockerfile = fs.readFileSync(path.join(ROOT, 'lib/cso/scanner-images/scanner.Dockerfile'), 'utf8');
     for (const value of ['/opt/cso/entrypoint', '/opt/cso/bin/scanner', 'USER 10001:10001', 'test -x /bin/sleep', 'test -x /bin/cat']) expect(dockerfile).toContain(value);
-    expect(fs.readFileSync(path.join(ROOT, 'lib/cso/scanner-executor.ts'), 'utf8')).toContain("capture(['/bin/cat', plan.outputPath])");
+    expect(fs.readFileSync(path.join(ROOT, 'lib/cso/scanner-executor.ts'), 'utf8')).toContain("capture(['/bin/cat', plan.outputPath], plan.format)");
     const postgres = fs.readFileSync(path.join(ROOT, 'lib/cso/images/postgresql.Dockerfile'), 'utf8');
     for (const value of ['FROM ${BASE_IMAGE} AS upstream', 'FROM scratch', 'COPY --from=upstream / /']) expect(postgres).toContain(value);
   });

@@ -333,6 +333,7 @@ SOURCE_GSTACK_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 . "$SOURCE_GSTACK_DIR/bin/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $SOURCE_GSTACK_DIR/bin/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
 gstack_state_root_select; GSTACK_STATE_ROOT="$_gstack_sr_root"
 . "$SOURCE_GSTACK_DIR/bin/gstack-path-spelling.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-path-spelling.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
+. "$SOURCE_GSTACK_DIR/bin/gstack-claude-root.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-claude-root.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-install-registry.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-install-registry.sh is missing. fix: reinstall from a fresh clone (docs/ADDING_A_HOST.md)" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-render-claude.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-render-claude.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
 . "$SOURCE_GSTACK_DIR/bin/gstack-host-renders.sh" || { echo "$0: $SOURCE_GSTACK_DIR/bin/gstack-host-renders.sh is missing. fix: reinstall from a fresh clone" >&2; exit 1; }
@@ -2148,7 +2149,7 @@ fi
 # setup is installing Chromium right now, so this run registers skills and
 # re-probes next time. The download is bounded (default 600s, env
 # GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT) because Playwright's own retries cover a
-# flaky socket but not a wedged bunx; a wedged installer is killed with its
+# flaky socket but not a wedged `bun x`; a wedged installer is killed with its
 # child tree (_kill_tree: pgrep-walked, /proc-walked where pgrep is missing).
 # Reason codes: skipped, chromium-install,
 # chromium-install-timeout, chromium-install-locked, windows-no-node,
@@ -2234,12 +2235,14 @@ elif ! ensure_playwright_browser; then
     # the previous handler, so the lock trap must run both or any run taking
     # this path leaves .tmp-bun-bin behind.
     trap 'rm -rf "$_PW_LOCK" 2>/dev/null || true; cleanup_copied_bun' EXIT
+    # `bun x`, not `bunx`: a winget Bun ships no bunx (#3131).
+    _PW_BUN="$(command -v "$BUN_CMD" 2>/dev/null || printf '%s' "$BUN_CMD")"
     (
       cd "$SOURCE_GSTACK_DIR"
       if [ -n "$_PLAYWRIGHT_PLATFORM_OVERRIDE" ]; then
-        PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bunx playwright install chromium
+        PLAYWRIGHT_HOST_PLATFORM_OVERRIDE="$_PLAYWRIGHT_PLATFORM_OVERRIDE" bun_cmd x playwright install chromium
       else
-        bunx playwright install chromium
+        bun_cmd x playwright install chromium
       fi
     ) &
     _PW_PID=$!
@@ -2251,9 +2254,11 @@ elif ! ensure_playwright_browser; then
     _wait_with_deadline "$_PW_PID" "$_PW_INSTALL_TIMEOUT" || _PW_RC=$?
     trap - INT TERM
     if [ "$_PW_RC" -eq 124 ]; then
-      _pw_fail chromium-install-timeout "bunx playwright install chromium exceeded ${_PW_INSTALL_TIMEOUT}s and was killed (raise with GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>)"
+      _pw_fail chromium-install-timeout "$_PW_BUN x playwright install chromium exceeded ${_PW_INSTALL_TIMEOUT}s and was killed (raise with GSTACK_PLAYWRIGHT_INSTALL_TIMEOUT=<seconds>)"
+    elif [ "$_PW_RC" -eq 127 ]; then
+      _pw_fail chromium-install "$_PW_BUN x playwright install chromium exited 127 (command not found); install Bun from bun.sh (winget Bun ships no bunx), or skip with ./setup --no-browser (Git Bash) or .\\setup.ps1 --no-browser (PowerShell)"
     elif [ "$_PW_RC" -ne 0 ]; then
-      _pw_fail chromium-install "bunx playwright install chromium exited $_PW_RC (offline, proxy, or blocked download?)"
+      _pw_fail chromium-install "$_PW_BUN x playwright install chromium exited $_PW_RC (offline, proxy, or blocked download?)"
     fi
     rm -rf "$_PW_LOCK" 2>/dev/null || true
     # Restore the original handler (never `trap - EXIT`, which would clear
@@ -2654,7 +2659,7 @@ cleanup_old_claude_symlinks() {
     done
   fi
   if [ ${#removed[@]} -gt 0 ]; then
-    echo "  cleaned up old entries: ${removed[*]}"
+    echo "  cleaned up old entries: ${removed[*]} (removed from $skills_dir)"
   fi
 }
 
@@ -3786,6 +3791,12 @@ if [ "$INSTALL_CURSOR" -eq 1 ]; then
   # would make link_cursor_skill_dirs' "[ ! -d generated ]" gen fallback a no-op.
   _prune_stale_generated "$SOURCE_GSTACK_DIR" "$SOURCE_GSTACK_DIR/.cursor/skills" "$CURSOR_SKILLS"
   link_cursor_skill_dirs "$SOURCE_GSTACK_DIR" "$CURSOR_SKILLS"
+  # 1.31 left unprefixed <skill>/ folders here whose SKILL.md links into the
+  # checkout, so Cursor loaded every skill twice (#3133). Cursor installs only
+  # gstack-* names, so the Claude flat-name cleanup applies as is: it removes
+  # only entries proven to link into gstack (#2119). After linking, so a run
+  # that fails before the new links exist keeps the old folders.
+  cleanup_old_claude_symlinks "$SOURCE_GSTACK_DIR" "$CURSOR_SKILLS"
   create_cursor_sidecar "$SOURCE_GSTACK_DIR"
   _setup_arm_publish cursor global - "$CURSOR_SKILLS" "$CURSOR_GSTACK" -
   echo "gstack ready (cursor)."
@@ -3942,15 +3953,10 @@ fi
 #
 # WARNING for future code AND migrations (the v1.58.0.0.sh defect class):
 # NEVER register ${SCRIPT_DIR}/$SOURCE_GSTACK_DIR-relative hook paths.
-CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/skills/gstack"
-# Split-brain guard: the installer currently hardcodes $HOME/.claude/skills
-# (setup:1601 TODO), so a CLAUDE_CONFIG_DIR override can name a root that was
-# never installed. Fall back to where the install actually lives — both are
-# stable, neither is the running tree, so canonical-only still holds.
-if [ ! -x "$CANONICAL_GSTACK_ROOT/bin/gstack-session-update" ] \
-   && [ -x "$HOME/.claude/skills/gstack/bin/gstack-session-update" ]; then
-  CANONICAL_GSTACK_ROOT="$HOME/.claude/skills/gstack"
-fi
+# bin/gstack-claude-root.sh owns the choice: ${CLAUDE_CONFIG_DIR:-$HOME/.claude}
+# by default, the $HOME install when the config dir has none (the installer
+# writes to $HOME) or links back to it (a per-session CLAUDE_CONFIG_DIR, #3180).
+CANONICAL_GSTACK_ROOT="$(gstack_canonical_claude_root)"
 
 # Echo the canonical path for a hook (repo-relative arg); fails when the hook
 # is not executable at the canonical install — callers must skip + log.

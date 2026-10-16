@@ -149,6 +149,10 @@ describe('enforced checks and the tracking issue (DX-9)', () => {
     const failing = unseededCheck(freeRoot(2, 6));
     expect(failing).toMatchObject({ status: 'fail', detail: expect.stringContaining('stale seed: 6 unseeded file(s) > 5') });
     expect(failing.fix).toContain('bun run test:ubicloud --record-durations');
+    expect(failing.fix).toContain('UBICLOUD_API_KEY');
+    expect(failing.fix).toContain('copies scripts/free-test-durations.json back into this checkout');
+    expect(failing.fix).toContain('leave the refresh to a maintainer');
+    expect(failing.fix).not.toContain('CI recording');
     expect(unseededCheck(freeRoot(2, 5))).toMatchObject({ status: 'pass', detail: expect.stringContaining('5 unseeded file(s) (limit 5)') });
   });
 
@@ -162,7 +166,8 @@ describe('enforced checks and the tracking issue (DX-9)', () => {
 });
 
 describe('collectHealth over recorded fixture data', () => {
-  function fixture() {
+  function fixture(windowsRuns: unknown[] = [run(70, { event: 'pull_request', head_branch: 'feature' }),
+    run(71, { event: 'workflow_dispatch', run_started_at: day(2), updated_at: day(1) })]) {
     const prTrials = formatTrialOutcomes([trialRecord('gate-a', 'passed', { tier: 'gate', lane: 'gate/pr', cost_usd: 2.5 }),
       trialRecord('gate-b', 'passed', { tier: 'gate', lane: 'gate/pr', execution: 'reused', cost_usd: 0 })]);
     const census = formatTrialOutcomes([
@@ -184,7 +189,7 @@ describe('collectHealth over recorded fixture data', () => {
       [/workflows\/free-tests\.yml\/runs/, () => ({ workflow_runs: [run(60), run(61, { conclusion: 'failure' })] })],
       [/runs\/60\/artifacts/, () => ({ artifacts: [{ id: 61, name: 'flake-ledger-2', size_in_bytes: 10 }] })],
       [/runs\/61\/artifacts/, () => ({ artifacts: [] })],
-      [/workflows\/windows-free-tests\.yml\/runs/, () => ({ workflow_runs: [run(70)] })],
+      [/workflows\/windows-free-tests\.yml\/runs/, () => ({ workflow_runs: windowsRuns })],
     ], {
       11: { 'manifest.json': JSON.stringify({ prCoverage: { mode: 'full-fallback' } }) },
       12: { 'trial-outcomes.jsonl': prTrials },
@@ -207,7 +212,7 @@ describe('collectHealth over recorded fixture data', () => {
     expect(value('census-redispatch').value).toBe('0 of 1 census(es) re-dispatched; longest paid slice job 20.0 min');
     expect(value('quarantine-evidence').value).toContain('insufficient evidence (not the same as healthy)');
     expect(value('free-flaky-pass-rate').value).toStartWith('50.0% (1/2 main runs');
-    expect(value('free-wall').value).toBe('free-tests 0.0 min (1 runs); windows-free-tests 0.0 min (1 runs)');
+    expect(value('free-wall').value).toBe('free-tests 0.0 min (1 runs); windows-free-tests (successful PR runs) 0.0 min (1 runs)');
     expect(value('free-serial').value).toBe('3 s over 3 files');
     for (const entry of report.metrics.filter(entry => entry.id !== 'net-complexity')) {
       expect(entry.rule.length).toBeGreaterThan(10);
@@ -216,6 +221,18 @@ describe('collectHealth over recorded fixture data', () => {
     expect(report.checks.map(check => [check.id, check.status])).toEqual([['flaky-files', 'pass'], ['unseeded-free-files', 'pass']]);
     expect(report.issueAction).toBe('close');
     expect(formatHealth(report)).toContain('rule: share of evals.yml pull_request runs');
+  });
+
+  test('the Windows wall counts only successful pull_request runs and says so when there are none', () => {
+    const wall = (windowsRuns: unknown[]) => collectHealth({ client: fixture(windowsRuns), repo: 'o/r', now: NOW, sinceDays: 7, cacheDir: tmp('health-cache-'), root: freeRoot(3, 0) })
+      .metrics.find(entry => entry.id === 'free-wall')!;
+    const pr = (id: number, minutes: number, extra: Record<string, unknown> = {}) => run(id, { event: 'pull_request', head_branch: `pr-${id}`,
+      run_started_at: day(1), updated_at: new Date(Date.parse(day(1)) + minutes * 60_000).toISOString(), ...extra });
+    expect(wall([pr(70, 6), pr(71, 7), pr(74, 8), pr(72, 30, { conclusion: 'failure' }), run(73, { event: 'workflow_dispatch', run_started_at: day(3), updated_at: day(1) })]).value)
+      .toBe('free-tests 0.0 min (1 runs); windows-free-tests (successful PR runs) 7.0 min (3 runs)');
+    expect(wall([run(73, { event: 'workflow_dispatch', run_started_at: day(3), updated_at: day(1) })]).value)
+      .toBe('free-tests 0.0 min (1 runs); windows-free-tests (successful PR runs) no successful PR runs in window');
+    expect(wall([]).rule).toContain('workflow_dispatch duration recordings excluded');
   });
 
   test('a rate-limited API degrades every remote metric to a named unavailable reason, never 0, and keeps the issue open', () => {

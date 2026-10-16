@@ -39,7 +39,7 @@ export interface Scope {
 }
 
 export function snapshotTool(args: string[], cwd: string): any {
-  const r = spawnSync('bun', [SNAPSHOT_TOOL, ...args], { cwd, encoding: 'utf8', timeout: 120_000, env: process.env });
+  const r = spawnSync(process.execPath, [SNAPSHOT_TOOL, ...args], { cwd, encoding: 'utf8', timeout: 120_000, env: process.env });
   if (r.status !== 0) throw new Error(`gstack-autoplan-snapshot ${args[0]}: ${(r.stderr || r.stdout).trim()}`);
   return JSON.parse(r.stdout);
 }

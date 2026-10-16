@@ -38,5 +38,8 @@ fi
 
 echo "$INPUT" >> "$GSTACK_HOME/projects/$SLUG/timeline.jsonl"
 
-# gbrain-sync: enqueue for cross-machine sync (no-op if sync is off).
-"$SCRIPT_DIR/gstack-brain-enqueue" "projects/$SLUG/timeline.jsonl" 2>/dev/null &
+# gbrain-sync: enqueue for cross-machine sync (no-op if sync is off). Finish
+# the enqueue before returning: gstack-skill-end drains right after this
+# logger, and a backgrounded enqueue can let that drain miss the new event.
+# The helper keeps its off/unattended gates and silent-failure behavior.
+"$SCRIPT_DIR/gstack-brain-enqueue" "projects/$SLUG/timeline.jsonl" 2>/dev/null || true
