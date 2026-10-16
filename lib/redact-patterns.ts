@@ -120,12 +120,18 @@ export function shannonEntropy(s: string): number {
 //   (iv)  a lowercase/camel compound whose prefix ends in a credential word
 //         (apiKey, authToken, clientSecret, stripeApiKey) — cacheKey/sortKey/
 //         monkey have no credential prefix and are rejected.
+// #3208: a separated, non-ALL-CAPS `<word>_key` whose word names a data-model
+// key (input_key, cache_key, sort_key, primary_key) is a schema field, the
+// snake/kebab/dotted twin of the rejected camel forms. ALL-CAPS env names
+// (INPUT_KEY=, a GitHub Actions input) still count under (iii).
 const ENV_KV_NAME =
   /^[ \t]*(?:export[ \t]+)?["']?([A-Za-z0-9_.-]*?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE))["']?[ \t]*[:=]/i;
 const ENV_KV_SUFFIX =
   /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE)$/i;
 const ENV_KV_CRED_PREFIX =
   /(api|auth|access|secret|private|app|client|server|master|admin|signing|encryption|session|csrf|jwt|oauth|bearer)$/i;
+const ENV_KV_SCHEMA_KEY_WORD =
+  /(?:^|[_.-])(input|output|field|column|lookup|cache|sort|partition|range|primary|foreign|index|row|group|join|property|metric|map|catalog|schema|translation|i18n|idempotency|dedup|object)[_.-]$/i;
 
 /** True when the full env.kv match starts with a credential-shaped name. */
 export function isCredentialShapedEnvName(fullMatch: string): boolean {
@@ -136,8 +142,8 @@ export function isCredentialShapedEnvName(fullMatch: string): boolean {
   if (!suffixMatch) return false;
   const prefix = name.slice(0, name.length - suffixMatch[1].length);
   if (prefix === "") return true; // (ii) bare suffix
-  if (/[_.\-]$/.test(prefix)) return true; // (i) separator before suffix
   if (!/[a-z]/.test(name)) return true; // (iii) ALL-CAPS env style
+  if (/[_.\-]$/.test(prefix)) return !(/^key$/i.test(suffixMatch[1]) && ENV_KV_SCHEMA_KEY_WORD.test(prefix)); // (i) separator before suffix
   return ENV_KV_CRED_PREFIX.test(prefix); // (iv) credential-semantic compound
 }
 
