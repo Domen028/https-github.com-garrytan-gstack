@@ -161,11 +161,26 @@ export function cleanup(repo: FixtureRepo): void {
   fs.rmSync(repo.root, { recursive: true, force: true });
 }
 
-/** A `gh` on PATH answering `gh issue view <n> --json ...` from a map and `gh issue list` / `gh run view` from fixed data. */
-export function ghShim(repo: FixtureRepo, data: { issues?: Record<string, unknown>; issueList?: unknown[]; runs?: Record<string, unknown> }): { PATH: string } {
+/**
+ * A `gh` on PATH answering `gh issue view <n> --json ...` from a map, `gh issue list` / `gh run view` from fixed data,
+ * `gh repo view` from `repo` (null fails), the closing-PR `gh api graphql` query from `closing` (issue → pages of
+ * nodes; `after=c<i>` reads page i; a missing issue fails like an API error) and the PR-author query (`head=`)
+ * from `headAuthor` (the HEAD commit's GitHub user, null when GitHub has no such commit) and `ownerType`.
+ */
+export function ghShim(repo: FixtureRepo, data: { issues?: Record<string, unknown>; issueList?: unknown[]; runs?: Record<string, unknown>; repo?: string | null; viewer?: string; closing?: Record<string, unknown[][]>; headAuthor?: string | null; ownerType?: 'User' | 'Organization' }): { PATH: string } {
   const dir = path.join(repo.root, 'gh-shim');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify({ issues: {}, issueList: [], runs: {}, ...data }));
+  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify({ issues: {}, issueList: [], runs: {}, repo: 'owner/repo', viewer: 'me', closing: {}, headAuthor: null, ownerType: 'User', ...data }));
+  fs.writeFileSync(path.join(dir, 'api.js'), [
+    'const d = require(process.argv[2]); const a = process.argv.slice(3);',
+    'const arg = k => { const i = a.findIndex(x => x.startsWith(k + "=")); return i < 0 ? undefined : a[i].slice(k.length + 1); };',
+    'if (a[0] === "repo") { if (d.repo === null) { console.error("no git remotes found"); process.exit(1); } console.log(JSON.stringify({ nameWithOwner: d.repo })); process.exit(0); }',
+    'if (arg("head") !== undefined) { console.log(JSON.stringify({ data: { repository: { owner: { __typename: d.ownerType, login: d.repo.split("/")[0] }, object: d.headAuthor === null ? null : { author: { user: { login: d.headAuthor } } } } } })); process.exit(0); }',
+    'const pages = d.closing[arg("number")]; if (!pages) { console.error("HTTP 502: Bad Gateway (https://api.github.com/graphql)"); process.exit(1); }',
+    'const i = Number((arg("after") || "c0").slice(1));',
+    'console.log(JSON.stringify({ data: { viewer: { login: d.viewer }, repository: { issue: { closedByPullRequestsReferences: { nodes: pages[i] || [], pageInfo: { hasNextPage: i + 1 < pages.length, endCursor: "c" + (i + 1) } } } } } }));',
+    '',
+  ].join('\n'));
   const script = [
     '#!/bin/sh',
     `DATA="${path.join(dir, 'data.json')}"`,
@@ -173,8 +188,10 @@ export function ghShim(repo: FixtureRepo, data: { issues?: Record<string, unknow
     '  node -e "const d=require(process.argv[1]);const p=d.issues[process.argv[2]];if(!p){console.error(\'GraphQL: Could not resolve to an Issue\');process.exit(1)}console.log(JSON.stringify(p))" "$DATA" "$3"',
     '  exit $?',
     'fi',
-    '# issue list: entries whose body contains the quoted --search token, numbers only (what gstack-issue-links asks for)',
-    'if [ "$1" = "issue" ] && [ "$2" = "list" ]; then node -e "const a=process.argv.slice(2);const q=(a[a.indexOf(\'--search\')+1]||\'\').replace(/^\\"|\\" in:body$/g,\'\');console.log(JSON.stringify(require(process.argv[1]).issueList.filter(i=>!q||String(i.body||\'\').includes(q)).map(i=>({number:i.number}))))" "$DATA" "$@"; exit $?; fi',
+    '# issue list: entries whose body contains the quoted --search token (number, title, body, author: what gstack-issue-links asks for)',
+    'if [ "$1" = "issue" ] && [ "$2" = "list" ]; then node -e "const a=process.argv.slice(2);const q=(a[a.indexOf(\'--search\')+1]||\'\').replace(/^\\"|\\" in:body$/g,\'\');console.log(JSON.stringify(require(process.argv[1]).issueList.filter(i=>!q||String(i.body||\'\').includes(q))))" "$DATA" "$@"; exit $?; fi',
+    `if [ "$1" = "repo" ] && [ "$2" = "view" ]; then exec node "${path.join(dir, 'api.js')}" "$DATA" repo; fi`,
+    `if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then shift 2; exec node "${path.join(dir, 'api.js')}" "$DATA" "$@"; fi`,
     'if [ "$1" = "run" ] && [ "$2" = "view" ]; then',
     '  node -e "const d=require(process.argv[1]);const p=d.runs[process.argv[2]];if(!p){console.error(\'run not found\');process.exit(1)}console.log(JSON.stringify(p))" "$DATA" "$3"',
     '  exit $?',

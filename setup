@@ -441,6 +441,15 @@ _repair_crlf_checkout() {
 }
 [ -n "${GSTACK_SETUP_REFRESH_CHILD:-}" ] || _repair_crlf_checkout
 
+# _setup_ready_line — the final `gstack ready (<host>, ...)` line from summary
+# rows on stdin (host<TAB>...<TAB>result in field 7): every host installed,
+# updated or unchanged, in table order; nothing when no host row exists.
+_setup_ready_line() {
+  local hosts
+  hosts=$(awk -F'\t' '$1 != "state" && $7 ~ /^(installed|updated|unchanged)$/ && !seen[$1]++ { printf "%s%s", (n++ ? ", " : ""), $1 }')
+  [ -z "$hosts" ] || log "gstack ready ($hosts)"
+}
+
 # ─── --refresh-registered: refresh exactly the registered installs (#1925) ───
 # What /gstack-upgrade and the team-mode auto-update run. Each install this
 # checkout registered is refreshed by running setup for that one host, in its
@@ -554,6 +563,7 @@ EOF
   if [ "$_rf_disabled" != " " ]; then
     echo "  disabled skills (not registered on any host):$_rf_disabled"
   fi
+  _setup_ready_line < "$_RF_SUMMARY"
   rm -f "$_RF_SUMMARY"
   exit "$_RF_FAILED"
 fi
@@ -4772,3 +4782,6 @@ if [ -n "${_HOOK_REFUSED:-}" ]; then
   echo "gstack setup: everything else is installed, but these hooks were not registered because they do not parse: $_HOOK_REFUSED(first: $_HOOK_REFUSED_AT). This is a gstack bug; report $_HOOK_REFUSED_AT. https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#setup-hook-does-not-parse" >&2
   exit 1
 fi
+# The final line names every host this run installed, from the same rows as
+# the summary table; instruction-only hosts write no row and print none.
+printf '%s' "$_SETUP_ROWS" | _setup_ready_line

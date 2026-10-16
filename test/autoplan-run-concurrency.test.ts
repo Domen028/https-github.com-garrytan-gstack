@@ -10,7 +10,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { AUTOPLAN, ROOT, attemptsOf, env, journal, readRun, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
+import { AUTOPLAN, ROOT, attemptsOf, env, journal, readRun, resultOf, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-concurrency-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -44,7 +44,7 @@ describe('two writers', () => {
     const out = startSmallRun(path.join(TMP, 'submit'), ['--estimate-usd', '1']);
     const ids = attemptsOf(out, 'ceo');
     review(path.join(out, 'ceo-native-prompt.md'));
-    const args = ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native];
+    const args = ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native];
     const results = await parallel(Array.from({ length: 6 }, () => args));
     const ok = results.filter(r => r.status === 0);
     expect(ok).toHaveLength(1);
@@ -78,8 +78,8 @@ describe('two writers', () => {
     review(path.join(out, 'ceo-outside-prompt.md'));
     const before = readRun(out).revision;
     const results = await parallel([
-      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native],
-      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', path.join(out, 'ceo-outside.md'), '--model', 'openai/gpt-6-astra', '--attempt', ids.outside],
+      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native],
+      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', resultOf(out, 'ceo', 'outside'), '--model', 'openai/gpt-6-astra', '--attempt', ids.outside],
       ['status', '--out', out],
     ]);
     const bound = results.slice(0, 2).filter(r => r.status === 0).length;

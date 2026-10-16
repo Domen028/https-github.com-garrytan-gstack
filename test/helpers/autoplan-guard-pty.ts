@@ -82,7 +82,7 @@ console.log(close);
     '6. Read the file whose path step 3 printed, completely (no offset or limit).',
     '7. In one message, write exactly this line as your own text: **Phase 1 complete.** and make exactly one tool call in that ' +
       'same message: the Bash command `true autoplan-published ceo`.',
-    `8. In a later message, Read the file ${path.join(sections, 'design-phase.md')} with offset 1 and limit 20.`,
+    `8. In your next assistant message, without waiting for any user input, Read the file ${path.join(sections, 'design-phase.md')} with offset 1 and limit 20.`,
     `9. Run this Bash command alone: cat "${path.join(artifacts, 'dispatch-design.txt')}"`,
     '10. Call the Agent tool once with these inputs: prompt = the exact, complete output of step 9 (every line, unchanged), ' +
       'description "Design review", subagent_type "general-purpose". If the agent runs in the background, end your turn and wait ' +

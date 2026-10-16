@@ -232,6 +232,124 @@ describe('gstack-upgrade', () => {
     expect(again.stdout).toContain('gstack-upgrade: current 1.0.1');
   });
 
+  // Plan A7/A-b: every success path certifies the caller's project.
+  const STUB_CAPY = [
+    '#!/usr/bin/env bash',
+    'echo "capy-install $* cwd=$(pwd -P)" >> "$UPGRADE_LOG"',
+    'case " $* " in *" --project "*)',
+    '  [ -n "${STUB_PIN_CONFLICT:-}" ] && { echo "gstack-capy-install: Bun conflict: gstack needs >=1.4.2 (verified archives: 1.4.2 1.4.3), $2/package.json pins exactly 1.3.14; fix: raise the project\'s pin (RUNTIME_PIN_CONFLICT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-install-runtime-conflict)" >&2; exit 3; }',
+    '  [ -n "${STUB_PINS_FAIL:-}" ] && { echo "FAIL pins — bun 1.4.2 outside CI 1.4.3; fix: x (PROJECT_PIN_MISMATCH; d)"; echo "gstack: fail pins"; exit 1; }',
+    '  [ -n "${STUB_PROJECT_STOP:-}" ] && { echo "gstack-capy-install: preflight: jq not found; fix: install jq (INSTALL_PREFLIGHT_FAILED; d)" >&2; exit 3; } ;;',
+    'esac',
+    'echo "wrapper-env rev=${GSTACK_CAPY_WRAPPER_REV:-} path=${GSTACK_CAPY_WRAPPER_PATH:-}" >> "$UPGRADE_LOG.env"',
+    '[ -n "${STUB_STOP:-}" ] && { echo "gstack-capy-install: preflight: curl not found; fix: install curl (INSTALL_PREFLIGHT_FAILED; d)" >&2; exit 3; }',
+    '[ -n "${STUB_WRAPPER_FAIL:-}" ] && { echo "FAIL wrapper — every Capy skill copy is stale; fix: x (CAPY_WRAPPER_STALE; d)"; echo "gstack: fail wrapper"; exit 1; }',
+    '[ -f "${STUB_FAIL_ONCE:-/nonexistent}" ] && { rm -f "$STUB_FAIL_ONCE"; echo "gstack: fail setup — ./setup failed"; exit 1; }',
+    'echo "gstack: ok $(cat "$(dirname "$0")/../VERSION") for=autoplan"',
+  ].join('\n') + '\n';
+  const capyFixture = () => {
+    const f = fixture();
+    write(path.join(f.root, 'bin/gstack-capy-install'), STUB_CAPY, 0o755);
+    write(path.join(f.root, '.git/gstack-capy-install.state'), `head=${f.a}\n`);
+    const project = path.join(f.host.base, 'project');
+    fs.mkdirSync(project, { recursive: true });
+    spawnSync('git', ['init', '-q', project], { timeout: 30_000 });
+    const from = (cwd: string, args: string[] = [], extra: Record<string, string> = {}) =>
+      spawnSync('bash', [path.join(f.root, 'bin/gstack-upgrade'), ...args], { cwd, encoding: 'utf8', env: { ...f.host.env, UPGRADE_LOG: path.join(f.host.base, 'calls.log'), ...extra }, timeout: 60_000 });
+    return { ...f, project: fs.realpathSync(project), from, pending: path.join(f.root, '.git/gstack-upgrade.pending') };
+  };
+
+  test('A-b: from a RUNTIME_PIN_CONFLICT project the move is kept, `upgraded` then `gstack: fail pins`, exit 1, no pending marker; the no-op path says the same', () => {
+    const f = capyFixture();
+    const r = f.from(f.project, [], { STUB_PIN_CONFLICT: '1' });
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines[0]).toBe('gstack-upgrade: upgraded 1.0.0 -> 1.0.1');
+    expect(lines.at(-1)).toBe(`gstack: fail pins — Bun conflict: gstack needs >=1.4.2 (verified archives: 1.4.2 1.4.3), ${f.project}/package.json pins exactly 1.3.14; fix: raise the project's pin (RUNTIME_PIN_CONFLICT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-install-runtime-conflict)`);
+    expect(r.stdout).not.toContain('gstack: ok');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    expect(fs.existsSync(f.pending)).toBe(false);
+    expect(f.calls()).toEqual([`capy-install  cwd=${f.root}`, `capy-install --project ${f.project} cwd=${f.project}`]);
+    const again = f.from(f.project, [], { STUB_PIN_CONFLICT: '1' });
+    expect(again.status).toBe(1);
+    expect(again.stdout.trim().split('\n')[0]).toBe('gstack-upgrade: current 1.0.1');
+    expect(again.stdout.trim().split('\n').at(-1)).toMatch(/^gstack: fail pins — Bun conflict: /);
+    expect(f.from(f.project, ['--check'], { STUB_PIN_CONFLICT: '1' }).status).toBe(0);
+  });
+
+  test('a verified-pin project ends on the installer\'s ok for that project; a pins failure ends on its `gstack: fail pins`; from /tmp nothing is certified', () => {
+    const f = capyFixture();
+    const ok = f.from(f.project);
+    expect(ok.status, ok.stdout + ok.stderr).toBe(0);
+    expect(ok.stdout.trim().split('\n').at(-1)).toBe('gstack: ok 1.0.1 for=autoplan');
+    expect(ok.stdout.match(/^gstack: /gm)).toHaveLength(1);
+    const fail = f.from(f.project, [], { STUB_PINS_FAIL: '1' });
+    expect(fail.status).toBe(1);
+    expect(fail.stdout.trim().split('\n').at(-1)).toBe('gstack: fail pins');
+    expect(fs.existsSync(f.pending)).toBe(false);
+    const g = capyFixture();
+    const outside = g.from(fs.realpathSync(g.host.base), [], { STUB_PINS_FAIL: '1' });
+    expect(outside.status, outside.stdout + outside.stderr).toBe(0);
+    expect(g.calls()).toEqual([`capy-install  cwd=${g.root}`]);
+    expect(outside.stdout.trim().split('\n').at(-1)).toBe('gstack: ok 1.0.1 for=autoplan');
+  });
+
+  test('a pending repair resumed from another project certifies that project', () => {
+    const f = capyFixture();
+    const once = path.join(f.host.base, 'fail-once');
+    write(once, '');
+    const failed = f.from(fs.realpathSync(f.host.base), [], { STUB_FAIL_ONCE: once });
+    expect(failed.status).toBe(1);
+    expect(failed.stdout).toContain('gstack: fail setup');
+    expect(fs.existsSync(f.pending)).toBe(true);
+    const resumed = f.from(f.project);
+    expect(resumed.status, resumed.stdout + resumed.stderr).toBe(0);
+    expect(resumed.stdout).toContain('gstack-upgrade: current 1.0.1; reinstall pending from 1.0.0');
+    expect(fs.existsSync(f.pending)).toBe(false);
+    expect(f.calls().at(-1)).toBe(`capy-install --project ${f.project} cwd=${f.project}`);
+  });
+
+  // Integration items 2 and 9: the wrapper row is never a reinstall failure,
+  // and every installer stop line becomes a trailer.
+  test('a reinstall whose only failing row is wrapper leaves no pending marker; the installer runs with the checkout copy as the active wrapper', () => {
+    const f = capyFixture();
+    write(path.join(f.root, 'capy/skill/gstack/scripts/install.sh'), 'GSTACK_CAPY_WRAPPER=7\n');
+    const r = f.from(fs.realpathSync(f.host.base), [], { STUB_WRAPPER_FAIL: '1' });
+    expect(r.status).toBe(1);
+    expect(r.stdout).toContain('gstack: fail wrapper');
+    expect(r.stdout).toContain('only the wrapper row failed (an owner action on the Drive copy, CAPY_WRAPPER_STALE), so no reinstall is pending');
+    expect(r.stderr).not.toContain('completes the pending reinstall');
+    expect(fs.existsSync(f.pending)).toBe(false);
+    const again = f.from(fs.realpathSync(f.host.base));
+    expect(again.stdout).not.toContain('reinstall pending');
+    expect(fs.readFileSync(path.join(f.host.base, 'calls.log.env'), 'utf8')).toContain(`rev=7 path=${f.root}/capy/skill/gstack/scripts/install.sh`);
+  });
+
+  test('an installer stop line maps to `gstack: fail runtime — <msg>`: in the caller-project check (no pending) and in the reinstall (pending kept)', () => {
+    const f = capyFixture();
+    const cert = f.from(f.project, [], { STUB_PROJECT_STOP: '1' });
+    expect(cert.status).toBe(1);
+    expect(cert.stdout.trim().split('\n').at(-1)).toBe('gstack: fail runtime — preflight: jq not found; fix: install jq (INSTALL_PREFLIGHT_FAILED; d)');
+    expect(fs.existsSync(f.pending)).toBe(false);
+    const g = capyFixture();
+    const re = g.from(g.project, [], { STUB_STOP: '1' });
+    expect(re.status).toBe(1);
+    expect(re.stdout.trim().split('\n').at(-1)).toBe('gstack: fail runtime — preflight: curl not found; fix: install curl (INSTALL_PREFLIGHT_FAILED; d)');
+    expect(fs.existsSync(g.pending)).toBe(true);
+  });
+
+  test('off Capy the caller\'s project is certified by the doctor\'s runtime and pins rows', () => {
+    const f = fixture();
+    write(path.join(f.root, 'bin/gstack-doctor'), '#!/usr/bin/env bash\necho "doctor $*" >> "$UPGRADE_LOG"\n[ -n "${STUB_PINS_FAIL:-}" ] && { echo "FAIL pins — x"; echo "gstack: fail pins"; exit 1; }\necho "gstack: ok 1.0.1 for=require=runtime,pins"\n', 0o755);
+    const project = path.join(f.host.base, 'project');
+    fs.mkdirSync(project);
+    spawnSync('git', ['init', '-q', project], { timeout: 30_000 });
+    const r = spawnSync('bash', [path.join(f.root, 'bin/gstack-upgrade')], { cwd: project, encoding: 'utf8', env: { ...f.host.env, UPGRADE_LOG: path.join(f.host.base, 'calls.log'), STUB_PINS_FAIL: '1' }, timeout: 60_000 });
+    expect(r.status).toBe(1);
+    expect(r.stdout.trim().split('\n').at(-1)).toBe('gstack: fail pins');
+    expect(f.calls()).toEqual(['setup --refresh-registered', `doctor --check --require runtime,pins --project ${fs.realpathSync(project)}`]);
+  });
+
   test('every bin a trailer or fix line names exists in the repo', () => {
     const sources = ['bin/gstack-capy-install', 'bin/gstack-doctor-check.sh', 'bin/gstack-skill-end', 'bin/gstack-upgrade', 'docs/capy-install.md',
       'capy/skill/gstack/SKILL.md', 'capy/skill/gstack/scripts/install.sh'];
