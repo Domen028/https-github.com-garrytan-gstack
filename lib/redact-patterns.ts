@@ -120,18 +120,12 @@ export function shannonEntropy(s: string): number {
 //   (iv)  a lowercase/camel compound whose prefix ends in a credential word
 //         (apiKey, authToken, clientSecret, stripeApiKey) — cacheKey/sortKey/
 //         monkey have no credential prefix and are rejected.
-// #3208: a separated, non-ALL-CAPS `<word>_key` whose word names a data-model
-// key (input_key, cache_key, sort_key, primary_key) is a schema field, the
-// snake/kebab/dotted twin of the rejected camel forms. ALL-CAPS env names
-// (INPUT_KEY=, a GitHub Actions input) still count under (iii).
 const ENV_KV_NAME =
   /^[ \t]*(?:export[ \t]+)?["']?([A-Za-z0-9_.-]*?(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE))["']?[ \t]*[:=]/i;
 const ENV_KV_SUFFIX =
   /(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS?|DSN|AUTH|COOKIE|SESSION|PRIVATE)$/i;
 const ENV_KV_CRED_PREFIX =
   /(api|auth|access|secret|private|app|client|server|master|admin|signing|encryption|session|csrf|jwt|oauth|bearer)$/i;
-const ENV_KV_SCHEMA_KEY_WORD =
-  /(?:^|[_.-])(input|output|field|column|lookup|cache|sort|partition|range|primary|foreign|index|row|group|join|property|metric|map|catalog|schema|translation|i18n|idempotency|dedup|object)[_.-]$/i;
 
 /** True when the full env.kv match starts with a credential-shaped name. */
 export function isCredentialShapedEnvName(fullMatch: string): boolean {
@@ -142,8 +136,8 @@ export function isCredentialShapedEnvName(fullMatch: string): boolean {
   if (!suffixMatch) return false;
   const prefix = name.slice(0, name.length - suffixMatch[1].length);
   if (prefix === "") return true; // (ii) bare suffix
+  if (/[_.\-]$/.test(prefix)) return true; // (i) separator before suffix
   if (!/[a-z]/.test(name)) return true; // (iii) ALL-CAPS env style
-  if (/[_.\-]$/.test(prefix)) return !(/^key$/i.test(suffixMatch[1]) && ENV_KV_SCHEMA_KEY_WORD.test(prefix)); // (i) separator before suffix
   return ENV_KV_CRED_PREFIX.test(prefix); // (iv) credential-semantic compound
 }
 
@@ -586,6 +580,21 @@ function carriesSecretLiteral(text: string): boolean {
  * high-entropy literal (`decrypt("<secret>")`) still reports.
  */
 const CALL_SHAPED_VALUE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
+
+/**
+ * #3208: a catalog or schema entry `"input_key": "expected_media_rate_bits"`
+ * names a field, it holds no credential. Exempt only when both sides say so:
+ * the whole name is one lowercase data-model word plus `_key` (no further
+ * prefix, so `cosmosdb_primary_key` and `api_cache_key` still fire), and the
+ * value is two or more lowercase identifier words joined by `_`, `-` or `.`.
+ * A random key is mixed-case or one unbroken run, so it never takes this shape.
+ */
+const SCHEMA_FIELD_NAME =
+  /^[ \t]*["']?(?:input|output|field|column|lookup|cache|sort|partition|range|index|row|group|join|property|metric|catalog|schema|translation|idempotency|dedup)[_.-]key["']?[ \t]*[:=]/;
+const SCHEMA_FIELD_VALUE = /^[a-z][a-z0-9]*(?:[_.-][a-z][a-z0-9]*)+$/;
+function isSchemaFieldIdentifier(span: string, match: RegExpExecArray): boolean {
+  return SCHEMA_FIELD_NAME.test(match[0]) && SCHEMA_FIELD_VALUE.test(span);
+}
 function isCallExpression(span: string, match: RegExpExecArray): boolean {
   if (!CALL_SHAPED_VALUE.test(span)) return false;
   const { start } = spanBounds(match);
@@ -897,6 +906,7 @@ export const PATTERNS: RedactPattern[] = [
     // itself (`process.env.X||"…"`) is not an exact read and still fires.
     // #2899: a function call assigned to the name is code, not a value (see
     // isCallExpression). #3048: so is a TS/JSX type or expression (isSourceExpression).
+    // #3208: so is a schema field identifier (isSchemaFieldIdentifier).
     validate: (span, match, opts) =>
       isCredentialShapedEnvName(match[0]) &&
       !isPlaceholderSpan(span) &&
@@ -904,6 +914,7 @@ export const PATTERNS: RedactPattern[] = [
       !isBareEnvRead(span, match) &&
       !isCallExpression(span, match) &&
       !isSourceExpression(span, match, opts?.sourcePath) &&
+      !isSchemaFieldIdentifier(span, match) &&
       shannonEntropy(span) >= 3.0,
   },
   {
