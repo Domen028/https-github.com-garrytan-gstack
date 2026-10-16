@@ -694,6 +694,42 @@ export const RESULT_CODES = {
     summary: 'the eval model rules declare families (newest generation only) and an arm names a model in none of them, so its generation cannot be checked',
     fix: 'add the model to its family in .gstack/eval-models.json (newest first) in a reviewed PR, or pick a model a family lists',
   },
+  // Field list 2, W1: gstack-ship-queue and the ship-policy compatibility floor.
+  POLICY_GSTACK_TOO_OLD: {
+    anchor: 'policy-gstack-too-old',
+    summary: 'the ship policy sets min_gstack_version above this gstack, so this gstack refuses to read it',
+    fix: 'upgrade gstack (bin/gstack-upgrade, or the session install with --for <skill>) to the version named, then rerun',
+  },
+  QUEUE_NOT_READY: {
+    anchor: 'queue-not-ready',
+    summary: 'the lane is not ready to report: the working tree, HEAD or CI state does not match the pushed PR head',
+    fix: 'commit and push the work (or wait for CI on that exact head), then rerun gstack-ship-queue ready',
+  },
+  QUEUE_PROOF_MISSING: {
+    anchor: 'queue-proof-missing',
+    summary: 'a proof input the queue step needs is missing or does not match (gated head, base, stamp journal, version or tree)',
+    fix: 'supply the named input (fetch the gated head, pass the expected sha), or regate; nothing was written',
+  },
+  QUEUE_STAMP_NOT_STAMP_ONLY: {
+    anchor: 'queue-stamp-not-stamp-only',
+    summary: 'the stamp commit differs from the gated head by more than stamps, so the gate does not cover it',
+    fix: 'inspect the printed residual paths; drop the stray edit, or run the gate again on the stamped head',
+  },
+  QUEUE_VERIFY_MISMATCH: {
+    anchor: 'queue-verify-mismatch',
+    summary: 'the coordinator could not reproduce the lane’s stamp claim: the PR head, the recomputed gate-ahead merge or the gated tree differs',
+    fix: 'do not merge; ask the lane to rerun gstack-ship-queue stamp (or gate-ahead) on the current queue and report again',
+  },
+  QUEUE_GATE_MISSING: {
+    anchor: 'queue-gate-missing',
+    summary: 'the policy sets full_e2e and no passing full-gate record is bound to this tree',
+    fix: 'run the gate the policy names (gstack-ship-queue gate-ahead, then --record) or pass the record of a passing run on this head',
+  },
+  GATE_AHEAD_ATTEMPT_INVALID: {
+    anchor: 'gate-ahead-attempt-invalid',
+    summary: 'the gate-ahead attempt is unknown, already recorded, or its worktree no longer holds the gated commit',
+    fix: 'list attempts with gstack-ship-queue gate-ahead --list, then record the live one, or prepare a new attempt',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;
