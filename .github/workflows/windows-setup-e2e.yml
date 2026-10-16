@@ -216,7 +216,7 @@ jobs:
         # with a space, installed through powershell.exe into an isolated HOME.
         run: |
           set -euo pipefail
-          SPACED="$RUNNER_TEMP/gstack checkout"
+          SPACED="$(cygpath -u "$RUNNER_TEMP")/gstack checkout"
           mkdir -p "$SPACED"
           tar --exclude=./node_modules -cf - . | tar -xpf - -C "$SPACED"
           E2E_HOME="$RUNNER_TEMP/gstack-ps1-home"
