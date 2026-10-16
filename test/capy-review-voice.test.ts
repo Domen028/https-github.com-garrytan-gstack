@@ -197,4 +197,13 @@ describe('the no-Drive command has one text', () => {
       expect(text).not.toMatch(/no (gstack )?install (is )?needed/i);
     }
   });
+
+  test('autoplan/DRIVER.md.tmpl (and its committed render) tells the parent to relay each reviewer\'s trailer, never to waive the install', () => {
+    for (const rel of ['autoplan/DRIVER.md.tmpl', 'autoplan/DRIVER.md']) {
+      const text = fs.readFileSync(path.join(REPO, rel), 'utf8').replace(/\s+/g, ' ');
+      expect(text, rel).toContain('Every prompt ends with a `GSTACK TRAILER` block: the reviewer runs the `--for review-voice` install');
+      expect(text, rel).toContain('Never tell a reviewer that no install is needed');
+      expect(text, rel).toContain('treat a missing line as `gstack: fail not-installed`');
+    }
+  });
 });
