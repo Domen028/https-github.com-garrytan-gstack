@@ -88,9 +88,11 @@ process, or an identity-less lease from an older gstack past 120 minutes, is
 stale: `bin/gstack-lease live` reclaims it (`gstack-lease: reclaimed stale
 lease …`). Stale needs proof: two well-formed identities from the same backend
 that differ (`ps` is read under `LC_ALL=C TZ=UTC0`). An identity that cannot be
-read, a malformed record or a backend change keeps the lease. Reclaiming renames
-the lease aside first and restores it when a renewal landed meanwhile, and
-`touch` publishes by rename, so a reader never sees a half-written record. `bin/gstack-lease list` shows `alive|dead|stale`, and
+read, a malformed record or a backend change keeps the lease. `touch` (publish
+by rename, prune) and reclaim (reread, then delete only the record judged
+stale) run under one `mkdir` lock in the lease directory, so a renewal is never
+deleted and a live lease never disappears from a concurrent scan; a lock left
+by a killed process is broken after a minute. `bin/gstack-lease list` shows `alive|dead|stale`, and
 `GSTACK_UPGRADE_FORCE=1` overrides.
 
 ## What the installer does

@@ -80,31 +80,44 @@ valid_identity() {
     *) return 1 ;;
   esac
 }
-# state FILE PID — alive | dead | stale. Stale needs proof: two well-formed
-# identities from the same backend that differ. An identity that cannot be read
-# now, a malformed record or a backend change keeps the lease (never reclaim a
-# live session on missing evidence).
+# state PID RECORD AGE — alive | dead | stale for a lease whose record (first
+# line) and age were read once by the caller. Stale needs proof: two
+# well-formed identities from the same backend that differ. An identity that
+# cannot be read now, a malformed record or a backend change keeps the lease
+# (never reclaim a live session on missing evidence).
 state() {
-  alive "$2" || { echo dead; return; }
-  _rec=$(head -1 "$1" 2>/dev/null)
-  if [ -z "$_rec" ]; then
-    [ "$(age_min "$1")" -ge 120 ] && echo stale || echo alive
+  alive "$1" || { echo dead; return; }
+  if [ -z "$2" ]; then
+    [ "$3" -ge 120 ] && echo stale || echo alive
     return
   fi
-  _now=$(identity "$2")
-  if valid_identity "$_rec" && [ -n "$_now" ] && [ "${_rec%% *}" = "${_now%% *}" ] && [ "$_rec" != "$_now" ]; then echo stale
+  _now=$(identity "$1")
+  if valid_identity "$2" && [ -n "$_now" ] && [ "${2%% *}" = "${_now%% *}" ] && [ "$2" != "$_now" ]; then echo stale
   else echo alive
   fi
 }
-# reclaim FILE RECORD — remove a stale lease without losing a concurrent renewal:
-# rename it aside atomically, and put it back (hard link: only if no newer lease
-# was written meanwhile) when what was renamed is not the record judged stale.
+# The lease directory's lock: touch's publish and prune, and reclaim's
+# reread-and-delete, run under it, so a reclaim never deletes a renewal and a
+# lease never disappears while it is live. mkdir is atomic everywhere; a lock
+# left by a killed process is broken once it is a minute old.
+lock() {
+  _tries=0
+  until mkdir "$DIR/.lock" 2>/dev/null; do
+    _tries=$((_tries + 1))
+    if [ "$_tries" -ge 50 ]; then
+      [ -n "$(find "$DIR/.lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$DIR/.lock" 2>/dev/null && continue
+      return 1
+    fi
+    sleep 0.1
+  done
+}
+unlock() { rmdir "$DIR/.lock" 2>/dev/null; }
+# reclaim FILE RECORD — delete a stale lease only if, under the lock, it still
+# holds the record judged stale; a renewal since then keeps it.
 reclaim() {
-  _aside="${1%/*}/.reclaim.${1##*/}.$$"
-  mv -f "$1" "$_aside" 2>/dev/null || return 1
-  if [ "$(head -1 "$_aside" 2>/dev/null)" = "$2" ]; then rm -f "$_aside"; return 0; fi
-  ln "$_aside" "$1" 2>/dev/null
-  rm -f "$_aside"
+  lock || return 1
+  if [ "$(head -1 "$1" 2>/dev/null)" = "$2" ]; then rm -f "$1"; unlock; return 0; fi
+  unlock
   return 1
 }
 age_min() { # FILE — minutes since its mtime
@@ -116,15 +129,17 @@ case "$VERB" in
   touch)
     [ -n "$PID" ] || PID=$(gstack_harness_pid "${FROM:-$PPID}")
     mkdir -p "$DIR" || exit 2
-    _tmp="$DIR/.$PID.$$"
-    identity "$PID" > "$_tmp" && mv -f "$_tmp" "$DIR/$PID" || { rm -f "$_tmp"; exit 2; }
-    find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null
+    _tmp="$DIR/.$PID.$$" _locked=1
+    lock && _locked=0
+    identity "$PID" > "$_tmp" && mv -f "$_tmp" "$DIR/$PID" || { rm -f "$_tmp"; [ "$_locked" = 0 ] && unlock; exit 2; }
+    [ "$_locked" = 0 ] && { find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null; unlock; }
     exit 0 ;;
   list)
     for f in "$DIR"/*; do
       [ -f "$f" ] || continue
       p=${f##*/}
-      echo "$p $(age_min "$f")m $(state "$f" "$p")"
+      _age=$(age_min "$f")
+      echo "$p ${_age}m $(state "$p" "$(head -1 "$f" 2>/dev/null)" "$_age")"
     done
     exit 0 ;;
 esac
@@ -143,10 +158,10 @@ for f in "$DIR"/*; do
   [ -f "$f" ] || continue
   p=${f##*/}
   case "$ANCESTRY" in *" $p "*) continue ;; esac
-  case "$(state "$f" "$p")" in
+  _rec=$(head -1 "$f" 2>/dev/null) _age=$(age_min "$f")
+  case "$(state "$p" "$_rec" "$_age")" in
     dead) continue ;;
     stale)
-      _rec=$(head -1 "$f" 2>/dev/null) _age=$(age_min "$f")
       if reclaim "$f" "$_rec"; then
         echo "gstack-lease: reclaimed stale lease $p (${_age}m; recorded '$_rec', pid $p is now $(ps -o comm= -p "$p" 2>/dev/null | head -1) '$(identity "$p")')" >&2
         continue

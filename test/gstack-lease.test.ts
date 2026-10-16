@@ -150,7 +150,7 @@ describe('gstack-lease', () => {
     expect(r.stderr).not.toContain('reclaimed');
   });
 
-  test('a renewal that lands while a stale lease is being reclaimed survives (rename aside, then restore)', () => {
+  test('a renewal that lands between the stale verdict and the reclaim survives: reclaim rereads under the lock', () => {
     const { dir, leases } = checkout();
     const holder = sleeper();
     const file = path.join(leases, String(holder));
@@ -159,14 +159,31 @@ describe('gstack-lease', () => {
     fs.writeFileSync(file, otherStart(fresh.trim()) + '\n');
     const renewed = path.join(dir, 'renewed');
     fs.writeFileSync(renewed, fresh);
-    // The first rename-aside of the lease is preceded by the holder's renewal, as if touch ran between the stale verdict and the rename.
-    const racing = bashEnv(dir, `mv() { case "$*" in *".reclaim."*) command cp "${renewed}" "${file}" ;; esac; command mv "$@"; }\n`);
+    // The holder renews just before reclaim takes the lock, as if touch ran after the stale verdict.
+    const racing = bashEnv(dir, `mkdir() { case "$*" in *"/.lock") command cp "${renewed}" "${file}" ;; esac; command mkdir "$@"; }\n`);
     const r = run(['live', '--root', dir], { BASH_ENV: racing });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stderr).not.toContain('reclaimed');
     expect(fs.readFileSync(file, 'utf8')).toBe(fresh);
     expect(fs.readdirSync(leases).filter((n) => n.startsWith('.'))).toEqual([]);
   });
+
+  test('touch and reclaim take the directory lock; a lock a killed process left behind is broken after a minute', () => {
+    const { dir, leases } = checkout();
+    fs.mkdirSync(path.join(leases, '.lock'), { recursive: true });
+    const old = new Date(Date.now() - 5 * 60_000);
+    fs.utimesSync(path.join(leases, '.lock'), old, old);
+    const holder = sleeper();
+    const r = run(['touch', '--root', dir, '--pid', String(holder)]);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(path.join(leases, '.lock'))).toBe(false);
+    expect(fs.readFileSync(path.join(leases, String(holder)), 'utf8')).toMatch(/^(linux|ps) /);
+    fs.mkdirSync(path.join(leases, '.lock'));
+    fs.writeFileSync(path.join(leases, String(holder)), otherStart(fs.readFileSync(path.join(leases, String(holder)), 'utf8').trim()) + '\n');
+    const held = run(['live', '--root', dir]);
+    expect(held.status, held.stdout + held.stderr).toBe(0);
+    expect(fs.existsSync(path.join(leases, String(holder)))).toBe(true);
+  }, 30_000);
 
   test('a lease without a recorded identity (older gstack) counts while fresh and is stale past the 120-minute window', () => {
     const { dir, leases } = checkout();
