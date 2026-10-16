@@ -84,3 +84,14 @@ check('admitted domain skill RMW finishes its second identity check while draini
  expect(invoke(root,'status','Project','--id',held.id).state).toBe('exclusive');
  invoke(root,'end','Project','--id',held.id);
 }));
+
+check('design publication admits the consumed source as well as every destination',()=>fixture(root=>{
+ const source=join(root,'projects','Held','staged.png');mkdirSync(join(root,'projects','Held'),{recursive:true});writeFileSync(source,'received paid bytes');
+ const held=invoke(root,'begin','Held');
+ for(const destination of [join(root,'outside.png'),join(root,'projects','Other','published.png')]) {
+  const result=spawnSync('sh',[join(import.meta.dir,'../bin/gstack-design-claim'),source,destination],{env:process.env,encoding:'utf8',timeout:10000});
+  expect(result.status).toBe(1);expect(result.stderr).toContain('ARTIFACT_WINDOW_HELD');expect(existsSync(destination)).toBe(false);expect(readFileSync(source,'utf8')).toBe('received paid bytes');
+ }
+ expect(invoke(root,'status','Held','--id',held.id).state).toBe('exclusive');
+ invoke(root,'end','Held','--id',held.id);
+}));

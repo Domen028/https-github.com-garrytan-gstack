@@ -1,14 +1,20 @@
 #!/usr/bin/env bun
-/** Internal destination-scoped publisher. Child arguments are never logged. */
-import { withArtifactPathWrite } from "../lib/artifact-window";
+/** Internal explicitly mutation-scoped publisher. Child arguments are never logged. */
+import { withArtifactPathsWrite } from "../lib/artifact-window";
 
-const [destination, separator, ...command] = process.argv.slice(2);
-if (!destination || separator !== "--" || !command.length) {
-  console.error("gstack-artifact-publish: destination -- command required; staged bytes kept");
+const args = process.argv.slice(2), separator = args.indexOf("--");
+const destination = args[0], command = args.slice(separator + 1), mutations = [destination];
+let valid = separator >= 1;
+for (let index = 1; index < separator; index += 2) {
+  if (args[index] !== "--mutates" || !args[index + 1] || index + 1 >= separator) valid = false;
+  else mutations.push(args[index + 1]);
+}
+if (!destination || !valid || !command.length) {
+  console.error("gstack-artifact-publish: destination [--mutates path] -- command required; staged bytes kept");
   process.exitCode = 1;
 } else {
   try {
-    process.exitCode = await withArtifactPathWrite(destination, async () => {
+    process.exitCode = await withArtifactPathsWrite(mutations, async () => {
       const child = Bun.spawn(command, { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
       return await child.exited;
     });

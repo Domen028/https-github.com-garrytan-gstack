@@ -8,4 +8,4 @@ if [ ! -f "$1" ] || [ ! -s "$1" ]; then
   printf 'gstack-design-claim: staged image %s is missing or empty\ncause: the generating command did not save an image there\nfix: use the outputPath the $D command printed\n' "$1" >&2
   exit 1
 fi
-exec bun "$(dirname "$0")/gstack-artifact-publish.ts" "$2" -- sh "$(dirname "$0")/gstack-design-claim-impl.sh" "$@"
+exec bun "$(dirname "$0")/gstack-artifact-publish.ts" "$2" --mutates "$1" -- sh "$(dirname "$0")/gstack-design-claim-impl.sh" "$@"

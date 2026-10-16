@@ -321,3 +321,26 @@ maintenanceTest("an admitted native CLI can finish its nested identity claim whi
     expect(status(root, window.value.id).value.state).toBe("exclusive"); end(root, window.value.id);
   } finally { writeFileSync(proceed, "cleanup"); if (holder.exitCode === null) { holder.kill(); await holder.exited; } }
 }));
+
+test("inherited identity claims delegate liveness without sending a signal and retain dead-owner evidence", () => fixture(root => {
+  const code = `import importlib.util,os,sys,types
+from pathlib import Path
+spec=importlib.util.spec_from_file_location('paths',sys.argv[1]);paths=importlib.util.module_from_spec(spec);spec.loader.exec_module(paths)
+root=Path(sys.argv[2]);lock=root/'.brain-sync.lock.d';lock.mkdir();(lock/'owner').write_text('owned');(lock/'pid').write_text(str(os.getpid()));os.environ['GSTACK_BRAIN_LOCK_TOKEN']='owned'
+seen=[]
+def probe(pid):seen.append(pid)
+paths._WINDOW=types.SimpleNamespace(process_alive=probe,Refusal=RuntimeError)
+def forbidden(*args):raise AssertionError('signal probe forbidden')
+paths.os.kill=forbidden
+with paths.identity_lock(root) as owned:assert owned is False
+assert seen==[os.getpid()]
+def dead(pid):raise RuntimeError('unverified owner')
+paths._WINDOW.process_alive=dead
+try:
+ with paths.identity_lock(root):raise AssertionError('dead owner admitted')
+except paths.Refusal as error:assert error.code=='ARTIFACT_IDENTITY_OWNER_UNVERIFIED'
+assert (lock/'owner').read_text()=='owned' and (lock/'pid').exists()
+`;
+  const result = spawnSync("python3", ["-c", code, join(import.meta.dir, "../bin/gstack-artifact-paths.py"), root], {encoding:"utf8",timeout:10000});
+  expect(result.status,result.stderr).toBe(0);
+}));

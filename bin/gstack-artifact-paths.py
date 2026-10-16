@@ -35,6 +35,17 @@ LOCAL_GIT_ENV = set("GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_CONFIG GIT_CONFIG_PARA
 def git_env():
     return {**{k: v for k, v in os.environ.items() if k not in LOCAL_GIT_ENV and not re.fullmatch(r"GIT_CONFIG_(KEY|VALUE)_\d+", k)}, "GIT_OPTIONAL_LOCKS": "0"}
 
+_WINDOW = None
+
+def window_module():
+    global _WINDOW
+    if _WINDOW is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("gstack_artifact_window", Path(__file__).with_name("gstack-artifact-window.py"))
+        _WINDOW = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_WINDOW)
+    return _WINDOW
+
 @contextmanager
 def identity_lock(root):
     # Cooperate with the existing drain/init/restore lock. Never reclaim an
@@ -53,7 +64,11 @@ def identity_lock(root):
             pid_text = (lock / "pid").read_text().strip()
             if (lock / "pid").is_symlink() or not pid_text.isdigit() or int(pid_text) <= 0:
                 raise Refusal("ARTIFACT_IDENTITY_OWNER_UNVERIFIED")
-            os.kill(int(pid_text), 0)
+            window = window_module()
+            try:
+                window.process_alive(int(pid_text))
+            except window.Refusal:
+                raise Refusal("ARTIFACT_IDENTITY_OWNER_UNVERIFIED") from None
         except (OSError, OverflowError):
             raise Refusal("ARTIFACT_IDENTITY_OWNER_UNVERIFIED")
         # A shared token is not a mutex between siblings. Only established
@@ -89,10 +104,7 @@ def identity_lock(root):
 def claim_slug(root, slug):
     # Native callers use this helper without going through gstack-slug. Keep
     # their identity transaction admitted until the Git lock is released.
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("gstack_artifact_window", Path(__file__).with_name("gstack-artifact-window.py"))
-    window = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(window)
+    window = window_module()
     root.mkdir(parents=True, exist_ok=True)
     try:
         lease = window.acquire(root, slug, os.getpid(), inherit_holder=True)
