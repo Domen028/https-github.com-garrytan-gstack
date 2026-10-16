@@ -191,7 +191,7 @@ function planVersions(o: RestampOptions, loaded: LoadedPolicy, policyLabel: stri
 }
 
 /** The version writer's own files: the version source, the manifest (root or pinned) and the npm lockfiles beside it. */
-function versionFiles(root: string, versionRel: string): string[] {
+export function versionFiles(root: string, versionRel: string): string[] {
   const pin = path.join(root, '.gstack', 'package-json-path');
   const pkgRel = fs.existsSync(pin) ? (fs.readFileSync(pin, 'utf8').split('\n')[0]?.trim() || 'package.json') : 'package.json';
   const dir = path.dirname(pkgRel) === '.' ? '' : path.dirname(pkgRel) + '/';
