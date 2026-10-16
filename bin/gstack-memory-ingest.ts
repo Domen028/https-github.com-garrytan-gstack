@@ -3228,8 +3228,17 @@ async function runLocked(args: CliArgs): Promise<number> {
 
   if (args.mode === "incremental" && args.quiet) {
     // Steady-state fast path: log nothing unless changes happen.
-    if (result.written > 0 || result.failed > 0) {
-      console.error(`[memory-ingest] ${result.written} written, ${result.failed} failed in ${Date.now() - t0}ms`);
+    // #2394 parity: a page kept local by admitTranscriptSource (source
+    // registration refused/deferred, e.g. no brain configured yet) reached
+    // the post-attribution import step exactly like a written or failed
+    // page — it just didn't land. Fold it into the reported "failed" count
+    // here so this summary line stays a faithful account of every page the
+    // shared attribution gate admitted; the per-file kept_local bucket and
+    // its own retry semantics (re-prepared next run, not quarantined) are
+    // unchanged elsewhere.
+    const reportedFailed = result.failed + (result.kept_local ?? 0);
+    if (result.written > 0 || reportedFailed > 0) {
+      console.error(`[memory-ingest] ${result.written} written, ${reportedFailed} failed in ${Date.now() - t0}ms`);
     }
   } else {
     printBulkResult(result, args);
