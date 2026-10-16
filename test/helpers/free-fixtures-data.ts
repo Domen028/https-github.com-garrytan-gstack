@@ -169,6 +169,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/shared-libs-plan-callers-verbless-scope-37186854666.json': ['test/shared-libs-plan-actor.test.ts'],
   'test/fixtures/shared-libs/**': ['test/shared-libs-checker-interface-evidence.test.ts', 'test/shared-libs-fixture.test.ts', 'test/shared-libs-plan-actor.test.ts', 'test/shared-libs-revalidation-prompt.test.ts', 'test/shared-libs-review-start-evidence.test.ts', 'test/shared-libs-source-reads.test.ts', 'test/shared-libs-stage-actor.test.ts'],
   'test/fixtures/ship-triage/**': ['test/ship-triage-labels.test.ts'],
+  'test/fixtures/skill-md-size-allowlist.json': ['test/skill-md-size-guard.test.ts'],
   'test/fixtures/skillify-narration/**': ['test/skill-fixture.test.ts'],
   'test/fixtures/test-value-seam-evidence.json': ['test/test-value-bar.test.ts'],
   'test/fixtures/third-party-actions-recovery-public.json': ['test/third-party-actions-recording.test.ts', 'test/third-party-actions.test.ts'],
