@@ -239,6 +239,13 @@ gstack_result_anchor() {
     EVAL_MODEL_DENIED) printf '%s' 'eval-model-denied' ;;
     EVAL_MODEL_OLD_GENERATION) printf '%s' 'eval-model-old-generation' ;;
     EVAL_MODEL_GENERATION_UNRESOLVED) printf '%s' 'eval-model-generation-unresolved' ;;
+    POLICY_GSTACK_TOO_OLD) printf '%s' 'policy-gstack-too-old' ;;
+    QUEUE_NOT_READY) printf '%s' 'queue-not-ready' ;;
+    QUEUE_PROOF_MISSING) printf '%s' 'queue-proof-missing' ;;
+    QUEUE_STAMP_NOT_STAMP_ONLY) printf '%s' 'queue-stamp-not-stamp-only' ;;
+    QUEUE_VERIFY_MISMATCH) printf '%s' 'queue-verify-mismatch' ;;
+    QUEUE_GATE_MISSING) printf '%s' 'queue-gate-missing' ;;
+    GATE_AHEAD_ATTEMPT_INVALID) printf '%s' 'gate-ahead-attempt-invalid' ;;
     *) return 1 ;;
   esac
 }

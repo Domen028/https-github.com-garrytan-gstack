@@ -3440,3 +3440,100 @@ checked, and the arm fails instead of passing unchecked.
 
 **Fix.** Add the model to its family (newest first) in
 `.gstack/eval-models.json` in a reviewed PR, or use a model a family lists.
+
+<a id="policy-gstack-too-old"></a>
+### `POLICY_GSTACK_TOO_OLD`
+
+**Meaning.** `.gstack/ship-policy.json` on the base branch sets
+`min_gstack_version` above the gstack reading it. The policy uses keys this
+gstack would read differently or not at all, so every ship-policy reader
+(`gstack-restamp`, `gstack-tree-receipt`, `gstack-ship-queue`,
+`gstack-ship-policy`) refuses it instead of guessing. A gstack older than
+`min_gstack_version` itself sees that key as unknown and fails with
+`POLICY_INVALID`, which names the key.
+
+**Fix.** Upgrade gstack to the version the message names
+(`bin/gstack-upgrade`, or rerun the session install), then rerun. A crew lead
+raising `min_gstack_version` raises the crew's install floor at the same
+time; `gstack-ship-policy validate` prints `MIN_READER:` for exactly that.
+
+<a id="queue-not-ready"></a>
+### `QUEUE_NOT_READY`
+
+**Meaning.** `gstack-ship-queue ready` will not print a READY block the
+coordinator could misread: the working tree has uncommitted tracked changes,
+HEAD is not the PR's pushed head (read through `gh pr view`), CI at that
+exact head is not green (failed, pending or unreadable), or the pregate result
+is missing, failed or recorded on another tree (`PREGATE_STALE`).
+
+**Fix.** Commit and push, wait for CI on that head, rerun
+`gstack-pregate run --allow-repo-commands` when the tree changed, then rerun
+`gstack-ship-queue ready --pr <n>`. The block it prints before refusing shows
+which line is not yet true.
+
+<a id="queue-proof-missing"></a>
+### `QUEUE_PROOF_MISSING`
+
+**Meaning.** A queue step lacks an input it needs to prove its claim, or an
+input does not match: the gated head is not a commit here, HEAD differs from
+the gated head beyond stamps (the gate never covered this tree), an earlier
+stamp with other inputs is unfinished, the stamp journal's head moved, or a
+gate-ahead merge could not be recomputed with `git merge-tree`. Nothing was
+written unless the `QUEUE_STAMP_REFUSED:` line says `committed=yes`.
+
+**Fix.** Supply the named input (fetch the gated head, pass the current base
+sha), or regate the tree you mean to stamp. For an unfinished stamp, rerun the
+identical command to resume, or revert its files and delete
+`.gstack/tmp/ship-queue/stamp-<pr>.json`.
+
+<a id="queue-stamp-not-stamp-only"></a>
+### `QUEUE_STAMP_NOT_STAMP_ONLY`
+
+**Meaning.** `gstack-ship-queue stamp` committed the stamp, and the tree
+receipt between the gated head and the stamped head found a difference
+outside the stamp rules (the residual paths are printed). The gate's result
+does not cover that head. The refusal line says `committed=yes <sha>`.
+
+**Fix.** Inspect the residual paths: drop the stray edit and stamp again, or
+run the gate on the stamped head.
+
+<a id="queue-verify-mismatch"></a>
+### `QUEUE_VERIFY_MISMATCH`
+
+**Meaning.** The coordinator's `gstack-ship-queue verify` could not
+reproduce the lane's claim from the PR's pushed commits: the head moved, the
+head differs from the gated tree beyond stamps, the receipt digest differs
+from the one in `QUEUE_STAMP`, or, for a gate-ahead record, `git merge-tree
+--write-tree` gives another merge tree, the recorded stamp patch does not
+rebuild the recorded gated tree or changes more than stamps, or the
+predecessor PR moved after the gate.
+
+**Fix.** Do not merge. Ask the lane to rerun `gstack-ship-queue stamp` (or
+`gate-ahead`) on the current queue and report again.
+
+<a id="queue-gate-missing"></a>
+### `QUEUE_GATE_MISSING`
+
+**Meaning.** The ship policy sets `full_e2e: true`, and no passing full-gate
+result is bound to the tree being stamped or verified: no recorded gate-ahead
+attempt for that gated head, no `--gate-exit 0 --gate-log <file>` from a run
+on it, or the recorded run exited non-zero.
+
+**Fix.** Run the gate the policy's `gate_command` names in the gate-ahead
+worktree and bind it with `gstack-ship-queue gate-ahead --record`, or pass the
+exit code and log of a passing run on the gated head to `stamp`.
+
+<a id="gate-ahead-attempt-invalid"></a>
+### `GATE_AHEAD_ATTEMPT_INVALID`
+
+**Meaning.** `gstack-ship-queue gate-ahead --record` could not bind the gate
+result: the attempt id is unknown for that PR, the attempt already holds a
+different result, the log file is missing, or the attempt's worktree no longer
+holds the gated commit (its HEAD moved or a tracked file changed), so the
+result would not describe the gated tree.
+
+**Fix.** `gstack-ship-queue gate-ahead --list --pr <n>` shows every attempt
+and the current one. Record the live attempt, or prepare a new one with
+`gate-ahead --after <pr>` and run the gate there without editing tracked
+files.
+
