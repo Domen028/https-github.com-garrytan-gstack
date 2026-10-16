@@ -67,13 +67,17 @@ Flags:
                        (repeatable, needs --approved; symlinks and non-regular files are refused).
   --cwd <dir>          Run in this directory instead of a temp one (needs --approved).
   --approved           The user approved the --pass-env, --copy-config and --cwd values given.
-  --launch-check       Run "<cmd> --version" in the same containment and report launch ok|failed.
+  --launch-check       Run "<cmd> --version" in the same containment; launch says whether it started,
+                       exit_code is the probe's own result.
   --help               Print this help.
 
 Containment: stdin is /dev/null, no controlling terminal, own process group, temp cwd and temp
 HOME/XDG_CONFIG_HOME in a 0700 directory under the gstack state root (removed on exit), env limited
-to PATH, LANG, LC_*, TMPDIR, TERM=dumb and version-manager shims (NVM_DIR, NVM_BIN, MISE_*, VOLTA_HOME,
-ASDF_*, PYENV_ROOT, RBENV_ROOT; prefixed names that look like credentials are dropped).
+to PATH, LANG, LC_*, TMPDIR, TERM=dumb and version-manager locations (NVM_DIR, NVM_BIN, VOLTA_HOME,
+PYENV_ROOT, RBENV_ROOT, MISE_DATA_DIR, ASDF_DIR, ASDF_DATA_DIR); config, trust and env-loading
+variables (MISE_*, ASDF_* and the rest) need --pass-env. Containment lasts while the helper runs:
+a SIGKILLed helper, or a descendant that leaves the process group, outlives it, so capture only
+read-only invocations.
 
 Record (one JSON object on stdout): version, argv (redacted), exit_code (null when killed or signalled),
 signal, timed_out (the helper's own timer only), deadline_s, terminal {verdict: blocking |
@@ -130,8 +134,8 @@ function parseArgs(argv: string[]): Options {
 }
 
 const OWNED_ENV = new Set(['PATH', 'HOME', 'XDG_CONFIG_HOME', 'TERM', 'USERPROFILE']);
-const SHIM_NAMES = new Set(['PATH', 'LANG', 'TMPDIR', 'NVM_DIR', 'NVM_BIN', 'VOLTA_HOME', 'PYENV_ROOT', 'RBENV_ROOT']);
-const SHIM_PREFIXES = ['LC_', 'MISE_', 'ASDF_'];
+const SHIM_NAMES = new Set(['PATH', 'LANG', 'TMPDIR', 'NVM_DIR', 'NVM_BIN', 'VOLTA_HOME', 'PYENV_ROOT', 'RBENV_ROOT', 'MISE_DATA_DIR', 'ASDF_DIR', 'ASDF_DATA_DIR']);
+const SHIM_PREFIXES = ['LC_'];
 const WINDOWS_NAMES = new Set(['SYSTEMROOT', 'COMSPEC', 'PATHEXT', 'WINDIR']);
 const CREDENTIAL_NAME = /TOKEN|SECRET|PASSW|KEY|AUTH|CREDENTIAL|COOKIE|SESSION/i;
 
@@ -261,12 +265,12 @@ const bump = (map: Map<string, number>, id: string, by = 1) => map.set(id, (map.
 
 /** Sanitize, mask pass-env values literally, then mask every finding span. Null means withhold. */
 function clean(text: string, literals: string[], tally?: Tally, maxBytes = 4 * SCAN_CAP): string | null {
-  let value = sanitize(text);
-  for (const literal of literals) {
-    const parts = value.split(literal);
+  const mask = (input: string) => literals.reduce((acc, literal) => {
+    const parts = acc.split(literal);
     if (parts.length > 1 && tally) bump(tally.secret, 'passed_env.value', parts.length - 1);
-    value = parts.join(PASS_MARK);
-  }
+    return parts.join(PASS_MARK);
+  }, input);
+  const value = mask(sanitize(mask(text)));
   const result = scan(value, { maxBytes });
   if (result.oversize) return null;
   if (tally) for (const finding of result.findings) bump(finding.tier === 'HIGH' ? tally.secret : tally.other, finding.id);
@@ -279,7 +283,10 @@ function literalForms(names: string[]): string[] {
     const value = process.env[name] ?? '';
     if (value.length < MIN_MASKED_VALUE) continue;
     const base64 = Buffer.from(value, 'utf8').toString('base64');
-    for (const form of [value, encodeURIComponent(value), base64, base64.replace(/=+$/, ''), Buffer.from(value, 'utf8').toString('base64url')]) forms.add(form);
+    for (const form of [value, encodeURIComponent(value), JSON.stringify(value).slice(1, -1), base64, base64.replace(/=+$/, ''), Buffer.from(value, 'utf8').toString('base64url')]) {
+      forms.add(form);
+      forms.add(sanitize(form));
+    }
   }
   return [...forms].sort((a, b) => b.length - a.length);
 }
@@ -451,7 +458,7 @@ async function capture(options: Options): Promise<{ record: Record<string, unkno
     const stderrText = sanitize(Buffer.concat(run.chunks.filter(chunk => chunk.stream === 'stderr').map(chunk => chunk.bytes)).toString('utf8'));
     const terminal = classifyTerminal(stderrText, { exitCode, timedOut: run.timedOut, launched, quietMs: run.quietMs, outputBytes: run.outputBytes, deadlineS });
     return { literals, record: { ...base, exit_code: exitCode, signal: run.signal, timed_out: run.timedOut, deadline_s: deadlineS, terminal,
-      launch: !launched || (options.launchCheck && exitCode !== 0) ? 'failed' : 'ok',
+      launch: launched ? 'ok' : 'failed',
       stdout: released.text.stdout, stderr: released.text.stderr, withheld_reason: released.withheld,
       secret_findings: tallyOut(released.tally.secret), other_masked: tallyOut(released.tally.other), scan_complete: released.scanComplete,
       truncated: released.truncated, passed_env: options.passEnv, copied_config: copied,
@@ -462,9 +469,19 @@ async function capture(options: Options): Promise<{ record: Record<string, unkno
 }
 
 const writeTo = (stream: NodeJS.WriteStream, text: string) => new Promise<void>(resolve => { stream.write(text, () => resolve()); });
-const errorLine = (what: string, fix: string, code: string) => `${PROG}: ${what}; fix: ${fix} (${code})\n`;
+const stringFields = (value: unknown): string[] => typeof value === 'string' ? [value]
+  : value && typeof value === 'object' ? Object.values(value).flatMap(stringFields) : [];
+
+/** Every diagnostic passes the record's redaction; a line that still matches prints without its details. */
+function errorLine(what: string, fix: string, code: DxCaptureCodeName, literals: string[]): string {
+  const safe = clean(`${PROG}: ${what}; fix: ${fix} (${code})`, literals);
+  const leaked = safe === null || literals.some(literal => safe.includes(literal))
+    || scan(safe, { maxBytes: 2 * Buffer.byteLength(safe, 'utf8') + 1 }).findings.length > 0;
+  return `${leaked ? `${PROG}: details withheld by redaction; fix: ${DX_CAPTURE_CODES[code].fix} (${code})` : safe}\n`;
+}
 
 export async function dxErrorCaptureMain(argv: string[]): Promise<number> {
+  let literals: string[] = [];
   try {
     const options = parseArgs(argv);
     if (options.help) { await writeTo(process.stdout, DX_CAPTURE_HELP); return 0; }
@@ -474,26 +491,28 @@ export async function dxErrorCaptureMain(argv: string[]): Promise<number> {
         `ask the user to approve ${gated.join(' and ')} as given, then rerun with --approved`);
     }
     checkPassEnv(options.passEnv);
+    literals = literalForms(options.passEnv);
     if (options.cwd && !fs.statSync(options.cwd, { throwIfNoEntry: false })?.isDirectory()) {
       throw new CaptureError('DX_CAPTURE_BAD_CWD', `--cwd ${JSON.stringify(options.cwd)} is not an existing directory`);
     }
-    const { record, literals } = await capture(options);
+    const { record } = await capture(options);
     const json = JSON.stringify(record);
-    if (literals.some(literal => json.includes(literal)) || scan(json, { maxBytes: 2 * json.length + 1 }).findings.some(finding => finding.tier === 'HIGH')) {
+    if (stringFields(record).some(field => literals.some(literal => field.includes(literal))
+      || scan(field, { maxBytes: 2 * Buffer.byteLength(field, 'utf8') + 1 }).findings.some(finding => finding.tier === 'HIGH'))) {
       throw new CaptureError('DX_CAPTURE_REDACTION_FAILED', 'the finished record still matched a secret check; nothing was printed');
     }
     await writeTo(process.stdout, json + '\n');
     if (record.launch !== 'not_found') return 0;
     await writeTo(process.stderr, errorLine(`${JSON.stringify(path.basename(options.command))} does not resolve to an executable file; nothing ran`,
-      DX_CAPTURE_CODES.DX_CAPTURE_NOT_FOUND.fix, 'DX_CAPTURE_NOT_FOUND'));
+      DX_CAPTURE_CODES.DX_CAPTURE_NOT_FOUND.fix, 'DX_CAPTURE_NOT_FOUND', literals));
     return 1;
   } catch (error) {
     if (error instanceof CaptureError) {
-      await writeTo(process.stderr, errorLine(error.what, error.fix, error.code));
+      await writeTo(process.stderr, errorLine(error.what, error.fix, error.code, literals));
       return DX_CAPTURE_CODES[error.code].exit;
     }
     const frame = ((error as Error)?.stack ?? '').split('\n').find(line => line.trim().startsWith('at '))?.trim() ?? 'no stack frame';
-    await writeTo(process.stderr, errorLine(`unexpected ${(error as Error)?.name ?? 'error'} ${frame}`, DX_CAPTURE_CODES.DX_CAPTURE_INTERNAL.fix, 'DX_CAPTURE_INTERNAL'));
+    await writeTo(process.stderr, errorLine(`unexpected ${(error as Error)?.name ?? 'error'} ${frame}`, DX_CAPTURE_CODES.DX_CAPTURE_INTERNAL.fix, 'DX_CAPTURE_INTERNAL', literals));
     return 1;
   }
 }

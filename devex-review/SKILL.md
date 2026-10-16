@@ -800,7 +800,7 @@ Pick the evidence source by surface:
   (the helper refuses those flags without `--approved`). Unapproved paths are recorded unverified.
   ```bash
   TARGET_CLI="${TARGET_CLI:?set TARGET_CLI to the CLI under audit}"
-  ~/.claude/skills/gstack/bin/gstack-error-capture --launch-check -- "$TARGET_CLI"
+  ~/.claude/skills/gstack/bin/gstack-error-capture -- "$TARGET_CLI" --help
   ~/.claude/skills/gstack/bin/gstack-error-capture -- "$TARGET_CLI" --gstack-unknown-flag
   ```
   Swap `--gstack-unknown-flag` for each rejected form the help shows.
@@ -823,7 +823,7 @@ when `secret_findings` is non-zero; `other_masked` (emails, paths, IPs) is not a
 `scan_complete: false` or a withheld stream leaves redaction unknown. You judge what, fix,
 recovery, code, context and trace.
 
-`launch: failed` means the containment broke the CLI before it ran: report it as a
+`launch: failed` means the target never started in the containment (exit 127): report it as a
 containment limit and offer an approved rerun with `--pass-env`. A reached missing-auth or
 missing-config error is a real environment-class path: score it. Record per path the
 containment settings, passed env names and the error class reached; classes you never

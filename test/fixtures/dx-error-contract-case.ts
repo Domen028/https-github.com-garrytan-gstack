@@ -4,7 +4,8 @@
  * prompt, run headless). The bars below were fixed before any paid trial and
  * are not tuned after seeing results.
  *
- * A trial PASSES when the review's gstack-findings fence:
+ * A trial PASSES when the bound result parses with no errors (the INPUT receipt
+ * for this snapshot and a valid gstack-findings fence) and the fence:
  *   - flags path P1 (agent-hostile push) with Critical CAP4 findings naming
  *     redaction, channel and fix, and names context in some CAP finding on P1;
  *   - raises no CAP finding on P2 (agent-ready decoy), P3 (remote API error with
@@ -12,7 +13,7 @@
  *   - raises at least one CAP finding on P5 (error handling never specified);
  *   - labels every CAP4 finding Critical and every CAP6 finding High.
  */
-import { parseRecordFindings } from '../../lib/autoplan-reconcile';
+import { parseRecordFindings, parseReviewResult } from '../../lib/autoplan-reconcile';
 import { DX_ERROR_ITEMS } from '../../lib/dx-error-contract';
 
 export const DX_ERROR_CONTRACT_PLAN = `# Plan: acmesync 2.0 CLI error handling
@@ -90,10 +91,8 @@ export function capFindings(review: string): CapFinding[] {
   return caps;
 }
 
-export function gradeDxContractReview(review: string): DxContractGrade {
-  const reasons: string[] = [];
-  const parsed = parseRecordFindings(review);
-  if (parsed.source !== 'fence') reasons.push(`no gstack-findings fence (source=${parsed.source})`);
+export function gradeDxContractReview(review: string, sha256: string): DxContractGrade {
+  const reasons = parseReviewResult(review, { phase: 'dx', sha256 }).errors.map(error => `result: ${error}`);
   const caps = capFindings(review);
   for (const cap of caps) {
     if (!ITEMS.has(cap.item)) reasons.push(`unknown item in "${cap.title}"`);

@@ -2,7 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { DX_ERROR_COMPACT, DX_ERROR_ITEMS } from '../lib/dx-error-contract';
 import { DX_ERROR_CONTRACT_PLAN, capFindings, gradeDxContractReview } from './fixtures/dx-error-contract-case';
 
-const fence = (rows: Array<Record<string, unknown>>) => ['INPUT: dx abc', 'Review prose.', '```gstack-findings', ...rows.map(row => JSON.stringify(row)), '```'].join('\n');
+const SHA = 'a'.repeat(64);
+const fence = (rows: Array<Record<string, unknown>>) => [`INPUT: dx ${SHA}`, 'Review prose.', '```gstack-findings', ...rows.map(row => JSON.stringify(row)), '```'].join('\n');
 const PASSING = [
   { id: 'F1', severity: 'Critical', title: 'CAP4:P1:redaction --debug prints the bearer token' },
   { id: 'F2', severity: 'Critical', title: 'CAP4:P1:channel push failure exits 0 and blocks on a y/N prompt' },
@@ -27,14 +28,14 @@ describe('dx-error-contract-review grader (free controls for the paid case)', ()
   });
 
   test('a review meeting every bar passes', () => {
-    const grade = gradeDxContractReview(fence(PASSING));
+    const grade = gradeDxContractReview(fence(PASSING), SHA);
     expect(grade.reasons).toEqual([]);
     expect(grade.pass).toBe(true);
   });
 
   test('command-named paths map to their labels', () => {
     const rows = PASSING.map(row => ({ ...row, title: String(row.title).replace(':P1:', ':acmesync push:').replace(':P5:', ':acmesync migrate:') }));
-    expect(gradeDxContractReview(fence(rows)).pass).toBe(true);
+    expect(gradeDxContractReview(fence(rows), SHA).pass).toBe(true);
   });
 
   test.each([
@@ -45,16 +46,20 @@ describe('dx-error-contract-review grader (free controls for the paid case)', ()
     ['unsafe fix missed', PASSING.filter(row => row.id !== 'F3'), 'P1 missing CAP4:fix'],
     ['context gap missed', PASSING.filter(row => row.id !== 'F4'), 'P1 missing a CAP finding on context'],
     ['silent path missed', PASSING.filter(row => row.id !== 'F5'), 'P5 (unspecified error handling) not capped'],
+    ['malformed severity on a decoy row', [...PASSING, { id: 'F7', severity: 'Banana', title: 'Looks fine' }], 'result:'],
     ['CAP4 under-rated', PASSING.map(row => row.id === 'F2' ? { ...row, severity: 'High' } : row), 'CAP4 labelled High, want Critical'],
   ])('%s fails', (_name, rows, reason) => {
-    const grade = gradeDxContractReview(fence(rows as Array<Record<string, unknown>>));
+    const grade = gradeDxContractReview(fence(rows as Array<Record<string, unknown>>), SHA);
     expect(grade.pass).toBe(false);
     expect(grade.reasons.join('\n')).toContain(reason);
   });
 
-  test('a review with no findings fence fails', () => {
-    const grade = gradeDxContractReview('INPUT: dx abc\nLooks fine to me.');
-    expect(grade.pass).toBe(false);
-    expect(grade.reasons[0]).toContain('no gstack-findings fence');
+  test('a review with no findings fence, or bound to another snapshot, fails', () => {
+    const unfenced = gradeDxContractReview(`INPUT: dx ${SHA}\nLooks fine to me.`, SHA);
+    expect(unfenced.pass).toBe(false);
+    expect(unfenced.reasons.join('\n')).toContain('gstack-findings');
+    const rebound = gradeDxContractReview(fence(PASSING), 'b'.repeat(64));
+    expect(rebound.pass).toBe(false);
+    expect(rebound.reasons[0]).toContain('result: receipt names');
   });
 });

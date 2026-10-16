@@ -53,15 +53,15 @@ describeIfSelected('DX error contract native reviewer (arm A)', ['dx-error-contr
     });
     logCost(NAME, result);
     const review = fs.existsSync(prompts.nativeResult) ? fs.readFileSync(prompts.nativeResult, 'utf8') : '';
-    const grade = gradeDxContractReview(review);
+    const grade = gradeDxContractReview(review, snapshot.sha256);
     console.log(`dx-error-contract-review caps: ${grade.caps.map(cap => `${cap.severity}:${cap.title}`).join(' | ') || 'none'}`);
     recordE2E(collector, NAME, 'DX error contract native reviewer', result, {
       passed: result.exitReason === 'success' && grade.pass,
       ...(grade.reasons.length ? { error: grade.reasons.join('; ') } : {}),
     });
     expect(result.exitReason).toBe('success');
-    expectContract(review.startsWith(`INPUT: dx ${snapshot.sha256}`) && review.includes('```gstack-findings'),
-      'dx-error-contract-review: the reviewer did not write a bound result with a gstack-findings fence', { collector, name: NAME });
+    expectContract(!grade.reasons.some(reason => reason.startsWith('result: ')),
+      `dx-error-contract-review: the bound result does not parse: ${grade.reasons.filter(reason => reason.startsWith('result: ')).join('; ')}`, { collector, name: NAME });
     expect(grade.reasons).toEqual([]);
   }, CAPTURE_MS + 30_000);
 });

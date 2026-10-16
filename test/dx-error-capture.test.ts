@@ -41,6 +41,8 @@ const FIXTURES: Record<string, string> = {
     "process.exit(1);",
   ].join('\n'),
   'cross.ts': "const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));\nawait new Promise(resolve => process.stdout.write(process.argv[2], resolve));\nawait sleep(50);\nawait new Promise(resolve => process.stderr.write(process.argv[3], resolve));\n",
+  'echo-json-env.ts': "console.log(JSON.stringify({ value: process.env.DX_TEST_VALUE }));\n",
+  'cjk.ts': "console.error('\u9519'.repeat(5000));\nprocess.exit(1);\n",
   'echo-env.ts': "const value = process.env.DX_TEST_VALUE ?? '';\nconsole.log('value=' + value);\nconsole.error('encoded=' + Buffer.from(value).toString('base64'));\n",
   'big.ts': "const token = process.argv[2] + process.argv[3];\nprocess.stdout.write('a '.repeat(45) + token + ' ' + 'b'.repeat(200) + '\\n');\n",
   'bad-utf8.ts': "process.stdout.write(Buffer.from([0x6f, 0x6b, 0xff, 0xfe, 0x0a]));\nprocess.stderr.write('fine\\n');\n",
@@ -49,6 +51,7 @@ const FIXTURES: Record<string, string> = {
   'env.ts': "import { readFileSync, statSync } from 'node:fs';\nconst config = process.env.HOME + '/.config/tool/config.json';\nlet copied = null;\ntry { copied = { text: readFileSync(config, 'utf8'), mode: statSync(config).mode & 0o777 }; } catch {}\nconsole.log(JSON.stringify({ cwd: process.cwd(), home: process.env.HOME, xdg: process.env.XDG_CONFIG_HOME, term: process.env.TERM, keys: Object.keys(process.env).sort(), copied }));\n",
 };
 for (const [name, source] of Object.entries(FIXTURES)) fs.writeFileSync(path.join(ROOT, name), source);
+fs.writeFileSync(path.join(ROOT, 'no-version.sh'), '#!/bin/sh\necho "unknown option: $1" >&2\nexit 2\n', { mode: 0o755 });
 fs.mkdirSync(path.join(FAKE_HOME, '.config/tool'), { recursive: true });
 fs.writeFileSync(path.join(FAKE_HOME, '.config/tool/config.json'), '{"color":false}\n');
 fs.symlinkSync(path.join(FAKE_HOME, '.config/tool/config.json'), path.join(FAKE_HOME, '.linked.json'));
@@ -172,6 +175,25 @@ describe('gstack-error-capture redaction', () => {
     expect(result.record.containment.env).toContain('DX_TEST_VALUE');
   });
 
+  test('a --pass-env value the target JSON-escapes is masked, and decoding stdout cannot rebuild it', () => {
+    const value = 'quo"te' + randomAlnum(12);
+    const result = capture(['--pass-env', 'DX_TEST_VALUE', '--approved'], 'echo-json-env.ts', [], { DX_TEST_VALUE: value });
+    expect(result.stdout).not.toContain(JSON.stringify(value).slice(1, -1));
+    expect(JSON.stringify(JSON.parse(result.record.stdout))).not.toContain(value.slice(6));
+    expect(result.record.secret_findings.count).toBeGreaterThan(0);
+  });
+
+  test('a forwarded value equal to a JSON literal does not trip the final secret check', () => {
+    const { record } = capture(['--pass-env', 'CI', '--approved'], 'exit0.ts', [], { CI: 'true' });
+    expect(record.exit_code).toBe(0);
+  });
+
+  test('multi-byte output under the publish cap is recorded, not withheld', () => {
+    const { record } = capture([], 'cjk.ts');
+    expect(record.stderr).toBe('\u9519'.repeat(5000) + '\n');
+    expect(record.truncated.stderr).toBe(false);
+  });
+
   test('truncation runs after redaction and drops the run cut at --max-bytes', () => {
     const result = capture(['--max-bytes', '100'], 'big.ts', TOKEN_HALVES);
     expect(leaksToken(result.stdout)).toBe(false);
@@ -201,7 +223,8 @@ describe('gstack-error-capture containment', () => {
   test('the target gets a temp cwd and HOME, a scrubbed env and TERM=dumb; the run dir is removed', () => {
     const staleDir = path.join(STATE, 'error-capture', 'run-' + spawnSync(process.execPath, ['-e', ''], { timeout: 10_000 }).pid + '-stale');
     fs.mkdirSync(staleDir, { recursive: true });
-    const { record } = capture([], 'env.ts', [], { DX_UNLISTED_SECRET_NAME: 'x', MISE_GITHUB_TOKEN: 'y', MISE_ENV: 'dev' });
+    const { record } = capture([], 'env.ts', [], { DX_UNLISTED_SECRET_NAME: 'x', MISE_GITHUB_TOKEN: 'y', MISE_ENV: 'dev',
+      MISE_GLOBAL_CONFIG_FILE: path.join(FAKE_HOME, 'mise.toml'), MISE_TRUSTED_CONFIG_PATHS: FAKE_HOME, MISE_DATA_DIR: path.join(FAKE_HOME, '.mise') });
     const seen = JSON.parse(record.stdout);
     expect(seen.cwd.startsWith(fs.realpathSync(STATE))).toBe(true);
     expect(seen.home.startsWith(fs.realpathSync(STATE))).toBe(true);
@@ -209,7 +232,8 @@ describe('gstack-error-capture containment', () => {
     expect(seen.term).toBe('dumb');
     expect(seen.keys).not.toContain('DX_UNLISTED_SECRET_NAME');
     expect(seen.keys).not.toContain('MISE_GITHUB_TOKEN');
-    expect(seen.keys).toContain('MISE_ENV');
+    for (const name of ['MISE_ENV', 'MISE_GLOBAL_CONFIG_FILE', 'MISE_TRUSTED_CONFIG_PATHS']) expect(seen.keys).not.toContain(name);
+    expect(seen.keys).toContain('MISE_DATA_DIR');
     expect(record.containment).toEqual({ cwd: 'temp', home: 'temp', env: seen.keys });
     expect(fs.readdirSync(path.join(STATE, 'error-capture'))).toEqual([]);
     expect(fs.statSync(path.join(STATE, 'error-capture')).mode & 0o777).toBe(0o700);
@@ -229,6 +253,14 @@ describe('gstack-error-capture containment', () => {
     expect(result.stderr).toContain('(DX_CAPTURE_CONFIG_REFUSED)');
   });
 
+  test('--launch-check reports a started target as launch ok even when --version is rejected', () => {
+    const result = helper(['--launch-check', '--', path.join(ROOT, 'no-version.sh')]);
+    expect(result.status).toBe(0);
+    const record = JSON.parse(result.stdout);
+    expect(record.launch).toBe('ok');
+    expect(record.exit_code).toBe(2);
+  });
+
   test('--launch-check runs <cmd> --version inside the containment', () => {
     const result = helper(['--launch-check', '--', process.execPath]);
     expect(result.status).toBe(0);
@@ -241,6 +273,14 @@ describe('gstack-error-capture containment', () => {
 });
 
 describe('gstack-error-capture own errors', () => {
+  test('its own diagnostics are redacted: a token in an unknown flag never reaches stderr', () => {
+    const result = helper(['--' + TOKEN, '--', process.execPath]);
+    expect(result.status).toBe(2);
+    expect(result.stderr).toMatch(ERROR_LINE);
+    expect(result.stderr).toContain('(DX_CAPTURE_USAGE)');
+    expect(leaksToken(result.stderr)).toBe(false);
+  });
+
   test('--pass-env without --approved is refused with exit 3', () => {
     const result = helper(['--pass-env', 'DX_TEST_VALUE', '--', process.execPath, path.join(ROOT, 'echo-env.ts')], { DX_TEST_VALUE: PASSED_VALUE });
     expect(result.status).toBe(3);
