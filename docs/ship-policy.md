@@ -262,6 +262,7 @@ which carry the workflow consequences the skill prose would otherwise spell out:
 |---|---|
 | `ship: history merge-only: …` | never rebase, squash or force-push; `check-history --plan <merge\|squash\|rebase>` refuses a rewrite plan (`HISTORY_POLICY_VIOLATION`, exit 3) |
 | `ship: queue_mode stamp-at-merge: …` | Step 12 items 1–4 are replaced by `gstack-restamp --next --base <base> --pr <n> --expect-base <sha>` when the PR is next, `--after <predecessor-pr>` when it is not; the restamp's own `next:` line says what follows (NEW_VERSION, CHANGELOG entry text only, the merge's expected head) |
+| `ship: shared merge queue: …` | in a coordinator-run queue, `gstack-ship-queue ready`, `gate-ahead` and `stamp` replace the restamp calls; see [Run a shared merge queue](#run-a-shared-merge-queue) |
 | `ship: gate-ahead: …` | with `.gstack/tmp/gate-ahead.json` present, Step 16 reuses only the lanes `gstack-tree-receipt … --json > .gstack/tmp/tree-receipt.json` marks reusable; stamp-sensitive and not-eligible lanes run live; `--force-gate <reason>` is the coordinator's call |
 | `ship: bump patch: …` | Step 12 never asks for MINOR or MAJOR; PATCH or MICRO by size |
 | `ship: preregistration: …` | `gstack-evidence ancestor --from-policy --base <base>` must print only `ANCESTOR: ok` before push |

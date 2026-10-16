@@ -56,6 +56,7 @@ describe('through the binaries', () => {
     expect(r.out).toContain(`KEY: gate_command introduced=${SHIP_QUEUE_KEYS_VERSION}\n`);
     expect(r.out).toContain(`MIN_READER: gstack ${SHIP_QUEUE_KEYS_VERSION} `);
     expect(JSON.parse(runBin(repo, 'gstack-ship-policy', ['validate', '--json']).out).min_reader).toBe(SHIP_QUEUE_KEYS_VERSION);
+    expect(runBin(repo, 'gstack-ship-policy', ['show-effective', '--base', 'main']).out).toMatch(/^ship: shared merge queue: .*gstack-ship-queue ready --pr <n>.*\(docs\/ship-policy\.md#run-a-shared-merge-queue\); gate command: `bun run test`$/m);
     const explain = runBin(repo, 'gstack-ship-policy', ['init', '--explain']);
     expect(explain.out).toMatch(new RegExp(`^full_e2e: .* default: false introduced: ${SHIP_QUEUE_KEYS_VERSION.replace(/\./g, '\\.')}$`, 'm'));
   }, 60_000);
