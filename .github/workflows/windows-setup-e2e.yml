@@ -138,7 +138,7 @@ jobs:
           test "$CODE" -eq 0 || (echo "test/setup-ps1.test.ts exited $CODE" && exit 1)
           grep -qE '^ *4 pass$' <<< "$OUT" || (echo "expected exactly 4 executed setup.ps1 cases" && exit 1)
           grep -qE '^ *0 fail$' <<< "$OUT" || (echo "a setup.ps1 case failed" && exit 1)
-          grep -qE '^ *15 skip$' <<< "$OUT" || (echo "expected exactly 15 skipped setup.ps1 cases (the Linux-only prerequisite case and the 14 pwsh-on-Linux Git Bash resolution rows)" && exit 1)
+          grep -qE '^ *31 skip$' <<< "$OUT" || (echo "expected exactly 31 skipped setup.ps1 cases (the Linux-only prerequisite case, the 14 pwsh-on-Linux Git Bash resolution rows and the 16 shared-table rows from test/fixtures/windows-bash-resolution.json)" && exit 1)
           echo setup-ps1-cases >> "$RUNNER_TEMP/setup-cases"
         shell: bash
 
