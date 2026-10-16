@@ -11,6 +11,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { capyDriveFolder } from '../lib/autoplan-checkpoint';
 import { COORDINATOR_CONTRACT } from '../lib/coordinator-contract';
 import { ROOT } from './helpers/autoplan-run-fixture';
 import { capyRunner, readRunJson, writePlan } from './helpers/autoplan-capy';
@@ -99,6 +100,20 @@ describe('checkpoints on Capy', () => {
     } finally {
       config('off');
     }
+  });
+});
+
+describe('capyDriveFolder', () => {
+  test('one project-user folder, or the one named for the repo among several; none off Capy or when ambiguous', () => {
+    const home = path.join(r.host.base, 'drive-home');
+    const env = { GSTACK_CAPY: '1', HOME: home };
+    const base = path.join(home, '.capy', 'drive');
+    fs.mkdirSync(path.join(base, 'project-user-gstack-garry'), { recursive: true });
+    expect(capyDriveFolder(env, 'gstack')).toBe(path.join(base, 'project-user-gstack-garry', 'autoplan-checkpoints'));
+    expect(capyDriveFolder({ HOME: home }, 'gstack')).toBeUndefined();
+    fs.mkdirSync(path.join(base, 'project-user-gbrain-garry'), { recursive: true });
+    expect(capyDriveFolder(env, 'gbrain')).toBe(path.join(base, 'project-user-gbrain-garry', 'autoplan-checkpoints'));
+    expect(capyDriveFolder(env)).toBeUndefined();
   });
 });
 

@@ -12,6 +12,7 @@ import { spawnSync } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { LOCAL_NOTES, rewriteRoots } from '../lib/autoplan-public';
 import { ROOT, SMALL_PLAN } from './helpers/autoplan-run-fixture';
 import { capyRunner, phaseVia, readRunJson, writePlan } from './helpers/autoplan-capy';
 
@@ -103,5 +104,14 @@ describe('export --public', () => {
     expect(refused.status).toBe(3);
     expect(refused.stderr).toMatch(/\(ARTIFACT_PUBLIC_TARGET_EXISTS\)$/m);
     expect(r.ap(['export', '--out', ok.out, '--public', pub2]).status).toBe(0);
+  });
+});
+
+describe('rewriteRoots', () => {
+  test('a worktree path becomes repo-relative; a local root nested in the worktree still reads as local notes', () => {
+    const roots = [{ label: 'run', root: '/w/repo/.context/run' }, { label: 'home', root: '/home/u' }, { label: 'worktree', root: '/w/repo' }];
+    expect(rewriteRoots('see /w/repo/lib/a.ts and /w/repo', roots)).toBe('see lib/a.ts and .');
+    expect(rewriteRoots('notes at /home/u/notes.md', roots)).toBe(`notes at ${LOCAL_NOTES}/notes.md`);
+    expect(rewriteRoots('/w/repo/.context/run/run.json', roots)).toBe('.context/run/run.json');
   });
 });
