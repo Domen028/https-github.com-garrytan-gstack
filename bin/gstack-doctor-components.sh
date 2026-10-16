@@ -113,6 +113,7 @@ gstack_result_anchor() {
     RUNTIME_PIN_CONFLICT) printf '%s' 'capy-install-runtime-conflict' ;;
     BROWSER_UNAVAILABLE) printf '%s' 'browser-ensure-failed' ;;
     INSTALL_PREFLIGHT_FAILED) printf '%s' 'capy-install-preflight-failed' ;;
+    SETUP_PS1_EMPTY_ARGUMENT) printf '%s' 'setup-ps1-empty-argument' ;;
     POLICY_SOURCE_UNAVAILABLE) printf '%s' 'policy-source-unavailable' ;;
     POLICY_INVALID) printf '%s' 'policy-invalid' ;;
     POLICY_CONTAINMENT) printf '%s' 'policy-containment' ;;
@@ -192,6 +193,11 @@ gstack_result_anchor() {
     REVISION_BELOW_MINIMUM) printf '%s' 'revision-below-minimum' ;;
     CAPY_WRAPPER_STALE) printf '%s' 'capy-wrapper-stale' ;;
     INSTALL_UNVERIFIED) printf '%s' 'install-unverified' ;;
+    BROWSE_TAB_UNRECOVERABLE) printf '%s' 'browse-tab-unrecoverable' ;;
+    BUN_VERSION_UNREADABLE) printf '%s' 'bun-version-unreadable' ;;
+    BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
+    IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
+    OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
     *) return 1 ;;
   esac
 }

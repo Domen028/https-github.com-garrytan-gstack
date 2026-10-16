@@ -26,6 +26,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { checkChangelog, mergeChangelogs, parseChangelog, reheadChangelog } from './changelog-check';
 import { type ResultCodeName } from './result-codes';
+import { runScriptSync, wtreeFingerprint } from './script-invocation';
 import {
   SHIP_POLICY_PATH, VERSION_SLOT, assertInsideRoot, declaredCommands, isUnavailable, loadPolicyFromBase, loadPolicyFromHead, matchesAny,
   type LoadedPolicy, type QueueMode, type ShipPolicy,
@@ -509,9 +510,9 @@ export function restamp(o: RestampOptions): RestampResult {
       if (dirty.length) throw new Refusal('RESTAMP_CONFLICT', `restamp_command needs a clean HEAD, index and worktree (it runs on a clean checkout of HEAD); commit or remove: ${dirty.slice(0, 10).join(', ')}${dirty.length > 10 ? ' …' : ''}; nothing written`);
     }
 
-    const wt = spawnSync(path.join(BIN_DIR, 'gstack-wtree'), [], { cwd: o.repoRoot, encoding: 'utf8', timeout: 60_000 });
-    const wtree = (wt.stdout ?? '').trim();
-    if (wt.status !== 0 || !/^[0-9a-f]{40,64}$/.test(wtree)) throw new Refusal('RESTAMP_CONFLICT', `cannot fingerprint the working tree (${(wt.stderr ?? '').trim()}); nothing written`);
+    const fp = wtreeFingerprint({ cwd: o.repoRoot });
+    if ('error' in fp) throw new Refusal('RESTAMP_CONFLICT', `cannot fingerprint the working tree (${fp.error}); nothing written`);
+    const wtree = fp.tree;
     staging = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-restamp-staging-'));
     fs.rmSync(staging, { recursive: true, force: true });
     const add = git(o.repoRoot, ['worktree', 'add', '--detach', '-q', staging, 'HEAD']);
@@ -588,7 +589,7 @@ function gateAhead(o: RestampOptions, plan: Plan, stages: StageRecord[], common:
   if (!commit.ok) { removeWorktree(o.repoRoot, dir); throw new Refusal('RESTAMP_CONFLICT', `cannot commit the gate-ahead stamp: ${commit.err}`); }
   const gatedHead = git(dir, ['rev-parse', 'HEAD']).out;
   const gatedTree = git(dir, ['rev-parse', 'HEAD^{tree}']).out;
-  const slug = spawnSync(path.join(BIN_DIR, 'gstack-slug'), [], { cwd: o.repoRoot, encoding: 'utf8', timeout: 30_000 });
+  const slug = runScriptSync(path.join(BIN_DIR, 'gstack-slug'), [], { cwd: o.repoRoot, encoding: 'utf8', timeout: 30_000 });
   const branchKey = /^BRANCH=(.+)$/m.exec(slug.stdout ?? '')?.[1]?.trim() ?? git(o.repoRoot, ['branch', '--show-current']).out;
   const record: GateAheadRecord = {
     schema_version: 1, pr: o.pr ?? null, predecessor_pr: pred.pr, predecessor_head: pred.head, branch_head: branchHead, gated_head: gatedHead,

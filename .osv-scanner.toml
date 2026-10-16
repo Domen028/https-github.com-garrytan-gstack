@@ -30,18 +30,21 @@ ignoreUntil = 2026-11-30T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-5p2g-fcmc-qvqq"
-# image-size 1.2.1 via html-to-docx@1.8.0 (pins ^1.0.0). No fixed release
-# exists (FIXED VERSION = --; tracking: #2753). Exposure: image-size only parses images the
-# user themselves embeds into their own generated .docx — no untrusted input
-# path. Upgrade trigger: an image-size release with a fix, or html-to-docx
-# moving off it. Tracking: #2753.
-reason = "No fixed version exists; local-only input path (user's own docx images). Re-evaluate on expiry."
+# image-size 1.2.1 via html-to-docx@1.8.0. image-size 2.0.3 (2026-09-14)
+# fixes both advisories, but html-to-docx pins image-size ^1.0.0 and no fixed
+# 1.x exists, so taking the fix is a cross-major override. Exposure:
+# image-size only parses images the user themselves embeds into their own
+# generated .docx; no untrusted input path. Upgrade trigger: html-to-docx
+# moving off image-size 1.x, or a deliberate override to 2.x after checking
+# html-to-docx's call site against 2.x's API with a docx-export smoke test.
+# Tracking: #2753.
+reason = "Fixed in image-size 2.0.3, but html-to-docx pins image-size ^1.0.0 (no fixed 1.x); local-only input path (user's own docx images). Re-evaluate on expiry."
 ignoreUntil = 2026-11-30T00:00:00Z
 
 [[IgnoredVulns]]
 id = "GHSA-w3rx-r6r6-pgpr"
 # Same package/node as GHSA-5p2g-fcmc-qvqq above; same rationale.
-reason = "No fixed version exists; local-only input path (user's own docx images). Re-evaluate on expiry."
+reason = "Fixed in image-size 2.0.3, but html-to-docx pins image-size ^1.0.0 (no fixed 1.x); local-only input path (user's own docx images). Re-evaluate on expiry."
 ignoreUntil = 2026-11-30T00:00:00Z
 
 [[IgnoredVulns]]

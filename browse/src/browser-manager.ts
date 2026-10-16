@@ -27,6 +27,8 @@ import { ensureProjectProfile } from './chromium-profiles';
 import { launchWithXProtectHeal } from './xprotect-heal';
 import { readPidStartTime, shouldSpawnXvfb, spawnFreeXvfb, xvfbInstallHint, type XvfbHandle } from './xvfb';
 import { withCdpSession } from './cdp-bridge';
+import { resultLine } from '../../lib/result-codes';
+import { sanitizeEcho } from '../../lib/sanitize-echo';
 import type { MemorySnapshot, MemoryStructureStats, MemoryTabSnapshot, MemoryProcess } from './memory-snapshot';
 
 /**
@@ -406,6 +408,7 @@ export class BrowserManager {
   private xvfb: XvfbHandle | null = null;
   private displayAllocation: Promise<void> | null = null;
   private handoffPending: Promise<string> | null = null;
+  private activeTabRecovery: Promise<void> | null = null;
   private closing = false;
   private handoffPrevious: { browser: Browser; pages: Map<number, Page>; tabSessions: Map<number, TabSession>; activeTabId: number } | null = null;
 
@@ -1312,6 +1315,48 @@ export class BrowserManager {
   }
 
   // ─── Session Access ────────────────────────────────────────
+  /**
+   * Restore an active tab when every page was closed outside the CLI (for
+   * example, the user closed the headed window). The page 'close' handler is
+   * synchronous and cannot open a replacement, which left activeTabId at 0 and
+   * every later command, including status and stop, failing with "No active
+   * page". closeTab() already opens a blank tab for the last-tab case; this
+   * covers the external path. Concurrent callers share one recovery. Returns
+   * true when a new tab had to be opened.
+   */
+  async ensureActiveTab(): Promise<boolean> {
+    if (this.tabSessions.has(this.activeTabId)) return false;
+    const remaining = [...this.tabSessions.keys()];
+    if (remaining.length > 0) {
+      this.activeTabId = remaining[remaining.length - 1]!;
+      return false;
+    }
+    if (!this.context) throw new Error('Browser not launched');
+    this.activeTabRecovery ??= this.newTab()
+      .then(() => {})
+      .finally(() => { this.activeTabRecovery = null; });
+    await this.activeTabRecovery;
+    return true;
+  }
+
+  /**
+   * Called before every command runs (#3167). status, stop and restart never
+   * open a tab, so a daemon whose browser or context is gone can still report
+   * and be stopped. Any other command gets an active tab: a failed recovery is
+   * BROWSE_TAB_UNRECOVERABLE with the restart command, and a command that runs
+   * on a newly opened tab gets the returned one-line warning.
+   */
+  async ensureCommandTab(command: string): Promise<string | undefined> {
+    if (BrowserManager.NO_TAB_RECOVERY.has(command)) return undefined;
+    try {
+      if (!(await this.ensureActiveTab())) return undefined;
+    } catch (err: any) {
+      throw new Error(resultLine('browse', 'BROWSE_TAB_UNRECOVERABLE', sanitizeEcho(err?.message ?? String(err))));
+    }
+    return '[browse] warning: every tab was closed outside browse, so this command ran on a new blank tab; open your page again with: browse goto <url>';
+  }
+  private static readonly NO_TAB_RECOVERY = new Set(['status', 'stop', 'restart']);
+
   /** Get the TabSession for the active tab. */
   getActiveSession(): TabSession {
     const session = this.tabSessions.get(this.activeTabId);

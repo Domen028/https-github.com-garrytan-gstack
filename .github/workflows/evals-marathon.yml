@@ -109,7 +109,7 @@ jobs:
           echo "slices=$(jq -c '[range(1; .sliceCount + 1)]' /tmp/marathon-plan/manifest.json)" >> "$GITHUB_OUTPUT"
           echo "slice_timeouts=$(jq -ec '[0] + .plan.sliceCiTimeoutMinutes' /tmp/marathon-plan/manifest.json)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: marathon-plan
           path: /tmp/marathon-plan/manifest.json
@@ -173,7 +173,7 @@ jobs:
       - name: Register gstack skills for PTY tests
         uses: ./.github/actions/register-gstack-skills
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: marathon-plan
           path: /tmp/marathon-plan
@@ -215,7 +215,7 @@ jobs:
 
       - name: Upload slice results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: marathon-slice-${{ matrix.slice }}-a${{ github.run_attempt }}
           path: /tmp/marathon-slice-results
@@ -223,7 +223,7 @@ jobs:
 
       - name: Upload native capture evidence
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: native-captures-${{ env.EVALS_RUN_ID }}
           include-hidden-files: true
@@ -237,7 +237,7 @@ jobs:
 
       - name: Upload shard logs on failure
         if: failure()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: marathon-logs-slice-${{ matrix.slice }}-a${{ github.run_attempt }}
           include-hidden-files: true
@@ -270,12 +270,12 @@ jobs:
         with:
           bun-version: 1.4.2
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: marathon-plan
           path: /tmp/marathon-report
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: marathon-slice-*
           path: /tmp/marathon-report
@@ -314,7 +314,7 @@ jobs:
 
       - name: Upload the marathon report
         if: always() && (steps.reconcile.outputs.exit != '0' || needs.eval-slices.result != 'success')
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: marathon-report-a${{ github.run_attempt }}
           path: /tmp/marathon-report.md

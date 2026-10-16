@@ -21,11 +21,11 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { type ResultCodeName } from './result-codes';
+import { runBashSync, wtreeFingerprint as fingerprintTree } from './script-invocation';
 import { containedRelative, globToRegExp, matchesAny } from './ship-policy';
 
 export const GENERATED_PATH = '.gstack/generated.json';
 export const GENERATED_SCHEMA = 'https://github.com/garrytan/gstack/docs/pregate.md#generated-v1';
-const BIN_DIR = path.dirname(Bun.fileURLToPath(import.meta.url)).replace(/\/lib$/, '/bin');
 
 export interface RegenEntry {
   /** Stable id used in `regen` results and `--only <id>`. */
@@ -128,11 +128,15 @@ export function selectEntries(registry: Registry, touched?: readonly string[]): 
   return registry.entries.filter(e => e.inputs.length === 0 || touched.some(t => matchesAny(e.inputs, t) || matchesAny(e.outputs, t)));
 }
 
-/** The working-tree content fingerprint (bin/gstack-wtree): tracked and untracked non-ignored files. */
+/**
+ * Compatibility wrapper for the pregate consumers (lib/pregate/context.ts,
+ * lib/pregate/index.ts), files #3190 changes: they move to
+ * lib/script-invocation.ts's `{tree}|{error}` form in item 10b, which then
+ * deletes this.
+ */
 export function wtreeFingerprint(repoRoot: string): string | null {
-  const r = spawnSync(path.join(BIN_DIR, 'gstack-wtree'), [], { cwd: repoRoot, encoding: 'utf8', timeout: 60_000 });
-  const out = (r.stdout ?? '').trim();
-  return r.status === 0 && /^[0-9a-f]{40,64}$/.test(out) ? out : null;
+  const r = fingerprintTree({ cwd: repoRoot });
+  return 'tree' in r ? r.tree : null;
 }
 
 export interface Scratch { dir: string; wtree: string; remove: () => void }
@@ -144,8 +148,9 @@ export interface Scratch { dir: string; wtree: string; remove: () => void }
  * Error naming the step.
  */
 export function scratchWorktree(repoRoot: string, prefix = 'gstack-regen-'): Scratch {
-  const wtree = wtreeFingerprint(repoRoot);
-  if (!wtree) throw new Error('cannot fingerprint the working tree (gstack-wtree failed)');
+  const fp = fingerprintTree({ cwd: repoRoot });
+  if ('error' in fp) throw new Error(`cannot fingerprint the working tree (${fp.error})`);
+  const wtree = fp.tree;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   fs.rmSync(dir, { recursive: true, force: true });
   const add = git(repoRoot, ['worktree', 'add', '--detach', '-q', dir, 'HEAD']);
@@ -196,7 +201,7 @@ function diffSnapshots(a: Map<string, string>, b: Map<string, string>): string[]
 }
 
 function runCommand(cwd: string, command: string, env: NodeJS.ProcessEnv, timeoutMs: number): { exit: number | null; stderr: string } {
-  const r = spawnSync('bash', ['-c', `set -o pipefail; ${command}`], { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: { ...env, GSTACK_REGEN_SCRATCH: cwd } });
+  const r = runBashSync(`set -o pipefail; ${command}`, { cwd, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: { ...env, GSTACK_REGEN_SCRATCH: cwd } });
   return { exit: r.status, stderr: ((r.stderr ?? '') + (r.error ? `\n${r.error.message}` : '')).trim().slice(-4000) };
 }
 
@@ -242,7 +247,9 @@ export function runRegen(o: RunRegenOptions): { results: EntryResult[]; wtree: s
       } else results.push({ id: e.id, command: e.command, status: changed.length ? 'written' : 'fresh', changed, outside, exit: 0, ms, fix: fixFor(e) });
     }
   } finally { scratch?.remove(); }
-  return { results, wtree: scratch?.wtree ?? wtreeFingerprint(o.repoRoot) };
+  if (scratch) return { results, wtree: scratch.wtree };
+  const fp = fingerprintTree({ cwd: o.repoRoot });
+  return { results, wtree: 'tree' in fp ? fp.tree : null };
 }
 
 /** One line per entry, the way `gstack-regen` and the pre-gate print them. */

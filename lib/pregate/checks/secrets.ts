@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runScriptSync } from '../../script-invocation';
 import { baseInputs, sha256 } from '../context';
 import type { CheckDef, CheckResult, PregateContext } from '../types';
 
@@ -35,7 +36,7 @@ function run(ctx: PregateContext): CheckResult {
   const file = path.join(tmp, 'added.txt');
   try {
     fs.writeFileSync(file, text, { mode: 0o600 });
-    const r = spawnSync(path.join(BIN_DIR, 'gstack-redact'), ['--from-file', file, '--json', '--max-bytes', String(64 * 1024 * 1024)], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
+    const r = runScriptSync(path.join(BIN_DIR, 'gstack-redact'), ['--from-file', file, '--json', '--max-bytes', String(64 * 1024 * 1024)], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
     if (r.error || r.status === null) return { id: 'secrets', stage: 'preflight', status: 'incomplete', inputs, code: 'PREGATE_INCOMPLETE', detail: `gstack-redact did not finish (${r.error?.message ?? 'killed'})`, fix: 'rerun; raise --timeout for very large diffs' };
     let findings: Array<{ id?: string; description?: string; severity?: string; category?: string; line?: number }> = [];
     try { findings = JSON.parse(r.stdout).findings ?? []; } catch { /* non-JSON output below */ }
