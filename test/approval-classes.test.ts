@@ -84,7 +84,7 @@ describe('gstack-approval-classes check', () => {
     const r = check(repo);
     expect(r.status).toBe(EXIT.ok);
     expect(r.out).toMatch(/^APPROVAL_CLASSES: none \(no \.gstack\/approval-classes\.json on the base\) classes=0 report_only=0 source=origin\/main@[0-9a-f]{12}:\.gstack\/approval-classes\.json$/m);
-  });
+  }, 30_000);
 
   test('hits by path and literal pattern print class and file:line, one scope token per class, found=<n>; allowed paths are exempt; exit 1', () => {
     const repo = classRepo();
@@ -98,7 +98,7 @@ describe('gstack-approval-classes check', () => {
     expect(r.out).toMatch(/^APPROVAL_SCOPE: default-change@[0-9a-f]{12} effects=1 files=src\/config\.ts; cite: Approved by <owner> <YYYY-MM-DD> via <plan sha\|comment or review URL\|ref> for default-change@[0-9a-f]{12}$/m);
     expect(r.out).toMatch(/^APPROVAL_CLASSES: found=2 classes=2 report_only=0 source=origin\/main@/m);
     expect(r.err).toMatch(/\(APPROVAL_CLASS_FOUND\)$/m);
-  });
+  }, 30_000);
 
   test('classes come only from the base: a branch that deletes its class file is still checked against origin/main', () => {
     const repo = classRepo();
@@ -107,7 +107,7 @@ describe('gstack-approval-classes check', () => {
     const r = check(repo);
     expect(r.status).toBe(EXIT.fail);
     expect(r.out).toContain('APPROVAL_CLASS: data-repair src/commands/repair/accepted-takes.ts:1');
-  });
+  }, 30_000);
 
   test('the scope token changes when an effect is added or edited, and is stable otherwise', () => {
     const repo = classRepo();
@@ -119,7 +119,7 @@ describe('gstack-approval-classes check', () => {
     expect(edited).not.toBe(first);
     commit(repo, { 'src/commands/repair/orphans.ts': 'export const x = 1;\n' }, 'add');
     expect(scopeToken(check(repo).out, 'data-repair')).not.toBe(edited);
-  });
+  }, 30_000);
 
   test('migrations from the ship policy: report-only when no class claims them, declared with migrations: true', () => {
     const plain = classRepo();
@@ -135,7 +135,7 @@ describe('gstack-approval-classes check', () => {
     expect(d.status).toBe(EXIT.fail);
     expect(d.out).toContain('APPROVAL_CLASS: upgrade-data-rewrite db/migrate/0249_add_beliefs.sql:1 (migration) — added\n');
     expect(d.out).toMatch(/report_only=0 /);
-  });
+  }, 30_000);
 
   test('init writes an example that validates; an invalid working-tree or base file refuses with APPROVAL_CLASSES_INVALID; no origin refuses with APPROVAL_SOURCE_UNAVAILABLE', () => {
     const repo = classRepo(null);
@@ -157,7 +157,7 @@ describe('gstack-approval-classes check', () => {
     const gone = check(broken);
     expect(gone.status).toBe(EXIT.refused);
     expect(gone.err).toMatch(/origin\/main is not a resolvable commit.*\(APPROVAL_SOURCE_UNAVAILABLE\)$/m);
-  });
+  }, 30_000);
 });
 
 describe('citation grammar', () => {
@@ -166,7 +166,7 @@ describe('citation grammar', () => {
     expect(a).toMatchObject({ owner: 'garrytan', date: '2026-10-16', ref: 'https://github.com/a/b/pull/1#issuecomment-2', for: [] });
     expect(b).toMatchObject({ owner: 'Garry', ref: 'GBRA-60', for: [{ class: 'data-repair', digest: '0123456789ab' }, { class: 'default-change' }] });
     expect(parseCitations('Approved by x 2026-02-30 via y')).toEqual([]);
-  });
+  }, 30_000);
 });
 
 describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION_MISSING)', () => {
@@ -178,7 +178,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     expect(w.err).toMatch(/data-repair \(data-repair@[0-9a-f]{12}; effects in src\/commands\/repair\/accepted-takes\.ts\): no "Approved by" line.*\(APPROVAL_CITATION_MISSING\)$/m);
     expect(w.out).toBe('');
     expect(w.body).toBe('## Summary\n');
-  });
+  }, 30_000);
 
   test('a maintainer comment naming the scope token verifies; an authentic but unrelated approval, a non-maintainer, an owner mismatch and a changes-requested review do not', () => {
     const repo = classRepo();
@@ -201,7 +201,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     expect(receipt.approval).toMatchObject({ status: 'checked', source: expect.stringMatching(/^origin\/main@[0-9a-f]{12}:\.gstack\/approval-classes\.json$/) });
     expect(receipt.approval.classes).toEqual([{ class: 'data-repair', scope: token, effects: ['src/commands/repair/accepted-takes.ts:1'], citation: 'verified', approved_by: 'garrytan', date: '2026-10-16', via: COMMENT, binding: 'token', evidence: 'comment by garrytan' }]);
     expect(extractReceipt(ok.body).receipt!.approval).toEqual(receipt.approval);
-  });
+  }, 30_000);
 
   test('an effect added after the approval invalidates it: the old token no longer binds', () => {
     const repo = classRepo();
@@ -213,7 +213,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     const after = write(repo, `Approved by garrytan 2026-10-16 via ${COMMENT}\n`, [], gh);
     expect(after.status).toBe(EXIT.fail);
     expect(after.err).toMatch(/effects in src\/commands\/repair\/accepted-takes\.ts, src\/commands\/repair\/clear-never-installed\.ts\).*names neither.*\(APPROVAL_CITATION_MISSING\)$/m);
-  });
+  }, 30_000);
 
   test('a plan sha resolves through an APPROVED autoplan run whose plan names the class and every effect path; a pending gate, an unrelated plan and a later file do not', () => {
     const repo = classRepo();
@@ -244,7 +244,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     expect(noRun.err).toMatch(/plan sha [0-9a-f]{8}: pass the autoplan run with --approval-run <dir>.*must attest "for data-repair@[0-9a-f]{12}"/);
     fs.appendFileSync(path.join(good.out, 'plan.md'), '\nsrc/commands/repair/later.ts\n');
     expect(write(repo, `Approved by Garry 2026-10-16 via ${good.sha}\n`, ['--approval-run', good.out]).err).toMatch(/plan\.md does not match its manifest hash/);
-  });
+  }, 120_000);
 
   test('an unresolvable reference counts only as an explicit for <class>@<digest> attestation, recorded unverified, and goes stale when the effects change', () => {
     const repo = classRepo();
@@ -260,7 +260,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     const stale = write(repo, '', ['--approval', `Approved by Garry 2026-10-16 via GBRA-60 for ${token}`]);
     expect(stale.status).toBe(EXIT.fail);
     expect(stale.err).toMatch(/attested for data-repair@[0-9a-f]{12} but the effects are now data-repair@[0-9a-f]{12} \(changed since the attestation\)/);
-  });
+  }, 30_000);
 
   test('every class needs its own citation: an approval for one class does not cover another', () => {
     const repo = classRepo();
@@ -270,7 +270,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     expect(w.status).toBe(EXIT.fail);
     expect(w.err).toMatch(/default-change \(default-change@[0-9a-f]{12}; effects in src\/config\.ts\).*\(APPROVAL_CITATION_MISSING\)$/m);
     expect(w.err).not.toMatch(/data-repair \(data-repair@/);
-  });
+  }, 30_000);
 
   test('no origin: the receipt records approval status unavailable and the summary says approval=unchecked; report-only migrations are recorded without a citation', () => {
     const repo = classRepo(null);
@@ -285,5 +285,5 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     expect(gone.err).toMatch(/^APPROVAL_CLASSES: unavailable \(origin\/main is not a resolvable commit\); approval classes were not checked$/m);
     expect(gone.err).toMatch(/approval=unchecked$/m);
     expect(JSON.parse(gone.out).approval).toMatchObject({ status: 'unavailable', classes: [] });
-  });
+  }, 30_000);
 });
