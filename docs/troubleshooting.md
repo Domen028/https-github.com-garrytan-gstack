@@ -1204,8 +1204,18 @@ or too large. Each message names the cap that applied:
   withheld from the audit.
 - **Symlinks.** A tracked symlink anywhere in the repository stops the run.
 
-**Fix.** No setting raises these caps. Run /cso on a smaller checkout that
-holds the code you want audited and no symlinks. Add your file count or size to
+**Fix.** No setting raises these caps. For the 64 MiB source cap, rerun with
+`--paths` set to the comma-separated repo-relative directories you want audited
+(for example `--paths src/core,src/mcp`). Paths outside them are never
+captured or assessed and do not count toward the cap; snapshot and history
+coverage then read **partial**, the report counts every skipped path, and the run's
+snapshot manifest lists each one, so the verdict says what was not audited.
+With `--diff`, every changed path outside dependency directories must be inside
+`--paths`, or the run is refused. Do not audit a hand-trimmed copy: /cso would treat it as the whole
+repository and report nothing as skipped. `--paths` does not lower the
+manifest cap or the 100,000-entry limit, because every skipped path still has a
+manifest entry (about 50,000 files fit). Symlinks must be removed. Add your
+file count or size to
 [#2993](https://github.com/garrytan/gstack/issues/2993).
 
 <a id="cso-scanner-invalid-output"></a>
