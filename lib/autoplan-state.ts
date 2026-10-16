@@ -13,7 +13,7 @@ import { readJsonl } from './headless-artifacts';
 import type { ResultCodeName } from './result-codes';
 
 export type Voice = 'native' | 'outside';
-export interface AttemptState { attempt: string; state: 'dispatched' | 'submitted' | 'execution_unknown' | 'cancelled' | 'superseded'; prompt: string; result: string; estimate_usd: number; dispatched_at: string; terminal_at?: string }
+export interface AttemptState { attempt: string; state: 'dispatched' | 'submitted' | 'execution_unknown' | 'cancelled' | 'superseded' | 'deferred'; prompt: string; result: string; estimate_usd: number; dispatched_at: string; terminal_at?: string }
 export interface VoiceState extends VoiceOutcome {
   attempt?: string; attempts?: AttemptState[]; result_sha256?: string; findings?: number; label?: string; usage?: Record<string, unknown>; detail?: string;
   /** verified: the INPUT receipt matched the snapshot; attested: a --record bound without one, on the parent's word (attest_reason). */
@@ -27,11 +27,29 @@ export interface Amendment {
   /** The reviewed Implementation-plan hash of the active plan when the owner accepted it: `--settle` evidence. */
   plan_sha256?: string;
 }
+/** A revise that changed the plan under a phase at its round cap: the phase keeps its review, the delta becomes a gate item. */
+export interface CappedDelta {
+  k: number; phase: string; round: number; cap: number; old_plan_sha256: string; new_plan_sha256: string; added: number; removed: number;
+  status: 'pending' | 'accepted' | 'reopened'; at: string; decided_at?: string;
+}
+/** Why a run stopped `incomplete` with work left: the structured budget_exhausted stop `resume` lifts after a budget raise. */
+export interface RunStop {
+  reason: 'budget_exhausted'; phase?: string; cap_usd: number | null; max_rounds: number | null; rounds: Record<string, number>;
+  spent: number; reserved: number; unknown: number; unknown_count: number; next_estimate_usd: number; at: string;
+}
+/** A phase closed accepted-with-findings (`closeDeferred`): its open findings carry into tasks.jsonl and the gate. */
+export interface DeferredClose {
+  reason: string; by: string; cause: 'cap' | 'owner'; at: string; round: number; counts: Record<string, number>;
+  carried_file?: string; blockers: string[]; open: number;
+}
 export interface PhaseState {
   snapshot?: string; snapshot_dir?: string; snapshot_path?: string; methodology?: string; opened_at?: string; closed_at?: string;
   native?: VoiceState; outside?: VoiceState; consensus?: Record<string, unknown>; skipped?: string;
   prompts?: { native: string; outside: string; nativeResult: string; outsideResult: string };
   sections?: { loaded: string[]; skipped: string[]; checklist: boolean };
+  deferred?: DeferredClose;
+  /** A confirm round (r > 1): the revision this phase last reviewed. */
+  confirm?: { round: number; previous_sha256?: string; added: number; removed: number };
 }
 export interface RunState extends RunManifest {
   revision: number; out: string; plan_source: string; active_plan: string; restore: string; scope: Scope; phase_order: Phase[];
@@ -43,6 +61,9 @@ export interface RunState extends RunManifest {
   plan_input?: string; plan_heading?: string; scope_flags?: Record<string, boolean | undefined>; scaffolded?: boolean;
   plan_revision?: number; amendments?: Amendment[];
   plan_reality?: { plan_sha256: string; checker: string; verdict: string; line: string };
+  /** Review rounds per phase (null: uncapped); round_grants are the owner's per-phase raises at the gate. */
+  max_rounds?: number | null; round_grants?: Record<string, number>;
+  stop?: RunStop; stops?: RunStop[]; capped_deltas?: CappedDelta[];
 }
 
 export const TERMINAL_VOICE_STATUSES = ['completed', 'disabled', 'unavailable', 'failed', 'skipped'] as const;
@@ -52,7 +73,8 @@ export function voiceTerminal(v: { status?: string } | undefined): boolean {
 }
 export const pendingAmendments = (state: RunState): Amendment[] => (state.amendments ?? []).filter(a => a.status === 'pending');
 export class RunError extends Error {
-  constructor(public code: ResultCodeName, public detail: string, public exit: 1 | 3 = 1) { super(`${code}: ${detail}`); }
+  /** `status`: the run status the refusal leaves (default refused); `lines`: what the command still reports on stdout. */
+  constructor(public code: ResultCodeName, public detail: string, public exit: 1 | 3 = 1, public after: { status?: string; lines?: string[] } = {}) { super(`${code}: ${detail}`); }
 }
 
 export const FILES = { run: 'run.json', journal: 'attempts.jsonl', lock: 'run.lock', spend: 'spend.json', active: 'plan-active.md', restore: 'restore.md', source: 'plan-source.md' } as const;

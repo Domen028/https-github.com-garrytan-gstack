@@ -175,9 +175,11 @@ export function parseRecordFindings(text: string): { findings: CanonicalFinding[
 }
 
 /** Run-bound findings.jsonl rows for one voice of one phase. */
-export function canonicalRows(findings: CanonicalFinding[], ctx: { run: string; phase: string; voice: Voice; model?: string }): FindingRow[] {
+/** Ids are `<run>-<phase>-<voice>-<n>`; a confirm round r > 1 qualifies them as `<run>-<phase>-r<r>-<voice>-<n>`. */
+export function canonicalRows(findings: CanonicalFinding[], ctx: { run: string; phase: string; voice: Voice; model?: string; round?: number }): FindingRow[] {
+  const stem = `${ctx.run}-${ctx.phase}${(ctx.round ?? 1) > 1 ? `-r${ctx.round}` : ''}-${ctx.voice}`;
   return findings.map((f, i) => ({
-    schema_version: 1, run: ctx.run, id: `${ctx.run}-${ctx.phase}-${ctx.voice}-${i + 1}`, phase: ctx.phase, voice: ctx.voice,
+    schema_version: 1, run: ctx.run, id: `${stem}-${i + 1}`, phase: ctx.phase, voice: ctx.voice,
     severity: f.severity, title: f.title, disposition: 'open',
     ...(ctx.model ? { model: ctx.model } : {}), ...(f.file ? { file: f.file } : {}), ...(f.line !== undefined ? { line: f.line } : {}),
     ...(f.fix ? { resolution: f.fix } : {}), ...(f.plan_items?.length ? { plan_items: f.plan_items } : {}),
@@ -201,8 +203,8 @@ export interface ReconciliationRow {
 }
 export interface ReconciliationOverride { outside_id: string; native_id?: string | null; disposition: ReconciliationDisposition; resolution: string; proposal?: string }
 
-const tokens = (title: string) => new Set(title.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(t => t.length > 2));
-function jaccard(a: Set<string>, b: Set<string>): number {
+export const tokens = (title: string) => new Set(title.toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(t => t.length > 2));
+export function jaccard(a: Set<string>, b: Set<string>): number {
   if (!a.size || !b.size) return 0;
   let inter = 0;
   for (const t of a) if (b.has(t)) inter++;
