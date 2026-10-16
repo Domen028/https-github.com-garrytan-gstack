@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { DX_ERROR_CONTRACT_PLAN, gradeDxContractReview } from './fixtures/dx-error-contract-case';
+import { DX_ERROR_COMPACT, DX_ERROR_ITEMS } from '../lib/dx-error-contract';
+import { DX_ERROR_CONTRACT_PLAN, capFindings, gradeDxContractReview } from './fixtures/dx-error-contract-case';
 
 const fence = (rows: Array<Record<string, unknown>>) => ['INPUT: dx abc', 'Review prose.', '```gstack-findings', ...rows.map(row => JSON.stringify(row)), '```'].join('\n');
 const PASSING = [
@@ -16,6 +17,13 @@ describe('dx-error-contract-review grader (free controls for the paid case)', ()
     for (const path of ['P1', 'P2', 'P3', 'P4', 'P5']) expect(DX_ERROR_CONTRACT_PLAN).toContain(`### Error path ${path} `);
     expect(DX_ERROR_CONTRACT_PLAN).toContain('## Implementation plan');
     expect(DX_ERROR_CONTRACT_PLAN).toContain('(PROJECT_NOT_FOUND); fix: run');
+  });
+
+  test('the grader keys on the title and severity shapes the product prompt asks for', () => {
+    expect(DX_ERROR_COMPACT).toContain('as a Critical finding titled "CAP4:<path>:<item>"');
+    expect(DX_ERROR_COMPACT).toContain('as a High finding titled "CAP6:<path>:<item>"');
+    const rows = DX_ERROR_ITEMS.map((item, index) => ({ id: `F${index}`, severity: 'High', title: `CAP6:P1:${item} gap` }));
+    expect(capFindings(fence(rows)).map(cap => cap.item)).toEqual([...DX_ERROR_ITEMS]);
   });
 
   test('a review meeting every bar passes', () => {

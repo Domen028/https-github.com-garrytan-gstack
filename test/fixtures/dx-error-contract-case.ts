@@ -13,6 +13,7 @@
  *   - labels every CAP4 finding Critical and every CAP6 finding High.
  */
 import { parseRecordFindings } from '../../lib/autoplan-reconcile';
+import { DX_ERROR_ITEMS } from '../../lib/dx-error-contract';
 
 export const DX_ERROR_CONTRACT_PLAN = `# Plan: acmesync 2.0 CLI error handling
 
@@ -61,7 +62,7 @@ export type CapLevel = 4 | 6;
 export interface CapFinding { level: CapLevel; path: string; item: string; severity?: string; title: string }
 export interface DxContractGrade { pass: boolean; reasons: string[]; caps: CapFinding[] }
 
-const ITEMS = new Set(['what', 'fix', 'recovery', 'code', 'context', 'trace', 'redaction', 'channel']);
+const ITEMS = new Set<string>(DX_ERROR_ITEMS);
 const ALIASES: Record<string, string> = { terminal: 'channel', exit: 'channel', 'exit-code': 'channel', secret: 'redaction' };
 
 function pathId(raw: string): string | undefined {
