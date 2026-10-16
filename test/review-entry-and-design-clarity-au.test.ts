@@ -111,6 +111,14 @@ test('the design Completion Summary is its own section above the report, so the 
   expect(nextReviewRewrite(`# Plan\n\n${report}\n### Completion Summary\n${box}`)).not.toContain(box);
 });
 
+test('the DX Scorecard is its own section above the report, so the next review\'s rewrite keeps it (#3219)', () => {
+  const rendered = fs.readFileSync(path.join(root, 'plan-devex-review/sections/review-sections.md'), 'utf8');
+  const scorecard = compact(between(rendered, '### DX Scorecard', 'DX PLAN REVIEW'));
+  expect(scorecard).toContain('its own `## DX Review Scorecard` section');
+  expectMentions(scorecard, [['above', 'terminal', 'GSTACK REVIEW REPORT']], 'scorecard placement');
+  expectMentions(scorecard, [['never', 'inside', 'regenerates everything']], 'scorecard placement');
+});
+
 test('new regression and changed preamble sources select all Design and Eng owners', () => {
   for (const map of [E2E_TOUCHFILES, LLM_JUDGE_TOUCHFILES]) {
     const affected = selectTests(['plan-design-review/SKILL.md.tmpl', 'plan-eng-review/SKILL.md.tmpl'], map, []).selected;
