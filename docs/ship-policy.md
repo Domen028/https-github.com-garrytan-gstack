@@ -18,6 +18,7 @@ introduces or changes the policy runs under the reviewed bootstrap path
 
 Tools: `gstack-ship-policy init|validate|show-effective|check-history`,
 `gstack-restamp`, `gstack-tree-receipt`, `gstack-ship-receipt`,
+`gstack-ship-queue` ([shared merge queue](#run-a-shared-merge-queue)),
 `gstack-evidence bundle|ancestor`. They share the exit table (`0` ok, `1`
 fail, `2` usage, `3` refused or needs a flag) and end every error line with a
 code from [troubleshooting.md](troubleshooting.md#queue-aware-ship-policy-restamp-tree-receipt-ship-receipt).
@@ -27,7 +28,14 @@ code from [troubleshooting.md](troubleshooting.md#queue-aware-ship-policy-restam
 
 `gstack-ship-policy init` writes every key at its default; `init --explain`
 prints this table. JSON carries no comments, so examples live in
-`.gstack/ship-policy.example.json`. Unknown keys are errors.
+`.gstack/ship-policy.example.json`. Unknown keys are errors, and there is no
+extension mechanism: a key from a newer gstack, or a misspelled one, fails
+closed (`POLICY_INVALID`) instead of being ignored. Every key has an
+introducing version (`init --explain` and `validate` print it). A key newer
+than 1.91.98.0 set to a non-default value requires `min_gstack_version` at
+least at its introducing version, and a gstack older than `min_gstack_version`
+refuses the file (`POLICY_GSTACK_TOO_OLD`). `validate` ends with
+`MIN_READER: gstack <version>`, the floor every lane reading the policy needs.
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
@@ -47,6 +55,9 @@ prints this table. JSON carries no comments, so examples live in
 | `stamp_patterns` | literal templates | `[]` | At most 16 templates of at most 128 characters, each with exactly one `{version}` slot (`"version": "{version}"`, `since: '{version}'`, `<!-- x-stamp: {version} -->`); matched literally at a version boundary, never as a regex. The restamp writer and the tree receipt use them beside the built-in forms. |
 | `restamp_command` | command or `null` | `null` | The repo's own restamp, run first in the staging worktree; see [restamp_command](#restamp-command). |
 | `migrations` | `{ dir, id }` or `null` | `null` | The migration directory and a regex with exactly one capture group for the number in a file name (`"^v(\\d+)-"`); `gstack-pregate regate` reports `MIGRATION_COLLISION`. |
+| `gate_command` | command or `null` | `null` | The repo's full pre-merge gate. `gstack-ship-queue gate-ahead` and `ready` print it for the caller to run (in the background or in CI); gstack never executes it. Needs `min_gstack_version`. |
+| `full_e2e` | `true` \| `false` | `false` | `true`: every merge needs a passing full-gate result bound to a tree equal to the merging one modulo stamps; `gstack-ship-queue stamp` and `verify` refuse without one (`QUEUE_GATE_MISSING`). Needs `min_gstack_version`. |
+| `min_gstack_version` | version or `null` | `null` | The oldest gstack that may read the file; see the compatibility rule above. |
 
 Containment, checked by `validate` and again at write time: paths and globs are
 repo-relative with no `..` segment, under 256 characters, at most 64 per list,
@@ -124,6 +135,122 @@ running the merge queue:
 Until this policy is on `origin/main`, `gstack-restamp --next` reads the base's
 `bump: ask` and falls back to a MICRO bump; pass `--bump patch` on the first
 PR stamped after the flip if its base predates it.
+
+<a id="run-a-shared-merge-queue"></a>
+## Run a shared merge queue
+
+`gstack-ship-queue` strings `gstack-restamp`, `gstack-tree-receipt` and the
+ship receipt into the coordinator protocol, so nobody proves a stamp diff by
+hand. Lanes own their PRs and never merge; the coordinator owns the order and
+every merge. Each step ends in a line the other side acts on, then
+`GSTACK_RESULT: skill=ship-queue status=complete|refused run=<path>`. Nothing
+here pushes.
+
+**1. Lane: report ready (unstamped).** After the gate and pregate pass on the
+pushed head:
+
+```bash
+gstack-pregate run --allow-repo-commands
+git push
+gstack-ship-queue ready --pr 42
+```
+
+```
+READY #42 <head> STAMP_VERSION=unstamped
+pr: https://github.com/<owner>/<repo>/pull/42
+head: <head>
+version: unstamped
+base: origin/main@<sha>
+ci: green at <head12> (passed=31 failed=0 pending=0 skipped=2)
+PREGATE: pass tree=<tree12> head=<head12> checks=6
+gate: command="<gate_command>" full_e2e=no gate-ahead=none
+SHIP_RECEIPT: pr=42 head=<head12> …
+```
+
+It refuses (`QUEUE_NOT_READY`) when the working tree has tracked edits, HEAD
+is not the PR's pushed head, CI at that exact head is not green, or the pregate
+result is not a current pass. Send the block as printed.
+
+**2. Lane behind another PR: gate ahead.** Gate the tree the queue will have
+once the predecessor lands, while it is still open:
+
+```bash
+git fetch origin pull/41/head
+gstack-ship-queue gate-ahead --after 41 --pr 42 --predecessor-ref FETCH_HEAD --allow-repo-commands
+```
+
+prints `GATE_AHEAD: pr=42 attempt=<id> gated=<sha> tree=<tree> merge_tree=<tree>
+predecessor=#41@<sha12> version=<N+1>`, the attempt's own `worktree:`, its
+`record:` file, `GATE_COMMAND:` (the policy's `gate_command`) and the exact
+`next:` line. Run the gate there, in the background or in CI, then bind it:
+
+```bash
+(cd <worktree> && <gate command>) > gate.log 2>&1
+gstack-ship-queue gate-ahead --record --pr 42 --attempt <id> --exit $? --log gate.log
+```
+
+`GATE_RECORD: pr=42 attempt=<id> exit=0 gated_tree=<tree> log_sha256=<sha256>
+current=yes`. The record keeps the log and removes only that attempt's
+worktree, and refuses (`GATE_AHEAD_ATTEMPT_INVALID`) when the worktree no
+longer holds the gated commit. If the predecessor moves, prepare a new
+attempt; attempts never share a worktree, the newest is current, and
+recording an older one later prints `current=no (superseded by <id>)`.
+`gate-ahead --list --pr 42` shows them all. Send the record file with READY.
+
+**3. Coordinator: call the slot.** Name the version, the base sha and the
+order: "#42 next at 1.2.7.0, base `<sha>`, order 41,42".
+
+**4. Lane: stamp.** A gate-ahead lane first merges `origin/main` (with the
+predecessor in it) into its branch, never a rebase. Then:
+
+```bash
+gstack-ship-queue stamp --pr 42 --version 1.2.7.0 --expect-gated <gated> \
+  --expect-base <sha> --expect-order 41,42 --allow-repo-commands
+```
+
+`<gated>` is the head the gate ran on: the pushed head the lane gated, or the
+record's `gated=` after a gate-ahead. The preflight refuses before anything is
+written unless the tree to stamp equals the gated one modulo stamps, the base
+is `<sha>` and, under `full_e2e`, a passing gate result is bound to the gated
+head. Then it runs the restamp, commits, reruns the tree receipt and prints
+
+```
+QUEUE_STAMP: 42 1.2.7.0 head=<sha> gated=<sha> tree=same-modulo-stamps receipt=<sha256>
+```
+
+Each stage is journaled in `.gstack/tmp/ship-queue/stamp-42.json`; the
+identical command resumes at the first unfinished stage, or returns the stored
+`QUEUE_STAMP` when it already finished. A refusal prints
+`QUEUE_STAMP_REFUSED: 42 head=<sha> committed=no|yes <sha> stage=<stage>`
+and the coded line (`QUEUE_STALE` carries a `recompute:` command). Push the
+stamp commit, wait for CI on it, run `ready` again
+(`READY #42 <head> STAMP_VERSION=1.2.7.0`) and send it with the
+`QUEUE_STAMP` line.
+
+**5. Coordinator: verify, then merge.** From the coordinator's own clone:
+
+```bash
+gstack-ship-queue verify --pr 42 --gated <gated> --receipt <sha256> --expect-head <head>
+gstack-ship-queue verify --pr 42 --record <gate-ahead record> --receipt <sha256> --expect-head <head>
+```
+
+It fetches `refs/pull/42/head` and reruns the tree receipt there, so
+`QUEUE_STAMP` is never a pasted claim: `VERIFY: 42 1.2.7.0 head=<sha>
+gated=<sha> tree=same-modulo-stamps receipt=<same sha256>`. With a gate-ahead
+record, whose gated commit never left the lane's machine, it first recomputes
+the merge with `git merge-tree --write-tree <branch head> <predecessor head>`
+and compares it with the recorded merge tree, rebuilds the gated tree from
+the recorded stamp patch and compares it with the recorded `gated_tree`,
+proves that patch is stamps only, checks the predecessor did not move, and
+prints `merge_tree:`, `gated_tree:` and `gate:` lines. The last line is
+`MERGE_CONDITION: sha=<head>`: merge with that expected head. Any
+`QUEUE_VERIFY_MISMATCH` means do not merge.
+
+**Rolling out `gate_command` and `full_e2e`.** Commit them (with
+`min_gstack_version` at their introducing version, which `init --explain`
+prints) only after every lane's gstack is at least that version, the crew's
+install floor (`GSTACK_MIN_REVISION`). A lane on an older gstack refuses the
+policy by name rather than reading it differently.
 
 <a id="ship"></a>
 ## What `/ship` reads from it

@@ -213,6 +213,13 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    POLICY_GSTACK_TOO_OLD) printf '%s' 'policy-gstack-too-old' ;;
+    QUEUE_NOT_READY) printf '%s' 'queue-not-ready' ;;
+    QUEUE_PROOF_MISSING) printf '%s' 'queue-proof-missing' ;;
+    QUEUE_STAMP_NOT_STAMP_ONLY) printf '%s' 'queue-stamp-not-stamp-only' ;;
+    QUEUE_VERIFY_MISMATCH) printf '%s' 'queue-verify-mismatch' ;;
+    QUEUE_GATE_MISSING) printf '%s' 'queue-gate-missing' ;;
+    GATE_AHEAD_ATTEMPT_INVALID) printf '%s' 'gate-ahead-attempt-invalid' ;;
     *) return 1 ;;
   esac
 }

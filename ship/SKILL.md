@@ -770,6 +770,11 @@ chooses it in item 2 and ALREADY_BUMPED derives it in item 1.
 
 `ship: queue_mode stamp-at-merge` replaces items 1–4.
 
+**Shared merge queue:** when a coordinator runs the queue, use
+`~/.claude/skills/gstack/bin/gstack-ship-queue ready | gate-ahead | stamp`
+(docs/ship-policy.md#run-a-shared-merge-queue): stamp only when your slot is
+called, and send the printed READY and `QUEUE_STAMP:` lines.
+
 1. **Classify state** — pure reader, never writes:
    ```bash
    bun run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base <base>
