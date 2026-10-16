@@ -736,6 +736,32 @@ export const RESULT_CODES = {
     summary: 'an added or changed test line compares an elapsed wall-clock or CPU time against a bound, or sleeps and then asserts (a warning, not a block)',
     fix: 'assert on the outcome, an injected clock or a forced deadline instead; when the bound is the contract, add `gstack-timing-ok: <reason>` in a comment on the line or the line above',
   },
+  // Field list 2, W2 (approval classes) and W3 (state-machine round-trip matrix).
+  APPROVAL_CLASSES_INVALID: {
+    anchor: 'approval-classes-invalid',
+    summary: '`.gstack/approval-classes.json` is malformed, a class matches nothing, or a path escapes the repository',
+    fix: 'keep `classes` a non-empty list of uniquely named classes, each with `paths`, `patterns` or `migrations: true`, and every glob repo-relative (`gstack-approval-classes validate` checks the working-tree copy)',
+  },
+  APPROVAL_CLASS_FOUND: {
+    anchor: 'approval-class-found',
+    summary: 'the branch changes something a declared approval class covers',
+    fix: 'get the owner\'s approval and put `Approved by <owner> <YYYY-MM-DD> via <plan sha|comment or review URL> for <class>@<digest12>` in the PR body, using the APPROVAL_SCOPE token the check printed',
+  },
+  APPROVAL_CITATION_MISSING: {
+    anchor: 'approval-citation-missing',
+    summary: 'a declared approval class has no citation that resolves and binds to its current effects, so no receipt was written',
+    fix: 'add an `Approved by` line whose plan (with --approval-run <dir>) or maintainer comment names the APPROVAL_SCOPE token or the class and every effect path; for evidence gstack cannot read, attest it with `for <class>@<digest12>` on the line',
+  },
+  APPROVAL_SOURCE_UNAVAILABLE: {
+    anchor: 'approval-source-unavailable',
+    summary: 'origin/<base> is not a resolvable commit, so the committed .gstack/approval-classes.json cannot be read and nothing was checked',
+    fix: 'git fetch origin <base> (classes are never read from the working tree)',
+  },
+  STATE_MATRIX_INCOMPLETE: {
+    anchor: 'state-matrix-incomplete',
+    summary: 'the state-machines specialist output lacks a kind × owner action cell, maps a cell to a test that does not exist, or leaves an untested cell without a CRITICAL finding',
+    fix: 'rerun the state-machines specialist on the same diff; its review coverage stays incomplete until gstack-state-matrix check passes',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

@@ -3557,3 +3557,68 @@ an event or a poll with a deadline. When the bound is the contract, add
 `gstack-timing-ok: <reason>` in a comment on the line or the line above. Never
 raise a bound to make a flake pass; /investigate's flake playbook covers the
 diagnosis.
+
+<a id="approval-classes-invalid"></a>
+### `APPROVAL_CLASSES_INVALID`
+
+**Meaning.** The `.gstack/approval-classes.json` committed on the base branch
+(or, for `gstack-approval-classes validate`, the working-tree copy) is not
+valid JSON, has an unknown key, a class without a name or anything to match,
+or a glob that escapes the repository. `gstack-ship-receipt write` refuses
+rather than ship with the classes unchecked.
+
+**Fix.** Run `gstack-approval-classes validate`, correct the file, and merge
+it. See [Approval classes](ship-policy.md#approval-classes).
+
+<a id="approval-class-found"></a>
+### `APPROVAL_CLASS_FOUND`
+
+**Meaning.** `gstack-approval-classes check` found changes a declared class
+covers. Each `APPROVAL_CLASS:` line names the class and file:line, and each
+`APPROVAL_SCOPE: <class>@<digest12>` line is the token an approval binds to.
+Report-only lines from built-in detectors do not set this code.
+
+**Fix.** Ask the owner, then add
+`Approved by <owner> <YYYY-MM-DD> via <ref> for <class>@<digest12>` to the PR
+body. The token changes whenever an effect is added, removed or edited, so a
+later change needs a new approval.
+
+<a id="approval-citation-missing"></a>
+### `APPROVAL_CITATION_MISSING`
+
+**Meaning.** `gstack-ship-receipt write` found a declared approval class with
+no citation that both resolves and binds to the current effects, and wrote no
+receipt. The line lists every candidate citation and why it did not count:
+the plan's autoplan gate is not APPROVED, the comment is not by a ship-policy
+maintainer or not by the cited owner, the evidence names neither the scope
+token nor the class with every effect path (an approval of other work, or one
+given before an effect was added), or an unresolvable reference lacks a
+matching `for <class>@<digest12>` attestation.
+
+**Fix.** Cite the approval: a plan sha with `--approval-run <run dir>`, or the
+URL of a maintainer's comment or review that names the token. For evidence
+gstack cannot read (a thread code, a chat message), attest which scope it
+covers with `for <class>@<digest12>`; the receipt records it as
+`citation: unverified` for the coordinator.
+
+<a id="approval-source-unavailable"></a>
+### `APPROVAL_SOURCE_UNAVAILABLE`
+
+**Meaning.** `origin/<base>` does not resolve, so the committed approval
+classes cannot be read. `check` exits 3; `gstack-ship-receipt write`
+records `approval.status: unavailable` and prints `approval=unchecked`.
+
+**Fix.** `git fetch origin <base>` and rerun. The working-tree copy is never
+used.
+
+<a id="state-matrix-incomplete"></a>
+### `STATE_MATRIX_INCOMPLETE`
+
+**Meaning.** `gstack-state-matrix check` read the state-machines specialist's
+output and found a gap: a kind × owner action pair with no row, a row with no
+resulting row, a test reference that does not exist in the checkout, or an
+untested cell without a CRITICAL finding. A review whose matrix is incomplete
+has incomplete coverage, never a clean result.
+
+**Fix.** Rerun the state-machines specialist on the same diff and check its
+output again.
