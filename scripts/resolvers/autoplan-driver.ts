@@ -12,11 +12,12 @@ import { FILES } from '../../lib/autoplan-state';
 import { PHASES, RESULT_FORMAT } from '../../lib/autoplan-prompts';
 import { SCOPE_FLAG_TOKENS } from '../../lib/autoplan-scope';
 import { RESULT_CODES } from '../../lib/result-codes';
+import { DEFAULT_HOST_ESTIMATE_USD, DEFAULT_MAX_ROUNDS } from '../../lib/autoplan-budget';
 import type { ResolverFn } from './types';
 
 /** One entry per command line the loop runs, as the field-wave plan specifies them. */
 export const AUTOPLAN_DRIVER_COMMANDS: Array<{ cmd: string; does: string }> = [
-  { cmd: 'gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--scaffold]', does: 'first call: init the run, print PHASE:, SCOPE:, DRIVER: and one ATTEMPT: per voice' },
+  { cmd: 'gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--max-rounds <n>] [--scaffold]', does: `first call: init the run, print PHASE:, SCOPE:, DRIVER: and one ATTEMPT: per voice; --max-rounds caps review rounds per phase (default ${DEFAULT_MAX_ROUNDS} unattended), and an unattended Capy run reserves ${DEFAULT_HOST_ESTIMATE_USD.toFixed(2)} per host attempt unless --estimate-usd <n> says otherwise, so --spend-cap binds` },
   { cmd: 'gstack-autoplan next --out <dir> [--redispatch <attempt>]', does: 'later calls: open the next phase or reprint open attempts; never redispatches on its own' },
   { cmd: 'gstack-autoplan submit --out <dir> --phase <p> --voice native|outside --record <file.md> --model <id> [--attempt <id>]', does: 'bind a free-form review record (canonical fence, one findings table or list, or `No findings.`)' },
   { cmd: 'gstack-autoplan submit ... --record <file.md> --attest "<reason>" --attempt <id>', does: 'bind a record with no INPUT: line as receipt: attested (a wrong INPUT: always refuses)' },
@@ -27,6 +28,8 @@ export const AUTOPLAN_DRIVER_COMMANDS: Array<{ cmd: string; does: string }> = [
   { cmd: 'gstack-autoplan revise --out <dir> --plan <plan v2> --incorporates <decision ids>', does: 'bind the amended plan; reopens every phase whose reviewed plan changed, Eng last' },
   { cmd: 'gstack-autoplan revise --out <dir> --settle <decision id|d4>', does: 'discharge a packaging or ordering change with no plan edit; reopens nothing' },
   { cmd: 'gstack-autoplan revise --out <dir> --withdraw <decision id>', does: 'drop a pending amendment instead of applying it' },
+  { cmd: 'gstack-autoplan close --out <dir> --phase <p> --deferred "<reason>" --by human|agent:<id>', does: 'close a phase accepted-with-findings: its open findings go to tasks.jsonl, and Critical, urgent or user-challenge findings become gate items; also the recovery from `STOP: reason=budget_exhausted`' },
+  { cmd: 'gstack-autoplan budget --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by human|agent:<id>', does: 'the owner\'s journaled cap raise; after a budget stop, `resume` continues the run' },
   { cmd: 'gstack-autoplan export --out <dir>', does: 'write the artifact set; then `gstack-artifact validate <dir>/run.json`' },
   { cmd: 'gstack-autoplan status|resume --out <dir>', does: 'read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts)' },
   { cmd: 'gstack-autoplan resume --out <new dir> --from <checkpoint>', does: 'restore the newest valid checkpoint generation (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership; `checkpoints --from <dir>` lists them' },

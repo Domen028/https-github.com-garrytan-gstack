@@ -47,8 +47,8 @@ line yourself; gstack never writes the plan.
 
 ### Commands
 
-- `gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--scaffold]`
-  first call: init the run, print PHASE:, SCOPE:, DRIVER: and one ATTEMPT: per voice.
+- `gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--max-rounds <n>] [--scaffold]`
+  first call: init the run, print PHASE:, SCOPE:, DRIVER: and one ATTEMPT: per voice; --max-rounds caps review rounds per phase (default 3 unattended), and an unattended Capy run reserves 5.00 per host attempt unless --estimate-usd <n> says otherwise, so --spend-cap binds.
 - `gstack-autoplan next --out <dir> [--redispatch <attempt>]`
   later calls: open the next phase or reprint open attempts; never redispatches on its own.
 - `gstack-autoplan submit --out <dir> --phase <p> --voice native|outside --record <file.md> --model <id> [--attempt <id>]`
@@ -69,6 +69,10 @@ line yourself; gstack never writes the plan.
   discharge a packaging or ordering change with no plan edit; reopens nothing.
 - `gstack-autoplan revise --out <dir> --withdraw <decision id>`
   drop a pending amendment instead of applying it.
+- `gstack-autoplan close --out <dir> --phase <p> --deferred "<reason>" --by human|agent:<id>`
+  close a phase accepted-with-findings: its open findings go to tasks.jsonl, and Critical, urgent or user-challenge findings become gate items; also the recovery from `STOP: reason=budget_exhausted`.
+- `gstack-autoplan budget --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by human|agent:<id>`
+  the owner's journaled cap raise; after a budget stop, `resume` continues the run.
 - `gstack-autoplan export --out <dir>`
   write the artifact set; then `gstack-artifact validate <dir>/run.json`.
 - `gstack-autoplan status|resume --out <dir>`
@@ -137,8 +141,8 @@ Merge conditions. A lane's PR merges only when: the required gate lanes are gree
 
 Behavior-change notices. Every user-visible behavior change outside the plan's own items is listed in the PR body under `## Behavior changes` with the file, the old behavior and the new one, before the review starts. An omitted change found in review is a CRITICAL finding, whatever its size.
 
-Spend caps. Each lane runs under the `--spend-cap` the coordinator names; a lane that reaches it stops with `status=budget_exhausted` and reports spent, reserved and unknown charges. Paid evals are never retried to change a verdict; a rerun needs a named repair. Host-subagent spend is reported as `unknown`, never zero.
+Spend caps. Each lane runs under the `--spend-cap` the coordinator names; a lane that reaches it stops `incomplete` (`STOP: reason=budget_exhausted`) and reports spent, reserved and unknown charges. Paid evals are never retried to change a verdict; a rerun needs a named repair. Host-subagent spend is reported as `unknown`, never zero.
 
-Before done. A lane runs `gstack-pregate run --allow-repo-commands` on its branch (the unit tier on the changed files plus the repo's guards) and reports done only after it passes. In a repo whose `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push, because a PR tool may not run local hooks.
+Before done. A lane runs `gstack-pregate run --allow-repo-commands` on its branch and reports done only after it passes. In a repo whose `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push, because a PR tool may not run local hooks.
 
 Handoff format. A lane reports in this order, identifiers first: PR URL (or `no PR` with branch and SHA), `GSTACK_RESULT` line, the `gstack: ok|fail <rev>` line, the `PREGATE:` line, gate summary (lanes passed/failed/skipped), behavior changes (or `none`), spend (spent/reserved/unknown), then what it could not verify. Full thread ids (`jam_…`), never short codes, in every cross-thread message. Prose after the identifiers may be truncated; nothing before them may be.

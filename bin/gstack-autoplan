@@ -16,25 +16,29 @@
  *   gstack-autoplan status  --out <dir> [--json]        query: the manifest, no GSTACK_RESULT line
  *   gstack-autoplan export  --out <dir> [--json]        rewrite plan.md, review-record.md, findings/tasks.jsonl and run.json hashes
  *   gstack-autoplan release --out <dir> --attempt <id>  drop a reservation for an attempt that never ran
+ *   gstack-autoplan close   --out <dir> --phase <p> --deferred "<reason>" --by <human|agent:<id>>   close a phase accepted-with-findings
+ *   gstack-autoplan budget  --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by <human|agent:<id>>   the owner's journaled cap change
  *   gstack-autoplan checkpoints --from <dir>            list checkpoint generations, newest first, with hash ok|bad
  *   gstack-autoplan contract                            print the coordinator contract every lane prompt inherits (plan E2)
  *
  * Logic: lib/autoplan-run.ts (next/submit/resume), lib/autoplan-gate.ts (close, gate, answer),
  * lib/autoplan-export.ts, lib/autoplan-prompts.ts, lib/spend-ledger.ts. Codes: lib/result-codes.ts.
  * Workflow commands end with GSTACK_RESULT: skill=autoplan status=<s> run=<dir>; the run is never approved here.
- * Mutating verbs (next, submit, answer, recommend, revise, export, run) pass admission first (lib/autoplan-admission.ts)
+ * Mutating verbs (next, submit, answer, recommend, revise, close, budget, export, run) pass admission first (lib/autoplan-admission.ts)
  * and bring an older run directory forward (lib/autoplan-migrate.ts) under the run lock.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { amendmentSteps, answerGate, recommendGate } from '../lib/autoplan-gate';
+import { amendmentSteps, answerGate, closeDeferred, finishGate, recommendGate } from '../lib/autoplan-gate';
+import { changeBudget, liftStop } from '../lib/autoplan-budget';
+import { ANSWERED_BY_RE } from '../lib/gate-list';
 import { checkpointLines, checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
 import { migrateRun } from '../lib/autoplan-migrate';
 import { reviseRun } from '../lib/autoplan-revise';
 import { pendingAmendments, type RunState } from '../lib/autoplan-state';
-import { FILES, RunError, initRun, markOutside, nextStep, readState, resumeRun, statusLines, submitResult, withRunLock, writeState } from '../lib/autoplan-run';
+import { FILES, RunError, currentPhase, initRun, markOutside, nextStep, readState, resumeRun, statusLines, submitResult, withRunLock, writeState } from '../lib/autoplan-run';
 import { driverFile, type Phase } from '../lib/autoplan-prompts';
 import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { createRunner, familyConflict, type RunnerId } from '../lib/outside-voice-runner';
@@ -46,7 +50,9 @@ const HELP = `gstack-autoplan — unattended /autoplan: next/submit loop, answer
 DRIVER: ${driverFile()}
 
   next    --out <dir> [--plan <file>] [--plan-heading <text>] [--scaffold] [--ui|--no-ui] [--developer-tool] [--agent-primary] [--no-dx]
-          [--no-outside] [--light] [--spend-cap <usd>] [--estimate-usd <n>] [--deadline <min>] [--redispatch <attempt>] [--json]
+          [--no-outside] [--light] [--spend-cap <usd>] [--max-rounds <n>] [--estimate-usd <n>] [--deadline <min>] [--redispatch <attempt>] [--json]
+          --max-rounds (first next): review rounds per phase (default 3 unattended); at the cap a phase closes accepted-with-findings
+          --estimate-usd: reserved per new attempt; unattended Capy runs reserve a default for host attempts so --spend-cap binds
           --scaffold (first next): a plan missing one of its two sections is reviewed from <out>/plan-source.md with the heading added
           --light loads each phase's checklist plus the sections its scope needs (the unattended default); interactive kinds load everything
           prepare the current phase; one ATTEMPT: line per voice; ends awaiting_result
@@ -73,6 +79,11 @@ DRIVER: ${driverFile()}
           (a collection or root restores its newest valid generation; GSTACK_AUTOPLAN_CHECKPOINT_DIR set: every command
           leaving the run at rest publishes a generation under <dir>/<run>/ and prints CHECKPOINT: on stderr)
   checkpoints --from <dir>          list checkpoint generations, newest first: run, gate_rev, time, hash ok|bad, current
+  close   --out <dir> --phase <p> --deferred "<reason>" --by <human|agent:<id>>
+          close the phase accepted-with-findings: open voices skipped (dispatched attempts settle unknown at their
+          reservation), open findings into tasks.jsonl; Critical, urgent and user-challenge findings become gate items
+  budget  --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by <human|agent:<id>>
+          the owner's cap change, journaled; a run stopped incomplete (budget_exhausted) resumes with resume afterwards
   status  --out <dir> [--json]      export  --out <dir>      release --out <dir> --attempt <id>
   contract                          print lib/coordinator-contract.ts (the block every lane and reviewer prompt inherits word for word)
 
@@ -154,7 +165,9 @@ function doNext(out: string, rest: string[], json: boolean): number {
     const plan = flag(rest, '--plan');
     if (!plan) throw new RunError('RUN_NOT_INITIALIZED', `${out} has no run.json; pass --plan <file> on the first next`, 3);
     const ui = rest.includes('--ui') ? true : rest.includes('--no-ui') ? false : undefined;
-    initRun({ plan, out, cwd, planHeading: flag(rest, '--plan-heading'), outsideEnabled: !rest.includes('--no-outside'), spendCap: num(rest, '--spend-cap') ?? null,
+    const maxRounds = num(rest, '--max-rounds');
+    if (maxRounds !== undefined && (!Number.isInteger(maxRounds) || maxRounds < 1)) throw new RunError('ARTIFACT_SCHEMA', '--max-rounds needs an integer >= 1', 1);
+    initRun({ plan, out, cwd, planHeading: flag(rest, '--plan-heading'), outsideEnabled: !rest.includes('--no-outside'), spendCap: num(rest, '--spend-cap') ?? null, maxRounds,
       deadlineMin: num(rest, '--deadline'), light: rest.includes('--light'), scaffold: rest.includes('--scaffold'), scope: { ui, developerTool: rest.includes('--developer-tool'), agentPrimary: rest.includes('--agent-primary'), dx: rest.includes('--no-dx') ? false : undefined } }, initLines);
   }
   const redispatch = rest.flatMap((a, i) => (a === '--redispatch' && rest[i + 1] ? [rest[i + 1]!] : []));
@@ -196,6 +209,33 @@ function doRevise(out: string, rest: string[], json: boolean): number {
   if (r.state.status === 'running' || r.state.status === 'amend_pending') lines.push(nextLine(r.state, out));
   lines.push(resultLineFor(r.state.status, out));
   emit(json, lines, { run: r.state.run, status: r.state.status, reopened: r.reopened, amendments: pendingAmendments(r.state).map(a => a.decision), gate_rev: r.state.gate_rev ?? null, out });
+  return EXIT.ok;
+}
+
+function doClose(out: string, rest: string[], json: boolean): number {
+  const phase = flag(rest, '--phase'); const reason = flag(rest, '--deferred'); const by = flag(rest, '--by');
+  if (!phase || !reason?.trim()) return usage('close needs --phase <p> --deferred "<reason>" --by <human|agent:<id>>');
+  if (by === undefined || !ANSWERED_BY_RE.test(by)) throw new RunError('ANSWER_BY_REQUIRED', `close records who deferred the phase: pass --by human or --by agent:<id> (got ${JSON.stringify(by ?? null)})`, 3);
+  const state = readState(out);
+  const ps = state.phases[phase];
+  if (!state.phase_order.includes(phase as Phase) || ps?.closed_at || ps?.skipped) throw new RunError('PHASE_NOT_AWAITING', `${phase} is ${ps?.skipped ? 'skipped' : ps?.closed_at ? 'already closed' : 'not a phase of this run'}`, 3);
+  const stopped = state.status === 'incomplete' && !!state.stop;
+  if (!stopped && !['running', 'awaiting_result', 'interrupted'].includes(state.status)) throw new RunError('PHASE_NOT_AWAITING', `run is ${state.status}; close works on a running or budget-stopped run`, 3);
+  const r = closeDeferred(state, phase as Phase, { reason: reason.trim(), by, cause: 'owner' });
+  const lines = [...r.lines, ...(stopped ? liftStop(state, `${phase} closed deferred by ${by}`) : [])];
+  if (!currentPhase(state)) { finishGate(state); lines.push(`GATE: gate_rev=${state.gate_rev} render with: gstack-gate render ${path.join(out, 'gate.json')}`); }
+  else { state.status = 'running'; lines.push(`NEXT: gstack-autoplan next --out ${out}`); }
+  writeState(state);
+  lines.push(resultLineFor(state.status, out));
+  emit(json, lines, { run: state.run, status: state.status, phase, blockers: r.blockers, gate_rev: state.gate_rev ?? null, out });
+  return EXIT.ok;
+}
+
+function doBudget(out: string, rest: string[], json: boolean): number {
+  const state = readState(out);
+  const lines = changeBudget(state, { spendCap: num(rest, '--spend-cap'), maxRounds: num(rest, '--max-rounds'), by: flag(rest, '--by') });
+  writeState(state);
+  emit(json, [...lines, resultLineFor(state.status, out)], { run: state.run, status: state.status, spend_cap_usd: state.spend_cap_usd, max_rounds: state.max_rounds ?? null, out });
   return EXIT.ok;
 }
 
@@ -259,6 +299,8 @@ async function main(argv: string[]): Promise<number> {
     if (cmd === 'next') return mutating(out, json, () => doNext(out, rest, json));
     if (cmd === 'submit') return mutating(out, json, () => doSubmit(out, rest, json));
     if (cmd === 'revise') return mutating(out, json, () => doRevise(out, rest, json));
+    if (cmd === 'close') return mutating(out, json, () => doClose(out, rest, json));
+    if (cmd === 'budget') return mutating(out, json, () => doBudget(out, rest, json));
     if (cmd === 'run') { const admission = admit(process.env); if (admission.lines.length) process.stdout.write(admission.lines.join('\n') + '\n'); return await doRun(out, rest, json); }
     if (cmd === 'status') {
       const state = readState(out);
@@ -328,7 +370,8 @@ async function main(argv: string[]): Promise<number> {
   } catch (e: any) {
     if (e instanceof RunError) {
       process.stderr.write(resultLine(`gstack-autoplan ${cmd}`, e.code, e.detail) + '\n');
-      if (['next', 'submit', 'answer', 'resume', 'run', 'revise', 'recommend'].includes(cmd)) process.stdout.write(resultLineFor('refused', out) + '\n');
+      if (e.after.lines?.length) process.stdout.write(e.after.lines.join('\n') + '\n');
+      if (['next', 'submit', 'answer', 'resume', 'run', 'revise', 'recommend', 'close', 'budget'].includes(cmd)) process.stdout.write(resultLineFor(e.after.status ?? 'refused', out) + '\n');
       return e.exit === 3 ? EXIT.refused : EXIT.fail;
     }
     process.stderr.write(`gstack-autoplan ${cmd}: ${e?.message ?? e}\n`);
