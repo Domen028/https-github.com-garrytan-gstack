@@ -4,12 +4,13 @@
 # freshness test is test/doctor-components.test.ts. Sourced by
 # bin/gstack-doctor-check.sh; Bash 3.2 builtins only.
 
-GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision wrapper"
+GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso helpers runtime pins state-root privacy cores revision wrapper"
 GSTACK_DOCTOR_CORE="runtime pins state-root privacy cores revision wrapper"
 GSTACK_DOCTOR_HOSTS="claude codex"
 GSTACK_DOCTOR_OPTIONAL="codex-cli cso"
-GSTACK_DOCTOR_SKILLS="autoplan plan-ceo-review plan-eng-review plan-design-review plan-devex-review plan-tune office-hours spec review ship investigate codex cso browse qa qa-only design-review design-consultation design-html devex-review scrape skillify canary benchmark make-pdf diagram pair-agent open-gstack-browser setup-browser-cookies connect-chrome land-and-deploy benchmark-models careful claude-code context-restore context-save design-shotgun deslop-shared-libs document-generate document-release eval-plan freeze gstack-upgrade guard health ios-clean ios-design-review ios-fix ios-qa ios-sync landing-report learn retro setup-deploy setup-gbrain sync-gbrain test-audit unfreeze"
+GSTACK_DOCTOR_SKILLS="autoplan plan-ceo-review plan-eng-review plan-design-review plan-devex-review plan-tune office-hours spec review ship investigate codex cso browse qa qa-only design-review design-consultation design-html devex-review scrape skillify canary benchmark make-pdf diagram pair-agent open-gstack-browser setup-browser-cookies connect-chrome land-and-deploy benchmark-models careful claude-code context-restore context-save design-shotgun deslop-shared-libs document-generate document-release eval-plan freeze gstack-upgrade guard health ios-clean ios-design-review ios-fix ios-qa ios-sync landing-report learn retro setup-deploy setup-gbrain sync-gbrain test-audit unfreeze review-voice"
 GSTACK_BROWSER_LAZY_REASON="lazy; gstack-browser-ensure installs on first use"
+GSTACK_DOCTOR_HELPERS="gstack-pregate gstack-plan-reality gstack-artifact gstack-autoplan"
 
 # gstack_doctor_component_title ID — the human title; returns 1 for an unknown id.
 gstack_doctor_component_title() {
@@ -21,6 +22,7 @@ gstack_doctor_component_title() {
     browse-bundle) printf '%s' 'browse bundle' ;;
     browser) printf '%s' 'Chromium launch and render' ;;
     cso) printf '%s' 'CSO native helper' ;;
+    helpers) printf '%s' 'read-only helpers (gstack-pregate sealed, gstack-plan-reality, gstack-artifact, gstack-autoplan reads)' ;;
     runtime) printf '%s' 'gstack runtime (Bun)' ;;
     pins) printf '%s' 'project pins' ;;
     state-root) printf '%s' 'state root' ;;
@@ -42,6 +44,7 @@ gstack_doctor_component_kind() {
     browse-bundle) printf '%s' 'component' ;;
     browser) printf '%s' 'component' ;;
     cso) printf '%s' 'optional' ;;
+    helpers) printf '%s' 'component' ;;
     runtime) printf '%s' 'core' ;;
     pins) printf '%s' 'core' ;;
     state-root) printf '%s' 'core' ;;
@@ -61,6 +64,7 @@ gstack_doctor_skill_requires() {
     cso) printf '%s' 'claude cso' ;;
     browse|qa|qa-only|design-review|design-consultation|design-html|devex-review|scrape|skillify|canary|benchmark|make-pdf|diagram|pair-agent|open-gstack-browser|setup-browser-cookies|connect-chrome|land-and-deploy) printf '%s' 'claude codex patch browse-bundle browser' ;;
     benchmark-models|careful|claude-code|context-restore|context-save|design-shotgun|deslop-shared-libs|document-generate|document-release|eval-plan|freeze|gstack-upgrade|guard|health|ios-clean|ios-design-review|ios-fix|ios-qa|ios-sync|landing-report|learn|retro|setup-deploy|setup-gbrain|sync-gbrain|test-audit|unfreeze) printf '%s' 'claude' ;;
+    review-voice) printf '%s' 'helpers' ;;
     *) return 1 ;;
   esac
 }
@@ -73,6 +77,7 @@ gstack_doctor_skill_optional() {
     cso) printf '%s' '' ;;
     browse|qa|qa-only|design-review|design-consultation|design-html|devex-review|scrape|skillify|canary|benchmark|make-pdf|diagram|pair-agent|open-gstack-browser|setup-browser-cookies|connect-chrome|land-and-deploy) printf '%s' 'codex-cli' ;;
     benchmark-models|careful|claude-code|context-restore|context-save|design-shotgun|deslop-shared-libs|document-generate|document-release|eval-plan|freeze|gstack-upgrade|guard|health|ios-clean|ios-design-review|ios-fix|ios-qa|ios-sync|landing-report|learn|retro|setup-deploy|setup-gbrain|sync-gbrain|test-audit|unfreeze) printf '%s' '' ;;
+    review-voice) printf '%s' '' ;;
     *) return 1 ;;
   esac
 }
@@ -83,6 +88,20 @@ gstack_doctor_skill_pins_advisory() {
     autoplan|plan-ceo-review|plan-eng-review|plan-design-review|plan-devex-review|office-hours) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# gstack_doctor_install_profile NAME — true for an install profile (helper runtime: no ./setup, no host profiles, project pins not applied).
+gstack_doctor_install_profile() {
+  case "$1" in
+    review-voice) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# gstack_capy_bootstrap_cmd ROOT [SKILL] — the install command for a machine without the Drive skill (capyBootstrapCommand).
+gstack_capy_bootstrap_cmd() {
+  printf 'test -f "%s/setup" || git clone --quiet --single-branch --depth 1 %s "%s" && GSTACK_CAPY_ROOT="%s" bash "%s/capy/skill/gstack/scripts/install.sh"' "$1" 'https://github.com/garrytan/gstack.git' "$1" "$1" "$1"
+  [ -z "${2:-}" ] || printf ' --for %s' "$2"
 }
 
 # gstack_result_anchor CODE — the docs/troubleshooting.md anchor for a lib/result-codes.ts code; returns 1 for an unknown code.

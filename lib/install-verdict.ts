@@ -17,7 +17,9 @@
  * is below gstack's supported minimum and, with GSTACK_CAPY=1 only, when the
  * verdict is missing, failing, for another checkout or HEAD, narrower than
  * the workflow, for another project when the workflow runs the repo's tests,
- * or records a Bun other than the one running (BUN_RESOLUTION_DRIFT). Other
+ * or records a Bun other than the one running (BUN_RESOLUTION_DRIFT). A
+ * verdict for an install profile (`for=review-voice`) covers no host, so it
+ * refuses every workflow with the full-install `--for <skill>` command. Other
  * spawned sessions only warn.
  * GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1 admits and sets `overridden` (the caller
  * records it as a run deviation).
@@ -26,7 +28,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { PINS_ADVISORY_SKILLS, SKILL_REQUIREMENTS } from './doctor-components';
+import { INSTALL_PROFILES, PINS_ADVISORY_SKILLS, SKILL_REQUIREMENTS } from './doctor-components';
 import type { ResultCodeName } from './result-codes';
 import { resolveStateRoot } from './state-root';
 
@@ -151,6 +153,10 @@ export function verdictProblem(skill: string, gstackRoot: string, env: Env, bunP
       fix: `run the Capy skill installer (scripts/install.sh --for ${skill}) from ${project ?? 'this directory'}, then launch with the GSTACK_LAUNCH line it prints` };
   }
   const missing = (SKILL_REQUIREMENTS[skill]?.requires ?? []).find(id => !v.required.includes(id));
+  if (missing && INSTALL_PROFILES.includes(v.for)) {
+    return { ...problem(`the install verdict certified for=${v.for}, which does not cover ${missing} that ${skill} needs (${v.for} certifies only the read-only helpers)`),
+      fix: `run GSTACK_CAPY_ROOT=${src} bash ${src}/capy/skill/gstack/scripts/install.sh --for ${skill} (the full install: ./setup and host profiles), then launch with the GSTACK_LAUNCH line it prints` };
+  }
   if (missing) return problem(`the install verdict certified for=${v.for}, which does not cover ${missing} that ${skill} needs`);
   if (v.bun_path && bunPath && bunPath !== v.bun_path) {
     return { detail: `bun ${bunVersion} at ${bunPath} is running, but the install verdict recorded bun ${v.bun_version} at ${v.bun_path}`, code: 'BUN_RESOLUTION_DRIFT',

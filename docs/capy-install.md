@@ -12,12 +12,38 @@ The vendored skill (`capy/skill/gstack/SKILL.md`) tells a Capy agent how to use
 them. The Drive folder is a mirror: the owner copies `capy/skill/gstack/` there
 when asked; nothing writes the Drive automatically.
 
-Direct use, without the skill:
+Direct use, without the Drive skill (a subagent or reviewer machine): clone into
+the root the bootstrapper resolves when nothing is there, then run the
+checkout's own bootstrapper by absolute path, from the project directory, so
+the floor check and fast-forward still run and the verdict is keyed by the
+caller's project. The same command serves every later session (an existing
+checkout is fast-forwarded, never re-cloned):
 
 ```bash
-git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.local/share/gstack
-~/.local/share/gstack/bin/gstack-capy-install --for autoplan
+test -f "$HOME/.local/share/gstack/setup" || git clone --quiet --single-branch --depth 1 https://github.com/garrytan/gstack.git "$HOME/.local/share/gstack" && GSTACK_CAPY_ROOT="$HOME/.local/share/gstack" bash "$HOME/.local/share/gstack/capy/skill/gstack/scripts/install.sh" --for autoplan
 ```
+
+The text comes from `capyBootstrapCommand` in `lib/doctor-components.ts`
+(Bash: `gstack_capy_bootstrap_cmd`); the not-installed fix lines print it with
+the root they checked.
+
+## Reviewer machines: `--for review-voice`
+
+A dispatched reviewer (an /autoplan voice, a second opinion) reads a plan and
+reports; it runs no workflow. `--for review-voice` gives its machine a real
+trailer in seconds: clone or fast-forward, Bun at gstack's own supported
+minimum (the project's pins are not applied, since no repo tests run there; the
+trailer says `pins: skipped (helper runtime)`), no `./setup`, no host profiles
+and no bun shim. The doctor certifies only the read-only helpers (`PASS
+helpers`: `gstack-pregate sealed`, `gstack-plan-reality`, `gstack-artifact` and
+the `gstack-autoplan` reads such as `status` and `contract`). Its verdict covers
+no host profile, so a workflow started there is refused (`INSTALL: fail verdict
+— … (review-voice certifies only the read-only helpers); fix: run
+GSTACK_CAPY_ROOT=<root> bash <root>/capy/skill/gstack/scripts/install.sh --for
+<skill> …`). A review-voice check never replaces an ok verdict that a fuller
+install wrote for the same HEAD and project. Every /autoplan reviewer prompt
+ends with this command (`GSTACK TRAILER`); the warm run's budget, under 20 s,
+is measured by `test/capy-review-voice.test.ts`.
 
 ## Session start
 
@@ -202,7 +228,7 @@ gstack: fail runtime,pins
 
 An ok trailer carries at most one parenthesised note group, `; `-separated,
 in this order: `requested: …` (an existing checkout at another revision than
-`--revision`), `pins: skipped (planning-only|no project)`, then either
+`--revision`), `pins: skipped (planning-only|no project|helper runtime)`, then either
 `behind=<n> (latest: <ver>)` followed by `fix: <command>` (the session ended
 <n> commits behind origin's default branch after a fetch that succeeded in this
 run; `bin/gstack-capy-session` exports `GSTACK_CAPY_BEHIND`, `_BEHIND_TO` and
