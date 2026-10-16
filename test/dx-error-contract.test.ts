@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createSnapshot, prepareMethodology } from '../bin/gstack-autoplan-snapshot';
+import { writePrompts } from '../lib/autoplan-prompts';
 import { DX_ERROR_COMPACT, DX_ERROR_CONTRACT, DX_ERROR_ITEMS, DX_ERROR_RUBRIC } from '../lib/dx-error-contract';
 
 const ROOT = resolve(import.meta.dir, '..');
@@ -39,6 +40,9 @@ describe('agent-ready error contract reaches every DX reviewer', () => {
     expect(methodology).toContain(DX_ERROR_COMPACT);
     const snapshot = createSnapshot('dx', active, restore, method.methodologyPath);
     expect(snapshot.nativePrompt).toContain(DX_ERROR_COMPACT);
+    const prompts = writePrompts({ phase: 'dx', snapshot, outDir: dir, priorConsensus: [] });
+    expect(readFileSync(prompts.native, 'utf8')).toContain(DX_ERROR_COMPACT);
+    expect(readFileSync(prompts.outside, 'utf8')).toContain(DX_ERROR_COMPACT);
   });
 
   test('rendered skills carry the contract where each consumer reads it', () => {
@@ -70,7 +74,7 @@ describe('agent-ready error contract reaches every DX reviewer', () => {
 
   test('no DX consumer keeps the old error formula', () => {
     const consumers = [
-      'scripts/resolvers/dx.ts', 'bin/gstack-autoplan-snapshot.ts', 'autoplan/sections/dx-phase.md',
+      'scripts/resolvers/dx.ts', 'bin/gstack-autoplan-snapshot.ts', 'lib/autoplan-prompts.ts', 'autoplan/sections/dx-phase.md',
       'plan-devex-review/SKILL.md', 'plan-devex-review/sections/review-sections.md',
       'plan-devex-review/sections/checklist.md', 'plan-devex-review/dx-hall-of-fame.md', 'devex-review/SKILL.md',
     ];

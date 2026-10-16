@@ -13,6 +13,7 @@ import * as path from 'node:path';
 import { redactFindingSpans, scan } from './redact-engine';
 import { resolveStateRoot } from './state-root';
 import { runQaDeadlineCommand, startQaDeadline } from './qa-deadline';
+import { RESULT_CODES } from './result-codes';
 
 type Stream = 'stdout' | 'stderr';
 type Recovery = 'retry' | 'fix_and_retry' | 'do_first' | 'ask_human';
@@ -24,25 +25,27 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 const PASS_MARK = '<REDACTED-passed_env.value>';
 const MIN_MASKED_VALUE = 4;
 const PROG = 'gstack-error-capture';
-const USAGE = `${PROG} [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]`;
+const USAGE = RESULT_CODES.DX_CAPTURE_USAGE.fix;
 
 export interface DxCaptureCode { exit: 0 | 1 | 2 | 3; recovery: Recovery; summary: string; fix: string }
 
+const row = (name: keyof typeof RESULT_CODES, exit: DxCaptureCode['exit'], recovery: Recovery): DxCaptureCode => ({ exit, recovery, summary: RESULT_CODES[name].summary, fix: RESULT_CODES[name].fix });
+
 export const DX_CAPTURE_CODES = {
-  DX_CAPTURE_USAGE: { exit: 2, recovery: 'fix_and_retry', summary: 'Arguments are malformed: unknown flag, missing value, no `--`, or no command after it.', fix: USAGE },
-  DX_CAPTURE_BAD_DEADLINE: { exit: 2, recovery: 'fix_and_retry', summary: '--deadline is not a positive number of seconds (at most 3600, up to 3 decimals).', fix: '--deadline 20' },
-  DX_CAPTURE_BAD_MAX_BYTES: { exit: 2, recovery: 'fix_and_retry', summary: `--max-bytes is not an integer from 1 to ${SCAN_CAP}.`, fix: `--max-bytes ${DEFAULT_MAX_BYTES}` },
-  DX_CAPTURE_BAD_PASS_ENV: { exit: 2, recovery: 'fix_and_retry', summary: '--pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE).', fix: '--pass-env NAME with NAME set in the calling environment' },
-  DX_CAPTURE_BAD_CWD: { exit: 2, recovery: 'fix_and_retry', summary: '--cwd is not an existing directory.', fix: '--cwd <existing directory> --approved' },
-  DX_CAPTURE_APPROVAL_REQUIRED: { exit: 3, recovery: 'ask_human', summary: '--pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files.', fix: 'ask the user to approve the named variables, files or directory, then add --approved' },
-  DX_CAPTURE_CONFIG_REFUSED: { exit: 3, recovery: 'fix_and_retry', summary: '--copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB.', fix: '--copy-config <regular file under $HOME, no symlinks>' },
-  DX_CAPTURE_NOT_FOUND: { exit: 1, recovery: 'do_first', summary: 'The command does not resolve to an executable file; the record carries launch "not_found" and nothing ran.', fix: 'install the command or pass its absolute path after --' },
-  DX_CAPTURE_TEMP_DIR: { exit: 1, recovery: 'do_first', summary: 'The private 0700 containment directory under the gstack state root could not be created.', fix: 'make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun' },
-  DX_CAPTURE_CONTAINMENT_UNAVAILABLE: { exit: 1, recovery: 'ask_human', summary: 'Process-group or Windows job containment is unavailable on this platform; nothing ran.', fix: 'run the capture on Linux, macOS or Windows with job objects available' },
-  DX_CAPTURE_SUPERVISOR_FAILED: { exit: 1, recovery: 'retry', summary: 'The deadline supervisor failed before reporting a result.', fix: 'rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor' },
-  DX_CAPTURE_INTERRUPTED: { exit: 1, recovery: 'retry', summary: 'The helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed.', fix: 'rerun the same command without interrupting it' },
-  DX_CAPTURE_REDACTION_FAILED: { exit: 1, recovery: 'ask_human', summary: 'The finished record still matched a secret check, so nothing was printed.', fix: 'do not rerun with more --pass-env; report the command name to the gstack maintainers' },
-  DX_CAPTURE_INTERNAL: { exit: 1, recovery: 'ask_human', summary: 'Unexpected helper failure; the line names the error class and its first stack frame.', fix: 'rerun once; if it repeats, report the printed frame to the gstack maintainers' },
+  DX_CAPTURE_USAGE: row('DX_CAPTURE_USAGE', 2, 'fix_and_retry'),
+  DX_CAPTURE_BAD_DEADLINE: row('DX_CAPTURE_BAD_DEADLINE', 2, 'fix_and_retry'),
+  DX_CAPTURE_BAD_MAX_BYTES: row('DX_CAPTURE_BAD_MAX_BYTES', 2, 'fix_and_retry'),
+  DX_CAPTURE_BAD_PASS_ENV: row('DX_CAPTURE_BAD_PASS_ENV', 2, 'fix_and_retry'),
+  DX_CAPTURE_BAD_CWD: row('DX_CAPTURE_BAD_CWD', 2, 'fix_and_retry'),
+  DX_CAPTURE_APPROVAL_REQUIRED: row('DX_CAPTURE_APPROVAL_REQUIRED', 3, 'ask_human'),
+  DX_CAPTURE_CONFIG_REFUSED: row('DX_CAPTURE_CONFIG_REFUSED', 3, 'fix_and_retry'),
+  DX_CAPTURE_NOT_FOUND: row('DX_CAPTURE_NOT_FOUND', 1, 'do_first'),
+  DX_CAPTURE_TEMP_DIR: row('DX_CAPTURE_TEMP_DIR', 1, 'do_first'),
+  DX_CAPTURE_CONTAINMENT_UNAVAILABLE: row('DX_CAPTURE_CONTAINMENT_UNAVAILABLE', 1, 'ask_human'),
+  DX_CAPTURE_SUPERVISOR_FAILED: row('DX_CAPTURE_SUPERVISOR_FAILED', 1, 'retry'),
+  DX_CAPTURE_INTERRUPTED: row('DX_CAPTURE_INTERRUPTED', 1, 'retry'),
+  DX_CAPTURE_REDACTION_FAILED: row('DX_CAPTURE_REDACTION_FAILED', 1, 'ask_human'),
+  DX_CAPTURE_INTERNAL: row('DX_CAPTURE_INTERNAL', 1, 'ask_human'),
 } satisfies Record<string, DxCaptureCode>;
 
 type DxCaptureCodeName = keyof typeof DX_CAPTURE_CODES;

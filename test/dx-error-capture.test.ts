@@ -303,6 +303,8 @@ describe('gstack-error-capture own errors', () => {
       'timed_out', 'terminal', 'secret_findings', 'other_masked', 'scan_complete', 'withheld_reason', 'containment', '3 refused']) {
       expect(DX_CAPTURE_HELP).toContain(word);
     }
+    expect(DX_CAPTURE_HELP).toContain('(default ' + DX_CAPTURE_CODES.DX_CAPTURE_BAD_MAX_BYTES.fix.split(' ')[1] + ')');
+    expect(DX_CAPTURE_HELP).toContain('Usage: ' + DX_CAPTURE_CODES.DX_CAPTURE_USAGE.fix);
     for (const [code, row] of Object.entries(DX_CAPTURE_CODES)) {
       expect(code.startsWith('DX_CAPTURE_')).toBe(true);
       expect(DX_CAPTURE_HELP).toContain(code + ' (exit ' + row.exit);

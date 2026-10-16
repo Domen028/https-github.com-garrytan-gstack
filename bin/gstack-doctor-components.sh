@@ -213,6 +213,20 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    DX_CAPTURE_USAGE) printf '%s' 'dx-capture-usage' ;;
+    DX_CAPTURE_BAD_DEADLINE) printf '%s' 'dx-capture-bad-deadline' ;;
+    DX_CAPTURE_BAD_MAX_BYTES) printf '%s' 'dx-capture-bad-max-bytes' ;;
+    DX_CAPTURE_BAD_PASS_ENV) printf '%s' 'dx-capture-bad-pass-env' ;;
+    DX_CAPTURE_BAD_CWD) printf '%s' 'dx-capture-bad-cwd' ;;
+    DX_CAPTURE_APPROVAL_REQUIRED) printf '%s' 'dx-capture-approval-required' ;;
+    DX_CAPTURE_CONFIG_REFUSED) printf '%s' 'dx-capture-config-refused' ;;
+    DX_CAPTURE_NOT_FOUND) printf '%s' 'dx-capture-not-found' ;;
+    DX_CAPTURE_TEMP_DIR) printf '%s' 'dx-capture-temp-dir' ;;
+    DX_CAPTURE_CONTAINMENT_UNAVAILABLE) printf '%s' 'dx-capture-containment-unavailable' ;;
+    DX_CAPTURE_SUPERVISOR_FAILED) printf '%s' 'dx-capture-supervisor-failed' ;;
+    DX_CAPTURE_INTERRUPTED) printf '%s' 'dx-capture-interrupted' ;;
+    DX_CAPTURE_REDACTION_FAILED) printf '%s' 'dx-capture-redaction-failed' ;;
+    DX_CAPTURE_INTERNAL) printf '%s' 'dx-capture-internal' ;;
     *) return 1 ;;
   esac
 }
