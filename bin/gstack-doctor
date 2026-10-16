@@ -88,8 +88,9 @@ row() {
   esac
 }
 
-# sq TEXT — TEXT single-quoted for bash.
+# sq TEXT — TEXT single-quoted for bash; psq TEXT — single-quoted for PowerShell.
 sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
+psq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/''/g")"; }
 
 # clamp CHARSET MAX — stdin's first line reduced to CHARSET, at most MAX chars.
 clamp() { head -1 | tr -cd "$1" | cut -c1-"$2"; }

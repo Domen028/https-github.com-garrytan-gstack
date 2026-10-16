@@ -760,7 +760,8 @@ describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pi
     expect(below.rows.revision.status).toBe('FAIL');
     expect(below.rows.revision.rest).toContain(`installed ${VERSION}`);
     expect(below.rows.revision.rest).toContain('below the supported minimum 99.0.0.0');
-    expect(below.rows.revision.rest).toContain(`${bashPath(f.root)}/bin/gstack-upgrade`);
+    // On Windows the fix names the held-install recovery instead (bin/gstack-upgrade refuses Git Bash installs).
+    expect(below.rows.revision.rest).toContain(process.platform === 'win32' ? 'in Git Bash: ' : `${bashPath(f.root)}/bin/gstack-upgrade`);
     expect(below.rows.revision.rest).toContain('(REVISION_BELOW_MINIMUM; ');
     expect(below.trailer).toBe('gstack: fail revision');
     const wrapped = check(f, ['--min-revision', '99.0.0.0'], { GSTACK_CAPY_WRAPPER_PATH: '/drive/skills/gstack/scripts/install.sh' });
@@ -1032,5 +1033,44 @@ describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash, Windo
     expect(row.fix).toContain('#bash-unavailable');
     expect(refused.status).toBe(1);
     expect(doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'posix' }).out).not.toContain('windows bash');
+  });
+
+  /** A held-install recovery form from docs/troubleshooting.md (the line after its form marker's fence). */
+  const form = (name: string) => {
+    const doc = fs.readFileSync(path.join(REPO, 'docs/troubleshooting.md'), 'utf8');
+    return doc.slice(doc.indexOf(`<!-- form:${name} -->`)).match(/```[a-z]+\n([^\n]+)\n```/)![1];
+  };
+  const check = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = doctor(f, ['--check', ...args], extra);
+    return { ...r, revision: r.out.split('\n').find(l => /^(PASS|FAIL) revision\b/.test(l)) ?? '' };
+  };
+
+  test('--check on Windows: the upgrade fix names both held-install recovery forms, each labelled by shell with the install path quoted, never bin/gstack-upgrade; elsewhere it keeps bin/gstack-upgrade', () => {
+    const f = makeFixture();
+    const root = bashPath(f.root);
+    const win = spawnSync('bash', ['-c', 'cygpath -w "$1" 2>/dev/null || printf %s "$1"', '_', root], { encoding: 'utf8', timeout: 10_000 }).stdout.trim();
+    const gitBash = form('recovery-gitbash').replace('cd ~/.claude/skills/gstack', `cd '${root}'`);
+    const powershell = form('recovery-powershell').replace('"$HOME\\.claude\\skills\\gstack"', `'${win}'`);
+    expect(gitBash).toContain(`cd '${root}' && `);
+    expect(powershell).toContain(`Set-Location -LiteralPath '${win}' `);
+    const windows = { GSTACK_DOCTOR_PLATFORM: 'windows' };
+    for (const [args, extra] of [
+      [['--min-revision', '99.0.0.0'], windows],
+      [['--min-revision', '99.0.0.0'], { ...windows, GSTACK_CAPY_WRAPPER_PATH: '/drive/skills/gstack/scripts/install.sh' }],
+      [['--revision', 'v0.0.0.1'], windows],
+    ] as Array<[string[], Record<string, string>]>) {
+      const r = check(f, args, extra);
+      expect(r.revision, r.out).toStartWith('FAIL revision');
+      expect(r.revision).toContain(`in Git Bash: ${gitBash}`);
+      expect(r.revision).toContain(`in Windows PowerShell 5.1: ${powershell}`);
+      expect(r.revision).not.toContain(`${root}/bin/gstack-upgrade`);
+    }
+    expect(spawnSync('bash', ['-n', '-c', gitBash], { encoding: 'utf8', timeout: 10_000 }).status).toBe(0);
+    const json = JSON.parse(doctor(f, ['--check', '--json', '--min-revision', '99.0.0.0'], windows).out);
+    expect(json.rows.find((x: { id: string }) => x.id === 'revision').fix).toContain(`in Windows PowerShell 5.1: ${powershell}`);
+    const posix = check(f, ['--min-revision', '99.0.0.0'], { GSTACK_DOCTOR_PLATFORM: 'posix' });
+    expect(posix.revision).toContain(`fix: ${root}/bin/gstack-upgrade (fast-forwards to the remote default branch, then reinstalls)`);
+    expect(posix.revision).not.toContain('in Git Bash:');
+    expect(check(f, ['--revision', 'v0.0.0.1'], { GSTACK_DOCTOR_PLATFORM: 'posix' }).revision).toContain(`or run ${root}/bin/gstack-upgrade to move to the latest release`);
   });
 });
