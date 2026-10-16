@@ -108,6 +108,53 @@ describe('caller native-event observer controls', () => {
       ['exploratory', 'system-functional'].map(id => [id, ready.find(tool => String(tool.input.file_path).endsWith(`/qa/sections/${id}.md`))] as const))).toEqual([]);
   });
 
+  test('census 38212265208: a probe batched with the caller section Read is flagged, and the scheduling contract never calls a probe discovery', async () => {
+    // Native order of census 38212265208 (gate-census-6, ship-exploratory-late-input): provider
+    // message, tool, input; outputs abbreviated. Capture 001 shares a response with the Step 9 section Read.
+    const R = '/home/runner/.cache/gstack-paid-shard-iHlpIM/tmp/qc-cALQYz';
+    const capture = (id: string, extra = '') => `bun ${R}/host/runtime/bin/gstack-qa-evidence capture ${R}/product/reports ${id} --public --deadline ${R}/product/reports/deadline.json ${extra}-- bun scripts/probe.ts`;
+    const replay: Array<[string, string, Record<string, string>, string]> = [
+      ['YvqEApde', 'Read', { file_path: `${R}/host/runtime/ship/sections/plan-completion.md` }, '## Step 8: Plan Completion Audit'],
+      ['YvqEApde', 'Read', { file_path: `${R}/host/runtime/ship/sections/review-army.md` }, '## Step 9: Pre-Landing Review'],
+      ['YvqEApde', 'Bash', { command: `${capture('001')} 3` }, '{"id":"probe-b5ae2d9c-af87-4e8a-9aab-76972f826079","charter":"happy","input":"3"}'],
+      ['w9Gt4kmL', 'Read', { file_path: `${R}/host/runtime/qa/sections/exploratory.md` }, '# Shared exploratory QA'],
+      ['w9Gt4kmL', 'Read', { file_path: `${R}/host/runtime/bin/gstack-qa-evidence` }, '#!/usr/bin/env bun'],
+      ['w9Gt4kmL', 'Bash', { command: `${R}/host/runtime/bin/gstack-review-read` }, 'NO_REVIEWS'],
+      ['w9Gt4kmL', 'Bash', { command: `${R}/host/runtime/bin/gstack-specialist-stats` }, 'SPECIALIST_STATS: 0 reviews analyzed'],
+      ['cba4VKcQ', 'Bash', { command: `${capture('002', "--after 001 --hypothesis 'upper bound 9 should still print 18' ")} 9` }, '{"id":"probe-baf59bfd-ac54-4a4a-8bec-2cd416154bbf","charter":"plan:nine","input":"9"}'],
+      ['cba4VKcQ', 'Read', { file_path: `${R}/host/runtime/qa/sections/scope.md` }, '### Select the surface before setup'],
+      ['cba4VKcQ', 'Read', { file_path: `${R}/host/runtime/qa/sections/system-functional.md` }, '# Functional QA with repository-native tools'],
+    ];
+    const replayTools = (rows: typeof replay) => callerTools(rows.flatMap(([message, name, input, output], i) =>
+      nativeCall(`toolu_${i}`, name, input, output).map((event: any) => event.type === 'assistant'
+        ? { ...event, session_id: 'census-38212265208', message: { ...event.message, id: `msg_${message}` } } : event)));
+    const probeErrors = (tools: ReturnType<typeof callerTools>) => tools.filter(tool => / capture /.test(String(tool.input.command)))
+      .flatMap(probe => callerProbeReadErrors(probe, ['exploratory', 'system-functional']
+        .map(id => [id, tools.find(tool => String(tool.input.file_path).endsWith(`/qa/sections/${id}.md`))] as const)));
+    const tools = replayTools(replay);
+    const section = tools.find(tool => String(tool.input.file_path).endsWith('/ship/sections/review-army.md'))!;
+    expect(tools.find(tool => / capture /.test(String(tool.input.command)))!.messageId).toBe(section.messageId);
+    expect(probeErrors(tools)).toEqual([
+      'probe preceded resource read: exploratory', 'probe preceded resource read: system-functional',
+      'probe preceded resource read: system-functional',
+    ]);
+    const isProbe = ([, , input]: (typeof replay)[number]) => / capture /.test(input.command ?? '');
+    expect(probeErrors(replayTools([...replay.filter(row => !isProbe(row)),
+      ...replay.filter(isProbe).map(([message, ...rest]) => [`${message}-after-reads`, ...rest] as (typeof replay)[number])]))).toEqual([]);
+
+    const fixture = createQaCallerFixture('ship-exploratory-late-input');
+    try {
+      await runQaCaller(fixture, 'free-read-probe-contract', async options => {
+        const contract = options.appendSystemPrompt!;
+        const discovery = contract.match(/Read-only discovery is [^.]*;([^.]*)\./);
+        expect(discovery?.[1]).toMatch(/capture/);
+        expect(discovery?.[1]).toMatch(/guard start/);
+        expect(discovery?.[1]).toMatch(/never discovery/);
+        return { exitReason: 'error_max_turns', transcript: [] } as unknown as SkillTestResult;
+      });
+    } finally { await fixture.close(); fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
   test.each(['pending-result', 'same-event', 'same-message-id'])('method Read %s cannot authorize a dependent probe', ordering => {
     const observed = evidence();
     const events = observed.result.transcript as any[];

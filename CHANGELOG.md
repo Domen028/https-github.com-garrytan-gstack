@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.91.108.0] - 2026-10-16
+
+**The weekly census's two #3153 findings were in the test fixtures, not in /ship or /review.** The Oct 12 census went red on `ship-exploratory-late-input` and flagged `review-army-simplification` over its session headroom cap. Both are diagnosed from the run's own transcripts (`docs/evals/headroom-diagnosis-2026-10.md`), and each fixture repair lands with a free test that failed first. No skill prose, budget, threshold or detector changed. Reported by the weekly periodic census bot (#3153).
+
+### What this means for you
+
+- **`ship-exploratory-late-input` no longer gets invited to probe before its QA methods are read.** The fixture's scheduling contract told the session to batch "Reads and read-only discovery" together, and the session counted a QA capture as discovery. It went out in the same response as the Step 9 section Read, before any QA section had returned. The contract now says a capture, a deadline guard start or run, or a diagnostic run is a probe, never discovery. The ordering rule itself stays in /ship's own Step 9 STOP, so the case still catches that STOP being lost.
+- **`review-army-simplification` stops spending its budget on a false premise.** Its prompt said the diff was "over 100 lines" when the fixture is 68, so every run reconciled the mismatch, read the whole review skill and checklist, and wrote an unbounded report (142, 91 and 146 s of a 180 s budget on Oct 12; 159 s pooled). It now stages only the Review Army section and the simplification checklist with recorded scope, stats and diff, as the other Review Army cases do. It selects the specialist with the real `/review --simplification` flag and caps the report at 30 lines. The budget and assertions are unchanged.
+
+### If you…
+
+- **…maintain gstack's eval census:** the next census on this revision (or the paid reruns of the two cases) decides both; until then #3153 stays open.
+
+### For contributors
+
+- `test/qa-exploratory-callers.test.ts` replays census 38212265208's native tool order through `callerProbeReadErrors`, with a reordered negative control, and checks the actual runner callback's discovery definition.
+- `test/review-army-budget.test.ts` drives the registered simplification callback with a mocked runner: one pass control and two negative controls. It checks that the premise matches the staged 68-line diff, which files are staged, and the report bound.
+
 ## [1.91.107.0] - 2026-10-16
 
 **The GBRA-40 field list is fixed: install and check agree on one Bun, `rec` approves an autoplan gate in one word, and pregate never sits silent.** Eighteen Capy threads upgraded to v1.91.101.0 and reported 21 problems (`GBRA-40`, October 14). Each gstack item was reproduced with a test that failed first; the plan went through `/autoplan` (two gate revisions, Claude and GPT-6.1 Sol voices per phase) and two independent code reviews. Two items are Capy's (skills not mounted on some crew threads, Drive copies not re-synced) and are handed off, not worked around.
