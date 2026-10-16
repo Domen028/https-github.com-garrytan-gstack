@@ -22,14 +22,16 @@
  * from the repo's call-plan DATA file (`--plan-file`, else `price_file` in the
  * base branch's .gstack/pregate.json read from the HEAD commit) after checking
  * its binding (exact gate command, head, input hashes); it executes nothing and
- * writes a receipt (docs/eval-calls.md). Exit 0 ok, 1 fail (incomplete
+ * writes a receipt (docs/eval-calls.md). arms, dry-run, pilot start and
+ * price-gate lint every arm's model against the base branch's
+ * .gstack/eval-models.json (docs/eval-models.md; lib/eval-models.ts). Exit 0 ok, 1 fail (incomplete
  * prereg, failed check, exceeded cap, unpriced or stale gate), 2 usage, 3 refused.
  * Logic: lib/eval-plan.ts.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { checkPrereg, DEFAULT_TOKENS, renderPreregDiagnostics, runPreregDiagnostics, dryRun, pilotReport, preregTemplate, priceGate, releasePilot, renderArms, renderDryRun, renderGatePrice, renderPilotReport, resolveArms, resolvePlanSource, settlePilot, startPilot } from '../lib/eval-plan';
+import { checkPrereg, DEFAULT_TOKENS, dryRun, pilotReport, preregTemplate, priceGate, releasePilot, renderArms, renderDryRun, renderGatePrice, renderPilotReport, renderPreregDiagnostics, resolveArms, resolvePlanSource, runPreregDiagnostics, settlePilot, startPilot } from '../lib/eval-plan';
 import { checkModelRules, EVAL_SCOPES, type EvalScope, type ModelRulesCheck } from '../lib/eval-models';
 import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { resultLine } from '../lib/result-codes';
@@ -55,6 +57,10 @@ const HELP = `gstack-eval-plan — preregistration, priced arms, $0 dry run, pri
                                      price a paid gate from its GSTACK_EVAL_CALLS v1 call-plan file (--plan-file, else the base
                                      policy's price_file at HEAD); checks the gate/head/input binding, executes nothing, writes a
                                      receipt (default .gstack/tmp/price-gate/); docs/eval-calls.md
+
+  Model rules: arms, dry-run, pilot start and price-gate check every arm against .gstack/eval-models.json from
+  origin/<base> (--base b; --models-from head for the unreviewed working-tree copy) at --scope smoke|full
+  (default full; price-gate uses each call row's scope); docs/eval-models.md
 
 ${exitTableHelp()}`;
 

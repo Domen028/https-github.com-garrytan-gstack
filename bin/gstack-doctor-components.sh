@@ -234,6 +234,11 @@ gstack_result_anchor() {
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
     ARTIFACT_MACHINE_PATH) printf '%s' 'artifact-machine-path' ;;
     ARTIFACT_PUBLIC_TARGET_EXISTS) printf '%s' 'artifact-public-target-exists' ;;
+    PREREG_DIAGNOSTIC_UNTESTED) printf '%s' 'prereg-diagnostic-untested' ;;
+    EVAL_MODELS_INVALID) printf '%s' 'eval-models-invalid' ;;
+    EVAL_MODEL_DENIED) printf '%s' 'eval-model-denied' ;;
+    EVAL_MODEL_OLD_GENERATION) printf '%s' 'eval-model-old-generation' ;;
+    EVAL_MODEL_GENERATION_UNRESOLVED) printf '%s' 'eval-model-generation-unresolved' ;;
     *) return 1 ;;
   esac
 }
