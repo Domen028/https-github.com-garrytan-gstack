@@ -265,6 +265,23 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
     file: 'test/gstack-ship-receipt.test.ts',
     reason: 'spawns bin/gstack-ship-receipt and bin/gstack-artifact (shebangs) plus a #!/bin/sh gh shim through test/helpers/restamp-fixture.ts',
   },
+  // Field list 2, W1 (shared merge queue): same fixture helpers, same shebang spawns.
+  {
+    file: 'test/gstack-ship-queue.test.ts',
+    reason: 'spawns bin/gstack-ship-queue (shebang) and a #!/bin/sh gh shim through test/helpers/restamp-fixture.ts and test/helpers/ship-queue-fixture.ts',
+  },
+  {
+    file: 'test/ship-policy-compat.test.ts',
+    reason: 'spawns bin/gstack-ship-policy, bin/gstack-restamp and bin/gstack-tree-receipt (shebangs) through test/helpers/restamp-fixture.ts',
+  },
+  {
+    file: 'test/tree-receipt-gbrain-pair.test.ts',
+    reason: 'spawns bin/gstack-tree-receipt and bin/gstack-ship-policy (shebangs) through test/helpers/restamp-fixture.ts',
+  },
+  {
+    file: 'test/restamp-gate-ahead-changelog.test.ts',
+    reason: 'spawns bin/gstack-restamp (shebang) and a POSIX release tool through test/helpers/restamp-fixture.ts',
+  },
 ];
 
 // Force-include overrides: files a WINDOWS_FRAGILE_PATTERNS regex excludes for
