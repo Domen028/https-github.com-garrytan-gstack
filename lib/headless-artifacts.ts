@@ -82,6 +82,8 @@ export interface ShipReceipt {
   thread?: string; tree?: string; gate_reuse?: string; policy?: string; queue_mode?: string; preregistration?: string; history?: string;
   // C-pregate (C8): the pre-gate's verdict against this head and its remote obligations (publication requires their receipts).
   pregate?: string; requires_remote?: string[];
+  /** Approval classes (lib/approval-citations.ts): source, status, one record per declared class with hits, report-only built-in hits. */
+  approval?: Record<string, unknown>;
   // C-pregate (C6): issue links the body carries, by intent.
   // Related open PRs by other authors (Lane D): `supersedes` / `credit` only on the owner's confirmation.
   issues?: { fixes: number[]; refs: number[]; flakes: Array<{ issue: number; run: string }>; related?: Array<{ pr: number; repo?: string; author: string; closes: number[]; supersedes?: boolean; credit?: boolean }> };
@@ -199,6 +201,7 @@ export const ARTIFACT_SCHEMAS = {
       session_kind: str, artifacts_consumed: { ...str, description: '<n>/<m>' }, run: str,
       thread: str, tree: { enum: ['same-modulo-stamps', 'changed', 'not-compared'] }, gate_reuse: str, policy: str, queue_mode: str, preregistration: str, history: str,
       pregate: { ...str, description: 'pass|warn|requires-remote cleared … @<tree> from pregate.json, current for this head' }, requires_remote: strList,
+      approval: { type: 'object', description: 'approval classes: { source, status: checked|unavailable, classes: [{ class, scope, effects, citation: verified|unverified, approved_by, date, via, binding, evidence }], report_only }' },
       issues: { type: 'object', properties: { fixes: { type: 'array', items: { type: 'integer' } }, refs: { type: 'array', items: { type: 'integer' } }, flakes: { type: 'array', items: { type: 'object', required: ['issue', 'run'], properties: { issue: { type: 'integer' }, run: str } } }, related: { type: 'array', items: { type: 'object', required: ['pr', 'author', 'closes'], properties: { pr: { type: 'integer' }, repo: str, author: str, closes: { type: 'array', items: { type: 'integer' } }, supersedes: { type: 'boolean' }, credit: { type: 'boolean' } } } } } },
     },
   },
