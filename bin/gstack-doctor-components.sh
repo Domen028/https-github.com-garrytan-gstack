@@ -213,6 +213,8 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    ARTIFACT_MACHINE_PATH) printf '%s' 'artifact-machine-path' ;;
+    ARTIFACT_PUBLIC_TARGET_EXISTS) printf '%s' 'artifact-public-target-exists' ;;
     *) return 1 ;;
   esac
 }

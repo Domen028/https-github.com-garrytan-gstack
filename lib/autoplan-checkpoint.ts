@@ -95,9 +95,14 @@ function newestRevision(collection: string): number {
   return Math.max(-1, ...fs.readdirSync(dir).map(g => { try { return Number(JSON.parse(fs.readFileSync(path.join(dir, g, MANIFEST), 'utf8')).revision); } catch { return -1; } }).filter(Number.isFinite));
 }
 
+/** Where checkpoints go: GSTACK_AUTOPLAN_CHECKPOINT_DIR, else nothing. */
+export function checkpointRoot(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  return env.GSTACK_AUTOPLAN_CHECKPOINT_DIR || undefined;
+}
+
 /** Publish a generation when the env opts in and the run is at rest; returns the CHECKPOINT line, or nothing. */
 export function checkpointRun(out: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const root = env.GSTACK_AUTOPLAN_CHECKPOINT_DIR;
+  const root = checkpointRoot(env);
   if (!root || !fs.existsSync(path.join(out, FILES.run))) return undefined;
   const state = readState(out);
   if (!AT_REST.includes(state.status)) return undefined;

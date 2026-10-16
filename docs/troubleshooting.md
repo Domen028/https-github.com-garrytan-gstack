@@ -3334,3 +3334,30 @@ unset, not in bare mode). Then re-run the review.
 
 **Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
 review — outside voice)` when the provider runs.
+
+<a id="artifact-machine-path"></a>
+### `ARTIFACT_MACHINE_PATH`
+
+**Meaning.** A public copy of an autoplan run still contains a path the run
+recorded on this machine: its run directory, the home directory, the plan's
+directory, the checkpoint directory or the worktree root. `gstack-artifact
+validate --public <dir> --private <run>/run.json` reports each hit with
+file:line; `gstack-autoplan export --public` runs that check on a staging copy
+and writes nothing when it fails.
+
+**Fix.** Export with `gstack-autoplan export --out <run> --public <dir>`, which
+rewrites recorded roots to repo-relative paths or `<local notes (not
+committed)>`. Export never rewrites inline code or fenced blocks in plan.md, so
+a hit there needs a plan edit: change the path, `revise`, and export again.
+Generic home-directory paths that are not recorded roots are WARN lines, not
+errors.
+
+<a id="artifact-public-target-exists"></a>
+### `ARTIFACT_PUBLIC_TARGET_EXISTS`
+
+**Meaning.** `gstack-autoplan export --public <dir>` found files in `<dir>`
+that are not an earlier public copy of the same run, and refused to overwrite
+them.
+
+**Fix.** Pass an empty or new directory, or the directory that already holds
+this run's public copy (it is replaced as a whole).

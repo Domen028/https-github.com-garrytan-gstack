@@ -15,6 +15,7 @@
  *   gstack-autoplan resume  --out <dir> [--from <checkpoint>] [--json]   take ownership; intent without a terminal record becomes EXECUTION_UNKNOWN
  *   gstack-autoplan status  --out <dir> [--json]        query: the manifest, no GSTACK_RESULT line
  *   gstack-autoplan export  --out <dir> [--json]        rewrite plan.md, review-record.md, findings/tasks.jsonl and run.json hashes
+ *   gstack-autoplan export  --out <dir> --public <pub>  a machine-path-free copy in <pub>; the private run is only read
  *   gstack-autoplan release --out <dir> --attempt <id>  drop a reservation for an attempt that never ran
  *   gstack-autoplan close   --out <dir> --phase <p> --deferred "<reason>" --by <human|agent:<id>>   close a phase accepted-with-findings
  *   gstack-autoplan budget  --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by <human|agent:<id>>   the owner's journaled cap change
@@ -35,6 +36,7 @@ import { ANSWERED_BY_RE } from '../lib/gate-list';
 import { checkpointLines, checkpointRun, restoreCheckpoint } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
+import { exportPublic } from '../lib/autoplan-public';
 import { migrateRun } from '../lib/autoplan-migrate';
 import { reviseRun } from '../lib/autoplan-revise';
 import { pendingAmendments, type RunState } from '../lib/autoplan-state';
@@ -84,6 +86,9 @@ DRIVER: ${driverFile()}
           reservation), open findings into tasks.jsonl; Critical, urgent and user-challenge findings become gate items
   budget  --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by <human|agent:<id>>
           the owner's cap change, journaled; a run stopped incomplete (budget_exhausted) resumes with resume afterwards
+  export  --out <dir> --public <pub>
+          write a machine-path-free copy (recorded roots rewritten, plan.md code kept) with provenance digests; the private
+          run is not touched; refused (ARTIFACT_MACHINE_PATH) when a recorded root would remain
   status  --out <dir> [--json]      export  --out <dir>      release --out <dir> --attempt <id>
   contract                          print lib/coordinator-contract.ts (the block every lane and reviewer prompt inherits word for word)
 
@@ -344,6 +349,14 @@ async function main(argv: string[]): Promise<number> {
         const lines = recommendGate(state, Number(rev), item.toLowerCase(), option.toLowerCase(), basis.trim(), flag(rest, '--by') ?? 'parent');
         writeState(state);
         emit(json, [...lines, resultLineFor(state.status, out)], { run: state.run, status: state.status, gate_rev: state.gate_rev, out });
+        return EXIT.ok;
+      });
+    }
+    if (cmd === 'export' && flag(rest, '--public') !== undefined) {
+      return withRunLock(out, () => {
+        const r = exportPublic(readState(out), path.resolve(flag(rest, '--public')!));
+        for (const w of r.warnings) process.stderr.write(w + '\n');
+        emit(json, r.files.map(f => `EXPORTED_PUBLIC: ${f}`), { files: r.files, warnings: r.warnings });
         return EXIT.ok;
       });
     }

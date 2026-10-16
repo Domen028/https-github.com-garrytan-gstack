@@ -75,6 +75,8 @@ line yourself; gstack never writes the plan.
   the owner's journaled cap raise; after a budget stop, `resume` continues the run.
 - `gstack-autoplan export --out <dir>`
   write the artifact set; then `gstack-artifact validate <dir>/run.json`.
+- `gstack-autoplan export --out <dir> --public <pub>`
+  a machine-path-free copy to commit or share (recorded roots rewritten, plan.md code kept, provenance digests); the private run is not touched; then `gstack-artifact validate --public <pub> --private <dir>/run.json` on this machine.
 - `gstack-autoplan status|resume --out <dir>`
   read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts).
 - `gstack-autoplan resume --out <new dir> --from <checkpoint>`
