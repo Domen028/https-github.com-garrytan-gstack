@@ -20,6 +20,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import { bashCommandInvocation } from '../script-invocation';
 
 export type ProgressAdapter = 'bun';
 export const PROGRESS_ADAPTERS: Record<ProgressAdapter, RegExp> = { bun: /(?:^|[\s;&|(])bun\s+test\b/ };
@@ -134,9 +135,15 @@ export function supervise(o: SuperviseOptions): Promise<Supervised> {
     let fd: number;
     try { fd = fs.openSync(o.log, 'a'); }
     catch (e: any) { resolve({ outcome: 'spawn-failed', exit: null, signal: null, start, end: start, lastFile: null, error: e.message, ms: 0 }); return; }
+    const inv = bashCommandInvocation(`set -o pipefail; ${o.command}`);
+    if (!inv.ok) {
+      fs.closeSync(fd);
+      resolve({ outcome: 'spawn-failed', exit: null, signal: null, start, end: start, lastFile: null, error: inv.error, ms: Date.now() - started });
+      return;
+    }
     let child: ReturnType<typeof spawn>;
     try {
-      child = spawn('bash', ['-c', `set -o pipefail; ${o.command}`], { cwd: o.cwd, env: o.env, stdio: ['ignore', fd, fd], detached: process.platform !== 'win32', windowsHide: true });
+      child = spawn(inv.cmd, inv.argv, { cwd: o.cwd, env: o.env, stdio: ['ignore', fd, fd], detached: process.platform !== 'win32', windowsHide: true });
     } catch (e: any) {
       fs.closeSync(fd);
       resolve({ outcome: 'spawn-failed', exit: null, signal: null, start, end: start, lastFile: null, error: e.message, ms: Date.now() - started });

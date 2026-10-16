@@ -23,8 +23,6 @@ const SPAWN_BARE_BASH = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\(\
 const COMMENT = /^\s*(?:\/\/|\*|\/\*)/;
 
 const KNOWN_SITES: Record<string, string> = {
-  'lib/pregate/checks/guards.ts': 'PR 5 (a #3190 file): repo guard commands move to runBashSync',
-  'lib/pregate/checks/lanes.ts': 'PR 5 (a #3190 file): the lane runner moves to runBashSync',
   'lib/evidence-bundle.ts': 'outside this wave: bundle replay commands (bash -lc) move to runBashSync',
   'bin/gstack-brain-context-load.ts': 'outside this wave: the brain context loader moves to runBashSync',
   'bin/gstack-issue-links': 'outside this wave: the gstack-issue-guard spawn moves to runScriptSync',
