@@ -188,6 +188,9 @@ field: fix that input file and rerun; nothing was written. `ISSUE_LINKS_MISSING`
 the named line under `## Issues` and rerun. `PREGATE_STALE` means rerun
 `gstack-pregate` on the stamped tree; `PREGATE_REMOTE_UNCLEARED` needs
 `gstack-pregate clear` with the run URL. Both stop publication.
+`APPROVAL_CITATION_MISSING` (a class declared in the base's `.gstack/approval-classes.json`): ask the owner;
+put their `Approved by <owner> <YYYY-MM-DD> via <ref> for <class>@<digest12>` line in the body (add
+`--approval-run <run dir>` for a plan sha) and rerun. Never write that line without the owner's approval.
 
 In each block below, restore the literal `PR_BODY_FILE` path and substitute Step 18's
 title file name; `gstack-post` detects GitHub or GitLab from the remote and the repo's
