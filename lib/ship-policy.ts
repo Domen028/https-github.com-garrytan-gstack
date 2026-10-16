@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { RESULT_CODES, type ResultCodeName } from './result-codes';
+import { cmpVersion, parseVersion } from './version-source';
 
 export const SHIP_POLICY_PATH = '.gstack/ship-policy.json';
 export const SHIP_POLICY_SCHEMA = 'https://github.com/garrytan/gstack/docs/ship-policy.md#schema-v1';
@@ -58,6 +59,12 @@ export interface ShipPolicy {
   restamp_command: string | null;
   /** Migration numbering: `{ dir, id }` where `id` is a regex with one capture group over the file name. */
   migrations: { dir: string; id: string } | null;
+  /** The repo's full pre-merge gate; gstack-ship-queue prints it for the caller to run (gstack never executes it). */
+  gate_command: string | null;
+  /** true: a merge needs a passing full-gate record bound to a tree equal to the merging one modulo stamps. */
+  full_e2e: boolean;
+  /** The oldest gstack that may read this policy; a newer key set to a non-default value requires it. */
+  min_gstack_version: string | null;
 }
 
 export const DEFAULT_POLICY: ShipPolicy = {
@@ -77,6 +84,9 @@ export const DEFAULT_POLICY: ShipPolicy = {
   stamp_patterns: [],
   restamp_command: null,
   migrations: null,
+  gate_command: null,
+  full_e2e: false,
+  min_gstack_version: null,
 };
 
 export type PolicyKey = Exclude<keyof ShipPolicy, '$schema'>;
@@ -100,7 +110,46 @@ export const POLICY_EXPLANATIONS: Record<PolicyKey, string> = {
   stamp_patterns: 'Literal templates with exactly one {version} slot (at most 16, 128 characters each), for example `"version": "{version}"` or `since: \'{version}\'`; the restamp writer and the tree receipt use them beside (was X), since: X and vX.',
   restamp_command: 'The repo’s own restamp, run first in gstack-restamp’s staging worktree (a clean checkout of HEAD) with the target version as its argument and in GSTACK_RESTAMP_VERSION; gstack’s version writer is skipped, output confinement still applies. Needs a clean caller tree and --allow-repo-commands.',
   migrations: '{ dir, id }: the migration directory and a regex with one capture group for the number in a file name; `gstack-pregate regate` reports MIGRATION_COLLISION against the base branch and every open PR.',
+  gate_command: 'The repo’s full pre-merge gate command. gstack-ship-queue gate-ahead and ready print it for the caller to run (in the background or in CI); gstack never executes it. null when the repo has none.',
+  full_e2e: 'true: every merge needs a passing full-gate record (gstack-ship-queue gate-ahead --record) bound to a tree equal to the merging one modulo stamps; ready and verify refuse without one (QUEUE_GATE_MISSING).',
+  min_gstack_version: 'The oldest gstack that may read this file. Any key newer than 1.91.98.0 set to a non-default value requires it at that key’s introducing version (validate prints each); a gstack older than it refuses the file (POLICY_GSTACK_TOO_OLD).',
 };
+
+/**
+ * The gstack release that introduced each key. Keys newer than
+ * POLICY_COMPAT_FLOOR need `min_gstack_version` before they take a
+ * non-default value, so a crew on mixed gstack versions sees one named
+ * refusal instead of a policy each version reads differently. Unknown keys
+ * always fail closed: there is no extension mechanism.
+ */
+export const POLICY_COMPAT_FLOOR = '1.91.98.0';
+export const SHIP_QUEUE_KEYS_VERSION = '1.91.108.0';
+export const POLICY_KEY_INTRODUCED: Record<PolicyKey, string> = {
+  bump: '1.91.73.0', queue_mode: '1.91.73.0', release_tool: '1.91.73.0', release_outputs: '1.91.73.0', stamp_paths: '1.91.73.0',
+  changelog: '1.91.73.0', mirror: '1.91.73.0', history: '1.91.73.0', preregistration_shas: '1.91.73.0', stamp_sensitive_gates: '1.91.73.0',
+  pr_count: '1.91.73.0', maintainers: '1.91.73.0', stamp_files: '1.91.98.0', stamp_patterns: '1.91.98.0', restamp_command: '1.91.98.0',
+  migrations: '1.91.98.0', gate_command: SHIP_QUEUE_KEYS_VERSION, full_e2e: SHIP_QUEUE_KEYS_VERSION, min_gstack_version: SHIP_QUEUE_KEYS_VERSION,
+};
+
+const newer = (a: string, b: string): boolean => cmpVersion(parseVersion(a)!, parseVersion(b)!) > 0;
+
+/**
+ * The release this checkout reads policies as: its VERSION file, or the
+ * newest key it knows when that is later (an unstamped tree that carries a
+ * new key already reads policies written for it).
+ */
+export function runningGstackVersion(): string {
+  let own = '0.0.0.0';
+  try { own = fs.readFileSync(path.resolve(import.meta.dir, '..', 'VERSION'), 'utf8').trim(); } catch {}
+  const known = Object.values(POLICY_KEY_INTRODUCED).reduce((a, b) => (newer(b, a) ? b : a));
+  return parseVersion(own) && !newer(known, own) ? own : known;
+}
+
+/** The newest introducing version among the keys a parsed policy sets: the gstack a crew needs to read it. */
+export function minimumReader(raw: Record<string, unknown>): string {
+  return Object.keys(raw).filter((k): k is PolicyKey => POLICY_KEYS.includes(k as PolicyKey))
+    .map(k => POLICY_KEY_INTRODUCED[k]).reduce((a, b) => (newer(b, a) ? b : a), POLICY_KEY_INTRODUCED.bump);
+}
 
 export interface PolicyError { code: ResultCodeName; path: string; message: string }
 
@@ -192,14 +241,20 @@ function migrationErrors(value: unknown, out: PolicyError[]): void {
   } catch (e: any) { out.push({ code: 'POLICY_INVALID', path: 'migrations.id', message: `not a valid regex: ${e.message}` }); }
 }
 
-/** Schema and containment check of a parsed policy object. Unknown keys are errors (a typo must not silently mean "default"). */
-export function validatePolicy(raw: unknown): PolicyError[] {
+/**
+ * Schema and containment check of a parsed policy object. Unknown keys are
+ * errors (a typo must not silently mean "default", and a key from a newer
+ * gstack must not be ignored by an older one).
+ */
+export function validatePolicy(raw: unknown, opts: { gstackVersion?: string } = {}): PolicyError[] {
   const errors: PolicyError[] = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return [{ code: 'POLICY_INVALID', path: '', message: 'policy must be a JSON object' }];
   const obj = raw as Record<string, unknown>;
+  const newest = Object.values(POLICY_KEY_INTRODUCED).reduce((a, b) => (newer(b, a) ? b : a));
   for (const key of Object.keys(obj)) {
-    if (key !== '$schema' && !POLICY_KEYS.includes(key as PolicyKey)) errors.push({ code: 'POLICY_INVALID', path: key, message: `unknown key; valid keys: ${POLICY_KEYS.join(', ')}` });
+    if (key !== '$schema' && !POLICY_KEYS.includes(key as PolicyKey)) errors.push({ code: 'POLICY_INVALID', path: key, message: `unknown key (this gstack reads keys introduced up to ${newest}; a key from a newer gstack needs an upgrade, a misspelled one a fix); valid keys: ${POLICY_KEYS.join(', ')}` });
   }
+  compatErrors(obj, opts.gstackVersion ?? runningGstackVersion(), errors);
   const oneOf = (key: string, values: readonly string[]) => {
     if (key in obj && !values.includes(obj[key] as string)) errors.push({ code: 'POLICY_INVALID', path: key, message: `must be one of ${values.join(' | ')}, got ${JSON.stringify(obj[key])}` });
   };
@@ -221,6 +276,12 @@ export function validatePolicy(raw: unknown): PolicyError[] {
     else if (t.length > MAX_COMMAND || /[\0\r\n]/.test(t)) errors.push({ code: 'POLICY_CONTAINMENT', path: 'restamp_command', message: `must be one line under ${MAX_COMMAND} characters` });
   }
   if ('migrations' in obj && obj.migrations !== null) migrationErrors(obj.migrations, errors);
+  if ('gate_command' in obj && obj.gate_command !== null) {
+    const t = obj.gate_command;
+    if (typeof t !== 'string' || !t.trim()) errors.push({ code: 'POLICY_INVALID', path: 'gate_command', message: 'must be a non-empty string or null' });
+    else if (t.length > MAX_COMMAND || /[\0\r\n]/.test(t)) errors.push({ code: 'POLICY_CONTAINMENT', path: 'gate_command', message: `must be one line under ${MAX_COMMAND} characters` });
+  }
+  if ('full_e2e' in obj && typeof obj.full_e2e !== 'boolean') errors.push({ code: 'POLICY_INVALID', path: 'full_e2e', message: 'must be true or false' });
   if ('stamp_paths' in obj) listErrors('stamp_paths', obj.stamp_paths, errors, globError);
   for (const key of ['changelog', 'mirror'] as const) {
     if (!(key in obj) || obj[key] === null) continue;
@@ -242,6 +303,30 @@ export function validatePolicy(raw: unknown): PolicyError[] {
     }
   }
   return errors;
+}
+
+/**
+ * min_gstack_version: a well-formed version, not newer than this gstack
+ * (POLICY_GSTACK_TOO_OLD), and at least the introducing version of every
+ * post-floor key the file sets to a non-default value.
+ */
+function compatErrors(obj: Record<string, unknown>, running: string, errors: PolicyError[]): void {
+  const min = obj.min_gstack_version;
+  if (min !== undefined && min !== null && (typeof min !== 'string' || !parseVersion(min))) {
+    errors.push({ code: 'POLICY_INVALID', path: 'min_gstack_version', message: 'must be a version (MAJOR.MINOR.PATCH[.MICRO]) or null' });
+    return;
+  }
+  if (typeof min === 'string' && parseVersion(running) && newer(min, running)) {
+    errors.push({ code: 'POLICY_GSTACK_TOO_OLD', path: 'min_gstack_version', message: `this policy needs gstack ${min} or later; this gstack is ${running}` });
+    return;
+  }
+  for (const key of POLICY_KEYS) {
+    const since = POLICY_KEY_INTRODUCED[key];
+    if (!(key in obj) || !newer(since, POLICY_COMPAT_FLOOR)) continue;
+    if (JSON.stringify(obj[key]) === JSON.stringify((DEFAULT_POLICY as any)[key])) continue;
+    if (typeof min === 'string' && !newer(since, min)) continue;
+    errors.push({ code: 'POLICY_INVALID', path: key, message: `introduced in gstack ${since}; set min_gstack_version to ${since} or later so an older gstack refuses this policy by name` });
+  }
 }
 
 /**
@@ -357,7 +442,7 @@ export function examplePolicyJson(overrides: Partial<ShipPolicy> = {}): string {
 }
 
 export function explainPolicy(): string {
-  return POLICY_KEYS.map(key => `${key}: ${POLICY_EXPLANATIONS[key]} default: ${JSON.stringify((DEFAULT_POLICY as any)[key])}`).join('\n') + '\n';
+  return POLICY_KEYS.map(key => `${key}: ${POLICY_EXPLANATIONS[key]} default: ${JSON.stringify((DEFAULT_POLICY as any)[key])} introduced: ${POLICY_KEY_INTRODUCED[key]}`).join('\n') + '\n';
 }
 
 /** `key=value  (source)` lines plus the `policy:` provenance line, as show-effective prints them. */
