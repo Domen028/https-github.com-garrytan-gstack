@@ -360,6 +360,17 @@ for (const skillName of ['review', 'ship']) {
   const army = generateReviewArmy(ctx);
   const flat = army.replace(/\s+/g, ' ');
 
+  // PR gate run 38981523623 (ship-exploratory-plan-checks): the block sourced the scope signals
+  // without printing them, so the agent appended its own echo to see SCOPE_FRONTEND.
+  test(`${skillName} clarity: the scope block prints every signal specialist selection reads`, () => {
+    const block = between(army, '### Detect stack and scope', '### Read specialist hit rates');
+    expect(block).toContain("/gstack-diff-scope <base> 2>/dev/null) || true\nset | grep '^SCOPE_'\n");
+    const used = [...new Set(between(army, '### Select specialists', '### Adaptive gating').match(/SCOPE_[A-Z]+/g))];
+    expect(used.length).toBeGreaterThan(0);
+    const flags = between(readFileSync(join(root, 'bin/gstack-diff-scope'), 'utf8'), '_print_flags() {', '}');
+    for (const signal of used) expect(flags, signal).toContain(`echo "${signal}=`);
+  });
+
   test(`${skillName} clarity: terminal failure permits independent work but never certifies coverage`, () => {
     expectMentions(flat, [['confirm', 'finished', 'stopped']], 'flat');
     expectMentions(flat, [['does not', 'termination', 'timeout']], 'flat');
