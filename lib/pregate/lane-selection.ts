@@ -19,7 +19,7 @@ import type { Lane } from './workflows';
 export interface Selection {
   /** Touched files with no lane and no `[]` declaration. */
   noLane: string[];
-  /** Documentation and evidence files with no mapped test: the docs/no-tests empty lane. */
+  /** Markdown (and `empty_lanes` paths) with no import-graph test: the docs/no-tests empty lane. */
   emptyLane: string[];
   /** Every test the touched files select, sorted. */
   tests: string[];
@@ -104,6 +104,7 @@ export function selectLanes(ctx: PregateContext): Selection {
     if (generator) { provenance.push(`${file}: covered by regen ${generator.id} (registry input)`); continue; }
     // The pin files are validated by pregate itself (validateConfig / validateRegistry) on every run.
     if (file === PREGATE_CONFIG_PATH || file === GENERATED_PATH) { provenance.push(`${file}: pin file validated by pregate`); continue; }
+    // Reached only when testsFor mapped nothing, so a Markdown file a test reads never lands here.
     if (isDocsEmptyLane(file, ctx.config.empty_lanes ?? [])) {
       emptyLane.push(file);
       provenance.push(`${file}: docs/no-tests (empty lane)`);
