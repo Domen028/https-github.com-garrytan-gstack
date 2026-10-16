@@ -18,6 +18,59 @@
 - `test/qa-exploratory-callers.test.ts` replays census 38212265208's native tool order through `callerProbeReadErrors`, with a reordered negative control, and checks the actual runner callback's discovery definition.
 - `test/review-army-budget.test.ts` drives the registered simplification callback with a mocked runner: one pass control and two negative controls. It checks that the premise matches the staged 68-line diff, which files are staged, and the report bound.
 
+## [1.91.106.0] - 2026-10-16
+
+**The 2026-10-15 issue wave is fixed, with every adopted contributor patch kept under its author.** Twenty-odd field reports and community PRs from the week after v1.91.101.0 (`docs/designs/FIX_WAVE_2026_10_15.md`): an `/autoplan` run locked by a Claude Code 2.1.300 compaction, `/cso` scans that could not finish, auto-updates that left conflict markers or held every Windows install, Windows pregate and restamp unable to run gstack's own scripts, plan reviews that lost their native second opinion on Claude Code 2.1.277+, and a batch of maintenance fixes. Each was reproduced with a test that failed first on v1.91.101.0.
+
+### What this means for you
+
+**Recovery and `/cso`**
+
+- **`/autoplan` continues after a Claude Code 2.1.300 auto-compaction.** The journal reader follows the compact boundary's preserved segment, so the phase guard no longer denies every phase with `close_incomplete` (#3194, adopted from #3196 by @vilano93). A compaction layout gstack does not read yet now allows with a visible warning and a decision-log row (`unrecognized_shape:compaction_unreachable`) instead of locking the run; an orphaned or not-yet-flushed record still denies.
+- **`/cso` Semgrep reports parse after redaction.** A redacted bare number in a JSON report becomes a quoted marker, so the report is no longer discarded as `INVALID_OUTPUT` (#3185). Only scan stdout declared as JSON takes the JSON-aware path, and a finding that spans JSON structure still withholds the whole stream. Rerun scans that ended `INVALID_OUTPUT`.
+- **`/cso` runs through OrbStack's Docker.** Docker and the watchdog invoke the trusted realpath with `argv0` `docker`, which OrbStack's multicall binary needs (#3187, adopted from #3188 by @aegixx).
+- **The browse daemon recovers when every tab was closed outside browse.** The next command opens a blank tab and says so once (`open your page again with: browse goto <url>`); `status`, `stop` and `restart` answer without opening one, and a context that cannot open a tab fails with `BROWSE_TAB_UNRECOVERABLE` (#3167, adopted from #3179 by @aftabkh4n).
+- **The Bun floor check holds under zsh.** zsh now reports Bun 1.3.2 as too old instead of accepting it, so `/gstack-upgrade` holds with `BUN_TOO_OLD` until you run `bun upgrade`. A `bun --version` the check cannot parse holds with `BUN_VERSION_UNREADABLE` and asks you to reinstall Bun from https://bun.sh (#3195).
+
+**Install, update and Windows**
+
+- **Auto-update no longer leaves conflict markers in your install.** The updater and `/gstack-upgrade` share one helper, `bin/gstack-ff-update`: it saves your local edits in a rescue ref under `refs/gstack/rescue/`, moves the install with a two-way `read-tree` that refuses to overwrite anything it did not save, and prints once a day how to inspect (`git -C '<install>' show --stat '<ref>'`), export and delete the rescue. Adopts #3189 by @BenjaminDSmithy and #3191 by @Jesssullivan.
+- **Windows auto-update is no longer held on every release (#3184, reported by @wengweiling).** The hook check extracts the incoming release without `tar`, and the banner shows the hold instead of a stale "bun not found". If yours has been held since 1.91.89.0, run the recovery once (docs/troubleshooting.md#auto-update-held-install-recovery). Git Bash:
+  `cd ~/.claude/skills/gstack && git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > "$d/gstack-ff-update" && bash "$d/gstack-ff-update" . FETCH_HEAD; s=$?; rm -rf "$d"; [ "$s" = 0 ] && ./setup`
+  Windows PowerShell:
+  `Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; IFS=; git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > $d/gstack-ff-update && bash $d/gstack-ff-update . FETCH_HEAD; s=$?; rm -rf -- $d; exit $s'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }`
+- **`setup.ps1` works under Windows PowerShell 5.1 (#3130, reported by @gfl130902-maker).** Its `bash -c` script holds no double quotes, which 5.1 stripped; an empty argument is refused up front (`SETUP_PS1_EMPTY_ARGUMENT`). It now finds Git Bash the same way the hooks do, including next to `git --exec-path` on arm64.
+- **Windows pregate, restamp, regen, gate-diff and evidence run gstack's own scripts again (#3197, reported by @exGeni).** Bun on Windows cannot execute an extensionless shebang script; every TypeScript caller now goes through `lib/script-invocation.ts`, which runs bash scripts through Git Bash. Git Bash outside `C:\Program Files\Git` (scoop, per-user, portable) is found next to `git --exec-path`. To pin one, in PowerShell: `[Environment]::SetEnvironmentVariable('GSTACK_GIT_BASH', 'C:\Program Files\Git\bin\bash.exe', 'User')`, then restart Claude Code. `GSTACK_BASH` still works as a deprecated alias; a path that does not exist is refused, and a non-MSYS `bash` on PATH (Cygwin, WSL) is no longer used. With no Git Bash, the error lists every place gstack looked and ends `(BASH_UNAVAILABLE)` (docs/troubleshooting.md#bash-unavailable).
+- **Hooks are registered at your `$HOME` install when `CLAUDE_CONFIG_DIR` is a per-session directory that links back to it (#3180).** Adopts #3181 by @Brit-juho (commit author NetrioGit).
+- **Cursor no longer loads every skill twice from 1.31-era unprefixed folders (#3133, first reported by @andrewkjankowski in #3084).** `./setup --host cursor` removes only folders whose `SKILL.md` links into gstack and names them. Adopts #3152 by @szsunyuan.
+- **A missing `bunx` is no longer reported as a network failure (#3131, reported by @gfl130902-maker).** setup installs Chromium with `bun x`; exit 127 names the resolved Bun and how to skip the browser.
+- **`gstack-evidence` records a content fingerprint in SHA-256 repositories.**
+
+**Plan reviews**
+
+- **Plan reviews get their native second opinion back on Claude Code 2.1.277+ (#3182, reported by @HuellintonMota).** Claude Code removed the TaskOutput tool, so `/plan-ceo-review`, `/plan-eng-review` and `/plan-devex-review` always reported "Outside voice unavailable" without Codex. The fallback now runs the Plan subagent in the background beside a five-minute timer; only a complete report that beats the timer counts. If you still see `(OUTSIDE_VOICE_UNAVAILABLE)`, the cause names what is missing (docs/troubleshooting.md#outside-voice-unavailable); the review-log row carries `unavailable_reason`.
+- **`/plan-eng-review` reads the CEO plan (#280).** `gstack-ceo-plan-find` finds the `/plan-ceo-review` plan for this branch and the Design Doc Check reads its scope as data. A plan from another branch is disclosed (`CEO plan found (from branch <b>, not <current>): <path>`) and interactive reviewers are asked first. Thanks @szsunyuan (#3159).
+
+**Pregate, terminal agent and maintenance**
+
+- **Pregate finds tests in Next.js route groups and through tsconfig path aliases.** Repo paths with `( ) [ ] + @ $` stay whole in the selection manifest and map to their files, and `compilerOptions.paths` resolve the way TypeScript does (exact pattern, then the most specific wildcard, targets in order; relative `extends` up to 4 hops). Uncertainty selects more tests, never fewer. A file with no lane gets `--explain` lines naming the unresolved specifiers. Thanks @vocodestudios (#3176).
+- **Terminal-agent shutdown no longer orphans PTY descendants that ignore SIGHUP (Linux).** Long-lived processes started from the sidebar terminal now end 3 seconds after the session closes; start them elsewhere if they must outlive it. Thanks @Y4NN777 (#3148, #3147).
+- **`gstack-skill-end` writes its completion event before the final drain,** so a full-tier end boundary pushes its own latest event. Thanks @Kkkkkuro (#3198).
+- **`gstack-config` compares whole root paths and prints a recovery command that runs** when a path contains a space or an apostrophe. Thanks @davidfragnoli-lang (#3186).
+- **`gstack-gbrain-sync` no longer dirties a tracked `.gitignore` that already ignores the pin.** Thanks @KuroChen (#3178).
+- **`GSTACK_IOS_LAUNCH_ENV`** passes a JSON object of environment variables to the app on every `gstack-ios-qa-daemon` launch: `export GSTACK_IOS_LAUNCH_ENV='{"DEBUG_BRIDGE":"1"}'`, then restart the daemon. An invalid value or a `GSTACK_` key refuses the launch with `IOS_LAUNCH_ENV_INVALID`. Thanks @Bmathews721 (split from #1796).
+- **Functional `/qa` and `/qa-only` probe every documented input rule.** The contract map asks for one invalid-input probe per stated rule (allowed characters, format, sign, range, arity), so an amount documented as digits-only is tried with a non-digit, not only zero and an overflow.
+- **README no longer asks you to paste a skill list into CLAUDE.md (#3169).** If you did, delete the "Available skills:" line; Claude Code lists installed skills itself.
+- **Dependencies:** `sharp` is declared; `@huggingface/transformers` 4.3.0 (onnxruntime-node 1.30.0) and dev `@anthropic-ai/claude-agent-sdk` 0.2.141 clear two transitive advisories, with identical classifier scores. Thanks @sonukapoor (#3145). CI actions bumped (dependabot #3175); Dependabot holds Playwright minor and major bumps behind the Windows `windowsHide` patch.
+
+### For contributors
+
+- `lib/script-invocation.ts` is the one way a TypeScript caller runs a gstack script or bash (`resolveWindowsBash` from one fixture table, `test/fixtures/windows-bash-resolution.json`, which `setup.ps1`'s tests also drive); `test/script-invocation-tripwire.test.ts` fails on new by-path or bare-`bash` spawns. New `.github/workflows/windows-pregate-e2e.yml` exercises restamp, regen, evidence, gate-diff and the refusal on `windows-latest`.
+- `lib/sanitize-echo.ts` and its Bash twin `bin/gstack-sanitize-echo.sh` are the one sanitizer for echoed external strings.
+- New result codes, each with a troubleshooting entry: `BUN_VERSION_UNREADABLE`, `BROWSE_TAB_UNRECOVERABLE`, `SETUP_PS1_EMPTY_ARGUMENT`, `BASH_UNAVAILABLE`, `IOS_LAUNCH_ENV_INVALID`, `OUTSIDE_VOICE_UNAVAILABLE`.
+- Gate-integrity edits: the `/autoplan` phase guard's fail-open surface grows by exactly the compaction-explained unreachable component (existing `unrecognized_shape` allow-with-warning); pregate selection can only grow for alias-using repos; the plan-eng-review prompt-size ceiling rises from 1.2170 to 1.2196 for #3159.
+- Tests stop writing into your real home and stop inheriting your git hooks: ship-measure CLI tests get a private HOME (thanks @y$un_, #3163) and the redact pre-push fixtures ignore `core.hooksPath` (thanks @Lockyer228, #3156, #2967).
+
 ## [1.91.105.0] - 2026-10-16
 
 **The free suite stops needing its retry pass.

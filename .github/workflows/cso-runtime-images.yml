@@ -46,7 +46,7 @@ jobs:
       - name: Record the requalification trigger inputs of this source commit
         run: bun run scripts/cso-requalification.ts triggers > requalification.json
       - if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: cso-requalification-triggers
           path: requalification.json
@@ -276,7 +276,7 @@ jobs:
             --arg commit "$GITHUB_SHA" --arg workflow "$workflow" --arg sbom "$sbom_digest" \
             --arg provenance "$provenance_digest" --argjson versions "$CSO_VERSIONS" \
             '{schemaVersion:1,helperAbi:3,state:"staged",buildRevision:$buildRevision,runtimeId:$runtimeId,image:$image,platform:$platform,stack:$stack,versions:$versions,sourceCommit:$commit,workflow:$workflow,sbomDigest:$sbom,provenanceDigest:$provenance,verifiedProvenance:true,qualification:"pending native and private release gates; no automatic promotion"}' > staged-image.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: cso-staged-${{ matrix.stack }}-${{ matrix.arch }}
           path: |
@@ -309,12 +309,12 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: 1.4.2
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: cso-staged-${{ matrix.stack }}-${{ matrix.arch }}
           path: staged-application
       - if: matrix.stack == 'rails'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: cso-staged-postgresql-${{ matrix.arch }}
           path: staged-postgresql
@@ -366,7 +366,7 @@ jobs:
           bun run scripts/cso-native-evidence.ts --stack "$CSO_STACK" --platform "$CSO_PLATFORM" \
             --junit native-tests.junit.xml --staged staged-application/staged-image.json \
             --output qualification-evidence.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: cso-qualification-gates-${{ matrix.stack }}-${{ matrix.arch }}
           path: |

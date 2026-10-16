@@ -54,14 +54,16 @@ case "$TEL_START" in ''|*[!0-9]*) TEL_START="$_TEL_END" ;; esac
 _TEL_DUR=$(( _TEL_END - TEL_START ))
 [ -n "$SESSION_ID" ] && rm -f "$_GH/analytics/.pending-$SESSION_ID" 2>/dev/null || true
 
+# Record completion before the final drain, including its durable enqueue.
+# The normal sync gates still decide publication: full may sync timelines,
+# artifacts-only retains them locally, and unattended never enqueues or drains.
+"$_BIN/gstack-timeline-log" '{"skill":"'"$SKILL_NAME"'","event":"completed","branch":"'"$(_b=$(git branch --show-current 2>/dev/null | tr -cd 'a-zA-Z0-9._/-'); echo "${_b:-unknown}")"'","outcome":"'"$OUTCOME"'","duration_s":"'"$_TEL_DUR"'","session":"'"$SESSION_ID"'"}' 2>/dev/null || true
+
 # Skill-end artifacts sync (drain + push; formerly its own inline fence).
 if [ "$_SESSION_KIND" != "unattended" ]; then
   "$_BIN/gstack-brain-sync" --discover-new 2>/dev/null || true
   "$_BIN/gstack-brain-sync" --once 2>/dev/null || true
 fi
-
-# Session timeline: local-only, never sent anywhere.
-"$_BIN/gstack-timeline-log" '{"skill":"'"$SKILL_NAME"'","event":"completed","branch":"'"$(_b=$(git branch --show-current 2>/dev/null | tr -cd 'a-zA-Z0-9._/-'); echo "${_b:-unknown}")"'","outcome":"'"$OUTCOME"'","duration_s":"'"$_TEL_DUR"'","session":"'"$SESSION_ID"'"}' 2>/dev/null || true
 
 # Local analytics (gated on telemetry setting).
 if [ "$_TEL" != "off" ]; then

@@ -166,9 +166,12 @@ describe('ship-measure sweep CLI ($0)', () => {
     fs.writeFileSync(path.join(dir, 'trial-outcomes.jsonl'), `${history().map(r => JSON.stringify(r)).join('\n')}\n`);
     return dir;
   };
-  const cli = (cwd: string, ...args: string[]) => spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/ship-measure.ts'), 'sweep', ...args], {
-    cwd, encoding: 'utf8', timeout: 120_000, env: { ...process.env, GSTACK_STATE_ROOT: tmp('sweep-cli-state-'), GITHUB_STEP_SUMMARY: '' },
-  });
+  const cli = (cwd: string, ...args: string[]) => {
+    const state = tmp('sweep-cli-state-');
+    return spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/ship-measure.ts'), 'sweep', ...args], {
+      cwd, encoding: 'utf8', timeout: 120_000, env: { ...process.env, HOME: state, USERPROFILE: state, GSTACK_STATE_ROOT: state, GITHUB_STEP_SUMMARY: '' },
+    });
+  };
 
   test('--dry-run reads local history, prints the plan and the before probability, and spends nothing', () => {
     const cwd = tmp('sweep-cli-');
@@ -189,6 +192,30 @@ describe('ship-measure sweep CLI ($0)', () => {
     expect(r.status).toBe(0);
     expect(r.stdout).toContain(`DIAGNOSTIC ${A} baseline: observed 9/10 trials (baseline); MEETS`);
     expect(r.stdout).toMatch(new RegExp(`\\| 1 \\| ${A} \\| rule \\| [^|]+ \\| 9/10 \\| MEETS \\|`));
+  });
+
+  test('the CLI never writes eval dirs under the parent HOME (#3162)', () => {
+    const home = tmp('sweep-cli-parent-home-');
+    const slug = path.join(home, '.claude', 'skills', 'gstack', 'bin', 'gstack-slug');
+    fs.mkdirSync(path.dirname(slug), { recursive: true });
+    fs.writeFileSync(slug, '#!/usr/bin/env bash\necho SLUG=leaked-slug\n', { mode: 0o755 });
+    const saved = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+    try {
+      const cwd = tmp('sweep-cli-home-');
+      const script = path.join(cwd, 'fake-trial.ts');
+      fs.writeFileSync(script, 'console.log("cost_usd: 0");\nconsole.log(`PASS ${process.argv[2]}`);\n');
+      const bun = /\s/.test(process.execPath) ? 'bun' : process.execPath;
+      const r = cli(cwd, '--history-dir', historyDir(), '--k', '1', '--cap-usd', '1', '--command', `${bun} ${script} {case}`, '--jobs', '5', '--out', path.join(cwd, 'out'));
+      expect(r.status).toBe(0);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+    expect(fs.existsSync(path.join(home, '.gstack'))).toBe(false);
   });
 
   test('history that cannot be read fails closed with nothing measured', () => {

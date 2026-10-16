@@ -236,12 +236,30 @@ export interface RecordMeta {
   subtype?: string;
   attachmentType?: string;
   version?: string;
+  /** A compact boundary's preserved message uuids, ending with its logical parent (Claude Code 2.1.300). */
+  preserved?: readonly string[];
 }
 
 /** Claude writes each SessionStart hook result as a message-less attachment chained above the first user turn. */
 const sessionStartRecord = (r: Record<string, any>): boolean => r.type === 'attachment' && r.message == null &&
   object(r.attachment) && r.attachment.hookEvent === 'SessionStart' &&
   typeof r.attachment.type === 'string' && /^hook_[a-z_]{1,48}$/.test(r.attachment.type);
+
+const PRESERVED_MAX = 1024;
+/**
+ * Claude Code 2.1.300 keeps a compaction's last records in place and lists them in
+ * compactMetadata.preservedMessages, ending with the segment's tail, which is also the
+ * boundary's logicalParentUuid. Only such a list of native uuids is read.
+ */
+function preservedUuids(r: Record<string, any>): readonly string[] | undefined {
+  if (r.type !== 'system' || r.subtype !== 'compact_boundary' || r.parentUuid !== null || !nativeUuid(r.logicalParentUuid)) return;
+  const meta = r.compactMetadata;
+  if (!object(meta) || !object(meta.preservedSegment) || !object(meta.preservedMessages)) return;
+  const uuids = meta.preservedMessages.uuids;
+  if (meta.preservedSegment.tailUuid !== r.logicalParentUuid || !Array.isArray(uuids) ||
+      uuids.length > PRESERVED_MAX || uuids.at(-1) !== r.logicalParentUuid || !uuids.every(nativeUuid)) return;
+  return uuids;
+}
 
 /** Record type names only, never content: `attachment:hook_success`, `system:compact_boundary`. */
 export const shapeOf = (m: RecordMeta): string => [m.type, m.subtype, m.attachmentType]
@@ -270,6 +288,7 @@ export function recordMeta(r: Record<string, any>, index: number): RecordMeta {
     type: typeof r.type === 'string' ? r.type : undefined, subtype: typeof r.subtype === 'string' ? r.subtype : undefined,
     attachmentType: object(r.attachment) && typeof r.attachment.type === 'string' ? r.attachment.type : undefined,
     version: indexedVersion(r),
+    preserved: preservedUuids(r),
   };
 }
 
@@ -294,13 +313,32 @@ export function ownedCausalOrder(metas: readonly RecordMeta[], cwd: string): Own
   }
   const byId = { get: (id: string) => { const m = byUuid.get(id); return m?.node ? m : undefined; } };
   if (byId.get(first.uuid ?? '') !== first) return { reason: excludedOf(first), shape: [shapeOf(first)] };
+  // Claude Code 2.1.300 writes a compaction's preserved tail after the boundary, under the
+  // compact summary, so the boundary's logical parent descends from the boundary itself.
+  // Such a boundary continues from the last preserved record that is a node of this file
+  // and not its own descendant. With none, the cycle stays and supplies no ownership.
+  const descends = (id: string | undefined, from: RecordMeta): boolean => {
+    for (const visited = new Set<RecordMeta>(); id;) {
+      const m = byId.get(id);
+      if (!m || visited.has(m)) return false;
+      if (m === from) return true;
+      visited.add(m); id = m.parent;
+    }
+    return false;
+  };
+  const resumed = new Map<RecordMeta, string>();
+  for (const m of nodes) if (m.preserved && descends(m.parent, m)) {
+    const anchor = m.preserved.slice(0, -1).findLast(id => byId.get(id) !== undefined && !descends(id, m));
+    if (anchor) resumed.set(m, anchor);
+  }
+  const parentOf = (m: RecordMeta) => resumed.get(m) ?? m.parent;
   // Anchor through the first observed conversation node, never an unrelated
   // later root. An unflushed ancestor supplies no ownership yet.
   const chain: RecordMeta[] = [first], seen = new Set<RecordMeta>(chain);
   const shape = () => chain.map(shapeOf).reverse().slice(0, 32);
   let genesis = false;
   for (let at = first; ;) {
-    const id = at.parent;
+    const id = parentOf(at);
     if (!id) break;
     const next = byId.get(id);
     if (!next) {
@@ -320,9 +358,9 @@ export function ownedCausalOrder(metas: readonly RecordMeta[], cwd: string): Own
   const top = chain.toReversed(), root = top[0]!;
   const turn = top.findIndex(n => n.message);
   const children = new Map<string, RecordMeta[]>();
-  for (const node of nodes) if (node.parent) {
-    const list = children.get(node.parent) ?? []; list.push(node); children.set(node.parent, list);
-  }
+  for (const node of nodes) { const parent = parentOf(node); if (parent) {
+    const list = children.get(parent) ?? []; list.push(node); children.set(parent, list);
+  } }
   // Uniqueness over every root candidate: a null-parent user, a SessionStart
   // chain head carrying a conversation, and the resumed-genesis boundary.
   const carriesTurn = (head: RecordMeta): boolean => {
@@ -370,5 +408,36 @@ export function ownedCausalOrder(metas: readonly RecordMeta[], cwd: string): Own
     order.push(node.index);
     for (const child of children.get(node.uuid!) ?? []) offer(child.index);
   }
+  const boundary = compactionCycle(nodes, new Set(order), byId, parentOf);
+  if (boundary) return { reason: 'unrecognized_shape:compaction_unreachable', shape: [shapeOf(boundary), ...shape()] };
   return { order, root: root.uuid };
+}
+
+/**
+ * An owned node the walk never reached is silently dropped, which the guard reads
+ * as an unread close packet. When that node's ancestry ends in a cycle through a
+ * compact boundary's logical parent, the cause is a compaction shape this reader
+ * does not know, so it is reported as one. An orphan whose ancestor is missing
+ * (not yet flushed) or another root keeps being dropped. Each node is walked once.
+ */
+function compactionCycle(nodes: readonly RecordMeta[], reached: ReadonlySet<number>,
+  byId: { get(id: string): RecordMeta | undefined }, parentOf: (m: RecordMeta) => string | undefined): RecordMeta | undefined {
+  const verdict = new Map<RecordMeta, RecordMeta | null>();
+  const isBoundary = (m: RecordMeta) => m.type === 'system' && m.subtype === 'compact_boundary' && m.parentNull && m.parent !== undefined;
+  for (const start of nodes) {
+    if (reached.has(start.index) || verdict.has(start)) continue;
+    const path: RecordMeta[] = [], onPath = new Map<RecordMeta, number>();
+    let result: RecordMeta | null = null;
+    for (let at: RecordMeta | undefined = start; at;) {
+      if (verdict.has(at)) { result = verdict.get(at)!; break; }
+      const loop = onPath.get(at);
+      if (loop !== undefined) { result = path.slice(loop).find(isBoundary) ?? null; break; }
+      onPath.set(at, path.length); path.push(at);
+      const id = parentOf(at);
+      at = id ? byId.get(id) : undefined;
+    }
+    for (const m of path) verdict.set(m, result);
+    if (result) return result;
+  }
+  return undefined;
 }

@@ -36,7 +36,7 @@ function slice(from: string, to: string | null): string {
 }
 
 const HOOK_SECTIONS = [
-  slice('CANONICAL_GSTACK_ROOT="${CLAUDE_CONFIG_DIR', '# ─── GBrain detection'),
+  slice('CANONICAL_GSTACK_ROOT="$(gstack_canonical_claude_root)"', '# ─── GBrain detection'),
   slice('# 11. Plan-tune cathedral hook install', '# ─── Redact pre-push guard consent'),
   slice('if [ -n "${_HOOK_REFUSED:-}" ]; then', null),
 ].join('\n');
@@ -282,6 +282,7 @@ describe('setup: registers the hooks that parse, refuses the rest, exits non-zer
       `SETTINGS_HOOK='${posix(ROOT)}/bin/gstack-settings-hook'`,
       `GSTACK_CONFIG='${posix(ROOT)}/bin/gstack-config'`,
       'TEAM_MODE=1 NO_TEAM_MODE=0 IS_WINDOWS=0 QUIET=1 PLAN_TUNE_HOOKS_MODE="" TIMELINE_STOP_HOOK_MODE=""',
+      '. "$SOURCE_GSTACK_DIR/bin/gstack-claude-root.sh"',
       HOOK_SECTIONS,
       'echo SETUP_HOOKS_DONE',
     ].join('\n');

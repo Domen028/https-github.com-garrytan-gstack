@@ -795,6 +795,30 @@ auto-updater running its first update cannot make this check.)
 **Fix.** `bun upgrade`; the next session start resumes the update. To update
 now: `bun upgrade && cd <gstack checkout> && git pull --ff-only && ./setup`.
 
+<a id="bun-version-unreadable"></a>
+### `bun-version-unreadable: could not read the version of Bun at <path> (bun --version printed '<output>'); gstack <version> needs <floor> or newer (BUN_VERSION_UNREADABLE)`
+
+**Meaning.** Before moving the checkout, the auto-updater and `/gstack-upgrade`
+compare the Bun that setup would run with the incoming release's security
+floor. `bun --version` printed something that is not a version (shown, with
+control characters removed), so the comparison could not run and the update was
+held: nothing was installed or changed. `/gstack-upgrade` prints the same text
+after `BUN_VERSION_UNREADABLE:`. Earlier releases read an unreadable version,
+and every version under zsh, as "not below the floor" and went ahead (#3195).
+
+**Fix.** Reinstall Bun; `bun upgrade` may not run on a broken install. In Git
+Bash or a macOS/Linux terminal:
+
+```bash
+curl -fsSL https://bun.sh/install | bash
+bun --version
+```
+
+**Expected result.** `bun --version` prints a version such as `1.4.2`, and the
+next session start (or `/gstack-upgrade`) updates.
+
+**Fixed in.** The first release after v1.91.101.0 (#3195).
+
 <a id="auto-update-incomplete"></a>
 ### `gstack auto-update: setup did not finish (<reason>); installed skills may be out of date. gstack retries automatically. Fix now: cd <dir> && ./setup`
 
@@ -895,17 +919,160 @@ cannot be checked before the pull; setup then refuses the broken hook (see the
 entry above).
 
 <a id="auto-update-hook-check-unavailable"></a>
-### `gstack auto-update: update held (hook-check-unavailable: <reason>); nothing was installed or changed, and your current hooks keep running. ... Fix now: cd <dir> && git pull --ff-only --autostash && ./setup ...`
+### `gstack auto-update: update held (hook-check-unavailable: <reason>); nothing was installed or changed, and your current hooks keep running. ... Fix now (in a terminal; Git Bash on Windows): cd '<dir>' && git fetch origin && bash bin/gstack-ff-update . '@{upstream}' && ./setup ...`
 
 **Meaning.** Neither the incoming release's hook checker nor your installed
 one gave a verified report on the incoming hooks (a crash, no output, an
-unreadable report, or no Bun to bundle the TypeScript hooks), so the
-auto-updater cannot tell whether moving your checkout would break Claude Code
-tool calls. It left your checkout, skills and hooks at the current revision.
-The `<reason>` names what each checker did.
+unreadable report, or no Bun to bundle the TypeScript hooks), or the incoming
+revision could not be extracted for the check (`cannot extract the incoming
+revision: <git's error>`), so the auto-updater cannot tell whether moving your
+checkout would break Claude Code tool calls. It left your checkout, skills and
+hooks at the current revision. The `<reason>` names what each checker did.
 
-**Fix.** Run the printed command. Setup checks every hook it registers and
-says what is wrong (for example that Bun is missing).
+**Fix.** Run the printed command. `bin/gstack-ff-update` moves the checkout
+without losing a local edit (see
+[shelved edits](#auto-update-rescued-edits)), and setup checks every hook it
+registers and says what is wrong (for example that Bun is missing).
+
+On Windows, if the reason is `git archive of the incoming revision failed`,
+your updater predates the fix for #3184: see
+[the held-install recovery](#auto-update-held-install-recovery).
+
+<a id="auto-update-held-install-recovery"></a>
+### `HELD hook-check-unavailable: git archive of the incoming revision failed` / `gstack auto-update: update held (hook-check-unavailable: git archive of the incoming revision failed) ...` / `gstack auto-update: setup did not finish (bun not found on PATH) ...` on Windows
+
+**Meaning.** From 1.91.89.0 to the release that fixed #3184, the auto-updater
+extracted each incoming release with `git archive | tar` before checking its
+hooks. Git for Windows' MSYS `tar` cannot create the `connect-chrome` symlink
+because it comes before its target in the archive, so every release was held
+(`~/.gstack/analytics/session-update.log` shows the `HELD` line), and a stale
+`setup did not finish (bun not found on PATH)` line could hide the hold. Your
+installed updater cannot deliver its own fix, and the old `/gstack-upgrade`
+can leave conflict markers when a local edit conflicts. The recovery fetches
+the new `bin/gstack-ff-update` from the new revision into a private temp
+directory and runs it. It works on a clean install, an install with local
+edits that conflict, an install that already has unmerged files, and a
+prefix-mode install: regenerable `SKILL.md` and `sections/*.md` edits are
+re-rendered by setup, and every other edit is kept in a rescue ref (the
+command prints it; see [shelved edits](#auto-update-rescued-edits)).
+
+**Fix, in Git Bash** (use your install directory if it is not
+`~/.claude/skills/gstack`):
+
+<!-- form:recovery-gitbash -->
+```bash
+cd ~/.claude/skills/gstack && git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > "$d/gstack-ff-update" && bash "$d/gstack-ff-update" . FETCH_HEAD; s=$?; rm -rf "$d"; [ "$s" = 0 ] && ./setup
+```
+
+**Fix, in Windows PowerShell 5.1** (it runs the same script through Git's
+`bash.exe`, then `.\setup.ps1`):
+
+<!-- form:recovery-powershell -->
+```powershell
+Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; IFS=; git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > $d/gstack-ff-update && bash $d/gstack-ff-update . FETCH_HEAD; s=$?; rm -rf -- $d; exit $s'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }
+```
+
+**In Claude Code**, ask it to run the Git Bash form above.
+
+**Expected result.** The script prints `ok <old> <new>` or
+`rescued <old> <new> refs/gstack/rescue/<oid> unmerged=<0|1>`, setup
+finishes with exit 0, the next session start prints no held line, and later
+updates install on their own.
+
+**Trying an unreleased fix, and going back.** A fix branch can be tried
+before it ships; auto-update pauses while a detached revision is checked out.
+Replace `<branch>` with the branch named in the issue.
+
+<!-- form:trial-gitbash -->
+```bash
+cd ~/.claude/skills/gstack && git checkout -- 'SKILL.md' '*/SKILL.md' '*/sections/*.md' && git fetch origin <branch> && git checkout --detach FETCH_HEAD && ./setup
+```
+
+<!-- form:trial-powershell -->
+```powershell
+Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; git checkout -- SKILL.md */SKILL.md */sections/*.md && git fetch origin <branch> && git checkout --detach FETCH_HEAD'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }
+```
+
+To go back to the released version (this also resumes auto-update):
+
+<!-- form:goback-gitbash -->
+```bash
+cd ~/.claude/skills/gstack && git checkout -- 'SKILL.md' '*/SKILL.md' '*/sections/*.md' && git checkout main && ./setup
+```
+
+<!-- form:goback-powershell -->
+```powershell
+Set-Location -LiteralPath "$HOME\.claude\skills\gstack" -ErrorAction Stop; $gb = Join-Path (git --exec-path) '..\..\..\bin\bash.exe'; & $gb -c 'set -f; git checkout -- SKILL.md */SKILL.md */sections/*.md && git checkout main'; if ($LASTEXITCODE -eq 0) { .\setup.ps1 }
+```
+
+<a id="auto-update-unmerged-files"></a>
+### `gstack auto-update: update held (unmerged-files: <n> unmerged file(s) in the install (first: <path>)); an earlier merge, rebase or stash pop left conflicts in the install, and an update would bury them. Fix now (...): cd '<dir>' && git fetch origin && bash bin/gstack-ff-update . '@{upstream}' && ./setup ...`
+
+**Meaning.** Your gstack checkout has unmerged files: conflict markers from a
+merge, rebase or `git stash pop` of your own, or from an auto-updater older
+than the fix for this (its `merge --autostash` left markers in place when a
+local edit conflicted). The background updater never moves a checkout with
+unmerged files, and it prints no "setup did not finish" fix while they exist,
+because setup would run over the markers.
+
+**Fix.** Run the printed command. It saves everything first, the unmerged
+files included, in a rescue ref labelled "needs manual resolution", then
+moves the checkout to the release and runs setup. Read the rescue with the
+commands under [shelved edits](#auto-update-rescued-edits). To resolve the
+conflict yourself instead, finish or abort your merge (`git -C '<dir>' merge
+--abort`, `git -C '<dir>' checkout -- <file>`); gstack retries at the next
+check.
+
+<a id="auto-update-autostash-unrecoverable"></a>
+### `gstack auto-update: update held (autostash-unrecoverable: <reason>); your local edits are where they were and nothing was installed. Look first: git -C '<dir>' status --short. Fix now (...)` / `autostash-unrecoverable: <reason>`
+
+**Meaning.** `bin/gstack-ff-update` refused to move the checkout and changed
+nothing. The `<reason>` says why: an untracked file is where the release
+puts a tracked one (`git refused to update ...: would be overwritten`), a
+file changed while the update ran, another git command held the index lock
+(`index.lock exists`), or a rescue ref of that name already names another
+commit.
+
+**Fix.** Run the `status` command the line prints, move the listed untracked
+file out of the way (or wait for the other git command to finish), then run
+the printed `Fix now` command. Nothing needs restoring: your edits are still
+in the working tree.
+
+<a id="auto-update-rescued-edits"></a>
+### `gstack auto-update: your local edits in the install (<files>) conflicted with an update, so they were saved in refs/gstack/rescue/<oid> and the install runs the update. ...` / `rescued <old> <new> refs/gstack/rescue/<oid> unmerged=<0|1>`
+
+**Meaning.** You had edited tracked files in your gstack checkout, and the
+release changed the same lines (or you had staged changes or unmerged files).
+Instead of leaving conflict markers in the checkout Claude Code runs hooks
+from, `bin/gstack-ff-update` saved your edits as one commit,
+`refs/gstack/rescue/<oid>`, and moved the checkout to the release. The
+rescue's first parent is the revision you had, so it holds only your changes;
+its second parent holds what you had staged. Edits that did not conflict stay
+in place, and regenerable `SKILL.md` and `sections/*.md` edits (skill prefix,
+gbrain blocks) are re-rendered by setup instead of being rescued. The
+session-start line repeats once a day until you delete the ref.
+
+**Fix.** Inspect first:
+
+```bash
+git -C ~/.claude/skills/gstack show --stat 'refs/gstack/rescue/<oid>'
+```
+
+To keep your edits, export only your changes and apply them in a scratch
+checkout (never with `stash apply` in the install):
+
+```bash
+git -C ~/.claude/skills/gstack diff 'refs/gstack/rescue/<oid>^' 'refs/gstack/rescue/<oid>' > ~/gstack-local-edits.patch
+git clone https://github.com/garrytan/gstack.git ~/gstack-scratch && cd ~/gstack-scratch && git apply -3 ~/gstack-local-edits.patch
+```
+
+A rescue labelled "needs manual resolution" holds files that were already
+unmerged: their content can contain conflict markers to resolve. Delete the
+ref when you are done (this also stops the daily line):
+
+```bash
+git -C ~/.claude/skills/gstack update-ref -d 'refs/gstack/rescue/<oid>'
+```
 
 <a id="setup-runtime-root-contains-checkout"></a>
 ### `gstack setup: refusing to replace <root> for <host>: this runtime directory contains the source checkout setup runs from (<checkout>), so replacing it would delete the checkout. Nothing was changed.`
@@ -1041,6 +1208,39 @@ or too large. Each message names the cap that applied:
 holds the code you want audited and no symlinks. Add your file count or size to
 [#2993](https://github.com/garrytan/gstack/issues/2993).
 
+<a id="cso-scanner-invalid-output"></a>
+### `INVALID_OUTPUT: Scanner report is malformed, unsupported, or exceeds structural limits.` (Semgrep on a real repository)
+
+**Meaning.** Before the first release after v1.91.101.0, /cso redacted a
+scanner's JSON report by splicing an unquoted `<REDACTED-...>` marker over any
+bare number that looked like a phone number or card number, such as Semgrep's
+`"max_memory_bytes":1145427776` or an epoch timestamp. The report then failed to
+parse and the scanner was recorded as not assessed (#3185). Now a redacted
+number becomes the quoted string `"<REDACTED-...>"` and the report parses. A
+redaction that would cross JSON tokens still withholds the payload
+(`REDACTION_FAILED`).
+
+**Fix.** Update gstack (`/gstack-upgrade`), then run /cso again. If this code
+still appears, the scanner itself emitted malformed JSON; report the scanner
+and version at https://github.com/garrytan/gstack/issues.
+
+**Fixed in.** The first release after v1.91.101.0 (#3185).
+
+<a id="cso-orbstack-argv0"></a>
+### `unsupported argv0 "docker-tools"` (OrbStack's `docker` under /cso)
+
+**Meaning.** /cso runs the canonical path of `docker` (symlinks resolved), and
+OrbStack's `docker` is a symlink to one multicall binary, `docker-tools`, that
+decides what to be from the name it was started as. Started under its real name
+it refused, so Docker isolation and every scanner were reported missing
+(#3187). /cso now starts the same verified binary with the name `docker`,
+including in its cleanup watchdog.
+
+**Fix.** Update gstack (`/gstack-upgrade`), then run `gstack-doctor`; its `cso`
+row should pass with OrbStack running.
+
+**Fixed in.** The first release after v1.91.101.0 (#3187).
+
 <a id="conductor-auq-hook-removed"></a>
 ### `removed the AskUserQuestion preference hook: it breaks Conductor's native AskUserQuestion (#2207). ...`
 
@@ -1156,7 +1356,7 @@ the project whose pins apply.
 
 **Meaning.** The first browser skill run on a machine installed without
 Chromium (`SKIP browser (lazy; gstack-browser-ensure installs on first use)`)
-tried to install it through `bunx playwright install chromium` under setup's
+tried to install it through `bun x playwright install chromium` under setup's
 lock, or Chromium is installed but does not launch.
 
 **Fix.** Read the installer output above: offline or proxied machines need
@@ -1383,6 +1583,32 @@ killed.
 **Fix.** After `browse stop`, check for a leftover browser with
 `ps aux | grep -i chrom` and end it with `kill <pid>`.
 
+<a id="browse-no-active-page"></a>
+### `No active page. Use "browse goto <url>" first.` (after the last tab was closed outside browse)
+
+**Meaning.** When every tab was closed outside browse (the headed window's tabs
+closed by hand, or a page that closed itself), earlier releases failed every
+later command this way, `status` and `stop` included, until the daemon was
+killed (#3167). Now `status` and `stop` answer without opening a tab, and any
+other command opens one new blank tab first and prints
+`[browse] warning: every tab was closed outside browse, so this command ran on a new blank tab; open your page again with: browse goto <url>`.
+
+**Fix.** `browse goto <url>` to open your page again.
+
+**Fixed in.** The first release after v1.91.101.0 (#3167).
+
+<a id="browse-tab-unrecoverable"></a>
+### ``browse: every tab was closed outside browse and a new one could not be opened, because the browser or its context is gone (<cause>); fix: run `browse restart` ... (BROWSE_TAB_UNRECOVERABLE)``
+
+**Meaning.** Every tab was closed outside browse and the browser, or its
+context, is gone too, so browse could not open a tab to run the command.
+`browse status` and `browse stop` still answer.
+
+**Fix.** `browse restart` (`$B restart` inside a gstack skill), then run the
+command again.
+
+**Fixed in.** The first release after v1.91.101.0 (#3167).
+
 ---
 
 ## Windows
@@ -1421,6 +1647,112 @@ Windows allows the binaries, re-run `./setup`; the message goes away.
 
 **Expected result.** setup prints no "Windows blocked" line, and
 `gstack-doctor` shows `ok` for `browse bundle` and `binaries`.
+
+<a id="setup-ps1-unexpected-eof"></a>
+### `setup: -c: line 1: unexpected EOF while looking for matching '"'` / `setup: -c: line 2: syntax error: unexpected end of file` from `.\setup.ps1`
+
+**Meaning.** Windows PowerShell 5.1 (`powershell.exe`, the default PowerShell
+on Windows) passes arguments to native programs the legacy way and strips
+the double quotes inside them. Until the release that fixed #3130,
+`setup.ps1` handed Git Bash a `bash -c` script with double quotes in it, so
+bash read a broken script and nothing was installed. PowerShell 7.3 and newer
+were not affected.
+
+**Fix.** Update gstack (in Git Bash: `cd ~/.claude/skills/gstack && git pull
+--ff-only`), then run `.\setup.ps1` again: its script no longer holds a
+double quote. Until then, run `./setup` from Git Bash, or `.\setup.ps1` from
+PowerShell 7 (`pwsh`).
+
+<a id="setup-ps1-empty-argument"></a>
+### `setup.ps1: argument N is empty; setup takes no empty arguments. Nothing was installed or changed. (SETUP_PS1_EMPTY_ARGUMENT; ...)`
+
+**Meaning.** One of the arguments you gave `.\setup.ps1` is an empty string
+(for example `''` or an unset variable such as `$hostName`). setup takes no
+empty arguments, and the way `setup.ps1` hands arguments to Git Bash under
+Windows PowerShell 5.1 cannot carry one, so it refuses before running
+anything.
+
+**Fix.** Drop the empty argument, or give it a value:
+
+```powershell
+.\setup.ps1 --host codex
+```
+
+---
+
+<a id="chromium-install-exit-127"></a>
+### `Chromium bootstrap: chromium-install — <bun> x playwright install chromium exited 127 (command not found); install Bun from bun.sh (winget Bun ships no bunx), or skip with ./setup --no-browser (Git Bash) or .\setup.ps1 --no-browser (PowerShell)`
+
+**Meaning.** setup (or `bin/gstack-browser-ensure`, as `BROWSER_UNAVAILABLE
+<bun> x playwright install chromium exited 127 (command not found)`) could
+not run the Playwright installer: the shell found no command to run. Until
+the release that fixed #3131, setup called `bunx`, which a Bun installed with
+winget does not ship, and reported the failure as `exited 127 (offline,
+proxy, or blocked download?)`. It now runs `bun x` through the Bun it
+resolved, so exit 127 means that Bun itself, or a command it starts, is
+missing. Skills that do not need a browser are installed either way.
+
+**Fix.** Install Bun from https://bun.sh (it ships `bun` and `bunx`), then
+run setup again. To install without the browser for now, in Git Bash:
+
+```bash
+./setup --no-browser
+```
+
+or in Windows PowerShell:
+
+```powershell
+.\setup.ps1 --no-browser
+```
+
+---
+
+<a id="bash-unavailable"></a>
+### `gstack: no Git Bash found to run gstack's bash scripts on Windows (tried ...); fix: ... (BASH_UNAVAILABLE)`
+
+**Meaning.** Windows cannot run a shebang script, so gstack hands its bash
+scripts (`gstack-wtree`, `gstack-slug`, the hooks' bins, `bash -c` commands in
+regen and pregate selection manifests) to Git Bash. It looks in this order and
+the message lists every candidate it tried with the reason it was rejected:
+
+1. `GSTACK_GIT_BASH` (or the older name `GSTACK_BASH`; when both are set and
+   differ, `GSTACK_GIT_BASH` wins and a one-line warning says so). A value
+   that does not exist is refused, not skipped.
+2. bash next to `git --exec-path` (finds scoop, per-user and portable Git).
+3. `C:\Program Files\Git`, `C:\Program Files (x86)\Git`,
+   `%LOCALAPPDATA%\Programs\Git` and scoop's `git\current`.
+4. A `bash` on PATH, only when `uname -s` reports MSYS or MINGW. WSL's
+   `bash.exe` in `System32` or `WindowsApps` is never used: it reads
+   `C:\...` paths as Linux paths. A PATH bash that is neither (Cygwin, for
+   example) is no longer used either.
+
+Before #3197 these commands spawned the scripts directly, so `gstack-restamp`
+refused with `cannot fingerprint the working tree ()` and `gstack-gate-diff`
+and `gstack-evidence` silently dropped the fingerprint.
+
+**Fix.** Install Git for Windows (`winget install --id Git.Git -e` in
+PowerShell), or point gstack at your bash.exe for good. An `export` in Git Bash
+reaches only that shell, so set it where Claude Code reads it:
+
+- Windows PowerShell 5.1 or PowerShell 7, then restart Claude Code:
+
+  ```powershell
+  [Environment]::SetEnvironmentVariable('GSTACK_GIT_BASH', 'C:\Program Files\Git\bin\bash.exe', 'User')
+  ```
+
+- Or the `env` block of `~/.claude/settings.json`:
+
+  ```json
+  { "env": { "GSTACK_GIT_BASH": "C:/Program Files/Git/bin/bash.exe" } }
+  ```
+
+The hooks cache the bash they found in `<state root>/cache/windows-bash.json`
+(keyed by `git.exe`'s path and modification time, rechecked before use); the
+override is never cached.
+
+**Expected result.** `gstack-restamp --dry-run` prints its diff and
+`gstack-gate-diff` records a candidate ending in a tree id instead of
+`+nowtree`.
 
 ---
 
@@ -1991,6 +2323,12 @@ legitimate generated output, or stop the tool from writing it.
 the journal recorded (someone edited it after the stage ran). Overwriting it
 would lose that edit, so the restamp stopped.
 
+`cannot fingerprint the working tree (<detail>); nothing written` is the same
+code before anything was staged: `gstack-wtree exited <n>: <reason>` carries
+the helper's own repair (for example a writable `TMPDIR`), and
+`gstack-wtree could not start: ...` is the Windows bash lookup failing (see
+[`BASH_UNAVAILABLE`](#bash-unavailable)).
+
 **Fix.** Read `.gstack/tmp/restamp-journal.json`, reconcile the named file by
 hand, then rerun `gstack-restamp` (idempotent: a complete stamp is a no-op).
 
@@ -2360,7 +2698,12 @@ string literals, the `bin/<name>` → `test/<name>*.test.ts` convention or a
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
 for files with no behaviour, such as docs) in `.gstack/pregate.json`. `--explain`
-prints every mapping and why.
+prints every mapping and why. For a file with no lane it also prints the import
+specifiers in test files that resolved to no repo file (for example a
+`tsconfig.json` `paths` alias such as `@/lib/x` whose target is missing) and any
+`extends` hop that was not followed (only relative `extends`, at most 4 hops). If
+a test does cover the file, declare it under `dependencies`; if the resolver
+should have found it, report the specifier as a resolver gap.
 
 <a id="pregate-lane-failed"></a>
 ### `PREGATE_LANE_FAILED`
@@ -2739,3 +3082,52 @@ writes that state; it comes from a hand edit or an older runner.
 
 **Fix.** Answer the gate with `gstack-autoplan answer` until no approval is
 pending, and `revise --incorporates` or `--withdraw` each pending amendment.
+
+<a id="ios-launch-env-invalid"></a>
+### `ios-qa launch: GSTACK_IOS_LAUNCH_ENV ... so the app was not launched (<detail>); fix: ... (IOS_LAUNCH_ENV_INVALID)`
+
+**Meaning.** `gstack-ios-qa-daemon` forwards `GSTACK_IOS_LAUNCH_ENV` to
+`xcrun devicectl device process launch --environment-variables` whenever it
+launches the app under test. The value must be a JSON object whose keys are
+environment variable names and whose values are strings, and it may not set a
+`GSTACK_` variable (that namespace belongs to the debug bridge). Anything else
+(invalid JSON, an array, a number value, a `GSTACK_` key) refuses the launch,
+because launching without the variables an env-gated debug bridge needs would
+look like a working app with no bridge. The detail names the key and its type,
+never a value. Added in the release after v1.91.101.0.
+
+**Fix.** In the shell that starts the daemon (macOS Terminal or Claude Code on
+the Mac with the device):
+
+```bash
+export GSTACK_IOS_LAUNCH_ENV='{"DEBUG_BRIDGE":"1"}'
+```
+
+or `unset GSTACK_IOS_LAUNCH_ENV`, then restart `gstack-ios-qa-daemon`.
+
+<a id="outside-voice-unavailable"></a>
+### `Outside voice unavailable: <cause>. Fix: <fix>. Continuing to ... (OUTSIDE_VOICE_UNAVAILABLE)`
+
+**Meaning.** `/plan-ceo-review`, `/plan-eng-review` or `/plan-devex-review` ran
+without a second opinion. The outside provider (Codex, or Claude Code under the
+Codex host) did not run or failed, and the native fallback could not supply a
+bounded review either. That fallback dispatches the built-in Plan subagent in
+the background next to a five-minute background timer, and stops whichever is
+still running when the other ends. The cause names which part was missing:
+`Plan agent type not offered`, `TaskStop not offered`, `background tasks
+unavailable`, `no complete report within five minutes`, or a failed status.
+The review-log row carries the same cause as `unavailable_reason`. Claude Code
+2.1.277 removed the TaskOutput tool the fallback used before, so on older
+gstack every native fallback on current Claude Code ended here.
+
+**What is kept.** The native plan review itself is complete. The row is
+recorded with `status: unavailable`, never as a clean review; a late or partial
+reviewer result is not counted.
+
+**Fix.** Repair the provider the line names: install it, or run `codex login`
+(in your terminal or Git Bash). For the native fallback, run Claude Code 2.1.277
+or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS`
+unset, not in bare mode). Then re-run the review.
+
+**Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
+review — outside voice)` when the provider runs.

@@ -135,7 +135,12 @@ test('CI native exploration Read does not stand in for completed method Reads', 
   try {
     for (const variant of ['omitted methods', 'pending methods', 'completed methods']) {
       const events = structuredClone(captured.omittedReadEvents);
-      if (variant !== 'omitted methods') events.push(...captured.completedMethodEvents.filter(event => variant === 'completed methods' || event.type === 'assistant'));
+      if (variant !== 'omitted methods') events.push(...structuredClone(captured.completedMethodEvents.filter(event => variant === 'completed methods' || event.type === 'assistant')));
+      for (const part of events.flatMap((event: any) => Array.isArray(event.message?.content) ? event.message.content : [])) {
+        if (part.type === 'tool_result' && typeof part.content === 'string' && part.content.includes('AUTO-GENERATED from system-functional.md.tmpl')) {
+          part.content = readFileSync(join(import.meta.dir, '../qa/sections/system-functional.md'), 'utf8').split('\n').map((line, i) => `${i + 1}\t${line}`).join('\n');
+        }
+      }
       const parsed = parseNDJSON(events.map(event => JSON.stringify(event)));
       expect(parsed.toolCalls.some(call => call.tool === 'Read' && call.input.file_path.endsWith('/qa-only/sections/exploratory.md') && call.output.includes('# Shared exploratory QA'))).toBe(true);
       const errors = qaFunctionalVerdict(fixture, 'qa-only', {
