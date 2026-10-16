@@ -27,6 +27,7 @@ const COPIED = [
   'autoplan/SKILL.md', // its frontmatter registers the autoplan hook the hooks-row test breaks
   'bin/gstack-launch-probe.sh',
   'bin/gstack-doctor-check.sh', 'bin/gstack-doctor-components.sh', 'bin/gstack-runtime-pins.ts', 'lib/runtime-pins.ts',
+  'bin/gstack-windows-bash.ts', 'lib/script-invocation.ts', 'lib/result-codes.ts', // the windows bash row
 ];
 const bases: string[] = [];
 afterEach(() => { for (const b of bases.splice(0)) fs.rmSync(b, { recursive: true, force: true }); });
@@ -1005,5 +1006,31 @@ describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash, Windo
     const r = doctor(f);
     expect(r.row('CLAUDE.md').state, r.out).toBe('ok');
     expect(replacement(r.out)).toEqual([]);
+  });
+
+  /** A JSON probe file: the discovery inputs resolveWindowsBash takes, in test/fixtures/windows-bash-resolution.json's shape. */
+  const probe = (f: Fixture, inputs: Record<string, unknown>) => { const file = path.join(f.base, 'bash-probe.json'); write(file, JSON.stringify(inputs)); return file; };
+  const GIT_BASH = 'C:/Program Files/Git/bin/bash.exe';
+
+  test('windows bash: on Windows the row names the resolved bash and what chose it; a refusal fails with BASH_UNAVAILABLE naming GSTACK_GIT_BASH; off Windows there is no row', () => {
+    const f = makeFixture();
+    const found = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: [GIT_BASH], gitExecPath: 'C:/Program Files/Git/mingw64/libexec/git-core' }) });
+    expect(found.row('windows bash'), found.out).toEqual({ state: 'ok', detail: `${GIT_BASH} (chosen by git --exec-path)`, fix: '' });
+    const override = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_GIT_BASH: 'D:\\tools\\bash.exe', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: ['D:/tools/bash.exe', GIT_BASH] }) });
+    expect(override.row('windows bash').detail).toBe('D:/tools/bash.exe (chosen by GSTACK_GIT_BASH)');
+    const differ = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_GIT_BASH: 'D:/a/bash.exe', GSTACK_BASH: 'D:/b/bash.exe', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: ['D:/a/bash.exe', 'D:/b/bash.exe'] }) });
+    expect(differ.row('windows bash').state).toBe('warn');
+    expect(differ.row('windows bash').detail).toContain('D:/a/bash.exe (chosen by GSTACK_GIT_BASH)');
+    expect(differ.row('windows bash').detail).toContain('GSTACK_GIT_BASH (D:/a/bash.exe) and the deprecated GSTACK_BASH (D:/b/bash.exe) differ');
+    const refused = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: [], gitExecPath: null, which: { bash: 'C:/Windows/System32/bash.exe' } }) });
+    const row = refused.row('windows bash');
+    expect(row.state, refused.out).toBe('fail');
+    expect(row.detail).toContain('(BASH_UNAVAILABLE)');
+    expect(row.detail).toContain('PATH C:/Windows/System32/bash.exe: WSL launcher, not Git Bash');
+    expect(row.detail).toContain(`install path ${GIT_BASH}: not found`);
+    expect(row.fix).toContain('GSTACK_GIT_BASH');
+    expect(row.fix).toContain('#bash-unavailable');
+    expect(refused.status).toBe(1);
+    expect(doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'posix' }).out).not.toContain('windows bash');
   });
 });
