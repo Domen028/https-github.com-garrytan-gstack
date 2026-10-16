@@ -21,6 +21,7 @@ function repo() {
   fs.mkdirSync(path.join(dir, 'handbook'), { recursive: true });
   git(root, 'init', '-q', '-b', 'main', dir);
   git(dir, 'config', 'user.email', 't@t'); git(dir, 'config', 'user.name', 't'); git(dir, 'config', 'commit.gpgsign', 'false');
+  git(dir, 'config', 'maintenance.auto', 'false'); git(dir, 'config', 'gc.auto', '0');
   fs.writeFileSync(path.join(dir, 'app.ts'), 'export const a = 1;\n');
   fs.writeFileSync(path.join(dir, 'handbook', 'guide.md'), '# Guide\n');
   git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'base');
@@ -38,7 +39,7 @@ describe('gstack-docs-candidate', () => {
   test('snapshot records base, HEAD, index, NUL-safe path lists and content hashes without touching the repository', () => {
     const { dir, record } = repo();
     const gitDir = path.join(dir, '.git');
-    const before = fs.readdirSync(gitDir, { recursive: true }).length;
+    const before = fs.readdirSync(gitDir, { recursive: true }) as string[];
     const indexBefore = fs.readFileSync(path.join(gitDir, 'index'));
     const result = run(dir, 'snapshot', '--out', record, '--audit-id', 'a1', '--mode', 'edit', '--base', 'main', '--docs', 'handbook');
     expect(result.status, result.stderr).toBe(0);
@@ -51,7 +52,9 @@ describe('gstack-docs-candidate', () => {
     expect(saved.hashes['app.ts']).toBe(git(dir, 'hash-object', 'app.ts'));
     expect(saved.index).toHaveLength(2);
     expect(fs.statSync(record).mode & 0o777).toBe(0o600);
-    expect(fs.readdirSync(gitDir, { recursive: true }).length).toBe(before);
+    const after = fs.readdirSync(gitDir, { recursive: true }) as string[];
+    const changed = [...before.filter(entry => !after.includes(entry)).map(entry => `-${entry}`), ...after.filter(entry => !before.includes(entry)).map(entry => `+${entry}`)];
+    expect(after.length, `.git entries changed during snapshot: ${changed.join(', ') || '(same names)'}`).toBe(before.length);
     expect(fs.readFileSync(path.join(gitDir, 'index')).equals(indexBefore)).toBe(true);
   });
 
