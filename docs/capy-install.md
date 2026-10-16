@@ -86,7 +86,11 @@ while a lease held by a live process outside its own chain exists, naming each
 holder as `pid <p> (<age>m <command>)`. A lease whose pid now belongs to another
 process, or an identity-less lease from an older gstack past 120 minutes, is
 stale: `bin/gstack-lease live` reclaims it (`gstack-lease: reclaimed stale
-lease …`). `bin/gstack-lease list` shows `alive|dead|stale`, and
+lease …`). Stale needs proof: two well-formed identities from the same backend
+that differ (`ps` is read under `LC_ALL=C TZ=UTC0`). An identity that cannot be
+read, a malformed record or a backend change keeps the lease. Reclaiming renames
+the lease aside first and restores it when a renewal landed meanwhile, and
+`touch` publishes by rename, so a reader never sees a half-written record. `bin/gstack-lease list` shows `alive|dead|stale`, and
 `GSTACK_UPGRADE_FORCE=1` overrides.
 
 ## What the installer does

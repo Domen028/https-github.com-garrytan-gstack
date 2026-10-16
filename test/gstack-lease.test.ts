@@ -54,6 +54,18 @@ function deadPid(): number {
   return r.pid!;
 }
 
+/** The same backend's identity for a different process start (what a reused pid shows). */
+function otherStart(recorded: string): string {
+  return recorded.startsWith('linux ') ? recorded.replace(/\d+$/, (n) => String(Number(n) + 1)) : 'ps Thu Jan  1 00:00:00 1970';
+}
+
+/** A BASH_ENV file whose functions shadow commands inside the lease script (fault injection). */
+function bashEnv(dir: string, body: string): string {
+  const file = path.join(dir, 'bash-env.sh');
+  fs.writeFileSync(file, body);
+  return file;
+}
+
 describe('gstack-lease', () => {
   test('bash -n passes and the bin is executable', () => {
     expect(fs.existsSync(LEASE), LEASE).toBe(true);
@@ -102,13 +114,58 @@ describe('gstack-lease', () => {
     expect(run(['touch', '--root', dir, '--pid', String(reused)]).status).toBe(0);
     const recorded = fs.readFileSync(path.join(leases, String(reused)), 'utf8').trim();
     expect(recorded).toMatch(/^(linux [0-9a-f-]+ \d+|ps .+)$/);
-    fs.writeFileSync(path.join(leases, String(reused)), recorded.replace(/\S+$/, 'x1') + '\n');
+    fs.writeFileSync(path.join(leases, String(reused)), otherStart(recorded) + '\n');
     expect(run(['list', '--root', dir]).stdout).toMatch(new RegExp(`^${reused} \\d+m stale$`, 'm'));
     const live = run(['live', '--root', dir]);
     expect(live.status, live.stdout + live.stderr).toBe(1);
     expect(live.stdout.trim()).toBe('');
     expect(live.stderr).toMatch(new RegExp(`^gstack-lease: reclaimed stale lease ${reused} \\(\\d+m; recorded '.+', pid ${reused} is now sleep '.+'\\)$`, 'm'));
     expect(fs.existsSync(path.join(leases, String(reused)))).toBe(false);
+  });
+
+  test('missing evidence never reclaims a live lease: an unreadable current identity, a malformed record or another backend keeps it', () => {
+    const { dir, leases } = checkout();
+    const holder = sleeper();
+    const file = path.join(leases, String(holder));
+    expect(run(['touch', '--root', dir, '--pid', String(holder)]).status).toBe(0);
+    const recorded = fs.readFileSync(file, 'utf8').trim();
+    const blind = bashEnv(dir, 'cat() { case "$1" in /proc/*/stat) return 1 ;; esac; command cat "$@"; }\nps() { case "$*" in *lstart*) return 1 ;; esac; command ps "$@"; }\n');
+    const unreadable = run(['live', '--root', dir], { BASH_ENV: blind });
+    expect(unreadable.status, unreadable.stdout + unreadable.stderr).toBe(0);
+    expect(unreadable.stderr).not.toContain('reclaimed');
+    for (const record of ['linux not-a-boot-id 12', 'linux ' + '0'.repeat(36) + ' x1', recorded.startsWith('linux ') ? 'ps Thu Jan  1 00:00:00 1970' : 'linux ' + '0'.repeat(8) + '-0000-0000-0000-' + '0'.repeat(12) + ' 1']) {
+      fs.writeFileSync(file, record + '\n');
+      const r = run(['live', '--root', dir]);
+      expect(r.status, record + ': ' + r.stderr).toBe(0);
+      expect(fs.existsSync(file), record).toBe(true);
+    }
+  });
+
+  test('the recorded identity does not depend on the caller\'s timezone or locale', () => {
+    const { dir } = checkout();
+    const holder = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(holder)], { TZ: 'UTC', LC_ALL: 'C' }).status).toBe(0);
+    const r = run(['live', '--root', dir], { TZ: 'Pacific/Kiritimati', LC_ALL: 'C.UTF-8' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('reclaimed');
+  });
+
+  test('a renewal that lands while a stale lease is being reclaimed survives (rename aside, then restore)', () => {
+    const { dir, leases } = checkout();
+    const holder = sleeper();
+    const file = path.join(leases, String(holder));
+    expect(run(['touch', '--root', dir, '--pid', String(holder)]).status).toBe(0);
+    const fresh = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, otherStart(fresh.trim()) + '\n');
+    const renewed = path.join(dir, 'renewed');
+    fs.writeFileSync(renewed, fresh);
+    // The first rename-aside of the lease is preceded by the holder's renewal, as if touch ran between the stale verdict and the rename.
+    const racing = bashEnv(dir, `mv() { case "$*" in *".reclaim."*) command cp "${renewed}" "${file}" ;; esac; command mv "$@"; }\n`);
+    const r = run(['live', '--root', dir], { BASH_ENV: racing });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stderr).not.toContain('reclaimed');
+    expect(fs.readFileSync(file, 'utf8')).toBe(fresh);
+    expect(fs.readdirSync(leases).filter((n) => n.startsWith('.'))).toEqual([]);
   });
 
   test('a lease without a recorded identity (older gstack) counts while fresh and is stale past the 120-minute window', () => {

@@ -65,22 +65,47 @@ identity() { # PID — the process's start identity, empty when unknown
   if [ -r "/proc/$1/stat" ] && [ -r /proc/sys/kernel/random/boot_id ]; then
     _st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0
     _st=${_st##*) }
-    printf 'linux %s %s\n' "$(cat /proc/sys/kernel/random/boot_id)" "$(printf '%s\n' "$_st" | awk '{print $20}')"
+    _id="linux $(cat /proc/sys/kernel/random/boot_id 2>/dev/null) $(printf '%s\n' "$_st" | awk '{print $20}')"
   else
-    _ls=$(ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//')
-    [ -n "$_ls" ] && printf 'ps %s\n' "$_ls"
+    _id="ps $(LC_ALL=C TZ=UTC0 ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//')"
   fi
+  valid_identity "$_id" && printf '%s\n' "$_id"
   return 0
 }
-# state FILE PID — alive | dead | stale (the pid now belongs to another process)
+# valid_identity ID — a well-formed identity from either backend
+valid_identity() {
+  case "$1" in
+    "linux "*) printf '%s\n' "$1" | grep -Eq '^linux [0-9a-f-]{36} [0-9]+$' ;;
+    "ps "?*) case "$1" in "ps "*[!\ ]*) return 0 ;; esac; return 1 ;;
+    *) return 1 ;;
+  esac
+}
+# state FILE PID — alive | dead | stale. Stale needs proof: two well-formed
+# identities from the same backend that differ. An identity that cannot be read
+# now, a malformed record or a backend change keeps the lease (never reclaim a
+# live session on missing evidence).
 state() {
   alive "$2" || { echo dead; return; }
   _rec=$(head -1 "$1" 2>/dev/null)
-  if [ -n "$_rec" ]; then
-    [ "$_rec" = "$(identity "$2")" ] && echo alive || echo stale
-  elif [ "$(age_min "$1")" -ge 120 ]; then echo stale
+  if [ -z "$_rec" ]; then
+    [ "$(age_min "$1")" -ge 120 ] && echo stale || echo alive
+    return
+  fi
+  _now=$(identity "$2")
+  if valid_identity "$_rec" && [ -n "$_now" ] && [ "${_rec%% *}" = "${_now%% *}" ] && [ "$_rec" != "$_now" ]; then echo stale
   else echo alive
   fi
+}
+# reclaim FILE RECORD — remove a stale lease without losing a concurrent renewal:
+# rename it aside atomically, and put it back (hard link: only if no newer lease
+# was written meanwhile) when what was renamed is not the record judged stale.
+reclaim() {
+  _aside="${1%/*}/.reclaim.${1##*/}.$$"
+  mv -f "$1" "$_aside" 2>/dev/null || return 1
+  if [ "$(head -1 "$_aside" 2>/dev/null)" = "$2" ]; then rm -f "$_aside"; return 0; fi
+  ln "$_aside" "$1" 2>/dev/null
+  rm -f "$_aside"
+  return 1
 }
 age_min() { # FILE — minutes since its mtime
   _m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)
@@ -91,7 +116,8 @@ case "$VERB" in
   touch)
     [ -n "$PID" ] || PID=$(gstack_harness_pid "${FROM:-$PPID}")
     mkdir -p "$DIR" || exit 2
-    identity "$PID" > "$DIR/$PID" || exit 2
+    _tmp="$DIR/.$PID.$$"
+    identity "$PID" > "$_tmp" && mv -f "$_tmp" "$DIR/$PID" || { rm -f "$_tmp"; exit 2; }
     find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null
     exit 0 ;;
   list)
@@ -120,8 +146,11 @@ for f in "$DIR"/*; do
   case "$(state "$f" "$p")" in
     dead) continue ;;
     stale)
-      echo "gstack-lease: reclaimed stale lease $p ($(age_min "$f")m; recorded '$(head -1 "$f")', pid $p is now $(ps -o comm= -p "$p" 2>/dev/null | head -1) '$(identity "$p")')" >&2
-      rm -f "$f"; continue ;;
+      _rec=$(head -1 "$f" 2>/dev/null) _age=$(age_min "$f")
+      if reclaim "$f" "$_rec"; then
+        echo "gstack-lease: reclaimed stale lease $p (${_age}m; recorded '$_rec', pid $p is now $(ps -o comm= -p "$p" 2>/dev/null | head -1) '$(identity "$p")')" >&2
+        continue
+      fi ;;
   esac
   echo "$p $(age_min "$f")m $(ps -o comm= -p "$p" 2>/dev/null | head -1 | sed 's|.*/||')"
   FOUND=0

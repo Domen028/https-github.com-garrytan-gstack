@@ -362,7 +362,8 @@ describe('capy skill: the session hands the installer GSTACK_CAPY_BEHIND', () =>
       expect(busy.last).toMatch(new RegExp(`behind=1 to=1\\.0\\.2 fix=.+ blocked=live gstack sessions hold this installation: pid ${holder.pid} \\(\\d+m sleep\\); fix: .+GSTACK_UPGRADE_FORCE=1.+ \\(UPGRADE_BUSY\\)$`));
       expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
       const file = path.join(leaseDir, String(holder.pid));
-      fs.writeFileSync(file, fs.readFileSync(file, 'utf8').trim().replace(/\S+$/, 'x1') + '\n');
+      const recorded = fs.readFileSync(file, 'utf8').trim();
+      fs.writeFileSync(file, (recorded.startsWith('linux ') ? recorded.replace(/\d+$/, (n) => String(Number(n) + 1)) : 'ps Thu Jan  1 00:00:00 1970') + '\n');
       const reclaimed = f.run(['--for', 'autoplan'], { GSTACK_LEASE_DIR: leaseDir });
       expect(reclaimed.stdout).toMatch(/^SELF_UPGRADE: done 1\.0\.1 -> 1\.0\.2$/m);
       expect(f.git(['rev-parse', 'HEAD'])).toBe(f.c);
