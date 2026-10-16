@@ -158,7 +158,7 @@ Rendering alone never certifies `full`.
 |---|---|---|
 | `toolExecution` | boolean | preambles and `bin/` helpers run |
 | `questions` | `native` / `prose` | structured question tool vs plain-text questions |
-| `planMode` | boolean | plan-mode transitions |
+| `planMode` | boolean | plan-mode transitions; `false` omits the preamble's plan-mode section |
 | `delegation` | boolean | sub-agents |
 | `browser` | boolean (needs `toolExecution`) | gstack's browser |
 | `safetyHooks` | `enforced` / `advisory` | `/careful`, `/freeze`, `/guard` block (Claude) or only warn |
