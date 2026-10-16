@@ -4,13 +4,13 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { lstatSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { resolveStateRoot } from "./state-root";
-import { claimArtifactProject } from "./bin-context";
+import { claimArtifactProject, artifactHelperPath } from "./bin-context";
 
-const helper = join(import.meta.dir, "../bin/gstack-artifact-window.py");
+const helper = () => artifactHelperPath("gstack-artifact-window.py");
 interface Lease { id: string; refs: number; released: boolean }
 const owned = new AsyncLocalStorage<Map<string, Lease>>();
 function call(action: string, root: string, slug: string, args: string[] = []): { id: string } {
-  const result = spawnSync("python3", [helper, action, root, slug, ...args], {
+  const result = spawnSync("python3", [helper(), action, root, slug, ...args], {
     encoding: "utf8", timeout: 10000, maxBuffer: 65536,
   });
   if (result.error || result.status !== 0) {
@@ -57,6 +57,12 @@ export function withArtifactProjectWrite<T>(root: string, slug: string, write: (
     release();
     throw error;
   }
+}
+
+/** Revalidate identity using only this async operation's live scoped holder. */
+export function claimAdmittedArtifactProject(root: string, slug: string): void {
+  const lease = owned.getStore()?.get(resolve(root) + "\0" + slug);
+  claimArtifactProject(root, slug, lease && !lease.released ? { id: lease.id, pid: process.pid } : undefined);
 }
 
 /** Arbitrary publishers participate when their final destination is a project bucket. */
@@ -107,7 +113,7 @@ export function withArtifactPathWrite<T>(file: string, write: () => T, root = re
   }
   if (parts.length >= 2 && parts[0] === "projects" && parts[1] && parts[1] !== "..") {
     return withArtifactProjectWrite(root, parts[1], () => {
-      claimArtifactProject(root, parts[1]);
+      claimAdmittedArtifactProject(root, parts[1]);
       return write();
     });
   }
@@ -117,7 +123,7 @@ export function withArtifactPathWrite<T>(file: string, write: () => T, root = re
 /** Hold an entire native CLI's reads, RMW and writes in one external lease. */
 export function reexecArtifactWriter(root: string, slug: string): void {
   if (ownsOuterLease(root, slug)) return;
-  const result = spawnSync("python3", [helper, "run", root, slug, "--",
+  const result = spawnSync("python3", [helper(), "run", root, slug, "--",
     process.execPath, "--no-env-file", process.argv[1], ...process.argv.slice(2)], {
     stdio: "inherit", timeout: 900000,
   });
@@ -125,4 +131,13 @@ export function reexecArtifactWriter(root: string, slug: string): void {
   // pretend it was released or silently replace it on a subsequent command.
   if (result.error || result.status === null) throw new Error("ARTIFACT_WINDOW_WRITER_INCOMPLETE");
   process.exit(result.status);
+}
+
+/** Admit every destination before any business read or mutation. Nested writers
+ * reuse their scoped lease; async work retains the entire set until settlement. */
+export function withArtifactPathsWrite<T>(files: readonly string[], write: () => T, root = resolveStateRoot()): T {
+  const destinations = [...new Set(files.map(file => resolve(file)))].sort();
+  const acquire = (index: number): T => index === destinations.length ? write()
+    : withArtifactPathWrite(destinations[index], () => acquire(index + 1), root);
+  return acquire(0);
 }

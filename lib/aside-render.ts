@@ -1,3 +1,4 @@
+import { withArtifactPathsWrite } from "./artifact-window";
 /**
  * lib/aside-render.ts — render local HTML through a browser: Aside first,
  * gstack's own headless browser as the fallback.
@@ -337,6 +338,10 @@ async function runProc(cmd: string, args: string[], timeoutMs: number): Promise<
 // ─── Render: Aside ───────────────────────────────────────────────────────────
 
 export async function renderWithAside(spec: RenderSpec): Promise<RenderResult> {
+  return withArtifactPathsWrite(spec.steps.flatMap(step => step.out ? [step.out] : []), () => renderWithAsideImpl(spec));
+}
+
+async function renderWithAsideImpl(spec: RenderSpec): Promise<RenderResult> {
   return { ...(await asideRender(spec)), engine: 'aside' };
 }
 
@@ -487,6 +492,10 @@ function screenshotName(i: number, step: ScreenshotStep): string {
  * to the caller's paths. The tab is closed in a finally; the daemon stays up.
  */
 export async function renderWithBrowse(spec: RenderSpec, bin: string | null = resolveBrowseBin()): Promise<RenderResult> {
+  return withArtifactPathsWrite(spec.steps.flatMap(step => step.out ? [step.out] : []), () => renderWithBrowseImpl(spec, bin));
+}
+
+async function renderWithBrowseImpl(spec: RenderSpec, bin: string | null = resolveBrowseBin()): Promise<RenderResult> {
   const outputs: string[] = [];
   const evals: Record<number, string> = {};
   const log: string[] = [];
@@ -640,6 +649,10 @@ export function pickEngine(fresh = false, deps: { probe?: () => AsideProbe; reso
  * of the process. A script-level failure (the page itself) is NOT retried.
  */
 export async function render(spec: RenderSpec): Promise<RenderResult> {
+  return withArtifactPathsWrite(spec.steps.flatMap(step => step.out ? [step.out] : []), () => renderImpl(spec));
+}
+
+async function renderImpl(spec: RenderSpec): Promise<RenderResult> {
   const c = pickEngine();
   if (c.engine === 'aside') {
     const r = await renderWithAside(spec);

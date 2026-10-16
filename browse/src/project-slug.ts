@@ -6,14 +6,14 @@
  * git remote (or env override) and doesn't change between commands.
  */
 
-import * as path from 'path';
-import { resolveSlug, claimArtifactProject } from '../../lib/bin-context';
+import { resolveSlug, artifactHelperPath } from '../../lib/bin-context';
+import { claimAdmittedArtifactProject } from "../../lib/artifact-window";
 import { resolveStateRoot } from '../../lib/state-root';
 let cachedSlug: string | null = null;
 export function getCurrentProjectSlug(): string {
   // Cache is identity data, never permission to skip a fresh mutation guard.
-  const slug = cachedSlug ?? resolveSlug(path.join(import.meta.dir, '../../bin/gstack-slug'));
-  claimArtifactProject(resolveStateRoot(), slug);
+  const slug = cachedSlug ?? resolveSlug(artifactHelperPath('gstack-slug'));
+  claimAdmittedArtifactProject(resolveStateRoot(), slug);
   cachedSlug = slug;
   return slug;
 }

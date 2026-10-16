@@ -1,3 +1,4 @@
+import { withArtifactPathsWrite } from "../../lib/artifact-window";
 /**
  * make-pdf's render client: final HTML → PDF through lib/aside-render's
  * `render()` — the Aside browser (macOS 15+, aside.com) when it is running,
@@ -83,7 +84,11 @@ export function pdfStepOptions(opts: PdfOptions): PdfStepOptions {
  * needs must be inline (the orchestrator inlines images as data URIs): only
  * the staging dir is served.
  */
-export async function renderPdf(
+export async function renderPdf(html: string, opts: PdfOptions, renderFn: typeof render = render): Promise<RenderEngine | undefined> {
+  return withArtifactPathsWrite([opts.output], () => renderPdfImpl(html, opts, renderFn));
+}
+
+async function renderPdfImpl(
   html: string,
   opts: PdfOptions,
   renderFn: typeof render = render,

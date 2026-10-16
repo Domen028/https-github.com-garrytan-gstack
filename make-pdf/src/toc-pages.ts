@@ -1,3 +1,4 @@
+import { withArtifactPathsWrite } from "../../lib/artifact-window";
 /**
  * TOC page numbers, offline: print, read where each heading landed from the
  * printed PDF itself, write those numbers into the TOC, and print again until
@@ -162,7 +163,12 @@ export function pdfDestinationPages(pdf: Uint8Array): Map<string, number> {
  * heading prints on. `print(html, out)` prints one PDF (one browser render).
  * Returns print's result from the accepted pass.
  */
-export async function printWithTocPages<R>(
+export async function printWithTocPages<R>(html: string, output: string, print: (html: string, out: string) => Promise<R>): Promise<R> {
+  const tmp = path.join(path.dirname(output), `.${path.basename(output)}.toc-pass.pdf`);
+  return withArtifactPathsWrite([output, tmp], () => printWithTocPagesImpl(html, output, print));
+}
+
+async function printWithTocPagesImpl<R>(
   html: string,
   output: string,
   print: (html: string, out: string) => Promise<R>,

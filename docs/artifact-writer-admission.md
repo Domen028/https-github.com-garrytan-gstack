@@ -57,3 +57,20 @@ again. Evidence logging preserves the child result after dispatch; a project hol
 is a pre-dispatch refusal. An impossible state root with a non-directory ancestor
 skips bookkeeping and still runs the command, preserving the existing transparency
 contract without attempting a project mutation under that impossible root.
+
+## Direct publishers and compiled tools
+
+PDF generation, TOC pagination, render-engine fallback, DESIGN.md edits and
+Autoplan snapshot APIs admit all their output destinations before business reads.
+The leases cover backup/staging files, asynchronous rendering, final copies,
+readback and cleanup. If a later destination refuses, earlier leases are released
+without entering the business callback. Nested operations carry their scoped
+holder only to the identity-check child process; they can finish while the window
+drains without mutating global environment or admitting a new workflow.
+
+Source tools resolve the Python and slug helpers beside their own modules.
+Compiled browse/design/PDF tools resolve them from their real executable's
+installation layout; the official Node bundle uses its browse/src anchor.
+Caller cwd, state root and GSTACK_ROOT cannot redirect this lookup. Missing
+installation helpers refuse. Deploy source and compiled runtimes together, and
+restart/drain already-running daemons before claiming deployment coverage.

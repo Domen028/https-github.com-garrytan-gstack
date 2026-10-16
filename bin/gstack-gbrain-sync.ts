@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { withArtifactPathsWrite } from "../lib/artifact-window";
 /**
  * gstack-gbrain-sync — V1 unified sync verb.
  *
@@ -1482,6 +1483,10 @@ async function runCodeImport(args: CliArgs): Promise<StageResult> {
  * perms logs a warning and lets the rest of the sync continue.
  */
 export function ensureGbrainSourceGitignored(root: string): void {
+  return withArtifactPathsWrite([join(root, ".gitignore")], () => ensureGbrainSourceGitignoredImpl(root));
+}
+
+function ensureGbrainSourceGitignoredImpl(root: string): void {
   const gitignorePath = join(root, ".gitignore");
   try {
     let existing = "";

@@ -234,9 +234,29 @@ export function readVersionedSlugCache(stateRoot: string, cwd: string): string |
   return slug && slug !== "." && slug !== ".." ? slug : undefined;
 }
 
-export function claimArtifactProject(home: string, slug: string): void {
-  const guard = spawnSync("python3", [join(import.meta.dir, "../bin/gstack-artifact-paths.py"), "claim", home, slug], {
+/** Native source modules and compiled tools resolve helpers from their own
+ * installation, never from cwd, state root, or a repository-controlled env var. */
+export function artifactHelperPath(name: "gstack-artifact-paths.py" | "gstack-artifact-window.py" | "gstack-slug"): string {
+  const source = join(import.meta.dir, "../bin", name);
+  if (isFile(source)) return source;
+  // The official Node fallback bundle maps import.meta.dir to browse/src.
+  // Native compiled tools instead resolve their executable's dist directory.
+  const anchors = [import.meta.dir, dirname(realpathSync(process.execPath))];
+  for (const anchor of anchors) {
+    const tool = dirname(anchor);
+    if (["src", "dist"].includes(basename(anchor)) && ["browse", "design", "make-pdf"].includes(basename(tool))) {
+      const native = join(dirname(tool), "bin", name);
+      if (isFile(native)) return native;
+    }
+  }
+  throw new Error("ARTIFACT_HELPER_UNAVAILABLE: preserve the installation layout; no artifact written");
+}
+
+export function claimArtifactProject(home: string, slug: string, holder?: { id: string; pid: number }): void {
+  const guard = spawnSync("python3", [artifactHelperPath("gstack-artifact-paths.py"), "claim", home, slug], {
     encoding: "utf8", timeout: 125000, maxBuffer: 65536,
+    // Pass only the scoped holder to this child, never mutate process.env.
+    env: holder ? { ...process.env, GSTACK_ARTIFACT_WRITER_ID: holder.id, GSTACK_ARTIFACT_WRITER_PID: String(holder.pid) } : process.env,
   });
   if (guard.status !== 0) throw new Error(guard.stderr?.trim() || "ARTIFACT_PATH_CHECK_UNAVAILABLE: no artifact written");
 }

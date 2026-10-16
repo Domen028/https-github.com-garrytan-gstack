@@ -518,7 +518,7 @@ describe('gstack-render CLI: neither browser available', () => {
   afterAll(() => { fs.rmSync(stage, { recursive: true, force: true }); });
 
   test.skipIf(!!uncontrollable)('first line is NEEDS_ASIDE and the error names both remedies', () => {
-    for (const rel of ['bin/gstack-render.ts', 'lib/aside-render.ts']) {
+    for (const rel of ['bin/gstack-render.ts', 'lib/aside-render.ts', 'lib/artifact-window.ts', 'lib/bin-context.ts', 'lib/state-root.ts', 'lib/remote-identity.ts']) {
       fs.mkdirSync(path.dirname(path.join(stage, rel)), { recursive: true });
       fs.copyFileSync(path.join(ROOT, rel), path.join(stage, rel));
     }

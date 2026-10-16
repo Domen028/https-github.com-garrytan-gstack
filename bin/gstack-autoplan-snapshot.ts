@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { withArtifactPathsWrite } from "../lib/artifact-window";
 /** Autoplan's blind reviewer inputs contain only the current implementation plan. */
 import { createHash } from 'node:crypto';
 import { linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -334,6 +335,10 @@ export function checkPhaseImplementation(phase: string, activePlan: string, snap
 
 /** Copy the current phase's whole accepted block; never re-summarize its conditions. */
 export function amendImplementation(phase: string, activePlan: string, snapshotPath: string) {
+  return withArtifactPathsWrite([activePlan], () => amendImplementationImpl(phase, activePlan, snapshotPath));
+}
+
+function amendImplementationImpl(phase: string, activePlan: string, snapshotPath: string) {
   const source = realpathSync(activePlan);
   const original = readFileSync(source, 'utf8');
   const prior = snapshotIdentity(phase, activePlan, snapshotPath).original;
@@ -391,6 +396,10 @@ export function canonicalDestination(file: string): string {
 
 /** Initialize the existing strict section contract before any scope or review call. */
 export function initializePlan(sourcePlan: string, activePlan: string, restorePath: string) {
+  return withArtifactPathsWrite([activePlan, restorePath], () => initializePlanImpl(sourcePlan, activePlan, restorePath));
+}
+
+function initializePlanImpl(sourcePlan: string, activePlan: string, restorePath: string) {
   if (![sourcePlan, activePlan, restorePath].every(isAbsolute)) throw new Error('Initialization requires three absolute paths');
   const source = realpathSync(sourcePlan);
   const destination = (file: string) => {
@@ -573,6 +582,10 @@ function methodologyReadRanges(lines: number) {
 
 /** One complete current-phase load target, not evidence that an agent read it. */
 export function prepareMethodology(phase: string, skillFile: string, restorePath: string) {
+  return withArtifactPathsWrite([restorePath], () => prepareMethodologyImpl(phase, skillFile, restorePath));
+}
+
+function prepareMethodologyImpl(phase: string, skillFile: string, restorePath: string) {
   const restore = realpathSync(restorePath);
   if (!statSync(restore).isFile()) throw new Error('Expected the existing restore-point file');
   const { content, sources } = methodologyContent(phase, skillFile);
@@ -629,6 +642,10 @@ function requireMethodology(phase: string, restore: string, methodologyPath: str
 }
 
 export function createSnapshot(phase: string, activePlan: string, restorePath: string, methodologyPath: string) {
+  return withArtifactPathsWrite([restorePath], () => createSnapshotImpl(phase, activePlan, restorePath, methodologyPath));
+}
+
+function createSnapshotImpl(phase: string, activePlan: string, restorePath: string, methodologyPath: string) {
   phaseName(phase);
   const source = realpathSync(activePlan);
   const restore = realpathSync(restorePath);
@@ -734,6 +751,10 @@ export function checkImplementation(phase: string, activePlan: string, snapshotP
 
 /** Keep the amendment baseline separate from the current, complete review input. */
 export function prepareAmendedInput(phase: string, activePlan: string, checkpointPath: string, restorePath: string, methodologyPath: string) {
+  return withArtifactPathsWrite([activePlan, restorePath], () => prepareAmendedInputImpl(phase, activePlan, checkpointPath, restorePath, methodologyPath));
+}
+
+function prepareAmendedInputImpl(phase: string, activePlan: string, checkpointPath: string, restorePath: string, methodologyPath: string) {
   // immutable checkpoint → apply accepted requirements → fresh export → currentness check
   const amended = amendImplementation(phase, activePlan, checkpointPath);
   let exported: ReturnType<typeof createSnapshot> | undefined;
@@ -760,6 +781,10 @@ export function prepareAmendedInput(phase: string, activePlan: string, checkpoin
 
 /** A parent close readback is distinct from the unchanged blind reviewer input. */
 export function preparePhaseClose(phase: string, activePlan: string, checkpointPath: string, restorePath: string, methodologyPath: string) {
+  return withArtifactPathsWrite([activePlan, restorePath], () => preparePhaseCloseImpl(phase, activePlan, checkpointPath, restorePath, methodologyPath));
+}
+
+function preparePhaseCloseImpl(phase: string, activePlan: string, checkpointPath: string, restorePath: string, methodologyPath: string) {
   const prepared = prepareAmendedInput(phase, activePlan, checkpointPath, restorePath, methodologyPath);
   try {
     const implementation = readFileSync(prepared.reviewInputPath, 'utf8');

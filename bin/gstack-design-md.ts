@@ -22,6 +22,7 @@
  * Exit 3 + DESIGN_MD_INTERNAL_ERROR is a gstack bug. YAML errors never propagate: a file whose
  * front matter does not parse is `unknown` with a reason.
  */
+import { withArtifactPathsWrite } from "../lib/artifact-window";
 import * as fs from 'fs';
 import * as path from 'path';
 import { SENTINEL } from '../lib/design-detect-contract';
@@ -41,6 +42,14 @@ function load(file: string): { text: string; doc: DesignMdDoc } | null {
 }
 
 export function main(argv = process.argv.slice(2)): number {
+  const positional = argv.slice(1).filter(a => !a.startsWith('--'));
+  const file = path.resolve((argv[0] === 'mark' ? positional[1] : positional[0]) ?? 'DESIGN.md');
+  const destinations = argv[0] === 'mark' ? [file]
+    : argv[0] === 'convert' && argv.includes('--write') ? [file, `${file}.legacy.bak`] : [];
+  return withArtifactPathsWrite(destinations, () => mainImpl(argv));
+}
+
+function mainImpl(argv: string[]): number {
   const verb = argv[0] ?? '';
   const flags = new Set(argv.filter(a => a.startsWith('--')));
   const positional = argv.slice(1).filter(a => !a.startsWith('--'));

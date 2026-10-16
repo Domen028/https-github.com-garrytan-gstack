@@ -476,6 +476,9 @@ describe('installed snapshot helper in fresh shells', () => {
     const runtime = join(home, host.globalRoot);
     mkdirSync(join(runtime, 'bin'), { recursive: true }); mkdirSync(join(runtime, 'lib'));
     copyFileSync(TOOL, join(runtime, 'bin/gstack-autoplan-snapshot.ts'));
+    for (const file of ['lib/artifact-window.ts', 'lib/bin-context.ts', 'lib/state-root.ts', 'lib/remote-identity.ts', 'bin/gstack-artifact-window.py', 'bin/gstack-artifact-paths.py']) {
+      copyFileSync(join(ROOT, file), join(runtime, file));
+    }
     writeFileSync(join(runtime, 'lib/claude-bin.ts'), '// runtime identity');
     const ctx = { host: host.name, paths: HOST_PATHS[host.name], skillName: 'autoplan', tmplPath: '' } as TemplateContext;
     const command = generateAutoplanSnapshotTool(ctx).replace(/^```bash\n/, '').replace(/\n```$/, '');

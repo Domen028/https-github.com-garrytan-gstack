@@ -1,3 +1,4 @@
+import { withArtifactPathsWrite } from "../../lib/artifact-window";
 /**
  * Orchestrator — ties render, the diagram pre-pass, asideClient, and the
  * filesystem together.
@@ -84,6 +85,10 @@ class ProgressReporter {
  * generate — full pipeline. Returns the output PDF path on success.
  */
 export async function generate(opts: GenerateOptions): Promise<string> {
+  return withArtifactPathsWrite([path.resolve(opts.output ?? path.join(OUTPUT_TMP_DIR, `${deriveSlug(path.resolve(opts.input))}.${opts.to ?? 'pdf'}`))], () => generateImpl(opts));
+}
+
+async function generateImpl(opts: GenerateOptions): Promise<string> {
   const progress = new ProgressReporter(opts);
   const input = path.resolve(opts.input);
 
