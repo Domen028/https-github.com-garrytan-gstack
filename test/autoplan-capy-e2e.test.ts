@@ -12,7 +12,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { RESULT_CODES } from '../lib/result-codes';
-import { ROOT, SMALL_PLAN } from './helpers/autoplan-run-fixture';
+import { ROOT, SMALL_PLAN, boundOf, resultOf } from './helpers/autoplan-run-fixture';
 import { capyRunner, phaseVia, readJsonl, readRunJson, writePlan, type CapyRunner } from './helpers/autoplan-capy';
 
 const r = capyRunner();
@@ -138,14 +138,14 @@ describe('conformance: one run through every mechanism', () => {
     const run = readRunJson(s.out).run;
     // ceo: native canonical (fixture), outside attested record
     ok(c.review(path.join(s.out, 'ceo-native-prompt.md')));
-    ok(c.ap(['submit', '--out', s.out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(s.out, 'ceo-native.md'), '--model', 'anthropic/claude-opus-5-5']));
+    ok(c.ap(['submit', '--out', s.out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(s.out, 'ceo', 'native'), '--model', 'anthropic/claude-opus-5-5']));
     const hand = path.join(s.dir, 'ceo-outside-hand.md');
     fs.writeFileSync(hand, '| Severity | Title |\n|---|---|\n| Medium | Retry storage cost is unpriced |\n');
     ok(c.ap(['submit', '--out', s.out, '--phase', 'ceo', '--voice', 'outside', '--record', hand, '--model', 'openai/gpt-6.1-sol', '--attest', 'Capy subagent', '--attempt', readRunJson(s.out).phases.ceo.outside.attempt]));
     // eng: native challenge with changes, outside unavailable
     ok(c.ap(['next', '--out', s.out]));
     ok(c.review(path.join(s.out, 'eng-native-prompt.md'), { FIXTURE_FINDINGS: JSON.stringify([{ id: 'F1', severity: 'High', title: 'Gate the backoff behind a flag', user_challenge: true, changes: 'scope', fix: 'RETRY_BACKOFF=1' }]) }));
-    ok(c.ap(['submit', '--out', s.out, '--phase', 'eng', '--voice', 'native', '--result', path.join(s.out, 'eng-native.md'), '--model', 'anthropic/claude-opus-5-5']));
+    ok(c.ap(['submit', '--out', s.out, '--phase', 'eng', '--voice', 'native', '--result', resultOf(s.out, 'eng', 'native'), '--model', 'anthropic/claude-opus-5-5']));
     expect(ok(c.ap(['submit', '--out', s.out, '--phase', 'eng', '--voice', 'outside', '--unavailable', 'no outside runner'])).stdout).toContain('status=gate_pending');
     const accept = JSON.parse(fs.readFileSync(path.join(s.out, 'gate.json'), 'utf8')).items.find((i: any) => i.title.startsWith('Gate the backoff')).id;
     // partial, then full
@@ -166,7 +166,7 @@ describe('conformance: one run through every mechanism', () => {
     const unknown = [...resumed.stdout.matchAll(/^EXECUTION_UNKNOWN: (\S+)$/gm)].map(m => m[1]!);
     ok(c.ap(['next', '--out', s.out, ...unknown.flatMap(a => ['--redispatch', a])]));
     for (const voice of ['native', 'outside']) ok(c.review(path.join(s.out, `ceo-${voice}-prompt.md`)));
-    for (const voice of ['native', 'outside']) ok(c.ap(['submit', '--out', s.out, '--phase', 'ceo', '--voice', voice, '--result', path.join(s.out, `ceo-${voice}.md`), '--model', voice === 'native' ? 'anthropic/claude-opus-5-5' : 'openai/gpt-6.1-sol']));
+    for (const voice of ['native', 'outside']) ok(c.ap(['submit', '--out', s.out, '--phase', 'ceo', '--voice', voice, '--result', resultOf(s.out, 'ceo', voice as 'native' | 'outside'), '--model', voice === 'native' ? 'anthropic/claude-opus-5-5' : 'openai/gpt-6.1-sol']));
     phaseVia(c, s.out, 'eng');
     expect(readRunJson(s.out).gate_rev).toBe(2);
     ok(c.ap(['answer', '--by', 'human', '--out', s.out, '--gate-rev', '2', '--reply', 'all except p1d']));
@@ -181,6 +181,6 @@ describe('conformance: one run through every mechanism', () => {
     expect(final.gate_rev).toBe(3);
     expectUniqueIds(s.out);
     expectReviewedHashes(s.out);
-    expect(fs.readFileSync(path.join(s.out, `ceo-native.md`), 'utf8')).toContain(final.phases.eng.snapshot);
+    expect(fs.readFileSync(boundOf(s.out, 'ceo', 'native'), 'utf8')).toContain(final.phases.eng.snapshot);
   });
 });

@@ -42,7 +42,7 @@ describe('autoplan/DRIVER.md content comes from the code', () => {
 
   test('the plan-specified commands and the amendment interlock are present', () => {
     for (const token of ['submit --out <dir> --phase <p> --voice native|outside --record', '--attest "<reason>"', '--unavailable|--failed',
-      'revise --out <dir> --plan <plan v2> --incorporates <decision ids>', '--withdraw <decision id>', '[--scaffold]', '`--no-dx`', '`all as-is`', 'PLAN_AMEND_PENDING', 'APPLY:']) {
+      'revise --out <dir> --plan <plan v2> --incorporates <decision ids>', '--withdraw <decision id>', '[--scaffold]', '`--no-dx`', '`as-is`', '`rec`', 'render <dir>/gate.json --all', '--settle <decision id|d4>', '--owner-reply', '--from <checkpoint>', 'PLAN_AMEND_PENDING', 'APPLY:']) {
       expect(doc).toContain(token);
     }
   });

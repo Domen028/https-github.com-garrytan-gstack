@@ -13,7 +13,7 @@ Three bins, all over `lib/`:
 |---|---|---|
 | `gstack-regen` | `.gstack/generated.json` | generated files regenerate, never hand-merge |
 | `gstack-pregate` | `.gstack/pregate.json` | two-stage cheap gate, `pregate.json` record, publication check |
-| `gstack-issue-links` | — | `Fixes #N` only on explicit closure intent |
+| `gstack-issue-links` | — | `Fixes #N` only on explicit closure intent; Related PRs and validated flake issues |
 
 ## Trust boundary
 
@@ -66,6 +66,8 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
 | `sealed` | sealed or eval output that must never reach a public destination; read by the pre-push hook and `gstack-pregate sealed` (see [sealed output](#sealed)) |
 | `price_file` | repo-relative path of the paid gate's call-plan data file (`GSTACK_EVAL_CALLS v1`); `gstack-eval-plan price-gate` prices from it and never executes anything ([docs/eval-calls.md](eval-calls.md)) |
+| `stall_timeout_s` | seconds a test command may print nothing before its process group is killed and the check is `incomplete` (`PREGATE_STALLED`); default 300, `0` disables; `--stall-timeout` overrides (see [supervision](#supervision)) |
+| `remote_gate` | the repo's remote test gate command; under 8 cores the local test tier becomes a `requires-remote` obligation naming it, and `--remote` runs it (see [remote gate](#remote-gate)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
 takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
@@ -73,7 +75,8 @@ takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
 ## `gstack-pregate`
 
 ```
-gstack-pregate [--stage preflight|tests|all] [--only <check,..>] [--allow-repo-commands] [--policy-from base|head] [--explain] [--json]
+gstack-pregate [--stage preflight|tests|all] [--only <check,..>] [--allow-repo-commands] [--policy-from base|head]
+               [--timeout <s>] [--stall-timeout <s>] [--remote --spend-cap <usd>] [--explain] [--json]
 gstack-pregate verify | clear --remote <workflow.yml/job> --run-url <url> | lanes | validate | init
 ```
 
@@ -123,6 +126,14 @@ Two stages with separate clocks, both printed:
   first of `$BUN_INSTALL/bin` and `~/.bun/bin` whose Bun satisfies gstack's and
   the project's `engines.bun` (the row prints `runtime: bun <v> from <dir>`),
   so a Capy host's older image Bun cannot flip the verdict.
+- Every test-tier command (the lanes runner, each guard, the `--remote` gate)
+  runs supervised: see [supervision](#supervision). `--timeout` bounds each
+  runner process (the unit-file group, each serial file, each guard without
+  its own `timeout_s`), not their total; the stall timeout catches a hung or
+  silent one sooner.
+- Under 8 cores, a base-branch `remote_gate` or a remote `test_backend`
+  (`gstack-config set test_backend ubicloud`) records the local test tier as a
+  `requires-remote` obligation instead of running it: see [remote gate](#remote-gate).
 
 Every check records the input identity it ran against (the working-tree
 fingerprint before and after, the selection, the command hash); a tree that
@@ -142,6 +153,77 @@ Unknown flags exit 2 with usage on every verb (an agent told to run a flag this
 gstack lacks never gets a green it did not ask for). Tier 2 checks still to come
 (`ratchets`, `lint`, `links`, `hermetic`, `patches`, `integrator`) are named in
 `--only`'s help.
+
+<a id="supervision"></a>
+## Supervision: progress, stalls, deadlines
+
+GBRA-95 (gbrain, 4 cores): a core edit selected 3,683 local files, 358 of them
+serial; the test stage printed nothing for 90 minutes: each runner process
+ran up to its own `--timeout` (one per serial file) with its output buffered
+until it returned, and nothing noticed a process that had gone quiet. Now each
+test-tier command:
+
+- runs in its own process group (`setsid`), with stdout and stderr appended to
+  a log file, never a pipe, so a backgrounded grandchild that keeps the output
+  open cannot hold the check; after the command exits, the group's leftover
+  members are killed;
+- reports live on stderr (stdout stays the table, or one JSON document with
+  `--json`):
+  ```
+  PREGATE_TEST: <n>/<total> <file> start
+  PREGATE_TEST: <n>/<total> <file> pass|fail <seconds>
+  PREGATE_HEARTBEAT: <label> running <s>s; last file <file>; log <bytes> bytes, last growth <s>s ago (<log>)
+  PREGATE: tests <verdict> in <s>s — lanes: <detail>
+  ```
+  Per-file lines come from a progress adapter where the runner's reporter
+  provides them: `bun test` (its `<file>:` headers) is the only adapter today;
+  a one-file run (each serial file) reports its file from the launch for any
+  runner. Other runners (node --test, vitest, jest, pytest) get heartbeats
+  only. A heartbeat follows each 60 s with no progress line;
+- is killed as **stalled** when its log does not grow for the stall timeout
+  (`--stall-timeout <s>`, else `stall_timeout_s`, else 300; `0` disables): the
+  check is `incomplete` with `PREGATE_STALLED` and names the last file
+  started; the next serial file still runs;
+- is killed as **timed out** when that runner process reaches `--timeout`
+  (per runner process, so many serial files that each fit still pass); the
+  check is `incomplete` and the next serial file still runs.
+
+A kill is SIGTERM to the group, then SIGKILL after 5 s (a group that ignores
+SIGTERM still dies). SIGINT or SIGTERM to `gstack-pregate` itself SIGKILLs every
+running group, writes no `pregate.json` and exits 130 or 143. Windows has no
+process groups here: the kill is `taskkill /T /F` on the shell's tree, which
+misses a descendant that was reparented or started detached.
+
+<a id="remote-gate"></a>
+## Small machines and the remote gate
+
+Under 8 cores (`os.availableParallelism()`), when the base branch's
+`.gstack/pregate.json` declares `remote_gate` or `gstack-config get
+test_backend` is not `local`, the lanes check runs nothing locally: it records
+the selected local files as a `requires-remote` obligation with the command to
+run, `pregate.json/remote_gate` (the declared command) or
+`test_backend/<backend>` (gstack's `scripts/ubicloud/ubi-runner.sh run --src
+<repo> -- '<runner> <files>'`). Without either, the tier runs locally under
+the supervision above. Close the obligation one of two ways:
+
+- after running it, `gstack-pregate clear --remote pregate.json/remote_gate
+  --receipt <file>` with the gate's output, validated as `--remote` validates it
+  (a run URL is refused, `PREGATE_RECEIPT_INVALID` for a bad receipt), or
+  `gstack-pregate clear --remote test_backend/<backend> --run-url <url>`, which
+  has no machine-checkable receipt and is recorded as `attested:<url>`; or
+- `gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands`,
+  which runs the declared `remote_gate` now (never under `--policy-from head`;
+  a `test_backend` without `remote_gate` cannot be run this way). The gate runs
+  in the repository root with `PREGATE_TREE` (the working-tree fingerprint
+  being tested), `PREGATE_FILES_FILE` (the selected files, one per line) and
+  `PREGATE_SPEND_CAP_USD`, and must print
+  `PREGATE_REMOTE: tree=<tree> tests=<n> failed=<n> [spent=<usd>]`, reporting the
+  tree it actually tested. The obligation clears only when that tree is
+  `PREGATE_TREE`, `tests` > 0, `failed` = 0 and the gate exits 0; anything else
+  leaves it uncleared and the check `incomplete`. The cap defaults to
+  `$GSTACK_SPEND_CAP_USD`; there is no default spend. Spend prints as
+  `spent, reserved, unknown`: a gate that prints no `spent=` is `unknown`,
+  counted at the cap.
 
 <a id="guards"></a>
 ## Guards and the lane-done rule
@@ -339,14 +421,41 @@ held-out and transcript layout.
 ## `gstack-issue-links`
 
 ```
-gstack-issue-links [--base <ref>] [--issue <n>]... [--ci-run <id>]... [--out issues.json] [--json]
+gstack-issue-links [--base <ref>] [--issue <n>]... [--ci-run <id>]... [--supersedes <pr>]... [--credit <pr>]...
+                   [--no-auto-links] [--author <login>] [--repo <owner/repo>] [--out issues.json] [--json]
 ```
 
 Reads `origin/<base>..HEAD`. `Fixes #N` only on explicit closure intent: a
-`Fixes`/`Closes`/`Resolves #N` trailer line or `--issue N`. A bare mention, a
-partial fix, a deferred ask and every cross-repo `owner/repo#N` are `Refs`. Each
-closure issue is read through `gstack-issue-guard`; one that cannot be read is
-`Refs #N (unreadable …)` with `ISSUE_UNREADABLE` (exit 1), never `Fixes`. Each
-`--ci-run <id>` is searched among open issues whose body names it and rendered
-`Flake: #N (run <id>)`. The printed lines go under `## Issues` in the PR body;
-`--out` writes the object `gstack-ship-receipt write --issues @file` embeds.
+`Fixes`/`Closes`/`Resolves #N` trailer line or `--issue N`. A bare mention
+(a subject's `(#N)` included), a partial fix, a deferred ask and every
+cross-repo `owner/repo#N` are `Refs`. Same-repo references are printed as
+promotion candidates (`reference #N ← <commit line> (promote: fix #N)` on
+stderr, `candidates` in `--json`): the owner's `fix #N` reply reruns with
+`--issue N`; an unattended run keeps them `Refs` and lists them in the
+handoff. Each closure issue is read through `gstack-issue-guard`; one that
+cannot be read is `Refs #N (unreadable …)` with `ISSUE_UNREADABLE` (exit 1),
+never `Fixes`.
+
+Each `--ci-run <id>` is searched among open issues whose body names it and
+rendered `Flake: #N (run <id>)` only for a bot-opened issue of this repository
+that names that run (its `flake:json` `first_seen.run_id`, or this repository's
+`actions/runs/<id>` URL) and a test (`flake:json` `file › test`, or a
+`Flake: <test>` title). Two issues for the same test keep the lower number;
+every refused match is printed with its reason.
+
+Open PRs by other authors (not this branch, and not this PR's author: `--author`,
+else the `gh` viewer; when the viewer is an app such as `capy-ai[bot]`, the HEAD
+commit's GitHub user, else the owner of a user-owned repository, else the gap is
+`ISSUE_LOOKUP_FAILED`) whose closing
+set overlaps this PR's `Fixes` are `Related: #N (@author)`, read page by page
+from each issue's closing-PR references, in unattended runs too. `Supersedes #N`
+replaces that line and `Contributed by @author` is added (the credit lines of
+`lib/contributor-mode.ts`) only with `--supersedes N` / `--credit N`, after the
+owner confirms.
+`--no-auto-links` skips the lookup. A failed lookup prints `ISSUE_LOOKUP_FAILED`
+and keeps the other lines. The stderr preview names the source of each line.
+
+The printed lines go under `## Issues` in the PR body; `--out` writes the
+object (`fixes`, `refs`, `flakes`, `related`) `gstack-ship-receipt write
+--issues @file` embeds. With `--body`, that write refuses a body missing any of
+those lines (`ISSUE_LINKS_MISSING`).

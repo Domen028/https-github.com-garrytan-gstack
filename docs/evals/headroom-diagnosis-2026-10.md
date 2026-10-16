@@ -96,3 +96,39 @@ declared its target mid-line ("… by the user. Review target (fixed):
 With the target-field fix the same capture is credited at D5 (521 s).
 Replay: `bun test test/detector-corpus-plan-eng-multi-finding-batching.test.ts`.
 No budget or kind change.
+
+## review-army-simplification: 159 s of 180 s in the Oct 12 census (#3153)
+
+The pass-rate gate pooled 159 s of the 180 s session budget (88.1%, over the
+85% cap); census 38212265208's own panel ran 142, 91 and 146 s. Phases from the
+three transcripts (paid slices 25-27):
+
+| Phase (38212265208) | t1 | t2 | t3 |
+|---|---|---|---|
+| Read the extracted review-SKILL.md, checklist, specialist; search for a "## Step 4.5" heading the carved fixture no longer has | 17 s | 15 s | 36 s |
+| Scope and stats commands, analysis, and reconciling the prompt's "over 100 lines" with the 68-line diff | 64 s | 29 s | 13 s, then a subagent (29 s) and re-verification (21 s) |
+| Compose the unbounded report | 45 s | 33 s | 31 s |
+| Final message (each restates the findings and the premise mismatch) | 11 s | 8 s | 11 s |
+
+The fixture, not the skill, carried the extra work. The case now uses the
+staging its siblings use (`stageReviewArmySession`: recorded scope, stats,
+learnings and diff; only `review-army.md` and `simplification.md` staged),
+selects the specialist with the real `/review --simplification` force flag,
+applies the checklist in-session and bounds the report to 30 lines. Budget and
+assertions are unchanged. Free check: the simplification scenarios in
+`test/review-army-budget.test.ts`.
+
+## ship-exploratory-late-input: a probe batched with its Reads (#3153)
+
+Not a headroom case; recorded here because the cause is also fixture work.
+Census 38212265208 failed it with "probe preceded resource read". Capture 001
+went out in the same provider response as the Reads of the caller's Step 8 and
+Step 9 sections, before any QA section was read (the Oct 7 capture `mtb1007a`
+batched it with the exploratory Read). /ship's prose never names the QA capture
+helper; the fixture prompt supplies it, and the fixture's scheduling contract
+(added 2026-10-06) invited batching "Reads and read-only discovery" without
+listing Read results among the dependencies a probe must wait for. The case
+passed on Oct 3 and Oct 5, before that contract. The contract now classifies
+captures, guard starts and runs as probes, never discovery; the ordering rule
+itself stays in /ship's Step 9 STOP, which the case still has to follow unaided.
+Free check: the census 38212265208 replay in `test/qa-exploratory-callers.test.ts`.

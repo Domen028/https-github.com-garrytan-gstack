@@ -22,24 +22,27 @@ export const AUTOPLAN_DRIVER_COMMANDS: Array<{ cmd: string; does: string }> = [
   { cmd: 'gstack-autoplan submit ... --record <file.md> --attest "<reason>" --attempt <id>', does: 'bind a record with no INPUT: line as receipt: attested (a wrong INPUT: always refuses)' },
   { cmd: 'gstack-autoplan submit --out <dir> --phase <p> --voice native|outside --result <file> --model <id> --attempt <id>', does: 'bind a canonical result (the RESULT FORMAT below)' },
   { cmd: 'gstack-autoplan submit --out <dir> --phase <p> --voice outside --unavailable|--failed "<reason>"', does: 'close the phase native-only when no outside voice can run' },
-  { cmd: 'gstack-autoplan answer --out <dir> --gate-rev <n> --reply "<reply>"', does: 'answer the gate with the reply grammar below' },
+  { cmd: 'gstack-autoplan answer --out <dir> --gate-rev <n> --reply "<reply>" --by human|agent:<id> [--owner-reply <text>|-] [--rec-hash <h>]', does: 'answer the gate with the reply grammar below; an agent answer stores the owner\'s words verbatim' },
+  { cmd: 'gstack-autoplan recommend --out <dir> --gate-rev <n> --item <id> --option <k> --basis "<why>"', does: 'change one recommendation before relay; then render and relay again (a `rec` needs the new `--rec-hash`)' },
   { cmd: 'gstack-autoplan revise --out <dir> --plan <plan v2> --incorporates <decision ids>', does: 'bind the amended plan; reopens every phase whose reviewed plan changed, Eng last' },
+  { cmd: 'gstack-autoplan revise --out <dir> --settle <decision id|d4>', does: 'discharge a packaging or ordering change with no plan edit; reopens nothing' },
   { cmd: 'gstack-autoplan revise --out <dir> --withdraw <decision id>', does: 'drop a pending amendment instead of applying it' },
   { cmd: 'gstack-autoplan export --out <dir>', does: 'write the artifact set; then `gstack-artifact validate <dir>/run.json`' },
-  { cmd: 'gstack-autoplan status|resume --out <dir>', does: 'read the manifest; take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts)' },
+  { cmd: 'gstack-autoplan status|resume --out <dir>', does: 'read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts)' },
+  { cmd: 'gstack-autoplan resume --out <new dir> --from <checkpoint>', does: 'restore the newest valid checkpoint generation (GSTACK_AUTOPLAN_CHECKPOINT_DIR) into an empty directory and take ownership; `checkpoints --from <dir>` lists them' },
 ];
 
 /** The reply grammar `gstack-gate` parses, one form per line. */
 export const GATE_REPLY_FORMS: Array<{ reply: string; means: string }> = [
-  { reply: 'all', means: 'every item takes its recommendation (an agreed change prints APPLY: and needs revise)' },
-  { reply: 'all as-is', means: 'keep every direction; no plan change' },
+  { reply: 'rec', means: 'every item takes its recommendation, plan changes included (each prints APPLY:); `all` is an alias' },
+  { reply: 'as-is', means: 'keep every direction; no plan change' },
   { reply: 'd3b uc1a', means: 'one <id><option> token per item you set; unanswered auto items take their default' },
-  { reply: 'all except d3b', means: 'recommendations, with the listed overrides' },
+  { reply: 'rec except d3b', means: 'recommendations, with the listed overrides' },
 ];
 
 /** Result codes the loop can print, in the order a run meets them. */
 export const DRIVER_CODES = ['RUN_NOT_INITIALIZED', 'PLAN_SECTIONS_INVALID', 'RUN_LOCKED', 'EXECUTION_UNKNOWN', 'SPEND_CAP_EXCEEDED', 'PHASE_NOT_AWAITING', 'ATTEMPT_MISMATCH',
-  'RESULT_RECEIPT_MISSING', 'RESULT_FINDINGS_MISSING', 'MODEL_FAMILY_CONFLICT', 'CONSENSUS_MISSING', 'GATE_REV_STALE', 'GATE_REPLY_UNPARSED', 'PLAN_AMEND_PENDING', 'GSTACK_VERSION_CHANGED'] as const;
+  'RESULT_RECEIPT_MISSING', 'RESULT_FINDINGS_MISSING', 'MODEL_FAMILY_CONFLICT', 'CONSENSUS_MISSING', 'GATE_REV_STALE', 'GATE_REPLY_UNPARSED', 'GATE_REC_STALE', 'OWNER_REPLY_REQUIRED', 'GATE_OWNER_REPLY_MISMATCH', 'PLAN_AMEND_PENDING', 'AMENDMENT_NOT_SETTLEABLE', 'CHECKPOINT_INVALID', 'GSTACK_VERSION_CHANGED'] as const;
 /** Fix text for codes the plan specifies and lane B-core adds to lib/result-codes.ts; the table's own fix wins once it exists. */
 const PENDING_FIX: Record<string, string> = {
   PLAN_SECTIONS_INVALID: 'the plan needs one `## Implementation plan` and one `## Review record`; rerun `next --scaffold` to wrap a plan that has neither',

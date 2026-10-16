@@ -11,7 +11,7 @@ import * as path from 'node:path';
 import { capyHost, type CapyHost } from './capy-host';
 import { SKILL_REQUIREMENTS } from '../../lib/doctor-components';
 import type { InstallVerdict } from '../../lib/install-verdict';
-import { AUTOPLAN, REVIEWER, ROOT, SMALL_PLAN } from './autoplan-run-fixture';
+import { AUTOPLAN, REVIEWER, ROOT, SMALL_PLAN, resultOf } from './autoplan-run-fixture';
 
 const SESSION_KIND_VAR = ['GSTACK', 'SESSION', 'KIND'].join('_');
 const RUNNER_KIND = 'un' + 'attended';
@@ -75,7 +75,7 @@ export function phaseVia(r: CapyRunner, out: string, phase: string, findings: { 
     if (rv.status !== 0) throw new Error(`fixture reviewer failed: ${rv.stderr}`);
   }
   const run = readRunJson(out);
-  const native = r.ap(['submit', '--out', out, '--phase', phase, '--voice', 'native', '--result', path.join(out, `${phase}-native.md`), '--model', 'anthropic/claude-opus-5-5', '--attempt', run.phases[phase].native.attempt, '--runner', 'host-subagent']);
-  const outside = r.ap(['submit', '--out', out, '--phase', phase, '--voice', 'outside', '--result', path.join(out, `${phase}-outside.md`), '--model', 'openai/gpt-6.1-sol', '--attempt', run.phases[phase].outside.attempt, '--runner', 'host-subagent']);
+  const native = r.ap(['submit', '--out', out, '--phase', phase, '--voice', 'native', '--result', resultOf(out, phase, 'native'), '--model', 'anthropic/claude-opus-5-5', '--attempt', run.phases[phase].native.attempt, '--runner', 'host-subagent']);
+  const outside = r.ap(['submit', '--out', out, '--phase', phase, '--voice', 'outside', '--result', resultOf(out, phase, 'outside'), '--model', 'openai/gpt-6.1-sol', '--attempt', run.phases[phase].outside.attempt, '--runner', 'host-subagent']);
   return { next, native, outside };
 }

@@ -92,6 +92,31 @@ describe('ubicloud free-suite runner', () => {
     expect(result.stderr.toString()).toContain('UBICLOUD_API_KEY is not set');
     expect(result.stdout.toString()).toBe('');
   });
+
+  test('up and run accept only the storage sizes Ubicloud offers, before any API call; UBI_ALLOWED_STORAGE widens the list', () => {
+    const root = mkdtempSync(join(tmpdir(), 'ubi-storage-'));
+    try {
+      const bin = join(root, 'bin'), log = join(root, 'curl.log');
+      mkdirSync(bin);
+      writeFileSync(join(bin, 'curl'), `#!/usr/bin/env bash\necho "curl $*" >> ${JSON.stringify(log)}\necho 000\n`);
+      chmodSync(join(bin, 'curl'), 0o755);
+      const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, UBICLOUD_API_KEY: 'offline', UBI_RUNNER_STATE: join(root, 'state'), UBI_VM_RECORD: join(root, 'vms.tsv'), UBI_OWNER: 't' };
+      const ubi = (args: string[], extra: Record<string, string> = {}) => Bun.spawnSync(['bash', join(DIR, 'ubi-runner.sh'), ...args], { env: { ...env, ...extra }, timeout: 10_000 });
+      for (const args of [['up', '-S', '100'], ['run', '--storage', '1000', '--', 'true'], ['up', '-S', '']]) {
+        const r = ubi(args);
+        expect(r.exitCode).toBe(1);
+        expect(r.stderr.toString()).toContain('(allowed: 320 640; set UBI_ALLOWED_STORAGE when Ubicloud adds sizes)');
+      }
+      expect(existsSync(log)).toBe(false);
+      for (const [size, extra] of [['320', {}], ['1280', { UBI_ALLOWED_STORAGE: '320 640 1280' }]] as const) {
+        const accepted = ubi(['run', '-S', size, '--bogus'], extra);
+        expect(accepted.stderr.toString()).toContain('run: unknown option --bogus');
+      }
+      expect(existsSync(log)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('ubi-runner teardown is confirmed and never sweeps other runners by default', () => {
