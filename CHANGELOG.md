@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.104.0] - 2026-10-15
+## [1.91.106.0] - 2026-10-16
 
 **The 2026-10-15 issue wave is fixed, with every adopted contributor patch kept under its author.** Twenty-odd field reports and community PRs from the week after v1.91.101.0 (`docs/designs/FIX_WAVE_2026_10_15.md`): an `/autoplan` run locked by a Claude Code 2.1.300 compaction, `/cso` scans that could not finish, auto-updates that left conflict markers or held every Windows install, Windows pregate and restamp unable to run gstack's own scripts, plan reviews that lost their native second opinion on Claude Code 2.1.277+, and a batch of maintenance fixes. Each was reproduced with a test that failed first on v1.91.101.0.
 
@@ -41,6 +41,7 @@
 - **`gstack-config` compares whole root paths and prints a recovery command that runs** when a path contains a space or an apostrophe. Thanks @davidfragnoli-lang (#3186).
 - **`gstack-gbrain-sync` no longer dirties a tracked `.gitignore` that already ignores the pin.** Thanks @KuroChen (#3178).
 - **`GSTACK_IOS_LAUNCH_ENV`** passes a JSON object of environment variables to the app on every `gstack-ios-qa-daemon` launch: `export GSTACK_IOS_LAUNCH_ENV='{"DEBUG_BRIDGE":"1"}'`, then restart the daemon. An invalid value or a `GSTACK_` key refuses the launch with `IOS_LAUNCH_ENV_INVALID`. Thanks @Bmathews721 (split from #1796).
+- **Functional `/qa` and `/qa-only` probe every documented input rule.** The contract map asks for one invalid-input probe per stated rule (allowed characters, format, sign, range, arity), so an amount documented as digits-only is tried with a non-digit, not only zero and an overflow.
 - **README no longer asks you to paste a skill list into CLAUDE.md (#3169).** If you did, delete the "Available skills:" line; Claude Code lists installed skills itself.
 - **Dependencies:** `sharp` is declared; `@huggingface/transformers` 4.3.0 (onnxruntime-node 1.30.0) and dev `@anthropic-ai/claude-agent-sdk` 0.2.141 clear two transitive advisories, with identical classifier scores. Thanks @sonukapoor (#3145). CI actions bumped (dependabot #3175); Dependabot holds Playwright minor and major bumps behind the Windows `windowsHide` patch.
 
