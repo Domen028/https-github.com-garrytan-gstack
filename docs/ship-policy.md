@@ -372,3 +372,63 @@ no list). Exit 0 for ok or none, 1 when found, 3 when the file is invalid
 (`BANNED_TERMS_INVALID`, also from `validate`). `/review` turns each finding into
 a Step 4 finding and `/document-release` into a documentation finding;
 `gstack-banned-terms init` writes a commented example.
+
+<a id="approval-classes"></a>
+## Approval classes
+
+`.gstack/approval-classes.json` names the changes that need the owner's
+approval before they ship: upgrade-time data rewrites, trust or visibility
+changes, existing-user default changes, data repairs, anything the owner wants
+cited. Each entry in `classes` has a `name` (lowercase, dashes) and at least
+one matcher: `paths` (globs of changed files), `patterns` (literal text in an
+added line, case-sensitive) or `migrations: true` (the files the ship policy's
+`migrations` key describes). `allowed_paths` exempts files, such as tests;
+`description` is for people. Globs follow the ship policy's containment rules.
+
+Classes come only from the copy committed on `origin/<base>`, so a branch can
+neither declare nor drop its own; `gstack-approval-classes validate` checks the
+working-tree copy before you commit it, and `init` writes an example.
+`gstack-approval-classes check --base <ref>` scans the branch's changes since
+the merge base and prints one `APPROVAL_CLASS: <class> <file>:<line>` line per
+hit, one `APPROVAL_SCOPE: <class>@<digest12>` line per declared class with hits,
+and `APPROVAL_CLASSES: ok | found=<n> | none` last (exit 0, 1 when found, 3 when
+the base file is invalid or `origin/<base>` does not resolve). Built-in
+detectors only report: the ship policy's migration files, when no class sets
+`migrations: true`, print as `(built-in, report-only)` and need no citation.
+
+The digest covers the class's effects: each matched file with its blob at the
+scanned head, and each matched added line. Adding, removing or editing an
+effect changes the token, so an approval given earlier no longer binds.
+
+**Enforcement.** `gstack-ship-receipt write` refuses with
+`APPROVAL_CITATION_MISSING`, writing nothing, unless each declared class with
+hits has a line in the `--body` file (or an `--approval` value) of the form
+
+```
+Approved by <owner> <YYYY-MM-DD> via <ref> [for <class>@<digest12>[,<class>@<digest12>]]
+```
+
+that resolves and binds:
+
+- A plan sha (7 to 64 hex characters) must match the plan of an autoplan run
+  passed with `--approval-run <run dir>` whose gate is APPROVED, and the plan
+  must name the scope token, or the class and every effect path.
+- A GitHub comment or review URL must be written by a `maintainers` login from
+  the base's ship policy that equals the cited owner (a review requesting
+  changes is not an approval), and its body must name the token, or the class
+  and every effect path.
+- Anything else (a thread code, a chat message, a URL gstack cannot read) is
+  recorded `citation: unverified` for the coordinator, and only when the line
+  attests which scope it covers with `for <class>@<digest12>` matching the
+  current token.
+
+The receipt's `approval` object records the source, `status` (`checked`, or
+`unavailable` when `origin/<base>` does not resolve), one record per class
+(scope token, effects, `citation: verified | unverified`, owner, date, ref,
+`binding: token | paths | attested`, evidence) and any report-only hits; the
+`SHIP_RECEIPT:` line ends with `approval=verified`, `approval=unverified:<classes>`,
+`approval=none` or `approval=unchecked`. A repository without the file gets no
+`approval` object unless a built-in detector reported.
+
+A data repair is a class to declare, and /review checks its shape: explicit,
+preview-first, and never reachable from an upgrade or migration path.

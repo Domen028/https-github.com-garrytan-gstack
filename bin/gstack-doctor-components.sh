@@ -213,6 +213,11 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    APPROVAL_CLASSES_INVALID) printf '%s' 'approval-classes-invalid' ;;
+    APPROVAL_CLASS_FOUND) printf '%s' 'approval-class-found' ;;
+    APPROVAL_CITATION_MISSING) printf '%s' 'approval-citation-missing' ;;
+    APPROVAL_SOURCE_UNAVAILABLE) printf '%s' 'approval-source-unavailable' ;;
+    STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
     *) return 1 ;;
   esac
 }
