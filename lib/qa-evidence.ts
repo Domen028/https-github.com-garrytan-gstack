@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "./artifact-window";
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -366,6 +367,12 @@ function materialize(root: string, source: string) {
 const QA_EVIDENCE_USAGE = 'capture ROOT ID [--public] --deadline FILE|--timeout-ms MS [--after PREVIOUS_CAPTURE --hypothesis TEXT] -- COMMAND ARGS (--after publishes checkpoint ID linking PREVIOUS_CAPTURE to this probe; required after the first complete capture unless a checkpoint was published) | checkpoint ROOT ID CAPTURE OBSERVATION_COMMAND HYPOTHESIS NEXT_COMMAND | checkpoint ROOT ID INTENT_FILE | materialize ROOT ANNOTATIONS (annotations: {evidence: [{capture, command, contract, expected, classification: pass|superseded|product-defect|fail|setup-blocked|blocked|inconclusive}], limits: [..]}; revision, runtime, cwd and learning are filled in)';
 
 export async function qaEvidenceMain(args: string[]): Promise<number> {
+  const destination = args[1];
+  return destination && ['capture', 'checkpoint', 'materialize'].includes(args[0])
+    ? withArtifactPathWrite(destination, () => qaEvidenceMainImpl(args)) : qaEvidenceMainImpl(args);
+}
+
+async function qaEvidenceMainImpl(args: string[]): Promise<number> {
   return withQaReceiptOutput(false, 'qa-evidence-receipt', value => value.event === 'observation'
     ? JSON.stringify(value.observed) + '\n' : value.event === 'diagnostic' ? String(value.stderr)
       : '\nQA_EVIDENCE ' + JSON.stringify({ producer: 'gstack-qa-evidence', version: 1, ...value }) + '\n', async emit => {

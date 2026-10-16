@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Snapshot command — accessibility tree with ref-based element selection
  *
@@ -334,250 +335,255 @@ export async function handleSnapshot(
   // ─── Annotated screenshot (-a) ────────────────────────────
   if (opts.annotate) {
     const screenshotPath = opts.outputPath || `${TEMP_DIR}/browse-annotated.png`;
-    // Validate output path — resolve symlinks to prevent symlink traversal attacks
-    {
-      const nodePath = require('path') as typeof import('path');
-      const nodeFs = require('fs') as typeof import('fs');
-      const absolute = nodePath.resolve(screenshotPath);
-      const safeDirs = [TEMP_DIR, process.cwd()].map((d: string) => {
-        try { return nodeFs.realpathSync(d); } catch (err: any) { if (err?.code !== 'ENOENT') throw err; return d; }
-      });
-      let realPath: string;
-      try {
-        realPath = nodeFs.realpathSync(absolute);
-      } catch (err: any) {
-        if (err.code === 'ENOENT') {
-          try {
-            const dir = nodeFs.realpathSync(nodePath.dirname(absolute));
-            realPath = nodePath.join(dir, nodePath.basename(absolute));
-          } catch (err2: any) {
-            if (err2?.code !== 'ENOENT') throw err2;
-            realPath = absolute;
-          }
-        } else {
-          throw new Error(`Cannot resolve real path: ${screenshotPath} (${err.code})`);
-        }
-      }
-      if (!safeDirs.some((dir: string) => isPathWithin(realPath, dir))) {
-        throw new Error(`Path must be within: ${safeDirs.join(', ')}`);
-      }
-    }
-    try {
-      // Inject overlay divs at each ref's bounding box
-      const boxes: Array<{ ref: string; box: { x: number; y: number; width: number; height: number } }> = [];
-      const ambiguousRefs: string[] = [];
-      const skippedRefs: string[] = [];
-      for (const [ref, entry] of refMap) {
+    await withArtifactPathWrite(screenshotPath, async () => {
+      // Validate output path — resolve symlinks to prevent symlink traversal attacks
+      {
+        const nodePath = require('path') as typeof import('path');
+        const nodeFs = require('fs') as typeof import('fs');
+        const absolute = nodePath.resolve(screenshotPath);
+        const safeDirs = [TEMP_DIR, process.cwd()].map((d: string) => {
+          try { return nodeFs.realpathSync(d); } catch (err: any) { if (err?.code !== 'ENOENT') throw err; return d; }
+        });
+        let realPath: string;
         try {
-          // A ref's locator can resolve to MORE than one element, and Playwright
-          // strict mode throws on that. It happens whenever a node has no
-          // accessible name: the locator degrades to `getByRole(role)` with no
-          // name filter, and the `.nth()` disambiguation above cannot help
-          // because its count comes from the FILTERED aria snapshot while
-          // getByRole matches the unfiltered DOM. Measured on a real page: the
-          // tree surfaced 2 unnamed paragraphs, the DOM had 9. Landmarks
-          // (banner/main/contentinfo) and paragraphs are correctly unnamed per
-          // ARIA, so this is the common case, not an edge.
-          //
-          // The exact nth-resolved locator stays the primary path; `.first()`
-          // is the AMBIGUITY FALLBACK only, and every fallback use is counted
-          // so first-match annotation is never silent. Before this, ONE such
-          // ref aborted the entire annotated screenshot (see the catch below) —
-          // which silently cost /qa, /canary and /land-and-deploy the
-          // screenshots their reports reference.
-          let locator = entry.locator;
-          const matchCount = await locator.count();
-          if (matchCount > 1) {
-            ambiguousRefs.push(`@${ref}`);
-            locator = locator.first();
-          }
-          const box = await locator.boundingBox({ timeout: 1000 });
-          if (box) {
-            boxes.push({ ref: `@${ref}`, box });
-          } else {
-            skippedRefs.push(`@${ref}`);
-          }
+          realPath = nodeFs.realpathSync(absolute);
         } catch (err: any) {
-          // Element may be offscreen, hidden, or page navigated — skip.
-          //
-          // The allowlist is deliberately not exhaustive-by-message any more: a
-          // box we cannot measure is a box we do not draw, never a reason to
-          // lose every other annotation on the page. The heatmap path below has
-          // always used a bare `catch {}` for exactly this reason; annotate was
-          // the only path that could be killed by a single unmeasurable ref.
-          skippedRefs.push(`@${ref}`);
-          if (process.env.BROWSE_DEBUG) console.error(`[annotate] skipped @${ref}: ${err?.message?.split('\n')[0]}`);
+          if (err.code === 'ENOENT') {
+            try {
+              const dir = nodeFs.realpathSync(nodePath.dirname(absolute));
+              realPath = nodePath.join(dir, nodePath.basename(absolute));
+            } catch (err2: any) {
+              if (err2?.code !== 'ENOENT') throw err2;
+              realPath = absolute;
+            }
+          } else {
+            throw new Error(`Cannot resolve real path: ${screenshotPath} (${err.code})`);
+          }
+        }
+        if (!safeDirs.some((dir: string) => isPathWithin(realPath, dir))) {
+          throw new Error(`Path must be within: ${safeDirs.join(', ')}`);
         }
       }
-
-      await page.evaluate((boxes) => {
-        for (const { ref, box } of boxes) {
-          const overlay = document.createElement('div');
-          overlay.className = '__browse_annotation__';
-          overlay.style.cssText = `
-            position: absolute; top: ${box.y}px; left: ${box.x}px;
-            width: ${box.width}px; height: ${box.height}px;
-            border: 2px solid red; background: rgba(255,0,0,0.1);
-            pointer-events: none; z-index: 99999;
-            font-size: 10px; color: red; font-weight: bold;
-          `;
-          const label = document.createElement('span');
-          label.textContent = ref;
-          label.style.cssText = 'position: absolute; top: -14px; left: 0; background: red; color: white; padding: 0 3px; font-size: 10px;';
-          overlay.appendChild(label);
-          document.body.appendChild(overlay);
-        }
-      }, boxes);
-
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      await guardScreenshotPath(screenshotPath);
-
-      // Always remove overlays
-      await page.evaluate(() => {
-        document.querySelectorAll('.__browse_annotation__').forEach(el => el.remove());
-      });
-
-      output.push('');
-      output.push(`[annotated screenshot: ${screenshotPath}]`);
-      // Ambiguity and skips are visible, not buried behind BROWSE_DEBUG: a
-      // first-match box or a missing box changes what the screenshot claims.
-      if (ambiguousRefs.length || skippedRefs.length) {
-        const cap = (arr: string[]) => arr.slice(0, 8).join(', ') + (arr.length > 8 ? `, +${arr.length - 8} more` : '');
-        const parts: string[] = [];
-        if (ambiguousRefs.length) parts.push(`${ambiguousRefs.length} ambiguous (first-match): ${cap(ambiguousRefs)}`);
-        if (skippedRefs.length) parts.push(`${skippedRefs.length} skipped: ${cap(skippedRefs)}`);
-        output.push(`[annotated: ${parts.join(' | ')}]`);
-      }
-    } catch (err: any) {
-      // Remove overlays even on screenshot failure — but only swallow page/browser errors
-      if (!err?.message?.includes('closed') && !err?.message?.includes('Target') && !err?.message?.includes('Execution context') && !err?.message?.includes('screenshot')) throw err;
       try {
+        // Inject overlay divs at each ref's bounding box
+        const boxes: Array<{ ref: string; box: { x: number; y: number; width: number; height: number } }> = [];
+        const ambiguousRefs: string[] = [];
+        const skippedRefs: string[] = [];
+        for (const [ref, entry] of refMap) {
+          try {
+            // A ref's locator can resolve to MORE than one element, and Playwright
+            // strict mode throws on that. It happens whenever a node has no
+            // accessible name: the locator degrades to `getByRole(role)` with no
+            // name filter, and the `.nth()` disambiguation above cannot help
+            // because its count comes from the FILTERED aria snapshot while
+            // getByRole matches the unfiltered DOM. Measured on a real page: the
+            // tree surfaced 2 unnamed paragraphs, the DOM had 9. Landmarks
+            // (banner/main/contentinfo) and paragraphs are correctly unnamed per
+            // ARIA, so this is the common case, not an edge.
+            //
+            // The exact nth-resolved locator stays the primary path; `.first()`
+            // is the AMBIGUITY FALLBACK only, and every fallback use is counted
+            // so first-match annotation is never silent. Before this, ONE such
+            // ref aborted the entire annotated screenshot (see the catch below) —
+            // which silently cost /qa, /canary and /land-and-deploy the
+            // screenshots their reports reference.
+            let locator = entry.locator;
+            const matchCount = await locator.count();
+            if (matchCount > 1) {
+              ambiguousRefs.push(`@${ref}`);
+              locator = locator.first();
+            }
+            const box = await locator.boundingBox({ timeout: 1000 });
+            if (box) {
+              boxes.push({ ref: `@${ref}`, box });
+            } else {
+              skippedRefs.push(`@${ref}`);
+            }
+          } catch (err: any) {
+            // Element may be offscreen, hidden, or page navigated — skip.
+            //
+            // The allowlist is deliberately not exhaustive-by-message any more: a
+            // box we cannot measure is a box we do not draw, never a reason to
+            // lose every other annotation on the page. The heatmap path below has
+            // always used a bare `catch {}` for exactly this reason; annotate was
+            // the only path that could be killed by a single unmeasurable ref.
+            skippedRefs.push(`@${ref}`);
+            if (process.env.BROWSE_DEBUG) console.error(`[annotate] skipped @${ref}: ${err?.message?.split('\n')[0]}`);
+          }
+        }
+
+        await page.evaluate((boxes) => {
+          for (const { ref, box } of boxes) {
+            const overlay = document.createElement('div');
+            overlay.className = '__browse_annotation__';
+            overlay.style.cssText = `
+              position: absolute; top: ${box.y}px; left: ${box.x}px;
+              width: ${box.width}px; height: ${box.height}px;
+              border: 2px solid red; background: rgba(255,0,0,0.1);
+              pointer-events: none; z-index: 99999;
+              font-size: 10px; color: red; font-weight: bold;
+            `;
+            const label = document.createElement('span');
+            label.textContent = ref;
+            label.style.cssText = 'position: absolute; top: -14px; left: 0; background: red; color: white; padding: 0 3px; font-size: 10px;';
+            overlay.appendChild(label);
+            document.body.appendChild(overlay);
+          }
+        }, boxes);
+
+        await page.screenshot({ path: screenshotPath, fullPage: true });
+        await guardScreenshotPath(screenshotPath);
+
+        // Always remove overlays
         await page.evaluate(() => {
           document.querySelectorAll('.__browse_annotation__').forEach(el => el.remove());
         });
-      } catch (err2: any) {
-        if (!err2?.message?.includes('closed') && !err2?.message?.includes('Target') && !err2?.message?.includes('Execution context')) throw err2;
+
+        output.push('');
+        output.push(`[annotated screenshot: ${screenshotPath}]`);
+        // Ambiguity and skips are visible, not buried behind BROWSE_DEBUG: a
+        // first-match box or a missing box changes what the screenshot claims.
+        if (ambiguousRefs.length || skippedRefs.length) {
+          const cap = (arr: string[]) => arr.slice(0, 8).join(', ') + (arr.length > 8 ? `, +${arr.length - 8} more` : '');
+          const parts: string[] = [];
+          if (ambiguousRefs.length) parts.push(`${ambiguousRefs.length} ambiguous (first-match): ${cap(ambiguousRefs)}`);
+          if (skippedRefs.length) parts.push(`${skippedRefs.length} skipped: ${cap(skippedRefs)}`);
+          output.push(`[annotated: ${parts.join(' | ')}]`);
+        }
+      } catch (err: any) {
+        // Remove overlays even on screenshot failure — but only swallow page/browser errors
+        if (!err?.message?.includes('closed') && !err?.message?.includes('Target') && !err?.message?.includes('Execution context') && !err?.message?.includes('screenshot')) throw err;
+        try {
+          await page.evaluate(() => {
+            document.querySelectorAll('.__browse_annotation__').forEach(el => el.remove());
+          });
+        } catch (err2: any) {
+          if (!err2?.message?.includes('closed') && !err2?.message?.includes('Target') && !err2?.message?.includes('Execution context')) throw err2;
+        }
       }
-    }
+    });
   }
 
   // ─── Heatmap mode (-H) ──────────────────────────────────────
   if (opts.heatmap) {
     const heatmapPath = opts.outputPath || `${TEMP_DIR}/browse-heatmap.png`;
-    // Validate output path
-    {
-      const nodePath = require('path') as typeof import('path');
-      const nodeFs = require('fs') as typeof import('fs');
-      const absolute = nodePath.resolve(heatmapPath);
-      const safeDirs = [TEMP_DIR, process.cwd()].map((d: string) => {
-        try { return nodeFs.realpathSync(d); } catch (err: any) { if (err?.code !== 'ENOENT') throw err; return d; }
-      });
-      let realPath: string;
-      try {
-        realPath = nodeFs.realpathSync(absolute);
-      } catch (err: any) {
-        if (err.code === 'ENOENT') {
-          try {
-            const dir = nodeFs.realpathSync(nodePath.dirname(absolute));
-            realPath = nodePath.join(dir, nodePath.basename(absolute));
-          } catch (err2: any) {
-            if (err2?.code !== 'ENOENT') throw err2;
-            realPath = absolute;
-          }
-        } else {
-          throw new Error(`Cannot resolve real path: ${heatmapPath} (${err.code})`);
-        }
-      }
-      if (!safeDirs.some((dir: string) => isPathWithin(realPath, dir))) {
-        throw new Error(`Path must be within: ${safeDirs.join(', ')}`);
-      }
-    }
-
-    // Parse and validate color map
-    const VALID_COLORS = new Set(['green', 'yellow', 'red', 'blue', 'orange', 'gray']);
-    const COLOR_MAP: Record<string, { border: string; bg: string }> = {
-      green:  { border: '#00b400', bg: 'rgba(0,180,0,0.15)' },
-      yellow: { border: '#ffb400', bg: 'rgba(255,180,0,0.15)' },
-      red:    { border: '#ff0000', bg: 'rgba(255,0,0,0.15)' },
-      blue:   { border: '#0066ff', bg: 'rgba(0,102,255,0.15)' },
-      orange: { border: '#ff6600', bg: 'rgba(255,102,0,0.15)' },
-      gray:   { border: '#888888', bg: 'rgba(136,136,136,0.15)' },
-    };
-
-    let colorAssignments: Record<string, string>;
-    try {
-      const parsed = JSON.parse(opts.heatmap);
-      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-        throw new Error('not an object');
-      }
-      colorAssignments = parsed;
-    } catch {
-      throw new Error('Invalid heatmap JSON. Expected object: \'{"@e1":"green","@e3":"red"}\'');
-    }
-
-    // Validate colors
-    for (const [ref, color] of Object.entries(colorAssignments)) {
-      if (!VALID_COLORS.has(color)) {
-        throw new Error(`Invalid heatmap color "${color}" for ${ref}. Valid: ${[...VALID_COLORS].join(', ')}`);
-      }
-    }
-
-    try {
-      const boxes: Array<{ ref: string; box: { x: number; y: number; width: number; height: number }; color: string }> = [];
-      for (const [refKey, color] of Object.entries(colorAssignments)) {
-        const cleanRef = refKey.startsWith('@') ? refKey.slice(1) : refKey;
-        const entry = refMap.get(cleanRef);
-        if (!entry) continue; // Skip refs not found on page
+    const heatmapInput = opts.heatmap;
+    await withArtifactPathWrite(heatmapPath, async () => {
+      // Validate output path
+      {
+        const nodePath = require('path') as typeof import('path');
+        const nodeFs = require('fs') as typeof import('fs');
+        const absolute = nodePath.resolve(heatmapPath);
+        const safeDirs = [TEMP_DIR, process.cwd()].map((d: string) => {
+          try { return nodeFs.realpathSync(d); } catch (err: any) { if (err?.code !== 'ENOENT') throw err; return d; }
+        });
+        let realPath: string;
         try {
-          const box = await entry.locator.boundingBox({ timeout: 1000 });
-          if (box) {
-            const colors = COLOR_MAP[color] || COLOR_MAP.gray;
-            boxes.push({ ref: `@${cleanRef}`, box, color: JSON.stringify(colors) });
+          realPath = nodeFs.realpathSync(absolute);
+        } catch (err: any) {
+          if (err.code === 'ENOENT') {
+            try {
+              const dir = nodeFs.realpathSync(nodePath.dirname(absolute));
+              realPath = nodePath.join(dir, nodePath.basename(absolute));
+            } catch (err2: any) {
+              if (err2?.code !== 'ENOENT') throw err2;
+              realPath = absolute;
+            }
+          } else {
+            throw new Error(`Cannot resolve real path: ${heatmapPath} (${err.code})`);
           }
-        } catch {
-          // Element may be offscreen or hidden — skip
+        }
+        if (!safeDirs.some((dir: string) => isPathWithin(realPath, dir))) {
+          throw new Error(`Path must be within: ${safeDirs.join(', ')}`);
         }
       }
 
-      await page.evaluate((boxes) => {
-        for (const { ref, box, color } of boxes) {
-          const colors = JSON.parse(color);
-          const overlay = document.createElement('div');
-          overlay.className = '__browse_heatmap__';
-          overlay.style.cssText = `
-            position: absolute; top: ${box.y}px; left: ${box.x}px;
-            width: ${box.width}px; height: ${box.height}px;
-            border: 2px solid ${colors.border}; background: ${colors.bg};
-            pointer-events: none; z-index: 99999;
-            font-size: 10px; color: ${colors.border}; font-weight: bold;
-          `;
-          const label = document.createElement('span');
-          label.textContent = ref;
-          label.style.cssText = `position: absolute; top: -14px; left: 0; background: ${colors.border}; color: white; padding: 0 3px; font-size: 10px;`;
-          overlay.appendChild(label);
-          document.body.appendChild(overlay);
-        }
-      }, boxes);
+      // Parse and validate color map
+      const VALID_COLORS = new Set(['green', 'yellow', 'red', 'blue', 'orange', 'gray']);
+      const COLOR_MAP: Record<string, { border: string; bg: string }> = {
+        green:  { border: '#00b400', bg: 'rgba(0,180,0,0.15)' },
+        yellow: { border: '#ffb400', bg: 'rgba(255,180,0,0.15)' },
+        red:    { border: '#ff0000', bg: 'rgba(255,0,0,0.15)' },
+        blue:   { border: '#0066ff', bg: 'rgba(0,102,255,0.15)' },
+        orange: { border: '#ff6600', bg: 'rgba(255,102,0,0.15)' },
+        gray:   { border: '#888888', bg: 'rgba(136,136,136,0.15)' },
+      };
 
-      await page.screenshot({ path: heatmapPath, fullPage: true });
-      await guardScreenshotPath(heatmapPath);
-
-      // Remove heatmap overlays
-      await page.evaluate(() => {
-        document.querySelectorAll('.__browse_heatmap__').forEach(el => el.remove());
-      });
-
-      output.push('');
-      output.push(`[heatmap screenshot: ${heatmapPath}]`);
-    } catch (err: any) {
-      // Cleanup on failure
+      let colorAssignments: Record<string, string>;
       try {
+        const parsed = JSON.parse(heatmapInput);
+        if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+          throw new Error('not an object');
+        }
+        colorAssignments = parsed;
+      } catch {
+        throw new Error('Invalid heatmap JSON. Expected object: \'{"@e1":"green","@e3":"red"}\'');
+      }
+
+      // Validate colors
+      for (const [ref, color] of Object.entries(colorAssignments)) {
+        if (!VALID_COLORS.has(color)) {
+          throw new Error(`Invalid heatmap color "${color}" for ${ref}. Valid: ${[...VALID_COLORS].join(', ')}`);
+        }
+      }
+
+      try {
+        const boxes: Array<{ ref: string; box: { x: number; y: number; width: number; height: number }; color: string }> = [];
+        for (const [refKey, color] of Object.entries(colorAssignments)) {
+          const cleanRef = refKey.startsWith('@') ? refKey.slice(1) : refKey;
+          const entry = refMap.get(cleanRef);
+          if (!entry) continue; // Skip refs not found on page
+          try {
+            const box = await entry.locator.boundingBox({ timeout: 1000 });
+            if (box) {
+              const colors = COLOR_MAP[color] || COLOR_MAP.gray;
+              boxes.push({ ref: `@${cleanRef}`, box, color: JSON.stringify(colors) });
+            }
+          } catch {
+            // Element may be offscreen or hidden — skip
+          }
+        }
+
+        await page.evaluate((boxes) => {
+          for (const { ref, box, color } of boxes) {
+            const colors = JSON.parse(color);
+            const overlay = document.createElement('div');
+            overlay.className = '__browse_heatmap__';
+            overlay.style.cssText = `
+              position: absolute; top: ${box.y}px; left: ${box.x}px;
+              width: ${box.width}px; height: ${box.height}px;
+              border: 2px solid ${colors.border}; background: ${colors.bg};
+              pointer-events: none; z-index: 99999;
+              font-size: 10px; color: ${colors.border}; font-weight: bold;
+            `;
+            const label = document.createElement('span');
+            label.textContent = ref;
+            label.style.cssText = `position: absolute; top: -14px; left: 0; background: ${colors.border}; color: white; padding: 0 3px; font-size: 10px;`;
+            overlay.appendChild(label);
+            document.body.appendChild(overlay);
+          }
+        }, boxes);
+
+        await page.screenshot({ path: heatmapPath, fullPage: true });
+        await guardScreenshotPath(heatmapPath);
+
+        // Remove heatmap overlays
         await page.evaluate(() => {
           document.querySelectorAll('.__browse_heatmap__').forEach(el => el.remove());
         });
-      } catch {}
-      if (!err?.message?.includes('closed') && !err?.message?.includes('Target') && !err?.message?.includes('Execution context') && !err?.message?.includes('screenshot')) throw err;
-    }
+
+        output.push('');
+        output.push(`[heatmap screenshot: ${heatmapPath}]`);
+      } catch (err: any) {
+        // Cleanup on failure
+        try {
+          await page.evaluate(() => {
+            document.querySelectorAll('.__browse_heatmap__').forEach(el => el.remove());
+          });
+        } catch {}
+        if (!err?.message?.includes('closed') && !err?.message?.includes('Target') && !err?.message?.includes('Execution context') && !err?.message?.includes('screenshot')) throw err;
+      }
+    });
   }
 
   // ─── Diff mode (-D) ───────────────────────────────────────

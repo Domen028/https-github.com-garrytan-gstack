@@ -33,6 +33,7 @@ import {
   resolvesToCommit, treePaths, untrackedAsAdded, wtreeFingerprint,
 } from '../lib/gate-diff/git';
 import { renderDiagnostics, renderJsonl, renderJsonlBody, renderTable } from '../lib/gate-diff/render';
+import { withArtifactPathWrite } from '../lib/artifact-window';
 import { resolveStateRoot } from '../lib/state-root';
 
 const BIN_DIR = path.dirname(Bun.fileURLToPath(import.meta.url));
@@ -94,9 +95,12 @@ function artifactDir(cwd: string): string {
 }
 
 function writeArtifact(file: string, body: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(file, body, { mode: 0o600 });
-  fs.chmodSync(file, 0o600);
+  withArtifactPathWrite(file, () => {
+
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(file, body, { mode: 0o600 });
+    fs.chmodSync(file, 0o600);
+  });
 }
 
 function main(argv: string[]): number {

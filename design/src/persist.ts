@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Persistence for paid design images. Every image the API returns goes through
  * persistImage exactly once: mkdir, exclusive claim (never overwrite), write,
@@ -124,26 +125,19 @@ function writeRecoveryCopy(bytes: Buffer, fsImpl: PersistFs, tmp: string): strin
  * Empty image data is a generation failure: no claim, no file.
  */
 export function persistImage(imageData: string, requested: string, deps: PersistDeps = {}): PersistOutcome {
-  const fsImpl = deps.fs ?? fs;
-  const bytes = Buffer.from(imageData || "", "base64");
-  if (bytes.length === 0) {
-    const reason = "API returned an empty image; nothing was saved";
-    console.error(`  ✗ ${path.basename(requested)}: ${reason}`);
-    return { ok: false, failure: { file: requested, reason } };
-  }
-
-  let claimed: { path: string; fd: number } | null = null;
+  if (!imageData || Buffer.from(imageData, "base64").length === 0) return persistImageImpl(imageData, requested, deps);
   try {
-    fsImpl.mkdirSync(path.dirname(requested), { recursive: true });
-    claimed = claimOutputPath(requested, fsImpl);
-    writeAll(fsImpl, claimed.fd, bytes);
-    fsImpl.fsyncSync(claimed.fd);
-    fsImpl.closeSync(claimed.fd);
-    if (claimed.path !== requested) {
-      console.error(`note: ${requested} exists; saved to ${claimed.path} (existing file kept)`);
-    }
-    return { ok: true, path: claimed.path, bytes: bytes.length };
+    return withArtifactPathWrite(requested, () => persistImageImpl(imageData, requested, deps));
   } catch (err) {
+    // Admission may fail after bytes were received. Keep the existing recovery
+    // path instead of dropping the image or repeating a provider request.
+    return persistFailure(Buffer.from(imageData, "base64"), requested, deps, null, err);
+  }
+}
+
+function persistFailure(bytes: Buffer, requested: string, deps: PersistDeps,
+  claimed: { path: string; fd: number } | null, err: unknown): PersistOutcome {
+  const fsImpl = deps.fs ?? fs;
     const target = claimed?.path ?? requested;
     if (claimed) {
       try { fsImpl.closeSync(claimed.fd); } catch {}
@@ -164,6 +158,30 @@ export function persistImage(imageData: string, requested: string, deps: Persist
     }
     console.error(reason);
     return { ok: false, failure: { file: requested, reason }, ...(recovered ? { recovered } : {}) };
+}
+
+function persistImageImpl(imageData: string, requested: string, deps: PersistDeps = {}): PersistOutcome {
+  const fsImpl = deps.fs ?? fs;
+  const bytes = Buffer.from(imageData || "", "base64");
+  if (bytes.length === 0) {
+    const reason = "API returned an empty image; nothing was saved";
+    console.error(`  ✗ ${path.basename(requested)}: ${reason}`);
+    return { ok: false, failure: { file: requested, reason } };
+  }
+
+  let claimed: { path: string; fd: number } | null = null;
+  try {
+    fsImpl.mkdirSync(path.dirname(requested), { recursive: true });
+    claimed = claimOutputPath(requested, fsImpl);
+    writeAll(fsImpl, claimed.fd, bytes);
+    fsImpl.fsyncSync(claimed.fd);
+    fsImpl.closeSync(claimed.fd);
+    if (claimed.path !== requested) {
+      console.error(`note: ${requested} exists; saved to ${claimed.path} (existing file kept)`);
+    }
+    return { ok: true, path: claimed.path, bytes: bytes.length };
+  } catch (err) {
+    return persistFailure(Buffer.from(imageData || "", "base64"), requested, deps, claimed, err);
   }
 }
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { withArtifactPathWrite, withArtifactProjectWrite } from "../lib/artifact-window";
 /**
  * gstack-evidence — verification-evidence ledger: the mechanical arm of /ship's
  * IRON LAW ("no completion claims without fresh verification evidence").
@@ -48,7 +49,7 @@
 
 import { openSync, writeSync, closeSync, readdirSync, statSync, unlinkSync, chmodSync, readFileSync } from "fs";
 import { mkdirpSync } from "../lib/fs-utils";
-import { join, dirname } from "path";
+import { join, dirname, basename, resolve } from "path";
 import { spawnSync } from "child_process";
 import { appendJsonl, readJsonl } from "../lib/jsonl-store";
 import { resolveStateRoot } from "../lib/state-root";
@@ -363,6 +364,29 @@ function childEnv(cwd: string): { env: Record<string, string>, scrubbed: string[
 }
 
 async function cmdRun(argv: string[]): Promise<number> {
+  // Admission is a pre-launch gate: if held, the child has not run. Once it
+  // runs, the original command-result transparency invariant stays intact.
+  const home = resolveStateRoot();
+  // Preserve command transparency when a non-directory ancestor makes this
+  // configured state root impossible. There can be no project store beneath
+  // that ancestor; skip bookkeeping entirely, rather than bypass a held scope.
+  let cursor = resolve(home);
+  for (;;) {
+    try {
+      if (!statSync(cursor).isDirectory()) return cmdRunImpl(argv, true);
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT" && (error as NodeJS.ErrnoException).code !== "ENOTDIR") throw error;
+      const parent = dirname(cursor);
+      if (parent === cursor) throw error;
+      cursor = parent;
+    }
+  }
+  const paths = ledgerPath();
+  return withArtifactProjectWrite(home, basename(paths.dir), () => cmdRunImpl(argv, false, paths));
+}
+
+async function cmdRunImpl(argv: string[], skipBookkeeping = false, admittedPaths?: ReturnType<typeof ledgerPath>): Promise<number> {
   let label = "default";
   const li = argv.indexOf("--label");
   const sep = argv.indexOf("--");
@@ -382,7 +406,8 @@ async function cmdRun(argv: string[]): Promise<number> {
   // Bookkeeping context — every piece is optional; failures only warn.
   let paths: ReturnType<typeof ledgerPath> | undefined;
   try {
-    paths = ledgerPath();
+    if (skipBookkeeping) throw new Error("state root has a non-directory ancestor");
+    paths = admittedPaths ?? ledgerPath();
     mkdirpSync(paths.dir);
   } catch (e: any) {
     warn(`ledger setup failed (${e?.message ?? e}) — result will not be recorded`);
@@ -665,6 +690,12 @@ function cmdCheck(argv: string[]): number {
 
 /** C3: export the ledger's latest record per label plus the execution identity as a portable bundle. */
 function cmdBundle(argv: string[]): number {
+  const out = argv[argv.indexOf("--out") + 1];
+  return argv.includes("--out") && out
+    ? withArtifactPathWrite(out, () => cmdBundleImpl(argv)) : cmdBundleImpl(argv);
+}
+
+function cmdBundleImpl(argv: string[]): number {
   const labels: string[] = [];
   const selections: Record<string, string> = {};
   const runUrls: Record<string, string> = {};
@@ -730,6 +761,12 @@ function cmdAncestor(argv: string[]): number {
 
 /** E2: rerun each lane's probe on the bundle's tree, or mark each claim from this machine's ledger. */
 function cmdVerify(argv: string[]): number {
+  const out = argv[argv.indexOf("--out") + 1];
+  return argv.includes("--out") && out
+    ? withArtifactPathWrite(out, () => cmdVerifyImpl(argv)) : cmdVerifyImpl(argv);
+}
+
+function cmdVerifyImpl(argv: string[]): number {
   const file = argv.find((a, i) => !a.startsWith("--") && argv[i - 1] !== "--out");
   if (!file) { console.error("usage: gstack-evidence verify <bundle.json> [--rerun] [--out <file>] [--json]"); return 2; }
   const read = readBundle(file);

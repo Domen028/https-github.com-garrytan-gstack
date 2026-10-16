@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Design history gallery — generates an HTML timeline of all design explorations
  * for a project. Shows every approved/rejected variant, feedback notes, organized
@@ -264,9 +265,12 @@ function escapeHtml(str: string): string {
  * Gallery command: generate HTML timeline from design explorations.
  */
 export function gallery(options: GalleryOptions): void {
-  const html = generateGalleryHtml(options.designsDir);
-  const outputDir = path.dirname(options.output);
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(options.output, html);
-  console.log(JSON.stringify({ outputPath: options.output }));
+  return withArtifactPathWrite(options.output, (): void => {
+
+    const html = generateGalleryHtml(options.designsDir);
+    const outputDir = path.dirname(options.output);
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(options.output, html);
+    console.log(JSON.stringify({ outputPath: options.output }));
+  });
 }

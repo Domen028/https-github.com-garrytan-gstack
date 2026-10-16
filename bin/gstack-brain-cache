@@ -19,6 +19,7 @@
  * unreachable. Concurrent-refresh dedup is a follow-up commit (T15).
  */
 
+import { withArtifactProjectWrite } from "../lib/artifact-window";
 import { claimArtifactProject } from "../lib/bin-context";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync, unlinkSync, readdirSync, openSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
@@ -255,38 +256,42 @@ interface GetResult {
 }
 
 export function cmdGet(entityName: string, projectSlug: string | null): GetResult {
-  const entity = BRAIN_CACHE_ENTITIES[entityName];
-  if (!entity) throw new Error(`Unknown entity: ${entityName}`);
-  const scope = entity.scope;
-  const meta = loadMeta(scope, projectSlug);
+  const operation = (): GetResult => {
 
-  // Schema-version mismatch → full rebuild (D4 A4).
-  if (schemaVersionMismatch(meta) || endpointSwitched(meta)) {
-    rebuildAllForScope(scope, projectSlug);
-    // After rebuild, meta is fresh; fall through to warm path.
-    const newMeta = loadMeta(scope, projectSlug);
-    if (hasFile(entityName, projectSlug) && !isStale(entityName, newMeta)) {
+    const entity = BRAIN_CACHE_ENTITIES[entityName];
+    if (!entity) throw new Error(`Unknown entity: ${entityName}`);
+    const scope = entity.scope;
+    const meta = loadMeta(scope, projectSlug);
+
+    // Schema-version mismatch → full rebuild (D4 A4).
+    if (schemaVersionMismatch(meta) || endpointSwitched(meta)) {
+      rebuildAllForScope(scope, projectSlug);
+      // After rebuild, meta is fresh; fall through to warm path.
+      const newMeta = loadMeta(scope, projectSlug);
+      if (hasFile(entityName, projectSlug) && !isStale(entityName, newMeta)) {
+        return { path: entityPath(entityName, projectSlug), state: 'warm' };
+      }
+      // Rebuild may have failed for this entity specifically.
+      return { path: entityPath(entityName, projectSlug), state: 'missing', message: 'rebuild after schema/endpoint change' };
+    }
+
+    if (hasFile(entityName, projectSlug) && !isStale(entityName, meta)) {
       return { path: entityPath(entityName, projectSlug), state: 'warm' };
     }
-    // Rebuild may have failed for this entity specifically.
-    return { path: entityPath(entityName, projectSlug), state: 'missing', message: 'rebuild after schema/endpoint change' };
-  }
 
-  if (hasFile(entityName, projectSlug) && !isStale(entityName, meta)) {
-    return { path: entityPath(entityName, projectSlug), state: 'warm' };
-  }
-
-  // Stale or missing — try cold refresh.
-  const refreshed = refreshEntity(entityName, projectSlug);
-  if (refreshed) {
-    return { path: entityPath(entityName, projectSlug), state: 'cold-refreshed' };
-  }
-  // Refresh failed. Use stale-but-usable if file exists.
-  if (hasFile(entityName, projectSlug)) {
-    return { path: entityPath(entityName, projectSlug), state: 'stale-fallback', message: 'brain unreachable; using stale cache' };
-  }
-  // No cache and no refresh = missing.
-  return { path: entityPath(entityName, projectSlug), state: 'missing', message: 'brain unreachable; no cache available' };
+    // Stale or missing — try cold refresh.
+    const refreshed = refreshEntity(entityName, projectSlug);
+    if (refreshed) {
+      return { path: entityPath(entityName, projectSlug), state: 'cold-refreshed' };
+    }
+    // Refresh failed. Use stale-but-usable if file exists.
+    if (hasFile(entityName, projectSlug)) {
+      return { path: entityPath(entityName, projectSlug), state: 'stale-fallback', message: 'brain unreachable; using stale cache' };
+    }
+    // No cache and no refresh = missing.
+    return { path: entityPath(entityName, projectSlug), state: 'missing', message: 'brain unreachable; no cache available' };
+  };
+  return projectSlug ? withArtifactProjectWrite(GSTACK_HOME, projectSlug, operation) : operation();
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -386,50 +391,58 @@ function isPidAlive(pid: number): boolean {
  * (process dead, or older than CACHE_REFRESH_LOCK_TIMEOUT_MS) are taken over.
  */
 export function withRefreshLock<T>(projectSlug: string | null, fn: () => T): T | 'dedup' {
-  const handle = tryAcquireLock(projectSlug);
-  if (!handle) return 'dedup';
-  try {
-    return fn();
-  } finally {
-    releaseLock(handle);
-  }
+  const operation = (): T | 'dedup' => {
+
+    const handle = tryAcquireLock(projectSlug);
+    if (!handle) return 'dedup';
+    try {
+      return fn();
+    } finally {
+      releaseLock(handle);
+    }
+  };
+  return projectSlug ? withArtifactProjectWrite(GSTACK_HOME, projectSlug, operation) : operation();
 }
 
 /** Refreshes one entity from the brain. Returns true on success. */
 export function refreshEntity(entityName: string, projectSlug: string | null): boolean {
-  const entity = BRAIN_CACHE_ENTITIES[entityName];
-  if (!entity) return false;
+  const operation = () => {
 
-  // Mark attempt
-  const meta = loadMeta(entity.scope, projectSlug);
-  meta.last_attempt = meta.last_attempt || {};
-  meta.last_attempt[entityName] = Date.now();
+    const entity = BRAIN_CACHE_ENTITIES[entityName];
+    if (!entity) return false;
 
-  // Fetch from brain. The actual fetch logic varies per entity — derived digests
-  // (recent-decisions, salience) need different queries from direct page reads.
-  // For T2a we implement the direct-page path; derived digests get filled in by
-  // the resolver / write-back paths in later commits.
-  const digestContent = fetchAndCompressEntity(entityName, projectSlug);
-  if (digestContent === null) {
+    // Mark attempt
+    const meta = loadMeta(entity.scope, projectSlug);
+    meta.last_attempt = meta.last_attempt || {};
+    meta.last_attempt[entityName] = Date.now();
+
+    // Fetch from brain. The actual fetch logic varies per entity — derived digests
+    // (recent-decisions, salience) need different queries from direct page reads.
+    // For T2a we implement the direct-page path; derived digests get filled in by
+    // the resolver / write-back paths in later commits.
+    const digestContent = fetchAndCompressEntity(entityName, projectSlug);
+    if (digestContent === null) {
+      saveMeta(entity.scope, projectSlug, meta);
+      return false;
+    }
+
+    // Enforce per-entity budget by truncating from end (oldest items live there
+    // by convention in our compressor). The per-skill budget is separately
+    // enforced at preflight injection time.
+    let final = digestContent;
+    if (Buffer.byteLength(final, 'utf-8') > entity.budget_bytes) {
+      final = truncateToBudget(final, entity.budget_bytes);
+    }
+
+    atomicWrite(entityPath(entityName, projectSlug), final);
+    meta.last_refresh[entityName] = Date.now();
+    // Keep schema/endpoint identity fresh.
+    meta.schema_version = GSTACK_SCHEMA_PACK_VERSION;
+    meta.endpoint_hash = detectEndpointHash();
     saveMeta(entity.scope, projectSlug, meta);
-    return false;
-  }
-
-  // Enforce per-entity budget by truncating from end (oldest items live there
-  // by convention in our compressor). The per-skill budget is separately
-  // enforced at preflight injection time.
-  let final = digestContent;
-  if (Buffer.byteLength(final, 'utf-8') > entity.budget_bytes) {
-    final = truncateToBudget(final, entity.budget_bytes);
-  }
-
-  atomicWrite(entityPath(entityName, projectSlug), final);
-  meta.last_refresh[entityName] = Date.now();
-  // Keep schema/endpoint identity fresh.
-  meta.schema_version = GSTACK_SCHEMA_PACK_VERSION;
-  meta.endpoint_hash = detectEndpointHash();
-  saveMeta(entity.scope, projectSlug, meta);
-  return true;
+    return true;
+  };
+  return projectSlug ? withArtifactProjectWrite(GSTACK_HOME, projectSlug, operation) : operation();
 }
 
 /**
@@ -437,15 +450,19 @@ export function refreshEntity(entityName: string, projectSlug: string | null): b
  * Used by --full and by schema/endpoint-change rebuilds.
  */
 export function refreshAll(projectSlug: string | null): { success: number; failed: number } {
-  let success = 0;
-  let failed = 0;
-  for (const [name, entity] of Object.entries(BRAIN_CACHE_ENTITIES)) {
-    // Cross-project entities only refresh when explicitly targeted via no-slug calls
-    if (entity.scope === 'cross-project' && projectSlug) continue;
-    if (entity.scope === 'per-project' && !projectSlug) continue;
-    if (refreshEntity(name, projectSlug)) success++; else failed++;
-  }
-  return { success, failed };
+  const operation = () => {
+
+    let success = 0;
+    let failed = 0;
+    for (const [name, entity] of Object.entries(BRAIN_CACHE_ENTITIES)) {
+      // Cross-project entities only refresh when explicitly targeted via no-slug calls
+      if (entity.scope === 'cross-project' && projectSlug) continue;
+      if (entity.scope === 'per-project' && !projectSlug) continue;
+      if (refreshEntity(name, projectSlug)) success++; else failed++;
+    }
+    return { success, failed };
+  };
+  return projectSlug ? withArtifactProjectWrite(GSTACK_HOME, projectSlug, operation) : operation();
 }
 
 /** Rebuild on schema-version mismatch or endpoint switch. Wipes affected scope first. */
@@ -478,11 +495,15 @@ function rebuildAllForScope(scope: 'cross-project' | 'per-project', projectSlug:
 // ──────────────────────────────────────────────────────────────────────────
 
 export function cmdInvalidate(entityName: string, projectSlug: string | null): void {
-  const entity = BRAIN_CACHE_ENTITIES[entityName];
-  if (!entity) throw new Error(`Unknown entity: ${entityName}`);
-  const meta = loadMeta(entity.scope, projectSlug);
-  delete meta.last_refresh[entityName];
-  saveMeta(entity.scope, projectSlug, meta);
+  const operation = () => {
+
+    const entity = BRAIN_CACHE_ENTITIES[entityName];
+    if (!entity) throw new Error(`Unknown entity: ${entityName}`);
+    const meta = loadMeta(entity.scope, projectSlug);
+    delete meta.last_refresh[entityName];
+    saveMeta(entity.scope, projectSlug, meta);
+  };
+  return projectSlug ? withArtifactProjectWrite(GSTACK_HOME, projectSlug, operation) : operation();
 }
 
 // ──────────────────────────────────────────────────────────────────────────

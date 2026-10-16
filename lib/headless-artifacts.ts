@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "./artifact-window";
 /**
  * headless-artifacts — the one versioned contract for every artifact the
  * unattended workflows write (plan B0): `tasks` (v2), `decisions`, `findings`,
@@ -541,7 +542,8 @@ export interface AckResult { consumed_by: Array<{ consumer: string; at: string }
 export function ackRun(runJson: string, consumer: string, opts: { analyticsPath: string; ephemeral: boolean; now?: Date }): AckResult {
   if (!/^[A-Za-z0-9_.:@/-]{1,200}$/.test(consumer)) throw new Error(`consumer id must match [A-Za-z0-9_.:@/-]{1,200}, got ${JSON.stringify(consumer)}`);
   // Exactly once across concurrent consumers: the read-modify-write runs under a file lock.
-  return withFileLock(runJson, () => ackLocked(runJson, consumer, opts));
+  return withArtifactPathWrite(runJson, () => withArtifactPathWrite(opts.analyticsPath,
+    () => withFileLock(runJson, () => ackLocked(runJson, consumer, opts))));
 }
 function ackLocked(runJson: string, consumer: string, opts: { analyticsPath: string; ephemeral: boolean; now?: Date }): AckResult {
   const manifest: RunManifest = JSON.parse(fs.readFileSync(runJson, 'utf8'));

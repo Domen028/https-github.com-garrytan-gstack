@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "./artifact-window";
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -275,7 +276,7 @@ export async function qaDeadlineMain(args: string[], receiptWorker = false): Pro
         return 0;
       }
       if (action === 'start' && file && (rest.length === 1 || rest.length === 2)) {
-        const status = qaDeadlineStatus(startQaDeadline(file, rest[0], rest[1]));
+        const status = qaDeadlineStatus(withArtifactPathWrite(file, () => startQaDeadline(file, rest[0], rest[1])));
         emit('stdout', { event: 'start', ...status });
         return status.expired ? 124 : 0;
       }

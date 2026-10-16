@@ -420,6 +420,18 @@ fi
 #    basename (preserves the old behavior for plain non-project folders).
 SLUG="${SLUG:-$(basename "$PROJECT_DIR" | tr -cd 'a-zA-Z0-9._-')}"
 
+# Ordinary resolution changes caches outside the moving bucket. Claim itself
+# participates below; take a process-lifetime lease only for project mutations.
+_ARTIFACT_WINDOW_HELPER="$(dirname "$0")/gstack-artifact-window.py"
+_ARTIFACT_SCOPE_HOME="$GSTACK_STATE_ROOT"
+_ARTIFACT_SCOPE_SLUG="$SLUG"
+_ARTIFACT_SCOPE_ID=""
+_artifact_scope_enter() {
+  [ -z "$_ARTIFACT_SCOPE_ID" ] || return 0
+  _ARTIFACT_SCOPE_ID=$(python3 "$_ARTIFACT_WINDOW_HELPER" acquire "$_ARTIFACT_SCOPE_HOME" "$_ARTIFACT_SCOPE_SLUG" --owner-pid "$$" --token-only --inherit-holder) || return 1
+  trap '_artifact_rc=$?; if ! python3 "$_ARTIFACT_WINDOW_HELPER" release "$_ARTIFACT_SCOPE_HOME" "$_ARTIFACT_SCOPE_SLUG" --id "$_ARTIFACT_SCOPE_ID" >/dev/null; then echo "gstack-slug: writer lease release failed; preserve it for inspection" >&2; exit 1; fi; exit "$_artifact_rc"' EXIT
+}
+
 # Refuse an alternate project spelling before a caller can append through an
 # APFS alias. Read index names too: the physical directory cannot expose both.
 python3 "$(dirname "$0")/gstack-artifact-paths.py" claim "$GSTACK_STATE_ROOT" "$SLUG"
@@ -437,6 +449,7 @@ SLUG=$(printf '%s' "$SLUG" | tr -cd 'a-zA-Z0-9._-')
 # A worktree whose own pre-#2767 entry named a different bucket that still
 # holds data: remember it so skill start can name the merge command.
 if [[ -n "$SLUG" && "$SLUG_FROM_ENV" -eq 0 && "$_ENTRY_FILE" != "$LEGACY_CACHE_FILE" && -f "$LEGACY_CACHE_FILE" ]]; then
+  _artifact_scope_enter || exit 1
   _OWN=$(cat "$LEGACY_CACHE_FILE" 2>/dev/null || true)
   _OWN=$(printf '%s' "${_OWN#v2:}" | tr -cd 'a-zA-Z0-9._-')
   _FORMER_FILE="$GSTACK_STATE_ROOT/projects/$SLUG/.former-slugs"
@@ -489,6 +502,7 @@ if [[ "$MODE" == "get" && "$MODE_ARG" == FORMER_SLUGS ]]; then
   exit 0
 fi
 _forget_former() {
+  _artifact_scope_enter || return 1
   [[ -f "$FORMER_FILE" ]] || return 0
   local tmp
   tmp=$(mktemp "$FORMER_FILE.XXXXXX") || return 1
@@ -500,6 +514,7 @@ if [[ "$MODE" == "adopt-dismiss" ]]; then
   exit $?
 fi
 if [[ "$MODE" == "adopt-from" ]]; then
+  _artifact_scope_enter || exit 1
   FROM_BUCKET="$GSTACK_STATE_ROOT/projects/$MODE_ARG"
   TO_BUCKET="$GSTACK_STATE_ROOT/projects/$SLUG"
   [[ "$MODE_ARG" != "$SLUG" ]] || { echo "gstack-slug: projects/$MODE_ARG is this project's own bucket." >&2; exit 2; }
@@ -542,6 +557,8 @@ if [[ "$MODE" == "default" ]]; then
   echo "BRANCH=$BRANCH"
   exit 0
 fi
+
+_artifact_scope_enter || exit 1
 
 # ── Project identity (#3003) ─────────────────────────────────────────────────
 # Identity = canonical remote; the root is identity only when there is no

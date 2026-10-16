@@ -16,6 +16,8 @@ eval "$_GSTACK_SLUG_OUTPUT"
 . "$(dirname "$0")/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $(dirname "$0")/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
 gstack_state_root_select
 GSTACK_HOME="$_gstack_sr_root"
+. "$(dirname "$0")/gstack-artifact-write.sh"
+gstack_artifact_write_reexec "$GSTACK_HOME" "$SLUG" "$0" "$@"
 mkdir -p "$GSTACK_HOME/projects/$SLUG"
 
 INPUT="$1"

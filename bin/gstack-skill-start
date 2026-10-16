@@ -239,10 +239,33 @@ for _PF in $(find "$_GH/analytics" -maxdepth 1 -name '.pending-*' 2>/dev/null); 
   break
 done
 fi
-eval "$("$_BIN/gstack-slug" 2>/dev/null)" 2>/dev/null || true
-for _former in $("$_BIN/gstack-slug" --get FORMER_SLUGS 2>/dev/null || true); do
-  echo "gstack: earlier data for this project is in projects/$_former (a worktree's old bucket). Merge it: gstack-slug --adopt-legacy --from $_former   (or stop this reminder: gstack-slug --adopt-legacy --dismiss $_former)"
-done
+# A workflow lease covers the agent's direct report writes until skill-end.
+# Existing session markers and install leases are not project writer admission.
+if _ARTIFACT_SLUG_OUTPUT=$("$_BIN/gstack-slug"); then
+  eval "$_ARTIFACT_SLUG_OUTPUT"
+else
+  echo "GSTACK_INSTRUCTION_BEGIN: artifact-scope-refused $_SESSION_ID"
+  echo "Project writer admission refused. STOP this workflow; do not write reports or fall back to an unknown bucket. Report the refusal above."
+  echo "GSTACK_INSTRUCTION_END"
+  exit 3
+fi
+if _ARTIFACT_LEASE=$(python3 "$_BIN/gstack-artifact-window.py" acquire "$_GH" "$SLUG" --owner-pid "$PARENT_PID" --session-id "$_SESSION_ID"); then
+  echo "ARTIFACT_WRITER_LEASE: $_ARTIFACT_LEASE"
+else
+  echo "GSTACK_INSTRUCTION_BEGIN: artifact-scope-refused $_SESSION_ID"
+  echo "Project writer admission refused. STOP this workflow and make no direct artifact writes. Report the refusal above."
+  echo "GSTACK_INSTRUCTION_END"
+  exit 3
+fi
+# The workflow already resolved and admitted this exact bucket. Read its
+# reminders directly instead of resolving/claiming it a second time on startup.
+while IFS= read -r _former || [ -n "$_former" ]; do
+  _former=$(printf '%s' "$_former" | tr -cd 'a-zA-Z0-9._-')
+  case "$_former" in ""|.|..) continue ;; esac
+  if [ -n "$(ls -A "$_GH/projects/$_former" 2>/dev/null)" ]; then
+    echo "gstack: earlier data for this project is in projects/$_former (a worktree's old bucket). Merge it: gstack-slug --adopt-legacy --from $_former   (or stop this reminder: gstack-slug --adopt-legacy --dismiss $_former)"
+  fi
+done < <(cat "$_GH/projects/$SLUG/.former-slugs" 2>/dev/null || true)
 _LEARN_FILE="$_GH/projects/${SLUG:-unknown}/learnings.jsonl"
 if [ -f "$_LEARN_FILE" ]; then
   _LEARN_COUNT=$(wc -l < "$_LEARN_FILE" 2>/dev/null | tr -d ' ')

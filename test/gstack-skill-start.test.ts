@@ -31,8 +31,8 @@ const END = path.join(ROOT, 'bin', 'gstack-skill-end');
 let tmpHome: string;
 let tmpGstackHome: string;
 
-function runStart(args: string[] = [], env: Record<string, string> = {}): string {
-  return execFileSync(START, ['--skill', 'testskill', ...args], {
+function runStart(args: string[] = [], env: Record<string, string> = {}, entry = START): string {
+  return execFileSync(entry, ['--skill', 'testskill', ...args], {
     timeout: 30_000,
     encoding: 'utf-8',
     cwd: tmpHome, // no CLAUDE.md/AGENTS.md, not the repo — routing detection stays cold
@@ -180,6 +180,9 @@ describe('gstack-skill-start behavior', () => {
       fs.copyFileSync(START, path.join(fakeBin, 'gstack-skill-start'));
       fs.chmodSync(path.join(fakeBin, 'gstack-skill-start'), 0o755);
       fs.copyFileSync(path.join(path.dirname(START), 'gstack-state-root.sh'), path.join(fakeBin, 'gstack-state-root.sh'));
+      for (const dependency of ['gstack-slug', 'gstack-remote-identity.sh', 'gstack-artifact-write.sh', 'gstack-artifact-window.py', 'gstack-artifact-paths.py']) {
+        fs.copyFileSync(path.join(path.dirname(START), dependency), path.join(fakeBin, dependency));
+      }
       const out = execFileSync(path.join(fakeBin, 'gstack-skill-start'), ['--skill', 't'], {
         timeout: 30_000,
         encoding: 'utf-8',
@@ -381,7 +384,7 @@ describe('gstack-skill-start behavior', () => {
     const pathDir = path.join(tmp, 'path'); fs.mkdirSync(pathDir);
     fs.writeFileSync(path.join(pathDir, 'git'), `#!/usr/bin/env bash\ncase "$1" in fetch|push|pull|ls-remote|merge) echo "git $*" >> "${log}" ;; esac\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
     fs.writeFileSync(path.join(gh, 'config.yaml'), 'telemetry: on\nartifacts_sync_mode: full\nartifacts_sync_mode_prompted: true\nupdate_check: true\n');
-    fs.mkdirSync(path.join(gh, '.git'));
+    execFileSync(realGit, ['init', '-q', '-b', 'main', gh], { timeout: 30_000 });
     fs.mkdirSync(path.join(gh, 'analytics'));
     fs.writeFileSync(path.join(gh, 'analytics', '.pending-old'), 'x');
     fs.writeFileSync(path.join(gh, '.brain-queue.jsonl'), '{"a":1}\n{"b":2}\n');
@@ -596,6 +599,11 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
     const gh = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-ss-attn-'));
     execFileSync('git', ['init', '-q', '-b', 'main', gh], { timeout: 30_000, stdio: 'pipe' });
     fs.writeFileSync(path.join(gh, 'config.yaml'), 'update_check: false\nartifacts_sync_mode: full\nartifacts_sync_mode_prompted: true\n');
+    const shadow = path.join(gh, 'fixture-bin'); fs.mkdirSync(shadow);
+    for (const name of fs.readdirSync(path.join(ROOT, 'bin'))) {
+      if (name !== 'gstack-slug') fs.symlinkSync(path.join(ROOT, 'bin', name), path.join(shadow, name));
+    }
+    fs.writeFileSync(path.join(shadow, 'gstack-slug'), '#!/usr/bin/env bash\necho SLUG=attention-fixture\necho BRANCH=main\n', { mode: 0o755 });
     fs.mkdirSync(path.join(gh, '.brain-sync.lock.d'));
     fs.writeFileSync(path.join(gh, '.brain-sync.lock.d', 'pid'), `${process.pid}\n`);
     if (status !== null) {
@@ -640,8 +648,8 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
       expect(fx).toBeDefined();
       const gh = syncHome(fx.status(), fx.queued ?? 0);
       try {
-        const expected = row.line.replaceAll('<bin>', SYNC).replaceAll('<N>', String(fx.n ?? 0));
-        expect(attention(runStart([], { GSTACK_HOME: gh }))).toEqual([expected]);
+        const expected = row.line.replaceAll('<bin>', path.join(gh, 'fixture-bin/gstack-brain-sync')).replaceAll('<N>', String(fx.n ?? 0));
+        expect(attention(runStart([], { GSTACK_HOME: gh }, path.join(gh, 'fixture-bin/gstack-skill-start')))).toEqual([expected]);
       } finally {
         fs.rmSync(gh, { recursive: true, force: true });
       }
@@ -652,7 +660,7 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
     for (const code of ['ok', 'idle']) {
       const gh = syncHome(status(code), 1);
       try {
-        const out = runStart([], { GSTACK_HOME: gh });
+        const out = runStart([], { GSTACK_HOME: gh }, path.join(gh, 'fixture-bin/gstack-skill-start'));
         expect(out).toMatch(/^ARTIFACTS_SYNC: mode=full \| last_push=\S+ \| queue=\d+$/m);
         expect(attention(out)).toEqual([]);
       } finally {
@@ -670,18 +678,18 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
       last_drain_at: `${NOW()}"; echo pwned`,
     }), 1);
     try {
-      const lines = attention(runStart([], { GSTACK_HOME: gh }));
+      const lines = attention(runStart([], { GSTACK_HOME: gh }, path.join(gh, 'fixture-bin/gstack-skill-start')));
       expect(lines.length).toBeGreaterThan(0);
       const text = lines.join('\n');
       expect(text).not.toContain('ghp_');
       expect(text).not.toContain('projects/p');
       expect(text).not.toContain('pwned');
       // The only path is the absolute helper path; no bare gstack- command remains.
-      const stripped = text.replaceAll(SYNC, '<bin>');
+      const stripped = text.replaceAll(path.join(gh, 'fixture-bin/gstack-brain-sync'), '<bin>');
       expect(stripped).not.toContain('/');
       expect(stripped).not.toContain('gstack-');
       // A forged last_drain_at fails the timestamp clamp, which reads as a drain that never ran.
-      expect(lines).toContain(`ARTIFACTS_SYNC: attention: stale-drain. The sync has not run for over 24 hours while files wait in the queue. See why: ${SYNC} --status`);
+      expect(lines).toContain(`ARTIFACTS_SYNC: attention: stale-drain. The sync has not run for over 24 hours while files wait in the queue. See why: ${path.join(gh, 'fixture-bin/gstack-brain-sync')} --status`);
     } finally {
       fs.rmSync(gh, { recursive: true, force: true });
     }
@@ -709,7 +717,11 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
 
       const held = runStart([], env);
       expect(held).toMatch(/^ARTIFACTS_SYNC: mode=full \| last_push=\S+ \| queue=\d+$/m);
-      expect(attention(held)).toEqual([
+      const syncDiagnostic = {
+        status: fs.existsSync(path.join(gh, '.brain-sync-status.json')) ? fs.readFileSync(path.join(gh, '.brain-sync-status.json'), 'utf8') : 'absent',
+        gitLock: fs.existsSync(path.join(gh, '.brain-sync.lock.d')),
+      };
+      expect(attention(held), JSON.stringify(syncDiagnostic)).toEqual([
         `ARTIFACTS_SYNC: attention: status=held held=1. The secret scan is holding back 1 file(s); everything else still syncs. See which files and how to fix them: ${path.join(ROOT, 'bin', 'gstack-brain-sync')} --status`,
       ]);
       expect(held).not.toContain('ghp_');

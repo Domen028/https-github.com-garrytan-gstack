@@ -75,4 +75,15 @@ if [ "$_TEL" != "off" ] && [ -x "$_BIN/gstack-telemetry-log" ]; then
     --used-browse "$USED_BROWSE" --session-id "$SESSION_ID" \
     --error-message "$ERROR_MESSAGE" --failed-step "$FAILED_STEP" 2>/dev/null &
 fi
+# Release only after project-producing work above has finished. A pending
+# maintenance window can then observe zero admitted writers. Legacy/unregistered
+# sessions are reported honestly and never counted as upgraded participants.
+if [ -n "$SESSION_ID" ]; then
+  if _ARTIFACT_RELEASE=$(python3 "$_BIN/gstack-artifact-window.py" session-release "$_GH" - --session-id "$SESSION_ID"); then
+    echo "ARTIFACT_WRITER_LEASE: $_ARTIFACT_RELEASE"
+  else
+    echo "ARTIFACT_WRITER_LEASE: release_failed; preserve the lease for inspection" >&2
+    exit 1
+  fi
+fi
 echo "SKILL_END: recorded outcome=$OUTCOME duration_s=$_TEL_DUR"

@@ -33,6 +33,7 @@ import { resolveSlug, claimArtifactProject } from "../lib/bin-context";
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { reexecArtifactWriter } from "../lib/artifact-window";
 import { resolveStateRoot } from '../lib/state-root';
 
 const STATE_DIR = resolveStateRoot();
@@ -212,6 +213,7 @@ function bumpPref(list: Preference[], value: string, opposite: Preference[], act
 
 function cmdUpdate(action: 'approved' | 'rejected', variant: string, reason?: string): void {
   const slug = getSlug();
+  reexecArtifactWriter(STATE_DIR, slug);
   const profile = load(slug);
   const signals = extractSignals(reason);
 
@@ -261,6 +263,7 @@ function cmdShow(): void {
 
 function cmdMigrate(): void {
   const slug = getSlug();
+  reexecArtifactWriter(STATE_DIR, slug);
   const profile = load(slug);
   save(slug, profile);
   console.log(`migrated taste profile to v${SCHEMA_VERSION} at ${profilePath(slug)}`);

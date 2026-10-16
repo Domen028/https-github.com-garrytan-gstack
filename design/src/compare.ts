@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Generate HTML comparison board for user review of design variants.
  * Opens in headed Chrome via $B goto. User picks favorite, rates, comments, submits.
@@ -631,9 +632,12 @@ export function generateCompareHtml(images: string[]): string {
  * Compare command: generate comparison board HTML from image files.
  */
 export function compare(options: CompareOptions): void {
-  const html = generateCompareHtml(options.images);
-  const outputDir = path.dirname(options.output);
-  fs.mkdirSync(outputDir, { recursive: true });
-  fs.writeFileSync(options.output, html);
-  console.log(JSON.stringify({ outputPath: options.output, variants: options.images.length }));
+  return withArtifactPathWrite(options.output, (): void => {
+
+    const html = generateCompareHtml(options.images);
+    const outputDir = path.dirname(options.output);
+    fs.mkdirSync(outputDir, { recursive: true });
+    fs.writeFileSync(options.output, html);
+    console.log(JSON.stringify({ outputPath: options.output, variants: options.images.length }));
+  });
 }

@@ -30,6 +30,8 @@ GSTACK_HOME="$_gstack_sr_root"
 _GSTACK_SLUG_OUTPUT=$("$SCRIPT_DIR/gstack-slug") || exit $?
 eval "$_GSTACK_SLUG_OUTPUT"
 SLUG="${SLUG:-unknown}"
+. "$(dirname "$0")/gstack-artifact-write.sh"
+gstack_artifact_write_reexec "$GSTACK_HOME" "$SLUG" "$0" "$@"
 PROJECT_DIR="$GSTACK_HOME/projects/$SLUG"
 PROPOSAL_FILE="$PROJECT_DIR/distillation-proposals.json"
 MEMORY_FILE="$GSTACK_HOME/free-text-memory.json"

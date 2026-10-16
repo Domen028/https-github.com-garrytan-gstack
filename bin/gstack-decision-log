@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { reexecArtifactWriter } from "../lib/artifact-window";
 /**
  * gstack-decision-log — append a durable decision (or supersede/redact/compact it).
  *
@@ -77,6 +78,7 @@ if (args.every((arg) => !arg.trim())) {
 
 const slug = resolveSlug(`${HERE}/gstack-slug`);
 const paths = decisionPaths(slug);
+reexecArtifactWriter(dirname(dirname(dirname(paths.log))), slug);
 // mkdirpSync, not bare mkdirSync: bun on Windows throws EEXIST from a
 // recursive mkdir on an existing dir (#2635), and this runs on every log call.
 mkdirpSync(dirname(paths.log));

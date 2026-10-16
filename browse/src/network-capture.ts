@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Network response body capture — SizeCappedBuffer + capture lifecycle.
  *
@@ -68,9 +69,11 @@ export class SizeCappedBuffer {
 
   /** Export to JSONL file. */
   exportToFile(filePath: string): number {
-    const lines = this.entries.map(e => JSON.stringify(e));
-    fs.writeFileSync(filePath, lines.join('\n') + '\n');
-    return this.entries.length;
+    return withArtifactPathWrite(filePath, () => {
+      const lines = this.entries.map(e => JSON.stringify(e));
+      fs.writeFileSync(filePath, lines.join('\n') + '\n');
+      return this.entries.length;
+    });
   }
 
   /** Summary of captured responses (URL, status, size). */
@@ -175,5 +178,8 @@ export function clearCapture(): void {
 
 /** Export captured responses to JSONL file. */
 export function exportCapture(filePath: string): number {
-  return captureBuffer.exportToFile(filePath);
+  return withArtifactPathWrite(filePath, (): number => {
+
+    return captureBuffer.exportToFile(filePath);
+  });
 }

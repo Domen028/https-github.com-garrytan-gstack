@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Persistent design board daemon.
  *
@@ -400,30 +401,32 @@ async function handleBoardFeedback(board: Board, req: Request): Promise<Response
 
   const feedbackFile = isSubmit ? "feedback.json" : "feedback-pending.json";
   const feedbackPath = path.join(board.sourceDir, feedbackFile);
-  try {
-    fs.writeFileSync(feedbackPath, JSON.stringify(augmented, null, 2));
-  } catch (e: any) {
-    dlog(`feedback write failed for ${board.id}: ${e.message}`);
-    return Response.json(
-      { error: `Cannot write ${feedbackFile}: ${e.message}` },
-      { status: 500 },
-    );
-  }
+  return withArtifactPathWrite(feedbackPath, () => {
+    try {
+      fs.writeFileSync(feedbackPath, JSON.stringify(augmented, null, 2));
+    } catch (e: any) {
+      dlog(`feedback write failed for ${board.id}: ${e.message}`);
+      return Response.json(
+        { error: `Cannot write ${feedbackFile}: ${e.message}` },
+        { status: 500 },
+      );
+    }
 
-  board.lastTouched = Date.now();
-  markMeaningfulActivity();
+    board.lastTouched = Date.now();
+    markMeaningfulActivity();
 
-  if (isSubmit) {
-    board.state = "done";
-    dlog(`board ${board.id} submitted → ${feedbackPath}`);
-    return Response.json({ received: true, action: "submitted" });
-  }
-  if (isRegen) {
-    board.state = "regenerating";
-    dlog(`board ${board.id} regenerate → ${feedbackPath}`);
-    return Response.json({ received: true, action: "regenerate" });
-  }
-  return Response.json({ received: true, action: "unknown" });
+    if (isSubmit) {
+      board.state = "done";
+      dlog(`board ${board.id} submitted → ${feedbackPath}`);
+      return Response.json({ received: true, action: "submitted" });
+    }
+    if (isRegen) {
+      board.state = "regenerating";
+      dlog(`board ${board.id} regenerate → ${feedbackPath}`);
+      return Response.json({ received: true, action: "regenerate" });
+    }
+    return Response.json({ received: true, action: "unknown" });
+  });
 }
 
 async function handleBoardReload(board: Board, req: Request): Promise<Response> {

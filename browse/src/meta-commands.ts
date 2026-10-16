@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Meta commands — tabs, server control, screenshots, chain, diff, snapshot
  */
@@ -523,80 +524,86 @@ export async function handleMetaCommand(
         return `data:image/png;base64,${buffer.toString('base64')}`;
       }
 
-      if (targetSelector) {
-        const resolved = await bm.resolveRef(targetSelector);
-        const locator = 'locator' in resolved ? resolved.locator : page.locator(resolved.selector);
-        await locator.screenshot({ path: outputPath, timeout: 5000 });
-        return `Screenshot saved (element): ${outputPath}`;
-      }
+      return withArtifactPathWrite(outputPath, async () => {
+        if (targetSelector) {
+          const resolved = await bm.resolveRef(targetSelector);
+          const locator = 'locator' in resolved ? resolved.locator : page.locator(resolved.selector);
+          await locator.screenshot({ path: outputPath, timeout: 5000 });
+          return `Screenshot saved (element): ${outputPath}`;
+        }
 
-      if (clipRect) {
-        await page.screenshot({ path: outputPath, clip: clipRect });
-        return `Screenshot saved (clip ${clipRect.x},${clipRect.y},${clipRect.width},${clipRect.height}): ${outputPath}`;
-      }
+        if (clipRect) {
+          await page.screenshot({ path: outputPath, clip: clipRect });
+          return `Screenshot saved (clip ${clipRect.x},${clipRect.y},${clipRect.width},${clipRect.height}): ${outputPath}`;
+        }
 
-      await page.screenshot({ path: outputPath, fullPage: !viewportOnly });
-      if (!viewportOnly) await guardScreenshotPath(outputPath);
-      return `Screenshot saved${viewportOnly ? ' (viewport)' : ''}: ${outputPath}`;
+        await page.screenshot({ path: outputPath, fullPage: !viewportOnly });
+        if (!viewportOnly) await guardScreenshotPath(outputPath);
+        return `Screenshot saved${viewportOnly ? ' (viewport)' : ''}: ${outputPath}`;
+      });
     }
 
     case 'pdf': {
       const page = bm.getPage();
       const parsed = parsePdfArgs(args);
-      validateOutputPath(parsed.output);
+      return withArtifactPathWrite(parsed.output, async () => {
+        validateOutputPath(parsed.output);
 
-      // If --toc: wait up to 3s for Paged.js to signal by setting
-      // window.__pagedjsAfterFired = true. If the polyfill isn't injected
-      // (make-pdf v1 ships without Paged.js; TOC renders without page
-      // numbers), we fall through silently — callers that require strict
-      // TOC pagination should pass --require-paged-js too.
-      if (parsed.toc) {
-        const deadline = Date.now() + 3000;
-        let ready = false;
-        while (Date.now() < deadline) {
-          try {
-            ready = await page.evaluate('!!window.__pagedjsAfterFired');
-          } catch { /* tab may still be hydrating */ }
-          if (ready) break;
-          await new Promise(r => setTimeout(r, 150));
+        // If --toc: wait up to 3s for Paged.js to signal by setting
+        // window.__pagedjsAfterFired = true. If the polyfill isn't injected
+        // (make-pdf v1 ships without Paged.js; TOC renders without page
+        // numbers), we fall through silently — callers that require strict
+        // TOC pagination should pass --require-paged-js too.
+        if (parsed.toc) {
+          const deadline = Date.now() + 3000;
+          let ready = false;
+          while (Date.now() < deadline) {
+            try {
+              ready = await page.evaluate('!!window.__pagedjsAfterFired');
+            } catch { /* tab may still be hydrating */ }
+            if (ready) break;
+            await new Promise(r => setTimeout(r, 150));
+          }
+          // Intentionally non-fatal. Paged.js is optional in v1.
         }
-        // Intentionally non-fatal. Paged.js is optional in v1.
-      }
 
-      const opts = buildPdfOptions(parsed);
-      opts.path = parsed.output;
-      await page.pdf(opts);
+        const opts = buildPdfOptions(parsed);
+        opts.path = parsed.output;
+        await page.pdf(opts);
 
-      return `PDF saved: ${parsed.output}`;
+        return `PDF saved: ${parsed.output}`;
+      });
     }
 
     case 'responsive': {
       const page = bm.getPage();
       const prefix = args[0] || `${TEMP_DIR}/browse-responsive`;
-      validateOutputPath(prefix);
-      const viewports = [
-        { name: 'mobile', width: 375, height: 812 },
-        { name: 'tablet', width: 768, height: 1024 },
-        { name: 'desktop', width: 1280, height: 720 },
-      ];
-      const originalViewport = page.viewportSize();
-      const results: string[] = [];
+      return withArtifactPathWrite(prefix, async () => {
+        validateOutputPath(prefix);
+        const viewports = [
+          { name: 'mobile', width: 375, height: 812 },
+          { name: 'tablet', width: 768, height: 1024 },
+          { name: 'desktop', width: 1280, height: 720 },
+        ];
+        const originalViewport = page.viewportSize();
+        const results: string[] = [];
 
-      for (const vp of viewports) {
-        await page.setViewportSize({ width: vp.width, height: vp.height });
-        const screenshotPath = `${prefix}-${vp.name}.png`;
-        validateOutputPath(screenshotPath);
-        await page.screenshot({ path: screenshotPath, fullPage: true });
-        await guardScreenshotPath(screenshotPath);
-        results.push(`${vp.name} (${vp.width}x${vp.height}): ${screenshotPath}`);
-      }
+        for (const vp of viewports) {
+          await page.setViewportSize({ width: vp.width, height: vp.height });
+          const screenshotPath = `${prefix}-${vp.name}.png`;
+          validateOutputPath(screenshotPath);
+          await page.screenshot({ path: screenshotPath, fullPage: true });
+          await guardScreenshotPath(screenshotPath);
+          results.push(`${vp.name} (${vp.width}x${vp.height}): ${screenshotPath}`);
+        }
 
-      // Restore original viewport
-      if (originalViewport) {
-        await page.setViewportSize(originalViewport);
-      }
+        // Restore original viewport
+        if (originalViewport) {
+          await page.setViewportSize(originalViewport);
+        }
 
-      return results.join('\n');
+        return results.join('\n');
+      });
     }
 
     // ─── Chain ─────────────────────────────────────────

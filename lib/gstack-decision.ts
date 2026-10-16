@@ -13,7 +13,8 @@
  * file-only core; semantic recall is a later, optional enhancement.
  */
 
-import { join } from "path";
+import { join, dirname, basename } from "path";
+import { withArtifactPathWrite } from "./artifact-window";
 import { randomUUID } from "crypto";
 import { existsSync, readFileSync, appendFileSync, statSync, openSync, closeSync, unlinkSync } from "fs";
 import { atomicWriteSync } from "./fs-atomic";
@@ -53,6 +54,17 @@ export interface DecisionPaths {
   log: string;
   snapshot: string;
   archive: string;
+}
+
+function withDecisionWrite<T>(paths: DecisionPaths, operation: () => T): T {
+  const project = dirname(paths.log), projects = dirname(project);
+  const root = basename(projects) === "projects" ? dirname(projects) : resolveStateRoot();
+  // Custom DecisionPaths may span buckets. Admit every destination before the
+  // first read, so a snapshot/archive cannot bypass a held scope via its log.
+  const destinations = [...new Set([paths.log, paths.snapshot, paths.archive])].sort();
+  const enter = (index: number): T => index === destinations.length ? operation()
+    : withArtifactPathWrite(destinations[index], () => enter(index + 1), root);
+  return enter(0);
 }
 
 /** Resolve the per-project decision store paths. Bins pass slug + GSTACK_HOME. */
@@ -211,7 +223,10 @@ export function filterByScope(active: ActiveDecision[], ctx: { branch?: string; 
 
 /** Append a validated event atomically (single-line, concurrency-safe). */
 export function appendEvent(paths: DecisionPaths, event: DecisionEvent): void {
-  appendJsonl(paths.log, event);
+  return withDecisionWrite(paths, (): void => {
+
+    appendJsonl(paths.log, event);
+  });
 }
 
 /** Read all events tolerantly (skips malformed/partial-tail lines). */
@@ -225,7 +240,10 @@ export function readEvents(paths: DecisionPaths): DecisionEvent[] {
  * O(active), not O(history).
  */
 export function writeSnapshot(paths: DecisionPaths, active: ActiveDecision[]): void {
-  atomicWriteSync(paths.snapshot, JSON.stringify(active));
+  return withDecisionWrite(paths, (): void => {
+
+    atomicWriteSync(paths.snapshot, JSON.stringify(active));
+  });
 }
 
 /** Read the bounded active snapshot. Returns [] if missing/corrupt (caller may rebuild). */
@@ -241,9 +259,12 @@ export function readSnapshot(paths: DecisionPaths): ActiveDecision[] {
 
 /** Recompute active from the event log and refresh the snapshot. Returns active. */
 export function rebuildSnapshot(paths: DecisionPaths): ActiveDecision[] {
-  const active = computeActive(readEvents(paths));
-  writeSnapshot(paths, active);
-  return active;
+  return withDecisionWrite(paths, (): ActiveDecision[] => {
+
+    const active = computeActive(readEvents(paths));
+    writeSnapshot(paths, active);
+    return active;
+  });
 }
 
 export interface CompactResult {
@@ -271,52 +292,55 @@ export interface CompactResult {
  * caller re-runs. Atomic rewrite (tmp + rename); refreshes the snapshot.
  */
 export function compact(paths: DecisionPaths): CompactResult {
-  const lockPath = `${paths.log}.compact.lock`;
-  let lockFd: number;
-  try {
-    lockFd = openSync(lockPath, "wx"); // O_EXCL|O_CREAT — throws EEXIST if a compact holds it
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "EEXIST") {
-      return { activeCount: computeActive(readEvents(paths)).length, archivedCount: 0, expungedCount: 0, skipped: true };
-    }
-    throw err;
-  }
-  try {
-    const sizeBefore = existsSync(paths.log) ? statSync(paths.log).size : 0;
-    const events = readEvents(paths);
-    const active = computeActive(events);
-    const activeIds = new Set(active.map((d) => d.id));
-    const redactedIds = new Set(
-      events.filter((e) => e.kind === "redact" && e.supersedes).map((e) => e.supersedes as string),
-    );
-    // Superseded = a decide that's neither active nor redacted. Archive these for history.
-    const superseded = events.filter(
-      (e): e is DecisionEvent => e.kind === "decide" && !activeIds.has(e.id) && !redactedIds.has(e.id),
-    );
+  return withDecisionWrite(paths, (): CompactResult => {
 
-    // Append-race guard: if the log grew/changed since we read it, an append landed —
-    // rewriting now would drop it. Abort untouched; the caller re-runs.
-    const sizeNow = existsSync(paths.log) ? statSync(paths.log).size : 0;
-    if (sizeNow !== sizeBefore) {
-      return { activeCount: active.length, archivedCount: 0, expungedCount: 0, skipped: true };
-    }
-
-    // One batched append (not one open/write/close per event) — matches the atomic
-    // batched rewrite of the active log below and shrinks the mid-compact crash window.
-    if (superseded.length) {
-      appendFileSync(paths.archive, superseded.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
-    }
-
-    atomicWriteSync(paths.log, active.map((d) => JSON.stringify(d)).join("\n") + (active.length ? "\n" : ""));
-    writeSnapshot(paths, active);
-
-    return { activeCount: active.length, archivedCount: superseded.length, expungedCount: redactedIds.size };
-  } finally {
-    closeSync(lockFd);
+    const lockPath = `${paths.log}.compact.lock`;
+    let lockFd: number;
     try {
-      unlinkSync(lockPath);
-    } catch {
-      // best-effort lock cleanup; a leftover lock only blocks the NEXT compact, which re-runs
+      lockFd = openSync(lockPath, "wx"); // O_EXCL|O_CREAT — throws EEXIST if a compact holds it
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EEXIST") {
+        return { activeCount: computeActive(readEvents(paths)).length, archivedCount: 0, expungedCount: 0, skipped: true };
+      }
+      throw err;
     }
-  }
+    try {
+      const sizeBefore = existsSync(paths.log) ? statSync(paths.log).size : 0;
+      const events = readEvents(paths);
+      const active = computeActive(events);
+      const activeIds = new Set(active.map((d) => d.id));
+      const redactedIds = new Set(
+        events.filter((e) => e.kind === "redact" && e.supersedes).map((e) => e.supersedes as string),
+      );
+      // Superseded = a decide that's neither active nor redacted. Archive these for history.
+      const superseded = events.filter(
+        (e): e is DecisionEvent => e.kind === "decide" && !activeIds.has(e.id) && !redactedIds.has(e.id),
+      );
+
+      // Append-race guard: if the log grew/changed since we read it, an append landed —
+      // rewriting now would drop it. Abort untouched; the caller re-runs.
+      const sizeNow = existsSync(paths.log) ? statSync(paths.log).size : 0;
+      if (sizeNow !== sizeBefore) {
+        return { activeCount: active.length, archivedCount: 0, expungedCount: 0, skipped: true };
+      }
+
+      // One batched append (not one open/write/close per event) — matches the atomic
+      // batched rewrite of the active log below and shrinks the mid-compact crash window.
+      if (superseded.length) {
+        appendFileSync(paths.archive, superseded.map((e) => JSON.stringify(e)).join("\n") + "\n", "utf-8");
+      }
+
+      atomicWriteSync(paths.log, active.map((d) => JSON.stringify(d)).join("\n") + (active.length ? "\n" : ""));
+      writeSnapshot(paths, active);
+
+      return { activeCount: active.length, archivedCount: superseded.length, expungedCount: redactedIds.size };
+    } finally {
+      closeSync(lockFd);
+      try {
+        unlinkSync(lockPath);
+      } catch {
+        // best-effort lock cleanup; a leftover lock only blocks the NEXT compact, which re-runs
+      }
+    }
+  });
 }

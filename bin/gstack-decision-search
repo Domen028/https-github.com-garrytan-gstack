@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { reexecArtifactWriter } from "../lib/artifact-window";
 /**
  * gstack-decision-search — read active decisions (the curated "what did we decide" view).
  *
@@ -19,6 +20,7 @@
  */
 
 import { existsSync } from "fs";
+import { dirname } from "node:path";
 import {
   decisionPaths,
   readSnapshot,
@@ -35,6 +37,7 @@ const args = process.argv.slice(2);
 
 const slug = resolveSlug(`${HERE}/gstack-slug`);
 const paths = decisionPaths(slug);
+reexecArtifactWriter(dirname(dirname(dirname(paths.log))), slug);
 const queryRaw = flagValue(args, "--query");
 const query = queryRaw?.toLowerCase();
 const scope = flagValue(args, "--scope");

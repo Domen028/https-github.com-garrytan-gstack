@@ -87,14 +87,28 @@ def identity_lock(root):
             raise Refusal("ARTIFACT_IDENTITY_LOCK_RELEASE_FAILED")
 
 def claim_slug(root, slug):
-    with identity_lock(root) as own_lock:
-        check_slug(root, slug)
-        project = root / "projects" / slug
-        if not own_lock and not project.exists():
-            raise Refusal("ARTIFACT_IDENTITY_OWNER_MUST_CLAIM_FIRST")
-        if own_lock:
-            project.mkdir(parents=True, exist_ok=True)
-        check_slug(root, slug)
+    # Native callers use this helper without going through gstack-slug. Keep
+    # their identity transaction admitted until the Git lock is released.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gstack_artifact_window", Path(__file__).with_name("gstack-artifact-window.py"))
+    window = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(window)
+    root.mkdir(parents=True, exist_ok=True)
+    try:
+        lease = window.acquire(root, slug, os.getpid(), inherit_holder=True)
+        try:
+            with identity_lock(root) as own_lock:
+                check_slug(root, slug)
+                project = root / "projects" / slug
+                if not own_lock and not project.exists():
+                    raise Refusal("ARTIFACT_IDENTITY_OWNER_MUST_CLAIM_FIRST")
+                if own_lock:
+                    project.mkdir(parents=True, exist_ok=True)
+                check_slug(root, slug)
+        finally:
+            window.release(root, slug, lease["id"])
+    except window.Refusal as error:
+        raise Refusal(str(error)) from None
 
 
 def git(root, args, allow_unborn=False):

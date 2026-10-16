@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * Read commands — extract data from pages without side effects
  *
@@ -221,29 +222,32 @@ export function resultToString(result: unknown): string {
  * gates the location but does not mkdir.
  */
 export function writeEvalResult(outPath: string, str: string, opts: { raw: boolean }): number {
-  validateOutputPath(outPath);
-  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+  return withArtifactPathWrite(outPath, (): number => {
 
-  if (!opts.raw && str.startsWith('data:')) {
-    const comma = str.indexOf(',');
-    if (comma !== -1) {
-      const header = str.slice('data:'.length, comma);
-      const tokens = header.split(';').map(t => t.trim().toLowerCase());
-      if (tokens.includes('base64')) {
-        const payload = str.slice(comma + 1).replace(/\s+/g, '');
-        if (!/^[A-Za-z0-9+/]*={0,2}$/.test(payload)) {
-          throw new Error('--out: malformed base64 in data URL (decode would corrupt output)');
+    validateOutputPath(outPath);
+    fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
+
+    if (!opts.raw && str.startsWith('data:')) {
+      const comma = str.indexOf(',');
+      if (comma !== -1) {
+        const header = str.slice('data:'.length, comma);
+        const tokens = header.split(';').map(t => t.trim().toLowerCase());
+        if (tokens.includes('base64')) {
+          const payload = str.slice(comma + 1).replace(/\s+/g, '');
+          if (!/^[A-Za-z0-9+/]*={0,2}$/.test(payload)) {
+            throw new Error('--out: malformed base64 in data URL (decode would corrupt output)');
+          }
+          const buf = Buffer.from(payload, 'base64');
+          fs.writeFileSync(outPath, buf);
+          return buf.length;
         }
-        const buf = Buffer.from(payload, 'base64');
-        fs.writeFileSync(outPath, buf);
-        return buf.length;
       }
     }
-  }
 
-  const buf = Buffer.from(stripLoneSurrogates(str), 'utf-8');
-  fs.writeFileSync(outPath, buf);
-  return buf.length;
+    const buf = Buffer.from(stripLoneSurrogates(str), 'utf-8');
+    fs.writeFileSync(outPath, buf);
+    return buf.length;
+  });
 }
 
 /**

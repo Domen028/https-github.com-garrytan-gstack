@@ -32,6 +32,7 @@
  *   - Punycode hostnames stored as-encoded
  */
 
+import { withArtifactProjectWrite } from "../../lib/artifact-window";
 import { claimArtifactProject } from "../../lib/bin-context";
 import { promises as fs } from 'fs';
 import { open as fsOpen, constants as fsConstants } from 'fs';
@@ -252,39 +253,42 @@ export interface WriteSkillInput {
  * Score >= 0.85 should fail-fast at caller, never reach here.
  */
 export async function writeSkill(input: WriteSkillInput): Promise<DomainSkillRow> {
-  if (input.classifierScore >= 0.85) {
-    throw new Error(
-      `Save blocked: classifier flagged content as potential injection (score: ${input.classifierScore.toFixed(2)}).\n` +
-        'Cause: skill body contains patterns the L4 classifier marks as risky.\n' +
-        'Action: rewrite the skill content removing instruction-like prose, retry.'
-    );
-  }
-  const normalized = normalizeHost(input.host);
-  const body = input.body;
-  const now = new Date().toISOString();
-  const sha = createHash('sha256').update(body, 'utf8').digest('hex');
-  // Determine prior version for this (host, scope=project) so version counter increments.
-  const projectRows = await readRows(projectFile(input.projectSlug));
-  const projectLatest = resolveLatest(projectRows);
-  const prior = projectLatest.get(`project::${normalized}`);
-  const version = prior ? prior.version + 1 : 1;
-  const row: DomainSkillRow = {
-    type: 'domain',
-    host: normalized,
-    scope: 'project',
-    state: 'quarantined',
-    body,
-    version,
-    classifier_score: input.classifierScore,
-    source: input.source,
-    sha256: sha,
-    use_count: 0,
-    flag_count: 0,
-    created_ts: prior?.created_ts ?? now,
-    updated_ts: now,
-  };
-  await appendRow(projectFile(input.projectSlug), row);
-  return row;
+  return withArtifactProjectWrite(gstackHome(), input.projectSlug, async () => {
+
+    if (input.classifierScore >= 0.85) {
+      throw new Error(
+        `Save blocked: classifier flagged content as potential injection (score: ${input.classifierScore.toFixed(2)}).\n` +
+          'Cause: skill body contains patterns the L4 classifier marks as risky.\n' +
+          'Action: rewrite the skill content removing instruction-like prose, retry.'
+      );
+    }
+    const normalized = normalizeHost(input.host);
+    const body = input.body;
+    const now = new Date().toISOString();
+    const sha = createHash('sha256').update(body, 'utf8').digest('hex');
+    // Determine prior version for this (host, scope=project) so version counter increments.
+    const projectRows = await readRows(projectFile(input.projectSlug));
+    const projectLatest = resolveLatest(projectRows);
+    const prior = projectLatest.get(`project::${normalized}`);
+    const version = prior ? prior.version + 1 : 1;
+    const row: DomainSkillRow = {
+      type: 'domain',
+      host: normalized,
+      scope: 'project',
+      state: 'quarantined',
+      body,
+      version,
+      classifier_score: input.classifierScore,
+      source: input.source,
+      sha256: sha,
+      use_count: 0,
+      flag_count: 0,
+      created_ts: prior?.created_ts ?? now,
+      updated_ts: now,
+    };
+    await appendRow(projectFile(input.projectSlug), row);
+    return row;
+  });
 }
 
 /**
@@ -309,32 +313,35 @@ export async function writeSkill(input: WriteSkillInput): Promise<DomainSkillRow
  * rewired and writeSkill / recordSkillUse start receiving non-zero scores.
  */
 export async function recordSkillUse(host: string, projectSlug: string, classifierFlagged: boolean): Promise<DomainSkillRow | null> {
-  const normalized = normalizeHost(host);
-  const rows = await readRows(projectFile(projectSlug));
-  const latest = resolveLatest(rows);
-  const current = latest.get(`project::${normalized}`);
-  if (!current) return null;
-  const useCount = current.use_count + 1;
-  const flagCount = current.flag_count + (classifierFlagged ? 1 : 0);
-  let state: SkillState = current.state;
-  if (
-    state === 'quarantined' &&
-    useCount >= PROMOTE_THRESHOLD &&
-    flagCount === 0 &&
-    current.classifier_score > 0
-  ) {
-    state = 'active';
-  }
-  const updated: DomainSkillRow = {
-    ...current,
-    state,
-    use_count: useCount,
-    flag_count: flagCount,
-    version: current.version + 1,
-    updated_ts: new Date().toISOString(),
-  };
-  await appendRow(projectFile(projectSlug), updated);
-  return updated;
+  return withArtifactProjectWrite(gstackHome(), projectSlug, async () => {
+
+    const normalized = normalizeHost(host);
+    const rows = await readRows(projectFile(projectSlug));
+    const latest = resolveLatest(rows);
+    const current = latest.get(`project::${normalized}`);
+    if (!current) return null;
+    const useCount = current.use_count + 1;
+    const flagCount = current.flag_count + (classifierFlagged ? 1 : 0);
+    let state: SkillState = current.state;
+    if (
+      state === 'quarantined' &&
+      useCount >= PROMOTE_THRESHOLD &&
+      flagCount === 0 &&
+      current.classifier_score > 0
+    ) {
+      state = 'active';
+    }
+    const updated: DomainSkillRow = {
+      ...current,
+      state,
+      use_count: useCount,
+      flag_count: flagCount,
+      version: current.version + 1,
+      updated_ts: new Date().toISOString(),
+    };
+    await appendRow(projectFile(projectSlug), updated);
+    return updated;
+  });
 }
 
 /**
@@ -379,28 +386,31 @@ export async function promoteToGlobal(host: string, projectSlug: string): Promis
  * Re-emits the prior row as the latest, preserving the version counter monotonicity.
  */
 export async function rollbackSkill(host: string, projectSlug: string, scope: SkillScope = 'project'): Promise<DomainSkillRow> {
-  const normalized = normalizeHost(host);
-  const file = scope === 'project' ? projectFile(projectSlug) : globalFile();
-  const rows = await readRows(file);
-  const matching = rows.filter((r) => r.host === normalized && r.scope === scope && !r.tombstone);
-  if (matching.length < 2) {
-    throw new Error(
-      `Cannot rollback: ${normalized} has fewer than 2 versions in ${scope} scope.\n` +
-        'Cause: no prior version to roll back to.\n' +
-        'Action: $B domain-skill rm to delete instead, or wait for a future revision to roll back from.'
-    );
-  }
-  // Sort by version desc; take second-latest as the rollback target.
-  matching.sort((a, b) => b.version - a.version);
-  const target = matching[1]!;
-  const newVersion = matching[0]!.version + 1;
-  const restored: DomainSkillRow = {
-    ...target,
-    version: newVersion,
-    updated_ts: new Date().toISOString(),
-  };
-  await appendRow(file, restored);
-  return restored;
+  return withArtifactProjectWrite(gstackHome(), projectSlug, async () => {
+
+    const normalized = normalizeHost(host);
+    const file = scope === 'project' ? projectFile(projectSlug) : globalFile();
+    const rows = await readRows(file);
+    const matching = rows.filter((r) => r.host === normalized && r.scope === scope && !r.tombstone);
+    if (matching.length < 2) {
+      throw new Error(
+        `Cannot rollback: ${normalized} has fewer than 2 versions in ${scope} scope.\n` +
+          'Cause: no prior version to roll back to.\n' +
+          'Action: $B domain-skill rm to delete instead, or wait for a future revision to roll back from.'
+      );
+    }
+    // Sort by version desc; take second-latest as the rollback target.
+    matching.sort((a, b) => b.version - a.version);
+    const target = matching[1]!;
+    const newVersion = matching[0]!.version + 1;
+    const restored: DomainSkillRow = {
+      ...target,
+      version: newVersion,
+      updated_ts: new Date().toISOString(),
+    };
+    await appendRow(file, restored);
+    return restored;
+  });
 }
 
 /**
@@ -418,23 +428,26 @@ export async function listSkills(projectSlug: string): Promise<{ project: Domain
  * Tombstone a skill. Append a tombstone row; compactor cleans up later.
  */
 export async function deleteSkill(host: string, projectSlug: string, scope: SkillScope = 'project'): Promise<void> {
-  const normalized = normalizeHost(host);
-  const file = scope === 'project' ? projectFile(projectSlug) : globalFile();
-  const rows = await readRows(file);
-  const latest = resolveLatest(rows);
-  const current = latest.get(`${scope}::${normalized}`);
-  if (!current) {
-    throw new Error(
-      `Cannot delete: no skill for ${normalized} in ${scope} scope.\n` +
-        'Cause: skill does not exist or is already tombstoned.\n' +
-        'Action: $B domain-skill list to see what exists.'
-    );
-  }
-  const tombstone: DomainSkillRow = {
-    ...current,
-    version: current.version + 1,
-    updated_ts: new Date().toISOString(),
-    tombstone: true,
-  };
-  await appendRow(file, tombstone);
+  return withArtifactProjectWrite(gstackHome(), projectSlug, async () => {
+
+    const normalized = normalizeHost(host);
+    const file = scope === 'project' ? projectFile(projectSlug) : globalFile();
+    const rows = await readRows(file);
+    const latest = resolveLatest(rows);
+    const current = latest.get(`${scope}::${normalized}`);
+    if (!current) {
+      throw new Error(
+        `Cannot delete: no skill for ${normalized} in ${scope} scope.\n` +
+          'Cause: skill does not exist or is already tombstoned.\n' +
+          'Action: $B domain-skill list to see what exists.'
+      );
+    }
+    const tombstone: DomainSkillRow = {
+      ...current,
+      version: current.version + 1,
+      updated_ts: new Date().toISOString(),
+      tombstone: true,
+    };
+    await appendRow(file, tombstone);
+  });
 }

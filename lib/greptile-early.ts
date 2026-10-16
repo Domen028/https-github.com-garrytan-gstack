@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "./artifact-window";
 /**
  * greptile-early: /ship's early Greptile review (B2).
  *
@@ -151,8 +152,10 @@ function consent(env: EarlyEnv, answer: string | undefined): number {
   if (answer !== "yes" && answer !== "no") { env.err("usage: gstack-greptile-early consent yes|no\n"); return 64; }
   const file = consentFile(env);
   if (!file) { env.err("gstack-greptile-early: cannot resolve this project's state directory.\n"); return 1; }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  withArtifactPathWrite(file, () => {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ consent: answer, decided_at: new Date(env.now()).toISOString() }) + "\n");
+  });
   env.out(`GREPTILE_CONSENT: ${answer === "yes" ? "granted" : "declined"}\n`);
   return 0;
 }

@@ -1,3 +1,4 @@
+import { withArtifactPathWrite } from "../../lib/artifact-window";
 /**
  * HTTP server for the design comparison board feedback loop.
  *
@@ -150,35 +151,37 @@ export async function serve(options: ServeOptions): Promise<void> {
     const feedbackDir = path.dirname(html);
     const feedbackFile = isSubmit ? "feedback.json" : "feedback-pending.json";
     const feedbackPath = path.join(feedbackDir, feedbackFile);
-    fs.writeFileSync(feedbackPath, JSON.stringify(body, null, 2));
+    return withArtifactPathWrite(feedbackPath, () => {
+      fs.writeFileSync(feedbackPath, JSON.stringify(body, null, 2));
 
-    if (isSubmit) {
-      state = "done";
-      if (timeoutTimer) clearTimeout(timeoutTimer);
+      if (isSubmit) {
+        state = "done";
+        if (timeoutTimer) clearTimeout(timeoutTimer);
 
-      // Give the response time to send before exiting
-      setTimeout(() => {
-        server.stop();
-        process.exit(0);
-      }, 100);
+        // Give the response time to send before exiting
+        setTimeout(() => {
+          server.stop();
+          process.exit(0);
+        }, 100);
 
-      return Response.json({ received: true, action: "submitted" });
-    }
+        return Response.json({ received: true, action: "submitted" });
+      }
 
-    if (isRegenerate) {
-      state = "regenerating";
-      // Reset timeout for regeneration (agent needs time to generate new variants)
-      if (timeoutTimer) clearTimeout(timeoutTimer);
-      timeoutTimer = setTimeout(() => {
-        console.error(`SERVE_TIMEOUT: after=${timeout}s (during regeneration)`);
-        server.stop();
-        process.exit(1);
-      }, timeout * 1000);
+      if (isRegenerate) {
+        state = "regenerating";
+        // Reset timeout for regeneration (agent needs time to generate new variants)
+        if (timeoutTimer) clearTimeout(timeoutTimer);
+        timeoutTimer = setTimeout(() => {
+          console.error(`SERVE_TIMEOUT: after=${timeout}s (during regeneration)`);
+          server.stop();
+          process.exit(1);
+        }, timeout * 1000);
 
-      return Response.json({ received: true, action: "regenerate" });
-    }
+        return Response.json({ received: true, action: "regenerate" });
+      }
 
-    return Response.json({ received: true, action: "unknown" });
+      return Response.json({ received: true, action: "unknown" });
+    });
   }
 
   async function handleReload(req: Request): Promise<Response> {
