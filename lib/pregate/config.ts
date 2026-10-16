@@ -8,9 +8,9 @@
  *   dependencies  glob → test files for subprocess targets, runtime reads and
  *                 generated inputs the import graph cannot see; `[]` declares
  *                 "no lane needed" for docs and the like
- *   empty_lanes   extra globs for the docs/no-tests empty lane (planning and
- *                 evidence Markdown already qualifies without a pin file;
- *                 source code and test trees never do)
+ *   empty_lanes   extra globs for the docs/no-tests empty lane (any Markdown
+ *                 file already qualifies without a pin file when no test
+ *                 depends on it; source code and test trees never do)
  *   selection     `<workflow.yml>/<job>` → the runner-owned command that lists
  *                 the lane's test files when the matrix is planner-computed
  *   warn          check ids downgraded to warn (never `secrets`; `lanes` keeps
@@ -47,7 +47,7 @@ export interface PregateConfig {
   $schema?: string;
   runner: string | null;
   dependencies: Record<string, string[]>;
-  /** Extra docs/no-tests globs. Built-in planning and evidence Markdown always qualifies. */
+  /** Extra docs/no-tests globs. Built-in Markdown always qualifies when no test depends on it. */
   empty_lanes: string[];
   selection: Record<string, string>;
   warn: string[];
@@ -232,7 +232,7 @@ export function explainConfig(): string {
   return [
     'runner: the test command with a {files} placeholder; null detects bun test / vitest / jest / pytest from the repo',
     'dependencies: glob → test files the import graph cannot see (subprocess targets, runtime reads, generated inputs); [] declares no lane needed',
-    'empty_lanes: extra globs treated as docs/no-tests when nothing else maps them. Built-in, with or without this file: a docs/doc/documentation tree, a .work plan, plans/evidence/redproof directories, markdown whose name says plan, planning, redproof or evidence, and README/CHANGELOG/CONTRIBUTING/LICENSE/AGENTS/CLAUDE. Source code and files under a test directory never qualify. A test that names the file still selects that test',
+    'empty_lanes: extra globs treated as docs/no-tests when nothing else maps them. Built-in, with or without this file: any Markdown file the import graph maps to no test (a quoted path, a join() of path segments, an import, or a dependencies entry), plus README/CHANGELOG/CONTRIBUTING/LICENSE/AGENTS/CLAUDE. Source code and files under a test directory never qualify. A test that reads the file still selects that test',
     'selection: <workflow.yml>/<job> → the runner-owned command that lists that lane’s test files when its matrix is planner-computed',
     `warn: check ids downgraded to warn; never ${NON_DOWNGRADABLE.join(', ')}; lanes keeps its required-lane and requires-remote verdicts`,
     'strays.allow: root files or new top-level directories that are intentional',

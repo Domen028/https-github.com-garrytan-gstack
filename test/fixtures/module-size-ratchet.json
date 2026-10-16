@@ -102,7 +102,7 @@
     { "file": "lib/pregate/import-graph.ts", "movedFrom": "(new: imports ∪ repo-path literals ∪ bin convention ∪ declarations, C8)" },
     { "file": "lib/pregate/context.ts", "movedFrom": "(new: touched files, base inputs and before/after fingerprinting, C8)" },
     { "file": "lib/pregate/lane-selection.ts", "movedFrom": "(new: touched files to lanes, local vs requires-remote, C8)" },
-    { "file": "lib/pregate/docs-lane.ts", "movedFrom": "(new: docs/no-tests empty lane for planning and evidence markdown, #3210)" },
+    { "file": "lib/pregate/docs-lane.ts", "movedFrom": "(new: docs/no-tests empty lane for markdown no test depends on, #3210)" },
     { "file": "lib/pregate/index.ts", "movedFrom": "(new: the check registry, two-stage runner, pregate.json writer and publication verifier, C8)" },
     { "file": "lib/pregate/checks/regen.ts", "movedFrom": "(new: pre-gate check, C8)" },
     { "file": "lib/pregate/checks/secrets.ts", "movedFrom": "(new: pre-gate check, C8)" },
