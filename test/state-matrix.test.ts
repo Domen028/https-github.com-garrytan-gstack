@@ -8,12 +8,13 @@
  * tests only for add, remove and a new-claim replace. `gstack-state-matrix
  * check` must pass it against the fixture's ground truth, and fail each
  * negative control derived from it. The paid behavior case that reruns the
- * specialist live is `review-army-state-matrix` (named in docs, added with
- * test/skill-e2e-review-army.test.ts).
+ * specialist live is `review-army-state-matrix`; it belongs in
+ * test/skill-e2e-review-army.test.ts and is not added here.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { checkStateMatrix, detectStateMachine, words } from '../lib/state-matrix';
@@ -100,5 +101,25 @@ describe('gstack-state-matrix check on the captured #6792 review', () => {
     expect(run(r.work, ['check', '-'], 'NO FINDINGS\n').out).toBe('STATE_MATRIX_CHECK: ok machines=0\n');
     expect(checkStateMatrix('NO FINDINGS\n', r.work, EXPECT).gaps.map(g => g.code)).toEqual(['no-matrix']);
     expect(checkStateMatrix('Here is my review:\n' + CAPTURED, r.work, EXPECT).gaps.map(g => g.code)).toEqual(['unparsed-line']);
+  });
+});
+
+describe('gstack-specialist-stats', () => {
+  test('state-machines is NEVER_GATE like security and data-migration', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-stats-'));
+    try {
+      expect(spawnSync('git', ['init', '-q'], { cwd: root, timeout: 30_000 }).status).toBe(0);
+      const stats = path.resolve(import.meta.dir, '..', 'bin', 'gstack-specialist-stats');
+      const slug = spawnSync(path.resolve(import.meta.dir, '..', 'bin', 'gstack-slug'), [], { cwd: root, encoding: 'utf8', timeout: 30_000 }).stdout.match(/^SLUG=(.+)$/m)![1];
+      const dir = path.join(root, 'state', 'projects', slug);
+      fs.mkdirSync(dir, { recursive: true });
+      const entry = { specialists: Object.fromEntries(['state-machines', 'testing'].map(n => [n, { dispatched: true, findings: 0 }])) };
+      fs.writeFileSync(path.join(dir, 'main-reviews.jsonl'), Array(10).fill(JSON.stringify(entry)).join('\n') + '\n');
+      const r = spawnSync(stats, [], { cwd: root, encoding: 'utf8', timeout: 60_000, env: { ...process.env, GSTACK_STATE_ROOT: path.join(root, 'state') } });
+      expect(r.stdout).toContain('state-machines: 10/10 dispatched, 0 findings (0%) [NEVER_GATE]');
+      expect(r.stdout).toContain('testing: 10/10 dispatched, 0 findings (0%) [GATE_CANDIDATE]');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
