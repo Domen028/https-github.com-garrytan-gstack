@@ -656,6 +656,12 @@ export const RESULT_CODES = {
     summary: 'a plan review ran without its second opinion: the outside provider did not run or failed, and the bounded native Plan reviewer was not offered or did not finish within five minutes',
     fix: 'repair the provider the line names (install it, or log in with `codex login`); for the native fallback use Claude Code 2.1.277 or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` unset), then re-run the review',
   },
+  // Field list 2 W4 (pregate `timing`).
+  PREGATE_TIMING_ASSERTION: {
+    anchor: 'pregate-timing-assertion',
+    summary: 'an added or changed test line compares an elapsed wall-clock or CPU time against a bound, or sleeps and then asserts (a warning, not a block)',
+    fix: 'assert on the outcome, an injected clock or a forced deadline instead; when the bound is the contract, add `gstack-timing-ok: <reason>` in a comment on the line or the line above',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

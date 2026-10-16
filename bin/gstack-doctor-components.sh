@@ -213,6 +213,7 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    PREGATE_TIMING_ASSERTION) printf '%s' 'pregate-timing-assertion' ;;
     *) return 1 ;;
   esac
 }

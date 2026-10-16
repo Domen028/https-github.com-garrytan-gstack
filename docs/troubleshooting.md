@@ -3334,3 +3334,18 @@ unset, not in bare mode). Then re-run the review.
 
 **Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
 review — outside voice)` when the provider runs.
+
+<a id="pregate-timing-assertion"></a>
+### `PREGATE_TIMING_ASSERTION`
+
+**Meaning.** A test line the branch added or changed compares an elapsed
+wall-clock or CPU time against a bound, or sleeps for a fixed time and then
+asserts. Under machine load such a test fails without a code change. The
+`timing` check warns; it does not block (the measurement is in
+[docs/pregate.md#timing](pregate.md#timing)).
+
+**Fix.** Assert on the outcome instead: an injected clock, a forced deadline,
+an event or a poll with a deadline. When the bound is the contract, add
+`gstack-timing-ok: <reason>` in a comment on the line or the line above. Never
+raise a bound to make a flake pass; /investigate's flake playbook covers the
+diagnosis.

@@ -110,6 +110,10 @@ A gate is anything that would have made this change fail: a test, an assertion, 
 - Date-key lookups that assume "today" covers 24h — report at 8am PT only sees midnight→8am under today's key
 - Mismatched time windows between related features — one uses hourly buckets, another uses daily keys for the same data
 
+#### Timing-Dependent Tests
+- An added or changed test line that compares an elapsed wall-clock or CPU time with a bound (`expect(Date.now() - t0).toBeLessThan(400)`, `assert elapsed < 0.5`) or sleeps a fixed time and then asserts, with no `gstack-timing-ok: <reason>` comment on the line or the line above. `gstack-pregate` prints these as `TIMING_ASSERTION: <file>:<line> <pattern>`; suggest asserting on the outcome, an injected clock, a forced deadline or a poll with a deadline
+- A diff that raises an existing timing bound or adds a retry to make a flake pass: the bound is not the cause; route it to /investigate's flake recipe (timing flakes)
+
 #### Type Coercion at Boundaries
 - Values crossing Ruby→JSON→JS boundaries where type could change (numeric vs string) — hash/digest inputs must normalize types
 - Hash/digest inputs that don't call `.to_s` or equivalent before serialization — `{ cores: 8 }` vs `{ cores: "8" }` produce different hashes
