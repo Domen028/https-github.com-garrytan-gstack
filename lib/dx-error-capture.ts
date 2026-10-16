@@ -481,7 +481,9 @@ function errorLine(what: string, fix: string, code: DxCaptureCodeName, literals:
 }
 
 export async function dxErrorCaptureMain(argv: string[]): Promise<number> {
-  let literals: string[] = [];
+  const split = argv.indexOf('--');
+  const flags = split === -1 ? argv : argv.slice(0, split);
+  const literals = literalForms(flags.flatMap((arg, i) => flags[i - 1] === '--pass-env' ? arg.split(',') : []).filter(name => /^[A-Za-z_][A-Za-z0-9_]*$/.test(name)));
   try {
     const options = parseArgs(argv);
     if (options.help) { await writeTo(process.stdout, DX_CAPTURE_HELP); return 0; }
@@ -491,14 +493,14 @@ export async function dxErrorCaptureMain(argv: string[]): Promise<number> {
         `ask the user to approve ${gated.join(' and ')} as given, then rerun with --approved`);
     }
     checkPassEnv(options.passEnv);
-    literals = literalForms(options.passEnv);
     if (options.cwd && !fs.statSync(options.cwd, { throwIfNoEntry: false })?.isDirectory()) {
       throw new CaptureError('DX_CAPTURE_BAD_CWD', `--cwd ${JSON.stringify(options.cwd)} is not an existing directory`);
     }
     const { record } = await capture(options);
     const json = JSON.stringify(record);
-    if (stringFields(record).some(field => literals.some(literal => field.includes(literal))
-      || scan(field, { maxBytes: 2 * Buffer.byteLength(field, 'utf8') + 1 }).findings.some(finding => finding.tier === 'HIGH'))) {
+    const untrusted = stringFields([record.argv, record.stdout, record.stderr, record.copied_config]);
+    if (untrusted.some(field => literals.some(literal => field.includes(literal))) || stringFields(record).some(field =>
+      scan(field, { maxBytes: 2 * Buffer.byteLength(field, 'utf8') + 1 }).findings.some(finding => finding.tier === 'HIGH'))) {
       throw new CaptureError('DX_CAPTURE_REDACTION_FAILED', 'the finished record still matched a secret check; nothing was printed');
     }
     await writeTo(process.stdout, json + '\n');

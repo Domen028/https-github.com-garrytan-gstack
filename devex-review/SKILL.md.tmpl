@@ -122,7 +122,8 @@ Pick the evidence source by surface:
   the help shows are rejected before any work (missing required argument, unknown flag,
   invalid value). Anything else, and any run needing `--pass-env`, `--copy-config` or
   `--cwd`, needs one AskUserQuestion per run naming the commands and the access forwarded
-  (the helper refuses those flags without `--approved`). Unapproved paths are recorded unverified.
+  (the helper refuses those flags without `--approved`). Every capture stays read-only: approval
+  grants the named access, never a mutation. Unapproved and mutating-only paths are recorded unverified.
   ```bash
   TARGET_CLI="${TARGET_CLI:?set TARGET_CLI to the CLI under audit}"
   ~/.claude/skills/gstack/bin/gstack-error-capture -- "$TARGET_CLI" --help

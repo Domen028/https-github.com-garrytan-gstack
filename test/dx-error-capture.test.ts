@@ -183,9 +183,10 @@ describe('gstack-error-capture redaction', () => {
     expect(result.record.secret_findings.count).toBeGreaterThan(0);
   });
 
-  test('a forwarded value equal to a JSON literal does not trip the final secret check', () => {
-    const { record } = capture(['--pass-env', 'CI', '--approved'], 'exit0.ts', [], { CI: 'true' });
+  test.each([['CI', 'true'], ['DX_MODE', 'none']])('forwarding %p=%p, a protocol value, does not trip the final secret check', (name, value) => {
+    const { record } = capture(['--pass-env', name, '--approved'], 'exit0.ts', [], { [name]: value });
     expect(record.exit_code).toBe(0);
+    expect(record.terminal.verdict).toBe('none');
   });
 
   test('multi-byte output under the publish cap is recorded, not withheld', () => {
@@ -279,6 +280,13 @@ describe('gstack-error-capture own errors', () => {
     expect(result.stderr).toMatch(ERROR_LINE);
     expect(result.stderr).toContain('(DX_CAPTURE_USAGE)');
     expect(leaksToken(result.stderr)).toBe(false);
+  });
+
+  test('a --pass-env value reflected in a rejected flag value is masked even before validation', () => {
+    const result = helper(['--pass-env', 'DX_TEST_VALUE', '--approved', '--deadline', PASSED_VALUE, '--', process.execPath], { DX_TEST_VALUE: PASSED_VALUE });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain('(DX_CAPTURE_BAD_DEADLINE)');
+    expect(result.stderr).not.toContain(PASSED_VALUE);
   });
 
   test('--pass-env without --approved is refused with exit 3', () => {
