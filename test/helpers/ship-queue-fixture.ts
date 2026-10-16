@@ -1,0 +1,76 @@
+/**
+ * Fixtures for gstack-ship-queue and the gbrain stamp-pair acceptance: a
+ * hermetic repo (bare origin plus working clone under os.tmpdir(), its own git
+ * identity) seeded from test/fixtures/ship-queue/gbrain-stamp-pair.json, the
+ * stamp files of a real gbrain stamp commit at its parent plus that commit's
+ * diff and gbrain's committed .gstack/ship-policy.json, byte for byte.
+ */
+import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { gitArgvIn } from './scratch-repo';
+import type { FixtureRepo } from './restamp-fixture';
+
+export const ROOT = path.resolve(import.meta.dir, '..', '..');
+
+export interface GbrainPair {
+  source: { repo: string; gated_commit: string; stamp_commit: string; stamp_subject: string; policy_commit: string; note: string };
+  policy: string;
+  gated: Record<string, string>;
+  stamp_diff: string;
+}
+
+export function loadGbrainPair(): GbrainPair {
+  return JSON.parse(fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'ship-queue', 'gbrain-stamp-pair.json'), 'utf8'));
+}
+
+/** A bare origin plus working clone with its own git identity; nothing committed yet. */
+export function emptyRepo(prefix: string): FixtureRepo {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  const origin = path.join(root, 'origin.git');
+  const work = path.join(root, 'work');
+  const home = path.join(root, 'home');
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(work, { recursive: true });
+  const env = { GSTACK_HOME: home, GSTACK_STATE_DIR: home, HOME: home, GIT_CONFIG_GLOBAL: path.join(root, 'gitconfig'), GIT_CONFIG_NOSYSTEM: '1' };
+  fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[user]\n\tname = t\n\temail = t@test\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n');
+  const git = (...args: string[]): string => {
+    const r = gitArgvIn(work, args, 30_000, { ...process.env, ...env });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr?.toString()}`);
+    return r.stdout?.toString().trim() ?? '';
+  };
+  spawnSync('git', ['init', '-q', '--bare', origin], { timeout: 30_000, env: { ...process.env, ...env } });
+  git('init', '-q', '-b', 'main');
+  git('remote', 'add', 'origin', origin);
+  return { root, work, origin, home, git, env };
+}
+
+/**
+ * main holds gbrain's policy and the stamp files at the gated commit; HEAD
+ * is that commit (the gated head). Returns the repo and a function that
+ * commits the real stamp diff on top (the stamped head).
+ */
+export function gbrainPairRepo(): { repo: FixtureRepo; pair: GbrainPair; gated: string; stamp: () => string } {
+  const pair = loadGbrainPair();
+  const repo = emptyRepo('gstack-gbrain-pair-');
+  for (const [rel, text] of Object.entries(pair.gated)) {
+    fs.mkdirSync(path.dirname(path.join(repo.work, rel)), { recursive: true });
+    fs.writeFileSync(path.join(repo.work, rel), text);
+  }
+  fs.mkdirSync(path.join(repo.work, '.gstack'), { recursive: true });
+  fs.writeFileSync(path.join(repo.work, '.gstack', 'ship-policy.json'), pair.policy);
+  repo.git('add', '-A');
+  repo.git('commit', '-q', '-m', `gated ${pair.source.gated_commit.slice(0, 10)}`);
+  repo.git('push', '-q', 'origin', 'main');
+  repo.git('remote', 'set-head', 'origin', 'main');
+  const gated = repo.git('rev-parse', 'HEAD');
+  const stamp = () => {
+    const diff = path.join(repo.root, 'stamp.diff');
+    fs.writeFileSync(diff, pair.stamp_diff);
+    repo.git('apply', '--index', diff);
+    repo.git('commit', '-q', '-m', pair.source.stamp_subject);
+    return repo.git('rev-parse', 'HEAD');
+  };
+  return { repo, pair, gated, stamp };
+}
