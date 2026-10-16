@@ -27,7 +27,7 @@
 # Docs: https://github.com/garrytan/gstack/blob/main/docs/state-root.md
 set -euo pipefail
 
-. "$(dirname "$0")/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $(dirname "$0")/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
+[ -r "$(dirname "$0")/gstack-state-root.sh" ] && . "$(dirname "$0")/gstack-state-root.sh" 2>/dev/null || { echo "$0: cannot resolve the gstack state root: $(dirname "$0")/gstack-state-root.sh is missing. fix: reinstall with ./setup or /gstack-upgrade (docs/state-root.md)" >&2; exit 1; }
 gstack_state_root_select
 STATE_DIR="$_gstack_sr_root"
 CONFIG_FILE="$STATE_DIR/config.yaml"
@@ -621,15 +621,14 @@ _SELF="$(cd "$(dirname "$0")" && pwd)/gstack-config"
 
 # One line when the root-selecting variables name different directories.
 report_root_disagreement() {
-  local _v _val _set="" _distinct=""
+  local _v _val _set="" _first="" _disagrees=0
   for _v in GSTACK_STATE_ROOT GSTACK_HOME GSTACK_STATE_DIR; do
     eval "_val=\${$_v:-}"
     [ -n "$_val" ] || continue
     _set="$_set $_v=$_val"
-    case " $_distinct " in *" $_val "*) ;; *) _distinct="$_distinct $_val" ;; esac
+    if [ -z "$_first" ]; then _first="$_val"; elif [ "$_val" != "$_first" ]; then _disagrees=1; fi
   done
-  set -- $_distinct
-  [ "$#" -gt 1 ] || return 0
+  [ "$_disagrees" -eq 1 ] || return 0
   echo "# note: root-selecting variables disagree:$_set; using $STATE_DIR ($_gstack_sr_var wins). Explain: $(dirname "$_SELF")/gstack-paths --explain ($_STATE_DOC)"
 }
 
@@ -971,7 +970,7 @@ $_gstack_legacy_root"
     gstack_config_select "$KEY"
     if [ -n "$_gstack_cfg_root" ] && [ "$_gstack_cfg_root" != "$STATE_DIR" ] && [ "$_gstack_cfg_value" != "$SAFE_VALUE" ]; then
       echo "gstack-config: set $KEY in $CONFIG_FILE, but $KEY is still '$_gstack_cfg_value': $_gstack_cfg_root/config.yaml sets that more restrictive value, and for privacy keys the most restrictive value across state roots wins." >&2
-      echo "fix: GSTACK_STATE_ROOT='$_gstack_cfg_root' $_SELF set $KEY $SAFE_VALUE ($_STATE_DOC)" >&2
+      printf 'fix: GSTACK_STATE_ROOT=%q %q set %q %q (%s)\n' "$_gstack_cfg_root" "$_SELF" "$KEY" "$SAFE_VALUE" "$_STATE_DOC" >&2
     fi
     # Auto-relink skills when prefix setting changes (skip during setup to avoid recursive call)
     if { [ "$KEY" = "skill_prefix" ] || [ "$KEY" = "disabled_skills" ]; } && [ -z "${GSTACK_SETUP_RUNNING:-}" ]; then

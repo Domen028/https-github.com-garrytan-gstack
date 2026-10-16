@@ -60,43 +60,57 @@ _gstack_bun_parse() {
   _gb_core="$((10#$_gb_maj)) $((10#$_gb_min)) $((10#$_gb_pat))"
 }
 
-# _gstack_bun_below <version> <release> — true when version sorts below the
-# release. Prerelease rule (semver): 1.3.3-canary.1 is below 1.3.3 and above
-# 1.3.2, so a prerelease of the floor itself is refused.
+# _gstack_bun_below <version> <release> — returns 0 when version sorts below
+# the release, 1 when it does not, and 2 when either cannot be parsed (callers
+# never read 2 as "not below"). Prerelease rule (semver): 1.3.3-canary.1 is
+# below 1.3.3 and above 1.3.2, so a prerelease of the floor itself is refused.
+# The release's fields are copied into quoted positional parameters before the
+# second parse, so the comparison does not depend on word splitting (zsh does
+# not split; #3195).
 _gstack_bun_below() {
-  _gstack_bun_parse "$2" || return 1
-  set -- "$1" $_gb_core
-  _gstack_bun_parse "$1" || return 1
-  set -- "$@" $_gb_core
-  [ "$5" -ne "$2" ] && { [ "$5" -lt "$2" ]; return; }
-  [ "$6" -ne "$3" ] && { [ "$6" -lt "$3" ]; return; }
-  [ "$7" -ne "$4" ] && { [ "$7" -lt "$4" ]; return; }
+  _gstack_bun_parse "$2" || return 2
+  set -- "$1" "$_gb_maj" "$_gb_min" "$_gb_pat"
+  _gstack_bun_parse "$1" || return 2
+  [ "$((10#$_gb_maj))" -ne "$((10#$2))" ] && { [ "$((10#$_gb_maj))" -lt "$((10#$2))" ]; return; }
+  [ "$((10#$_gb_min))" -ne "$((10#$3))" ] && { [ "$((10#$_gb_min))" -lt "$((10#$3))" ]; return; }
+  [ "$((10#$_gb_pat))" -ne "$((10#$4))" ] && { [ "$((10#$_gb_pat))" -lt "$((10#$4))" ]; return; }
   [ -n "$_gb_pre" ]
 }
 
 # gstack_bun_status <version> [floor] — prints too-old, untested, ok or
-# malformed. The optional floor lets the auto-updater apply the incoming
-# release's floor with this release's comparison rule.
+# malformed (the version or the floor cannot be parsed). The optional floor
+# lets the auto-updater apply the incoming release's floor with this
+# release's comparison rule.
 gstack_bun_status() {
-  if ! _gstack_bun_parse "$1"; then echo malformed
-  elif _gstack_bun_below "$1" "${2:-$GSTACK_BUN_FLOOR}"; then echo too-old
-  elif _gstack_bun_below "$1" "$GSTACK_BUN_TESTED"; then echo untested
-  else echo ok
-  fi
+  _gstack_bun_below "$1" "${2:-$GSTACK_BUN_FLOOR}"
+  case $? in
+    0) echo too-old ;;
+    1) _gstack_bun_below "$1" "$GSTACK_BUN_TESTED"
+       case $? in 0) echo untested ;; 1) echo ok ;; *) echo malformed ;; esac ;;
+    *) echo malformed ;;
+  esac
 }
 
 # gstack_bun_incoming_hold <git-dir> <rev> — the pre-advance check shared by
 # the auto-updater and /gstack-upgrade. Reads the floor from <rev>'s copy of
 # this file and checks the `bun` setup will run (first on PATH). Below that
-# floor it prints the held reason and returns 0; otherwise it prints nothing
-# and returns 1 (no bun, no floor in <rev>, or an unparseable version, which
-# setup only warns on). The comparison rule is this release's.
+# floor it prints the held reason and returns 0. A version it cannot compare
+# also holds (bun-version-unreadable, BUN_VERSION_UNREADABLE), with the bun
+# path and its output passed through gstack_sanitize_echo
+# (bin/gstack-sanitize-echo.sh in <git-dir>). Otherwise it prints nothing and
+# returns 1 (no bun, or no floor in <rev>). The comparison rule is this release's.
 gstack_bun_incoming_hold() {
   command -v bun >/dev/null 2>&1 || return 1
   _gb_floor=$(git -C "$1" show "$2:bin/gstack-bun-version.sh" 2>/dev/null | sed -n 's/^GSTACK_BUN_FLOOR="\([0-9A-Za-z.+-]*\)".*/\1/p' | head -1)
   [ -n "$_gb_floor" ] || return 1
   _gb_found=$(bun --version 2>/dev/null | head -1)
-  [ "$(gstack_bun_status "$_gb_found" "$_gb_floor")" = too-old ] || return 1
+  case "$(gstack_bun_status "$_gb_found" "$_gb_floor")" in
+    too-old) ;;
+    malformed)
+      echo "bun-version-unreadable: could not read the version of Bun at $( (. "$1/bin/gstack-sanitize-echo.sh" && gstack_sanitize_echo "$(command -v bun)") 2>/dev/null) (bun --version printed '$( (. "$1/bin/gstack-sanitize-echo.sh" && gstack_sanitize_echo "$_gb_found") 2>/dev/null)'); gstack $(git -C "$1" show "$2:VERSION" 2>/dev/null | head -1 | tr -cd '0-9A-Za-z.+-') needs $_gb_floor or newer (BUN_VERSION_UNREADABLE)"
+      return 0 ;;
+    *) return 1 ;;
+  esac
   _gb_ver=$(git -C "$1" show "$2:VERSION" 2>/dev/null | head -1)
   echo "bun-too-old: found Bun $_gb_found at $(command -v bun); gstack ${_gb_ver:-update} needs $_gb_floor or newer"
 }

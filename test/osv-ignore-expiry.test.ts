@@ -57,4 +57,19 @@ describe('OSV suppression expiry', () => {
     expect(report.steps[0].env.SCAN_RESULT).toBe('${{ needs.scan.result }}');
     for (const text of ['"$SCAN_RESULT" = "failure"', 'gh issue create', 'gh issue comment', 'gh issue close']) expect(run).toContain(text);
   });
+
+  test('the image-size entries name the fixed release and the pin that blocks it (#2753)', () => {
+    const toml = fs.readFileSync(path.join(import.meta.dir, '..', '.osv-scanner.toml'), 'utf8');
+    const entries = toml.split('[[IgnoredVulns]]').slice(1).filter(e => /^id = "GHSA-(?:5p2g-fcmc-qvqq|w3rx-r6r6-pgpr)"/m.test(e));
+    expect(entries).toHaveLength(2);
+    for (const entry of entries) {
+      expect(entry).not.toContain('No fixed version exists');
+      expect(entry).toMatch(/^reason = ".*image-size 2\.0\.3.*\^1\.0\.0.*"$/m);
+      expect(entry).toContain('ignoreUntil = 2026-11-30T00:00:00Z');
+    }
+    // The stated blocker is the lockfile's: html-to-docx asks for image-size ^1.0.0 and resolves a 1.x.
+    const lock = fs.readFileSync(path.join(ROOT, 'bun.lock'), 'utf8');
+    expect(lock).toMatch(/"html-to-docx": \["html-to-docx@[^"]+", "", \{ "dependencies": \{[^}]*"image-size": "\^1\.0\.0"/);
+    expect(lock).toMatch(/"image-size": \["image-size@1\.\d+\.\d+"/);
+  });
 });

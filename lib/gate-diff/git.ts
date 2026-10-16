@@ -78,17 +78,6 @@ export function headSha(cwd: string): string | null {
   return gitText(['rev-parse', '--verify', '-q', 'HEAD^{commit}'], cwd);
 }
 
-/** Working-tree content fingerprint from the sibling gstack-wtree helper; null when unavailable. */
-export function wtreeFingerprint(binDir: string, cwd: string): string | null {
-  try {
-    const r = spawnSync(path.join(binDir, 'gstack-wtree'), [], { cwd, encoding: 'utf-8', timeout: 60_000, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
-    const out = (r.stdout || '').trim();
-    return r.status === 0 && /^[0-9a-f]{40,64}$/.test(out) ? out : null;
-  } catch {
-    return null;
-  }
-}
-
 /** C-style unquote of a git path (`"a\\tb"`), including octal UTF-8 bytes. */
 export function unquoteGitPath(p: string): string {
   if (!(p.startsWith('"') && p.endsWith('"') && p.length >= 2)) return p;
