@@ -13,8 +13,9 @@
 #                          default is every host installed from this checkout.
 #                          Rows and ids: bin/gstack-doctor-components.sh.
 #
-# Rows: install root, state root, bun, hooks, codex, codex probe, artifacts
-# sync, browse bundle, binaries, cso, claude code, session journal, guard log. Each row is
+# Rows: install root, rescue refs, state root, bun, hooks, codex, codex probe,
+# artifacts sync, browse bundle, binaries, cso, claude code, session journal,
+# guard log, CLAUDE.md. Each row is
 # `ok`, `warn`, `not configured` or `fail`; a row that is not ok carries a fix
 # line, and every gstack helper in a fix line is an absolute path under this
 # install root. Exit 1 when any row is `fail`, 2 on a usage error, else 0.
@@ -81,6 +82,9 @@ row() {
     *) N_FAIL=$((N_FAIL + 1)) ;;
   esac
 }
+
+# sq TEXT — TEXT single-quoted for bash.
+sq() { printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"; }
 
 # clamp CHARSET MAX — stdin's first line reduced to CHARSET, at most MAX chars.
 clamp() { head -1 | tr -cd "$1" | cut -c1-"$2"; }
@@ -454,6 +458,84 @@ check_guard_log() {
   row ok "guard log" "${summary:-0 decisions (0 denied)}"
 }
 
+# check_rescue_refs — the refs/gstack/rescue/* commits bin/gstack-ff-update
+# leaves when local edits conflicted with an update, newest first, each with
+# its date and the inspect and delete commands its banner prints. No row for
+# an install that is not a git checkout.
+check_rescue_refs() {
+  local refs ref date q n=0 shown=0 label
+  git -C "$SRC" rev-parse --git-dir >/dev/null 2>&1 || return 0
+  refs=$(GIT_OPTIONAL_LOCKS=0 git -C "$SRC" for-each-ref --sort=-committerdate --format='%(refname) %(committerdate:short)' refs/gstack/rescue/ 2>/dev/null)
+  q=$(sq "$SRC")
+  if [ -z "$refs" ]; then
+    row ok "rescue refs" "none in $SRC"
+    return
+  fi
+  n=$(printf '%s\n' "$refs" | wc -l | tr -d ' ')
+  row warn "rescue refs" "$n in $SRC: local edits an update set aside instead of leaving conflict markers" "inspect each, export what you want to keep (git -C $q diff '<ref>^' '<ref>' > ~/gstack-local-edits.patch, then git apply -3 it in a scratch checkout), then delete it ($DOCS#auto-update-rescued-edits)"
+  while read -r ref date; do
+    shown=$((shown + 1))
+    if [ "$shown" -gt 10 ]; then
+      printf '%32s%s more: git -C %s for-each-ref refs/gstack/rescue/\n' '' "$((n - 10))" "$q"
+      break
+    fi
+    label=""
+    git -C "$SRC" cat-file commit "$ref" 2>/dev/null | grep -q '^Needs manual resolution' && label=", needs manual resolution"
+    printf '%32s%s (%s%s)\n' '' "$ref" "$date" "$label"
+    printf '%32s  inspect: git -C %s diff %s %s\n' '' "$q" "'$ref^'" "'$ref'"
+    printf '%32s  delete:  git -C %s update-ref -d %s\n' '' "$q" "'$ref'"
+  done <<REFS
+$refs
+REFS
+}
+
+# check_claude_md — a gstack section in ~/.claude/CLAUDE.md or this project's
+# CLAUDE.md that enumerates skills (#3169): Claude Code lists the installed
+# skills itself, and a pasted list goes stale with each release. A section is
+# a heading whose title starts with "gstack", up to the next heading of its
+# level or higher; it enumerates when it has an "Available skills" line or
+# names 8 or more distinct /skill tokens (paths are not tokens).
+check_claude_md() {
+  local user project file f n checked="" listed="" seen=""
+  user="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md"
+  project="$(git rev-parse --show-toplevel 2>/dev/null || pwd -P)/CLAUDE.md"
+  for file in "$user" "$project"; do
+    [ -f "$file" ] || continue
+    f=$(cd "$(dirname "$file")" 2>/dev/null && pwd -P)/CLAUDE.md
+    case "|$seen|" in *"|$f|"*) continue ;; esac
+    seen="$seen|$f"
+    checked="${checked:+$checked, }$file"
+    n=$(awk '
+      /^#+[ \t]/ {
+        level = match($0, /[^#]/) - 1
+        title = tolower(substr($0, level + 1)); sub(/^[ \t]+/, "", title)
+        if (in_block && level <= block_level) in_block = 0
+        if (!in_block && title ~ /^gstack([^a-z0-9-]|$)/) { in_block = 1; block_level = level; next }
+      }
+      !in_block { next }
+      tolower($0) ~ /available skills/ { available = 1 }
+      {
+        s = " " $0
+        while (match(s, /[ \t,(`*[]\/[a-z][a-z0-9-]*/)) {
+          tok = substr(s, RSTART + 2, RLENGTH - 2); nxt = substr(s, RSTART + RLENGTH, 1)
+          s = substr(s, RSTART + RLENGTH)
+          if (nxt == "/" || tok in seen) continue
+          seen[tok] = 1; count++
+        }
+      }
+      END { if (available || count >= 8) print count + 0 }' "$file" 2>/dev/null)
+    [ -n "$n" ] && listed="${listed:+$listed; }$file lists $n skills"
+  done
+  if [ -z "$checked" ]; then
+    row ok "CLAUDE.md" "none at $user or $project"
+  elif [ -z "$listed" ]; then
+    row ok "CLAUDE.md" "no gstack section lists skills ($checked)"
+  else
+    row warn "CLAUDE.md" "the gstack section in $listed; Claude Code lists installed skills itself, and a pasted list goes stale with each release" "replace that section with this short block ($DOCS#claude-md-skill-list):"
+    printf '%34s%s\n' '' '## gstack' '' 'Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.'
+  fi
+}
+
 if ! . "$BIN/gstack-state-root.sh" 2>/dev/null; then
   row fail "state root" "$BIN/gstack-state-root.sh is missing" "reinstall gstack from a fresh checkout of https://github.com/garrytan/gstack, then run its ./setup"
   exit 1
@@ -475,6 +557,7 @@ fi
 
 echo "gstack doctor $(head -1 "$ROOT/VERSION" 2>/dev/null | clamp '0-9A-Za-z.+-' 40)"
 check_install
+check_rescue_refs
 check_state_root
 check_bun
 check_hooks
@@ -487,5 +570,6 @@ check_cso
 check_claude
 check_journal
 check_guard_log
+check_claude_md
 echo "$N_OK ok, $N_WARN warn, $N_NC not configured, $N_FAIL fail"
 [ "$N_FAIL" -eq 0 ]

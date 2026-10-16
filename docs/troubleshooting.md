@@ -3371,3 +3371,24 @@ unavailable base, an invalid pin file) is one JSON object on stdout,
 with exit 3. A run's object carries the same `ok` and `status`
 (`complete` or `incomplete`), so `status` tells a refusal from a run. The
 `GSTACK_RESULT:` line goes to stderr under `--json`.
+
+<a id="claude-md-skill-list"></a>
+### `warn CLAUDE.md the gstack section in <file> lists <n> skills; Claude Code lists installed skills itself, and a pasted list goes stale with each release`
+
+**Meaning.** `gstack-doctor` found a gstack section in `~/.claude/CLAUDE.md`
+or in this project's `CLAUDE.md` that enumerates skills: an `Available
+skills:` line, or eight or more `/skill` names. Older install prompts asked
+for that list (#3169). Claude Code already lists every installed skill with
+its description, and a pasted list goes stale with each release, so the agent
+can take a partial list as the complete set.
+
+**Fix.** Replace the section with the short block the doctor prints (no skill
+list; keep any other gstack rules you wrote yourself):
+
+```
+## gstack
+Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
+```
+
+**Expected result.** The next `gstack-doctor` run shows
+`ok CLAUDE.md no gstack section lists skills (...)`.

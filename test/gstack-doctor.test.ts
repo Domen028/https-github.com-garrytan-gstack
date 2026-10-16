@@ -890,3 +890,120 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
     }
   });
 });
+
+// Lane F item D: the plain report lists rescue refs with their commands, warns
+// about a CLAUDE.md gstack section that enumerates skills (#3169), and on
+// Windows names the bash gstack's TypeScript hands its scripts to; --check's
+// upgrade fix names the held-install recovery forms on Windows, because
+// bin/gstack-upgrade refuses every Git Bash install. GSTACK_DOCTOR_PLATFORM
+// injects the platform and GSTACK_DOCTOR_BASH_PROBE the discovery inputs, so
+// every case runs on every OS.
+describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash, Windows upgrade fix', () => {
+  const git = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = spawnSync('git', args, {
+      cwd: f.root, encoding: 'utf8', timeout: 20_000,
+      env: { ...process.env, HOME: f.home, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.com', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.com', ...extra },
+    });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  /** A git install with one rescue commit per entry: a user edit on top of HEAD, committed on the given date. */
+  const withRescues = (f: Fixture, rescues: Array<{ date: string; unmerged?: boolean }>) => {
+    git(f, ['init', '-q']);
+    git(f, ['add', '-A']);
+    git(f, ['commit', '-qm', 'release']);
+    const index = path.join(f.base, 'rescue.idx');
+    return rescues.map(({ date, unmerged }, i) => {
+      const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: f.root, input: `edit ${i}\n`, encoding: 'utf8', timeout: 20_000 }).stdout.trim();
+      git(f, ['read-tree', 'HEAD'], { GIT_INDEX_FILE: index });
+      git(f, ['update-index', '--add', '--cacheinfo', `100644,${blob},local-edit-${i}.txt`], { GIT_INDEX_FILE: index });
+      const tree = git(f, ['write-tree'], { GIT_INDEX_FILE: index });
+      const message = `gstack rescue: local edits that conflicted with abc\n${unmerged ? '\nNeeds manual resolution: the install had unmerged files; their captured\ncontent may contain conflict markers.\n' : ''}`;
+      const oid = spawnSync('git', ['commit-tree', tree, '-p', 'HEAD'], {
+        cwd: f.root, input: message, encoding: 'utf8', timeout: 20_000,
+        env: { ...process.env, HOME: f.home, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'gstack rescue', GIT_AUTHOR_EMAIL: 'gstack@localhost', GIT_COMMITTER_NAME: 'gstack rescue', GIT_COMMITTER_EMAIL: 'gstack@localhost', GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      }).stdout.trim();
+      git(f, ['update-ref', `refs/gstack/rescue/${oid}`, oid]);
+      return `refs/gstack/rescue/${oid}`;
+    });
+  };
+  const rescueRefs = (f: Fixture) => git(f, ['for-each-ref', '--format=%(refname)', 'refs/gstack/rescue/']).split('\n').filter(Boolean);
+  const commandFor = (out: string, label: 'inspect' | 'delete', ref: string) =>
+    out.split('\n').map(l => l.trim()).find(l => l.startsWith(`${label}:`) && l.includes(`'${ref}'`))?.replace(/^[a-z]+:\s+/, '') ?? '';
+
+  test('rescue refs: two refs are listed newest first with their dates; the printed inspect command shows the edit and the printed delete command removes the ref', () => {
+    const f = makeFixture();
+    const [older, newer] = withRescues(f, [{ date: '2026-10-01T12:00:00Z' }, { date: '2026-10-14T08:30:00Z', unmerged: true }]);
+    const r = doctor(f);
+    const row = r.row('rescue refs');
+    expect(row.state, r.out).toBe('warn');
+    expect(row.detail).toContain(`2 in ${bashPath(f.root)}`);
+    expect(row.fix).toContain('#auto-update-rescued-edits');
+    const listing = r.out.split('\n').map(l => l.trim());
+    expect(listing.findIndex(l => l.startsWith(newer))).toBeLessThan(listing.findIndex(l => l.startsWith(older)));
+    expect(listing).toContain(`${older} (2026-10-01)`);
+    expect(listing).toContain(`${newer} (2026-10-14, needs manual resolution)`);
+    const q = `'${bashPath(f.root)}'`;
+    expect(commandFor(r.out, 'inspect', older)).toBe(`git -C ${q} diff '${older}^' '${older}'`);
+    expect(commandFor(r.out, 'delete', older)).toBe(`git -C ${q} update-ref -d '${older}'`);
+    const shown = spawnSync('bash', ['-c', commandFor(r.out, 'inspect', older)], { cwd: f.work, encoding: 'utf8', timeout: 20_000 });
+    expect(shown.status, shown.stderr).toBe(0);
+    expect(shown.stdout).toContain('+edit 0');
+    const deleted = spawnSync('bash', ['-c', commandFor(r.out, 'delete', older)], { cwd: f.work, encoding: 'utf8', timeout: 20_000 });
+    expect(deleted.status, deleted.stderr).toBe(0);
+    expect(rescueRefs(f)).toEqual([newer]);
+    expect(doctor(f).row('rescue refs').detail).toContain(`1 in ${bashPath(f.root)}`);
+    spawnSync('bash', ['-c', commandFor(r.out, 'delete', newer)], { cwd: f.work, encoding: 'utf8', timeout: 20_000 });
+    const none = doctor(f);
+    expect(none.row('rescue refs')).toEqual({ state: 'ok', detail: `none in ${bashPath(f.root)}`, fix: '' });
+    expect(none.status, none.out).toBe(0);
+  });
+
+  const LISTING = '## gstack\nUse /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.\nAvailable skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,\n/design-consultation, /design-shotgun, /design-html, /review, /ship, /qa, /browse, /retro, /investigate.\n';
+  const SHORT = '## gstack\nUse /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.\n';
+  const replacement = (out: string) => out.split('\n').filter(l => l.startsWith(' '.repeat(34))).map(l => l.slice(34));
+
+  test('CLAUDE.md: a gstack section that enumerates skills warns with the short replacement block, for ~/.claude/CLAUDE.md and the project CLAUDE.md', () => {
+    const f = makeFixture();
+    const user = path.join(f.home, '.claude/CLAUDE.md');
+    write(user, `# Me\n\n${LISTING}\n## Other\ntext\n`);
+    const r = doctor(f);
+    const row = r.row('CLAUDE.md');
+    expect(row.state, r.out).toBe('warn');
+    expect(row.detail).toContain(`${bashPath(f.home)}/.claude/CLAUDE.md lists 13 skills`);
+    expect(row.fix).toContain('#claude-md-skill-list');
+    expect(fs.readFileSync(path.join(REPO, 'docs/troubleshooting.md'), 'utf8')).toContain('<a id="claude-md-skill-list"></a>');
+    expect(replacement(r.out)).toEqual(['## gstack', 'Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.']);
+    expect(r.status, r.out).toBe(0);
+    write(user, SHORT);
+    write(path.join(f.work, 'CLAUDE.md'), `# Project\n\n## gstack (recommended)\nskills: /office-hours /plan-ceo-review /plan-eng-review /review /ship /qa /browse /retro /investigate\n`);
+    const project = doctor(f).row('CLAUDE.md');
+    expect(project.state).toBe('warn');
+    expect(project.detail).toContain(`${bashPath(f.work)}/CLAUDE.md lists 9 skills`);
+    expect(project.detail).not.toContain('.claude/CLAUDE.md');
+  });
+
+  test('CLAUDE.md: the short block, team-init\'s block, a separate Skill routing section and paths do not warn; no CLAUDE.md does not warn', () => {
+    const f = makeFixture();
+    const none = doctor(f).row('CLAUDE.md');
+    expect(none.state).toBe('ok');
+    expect(none.fix).toBe('');
+    write(path.join(f.home, '.claude/CLAUDE.md'), SHORT);
+    write(path.join(f.work, 'CLAUDE.md'), [
+      '## gstack (recommended)',
+      'Using gstack skills: After install, skills like /qa, /ship, /review, /investigate,',
+      'and /browse are available. Use the install path ~/.claude/skills/gstack/bin/gstack-config /usr/local/bin/bun /opt/a/b /x/y /z/w.',
+      '',
+      '## Skill routing',
+      '- Product ideas → invoke /office-hours',
+      '- Strategy → invoke /plan-ceo-review',
+      '- Architecture → invoke /plan-eng-review',
+      '- Design → invoke /design-consultation or /plan-design-review',
+      '- Review → invoke /autoplan, /investigate, /qa, /review, /ship',
+      '',
+    ].join('\n'));
+    const r = doctor(f);
+    expect(r.row('CLAUDE.md').state, r.out).toBe('ok');
+    expect(replacement(r.out)).toEqual([]);
+  });
+});
