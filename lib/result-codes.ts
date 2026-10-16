@@ -750,7 +750,7 @@ export const RESULT_CODES = {
   APPROVAL_CITATION_MISSING: {
     anchor: 'approval-citation-missing',
     summary: 'a declared approval class has no citation that resolves and binds to its current effects, so no receipt was written',
-    fix: 'add an `Approved by` line whose plan (with --approval-run <dir>) or maintainer comment names the APPROVAL_SCOPE token or the class and every effect path; for evidence gstack cannot read, attest it with `for <class>@<digest12>` on the line',
+    fix: 'add an `Approved by` line whose plan (with --approval-run <dir>) or maintainer comment names the APPROVAL_SCOPE token or the class and every effect path; for evidence gstack cannot read, attest it with `for <class>@<digest12>` on the line. Only the owner approves: never write the line without their approval',
   },
   APPROVAL_SOURCE_UNAVAILABLE: {
     anchor: 'approval-source-unavailable',

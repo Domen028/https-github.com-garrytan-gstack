@@ -63,7 +63,7 @@ Based on the scope signals above, select which specialists to dispatch.
 1. **Testing** — read \`${ctx.paths.skillRoot}/review/specialists/testing.md\`
 2. **Maintainability** — read \`${ctx.paths.skillRoot}/review/specialists/maintainability.md\`
 
-**If DIFF_LINES < 50:** Skip all specialists. Print: "Small diff ($DIFF_LINES lines) — specialists skipped." Continue to Step ${stepMerge} with the ${isShip ? 'core/design-lite' : 'core'} findings and an empty specialist list, then the parent's Exploratory QA step and ${nextStep}. Small diffs skip fan-out, never the parent-owned smoke probes. Core shared-code checks also remain required.
+**If DIFF_LINES < 50:** Skip all specialists except State Machines. Print: "Small diff ($DIFF_LINES lines) — specialists skipped." Continue to Step ${stepMerge} with the ${isShip ? 'core/design-lite' : 'core'} findings and an empty specialist list, then the parent's Exploratory QA step and ${nextStep}. Small diffs skip fan-out, never the parent-owned smoke probes. Core shared-code checks also remain required.
 
 **Conditional (dispatch if the matching scope signal is true):**
 3. **Security** — if SCOPE_AUTH=true, OR if SCOPE_BACKEND=true AND DIFF_LINES > 100. Read \`${ctx.paths.skillRoot}/review/specialists/security.md\`
@@ -72,6 +72,7 @@ Based on the scope signals above, select which specialists to dispatch.
 6. **API Contract** — if SCOPE_API=true. Read \`${ctx.paths.skillRoot}/review/specialists/api-contract.md\`
 7. **Design** — if SCOPE_FRONTEND=true. Use the existing design review checklist at \`${ctx.paths.skillRoot}/review/design-checklist.md\` and run the mechanical pass at the top of that checklist (the user-installed design detector, when present) before the LLM items
 8. **Simplification** — if DIFF_LINES > 100. Read \`${ctx.paths.skillRoot}/review/specialists/simplification.md\`. Advisory-only lens: hunts unrequested structure (hand-rolled stdlib, one-implementation abstractions, dependencies duplicating platform features), never coverage.
+9. **State Machines** — any size, if \`${ctx.paths.binDir}/gstack-state-matrix detect --base <base>\` says SCOPE_STATE_MACHINE=true: read \`${ctx.paths.skillRoot}/review/specialists/state-machines.md\`; its output must pass that tool's \`check -\`.
 
 ### Adaptive gating
 
@@ -79,9 +80,9 @@ After scope-based selection, apply adaptive gating based on specialist hit rates
 
 For each conditional specialist that passed scope gating, check the \`gstack-specialist-stats\` output above:
 - If tagged \`[GATE_CANDIDATE]\` (0 findings in 10+ dispatches): skip it. Print: "[specialist] auto-gated (0 findings in N reviews)."
-- If tagged \`[NEVER_GATE]\`: always dispatch regardless of hit rate. Security and data-migration are insurance policy specialists — they should run even when silent.
+- If tagged \`[NEVER_GATE]\`: always dispatch regardless of hit rate.
 
-**Force flags:** If the user's prompt includes \`--security\`, \`--performance\`, \`--testing\`, \`--maintainability\`, \`--data-migration\`, \`--api-contract\`, \`--design\`, \`--simplification\`, or \`--all-specialists\`, force-include that specialist regardless of gating.
+**Force flags:** \`--<specialist>\` (e.g. \`--state-machines\`) or \`--all-specialists\` in the prompt force-includes it.
 
 Note which specialists were selected, gated, and skipped. Print the selection:
 "Dispatching N specialists: [names]. Skipped: [names] (scope not detected). Gated: [names] (0 findings in N+ reviews)."`;
@@ -240,7 +241,7 @@ Do not add core shared-code savings to this specialist footer. Explain any overl
 #### 6. Save specialist activity
 
 Compile a \`specialists\` object for ${persistRef}.
-${isShip ? 'For each specialist' : 'For DIFF_LINES < 50, keep `specialists: {}`; do not manufacture per-specialist scope records. Otherwise record each considered specialist'} (testing, maintainability, security, performance, data-migration, api-contract, design, simplification, red-team):
+${isShip ? 'For each specialist' : 'For DIFF_LINES < 50, keep `specialists: {}`; do not manufacture per-specialist scope records. Otherwise record each considered specialist'} (testing, maintainability, security, performance, data-migration, api-contract, design, simplification, state-machines, red-team):
 - If dispatched: \`{"dispatched": true, "findings": N, "critical": N, "informational": N}\`
 - If skipped by scope: \`{"dispatched": false, "reason": "scope"}\`
 - If skipped by gating: \`{"dispatched": false, "reason": "gated"}\`
