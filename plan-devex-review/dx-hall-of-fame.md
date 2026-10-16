@@ -41,9 +41,11 @@ Read ONLY the section for the current review pass. Do NOT load the entire file.
 
 ## Pass 3: Error Messages & Debugging
 
-**Three tiers of error quality:**
+Score against the agent-ready error contract (Pass 3 of the review, and
+https://github.com/garrytan/gstack/blob/main/docs/agent-ready-errors.md). The examples
+below show single items done well; none of them alone meets every item.
 
-**Tier 1, Elm (Conversational Compiler):**
+**Elm (what, fix, readable first line):**
 ```
 -- TYPE MISMATCH ---- src/Main.elm
 I cannot do addition with String values like this one:
@@ -51,9 +53,9 @@ I cannot do addition with String values like this one:
      ^^^^^^^
 Hint: To put strings together, use the (++) operator instead.
 ```
-First person, complete sentences, exact location, suggested fix, further reading.
+First person, complete sentences, exact location, suggested fix.
 
-**Tier 2, Rust (Annotated Source):**
+**Rust (code, fix, `--explain`):**
 ```
 error[E0308]: mismatched types
  --> src/main.rs:4:20
@@ -62,17 +64,53 @@ help: consider borrowing here
 4 |     let name: &str = &get_name();
   |                       +
 ```
-Error code links to tutorial. Primary + secondary labels. Help section shows exact edit.
+A stable code with `rustc --explain E0308`, primary and secondary labels, and a help line
+that shows the exact edit.
 
-**Tier 3, Stripe API (Structured with doc_url):**
+**Stripe API (code, doc anchor, structured channel):**
 ```json
 {"error":{"type":"invalid_request_error","code":"resource_missing","message":"No such customer: 'cus_nonexistent'","param":"customer","doc_url":"https://stripe.com/docs/error-codes/resource-missing"}}
 ```
-Five fields, zero ambiguity.
 
-**The formula:** What happened + Why + How to fix + Where to learn more + Actual values that caused it.
+**Agent-ready CLI error (every applicable item).** stderr, exit 3:
+```
+deploy: push to registry.example.com/acme/api:1.4.2 failed: 401 unauthorized (REGISTRY_AUTH)
+  cause: docker login token in ~/.docker/config.json expired; nothing was pushed (side effects: none)
+  context: deploy 2.8.0, docker 27.1, config ./deploy.toml, env DEPLOY_REGISTRY set
+  fix: run `deploy login --registry registry.example.com`, then rerun the same command (safe to retry once)
+  docs: https://deploy.example.com/errors#REGISTRY_AUTH
+```
+and with `--json`, the same fields as an RFC 9457 problem-details object with extension members:
+```json
+{"type":"https://deploy.example.com/errors#REGISTRY_AUTH","title":"Registry push unauthorized",
+ "detail":"push to registry.example.com/acme/api:1.4.2 failed: 401","instance":"req_7f3a",
+ "code":"REGISTRY_AUTH","fix":"deploy login --registry registry.example.com",
+ "recovery":{"action":"fix_and_retry","side_effects":"none","max_retries":1},
+ "context":{"version":"2.8.0","config":"./deploy.toml","env":["DEPLOY_REGISTRY"]}}
+```
+An unexpected crash adds `trace: ~/.deploy/logs/crash-2026-10-16T18-02.log (rerun with
+--verbose to print it)`. A remote API returns `instance` as its correlation id and keeps the
+trace in its own logs. `recovery.action` is retry | fix_and_retry | do_first | ask_human;
+`side_effects` is none | partial | complete | unknown, with `reconcile` (a status command)
+whenever it is unknown. These member names are illustrative; score the meaning, not the spelling.
 
-**Anti-pattern:** TypeScript buries "Did you mean?" at the BOTTOM of long error chains. Most actionable info should appear FIRST.
+**A partial example, gstack's own workflow errors:**
+```
+findings.jsonl:12: severity must be one of Critical, High, Medium, Low, Informational (ARTIFACT_SCHEMA)
+```
+It covers what (file, line, the constraint), code (with a `docs/troubleshooting.md` anchor
+that carries the `fix:`) and channel (exit 1). It lacks a fix on the line itself, a recovery
+class and context. It would score CAP6:fix.
+
+**Standards mapping.** CLI Agent Spec (cli-agent-spec.github.io): per-exit-code `retryable`
+and `side_effects` → recovery. RFC 9457: `type` → code + doc anchor, `detail` → what,
+`instance` → trace for remote services. Stripe: `code` + `doc_url` → code. MCP tools:
+`isError: true` results the model can read → channel. clig.dev "Errors": the actionable line
+where the reader looks, debug info for unexpected errors → fix, trace.
+
+**Anti-patterns:** TypeScript buries "Did you mean?" mid-chain; put the fix on the first or
+last line. `Error: operation failed` with exit 0. A prompt that hangs when no terminal is
+attached. A stack trace that prints an API token.
 
 ## Pass 4: Documentation & Learning
 
@@ -121,6 +159,7 @@ Use when reviewing plans for Claude Code skills, MCP servers, or AI agent tools.
 - [ ] **Auto-upgrade**: Version check with cache + snooze backoff. Migration scripts. Inline offer.
 - [ ] **Skill composition**: Benefits-from chains. Review chaining. Inline invocation with section skipping.
 - [ ] **Error recovery**: Resume from failure. Partial results preserved. Checkpoint-safe.
+- [ ] **Agent-readable errors**: Every error meets the agent-ready error contract (Pass 3): a safe fix, recovery class, code, context, and a result line with a code.
 - [ ] **Session continuity**: Timeline events. Compaction recovery. Cross-session learnings.
 - [ ] **Bounded autonomy**: Clear operational limits. Mandatory escalation for destructive actions. Audit trails.
 
