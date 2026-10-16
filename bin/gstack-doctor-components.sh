@@ -246,6 +246,7 @@ gstack_result_anchor() {
     QUEUE_VERIFY_MISMATCH) printf '%s' 'queue-verify-mismatch' ;;
     QUEUE_GATE_MISSING) printf '%s' 'queue-gate-missing' ;;
     GATE_AHEAD_ATTEMPT_INVALID) printf '%s' 'gate-ahead-attempt-invalid' ;;
+    PREGATE_TIMING_ASSERTION) printf '%s' 'pregate-timing-assertion' ;;
     *) return 1 ;;
   esac
 }

@@ -730,6 +730,12 @@ export const RESULT_CODES = {
     summary: 'the gate-ahead attempt is unknown, already recorded, or its worktree no longer holds the gated commit',
     fix: 'list attempts with gstack-ship-queue gate-ahead --list, then record the live one, or prepare a new attempt',
   },
+  // Field list 2 W4 (pregate `timing`).
+  PREGATE_TIMING_ASSERTION: {
+    anchor: 'pregate-timing-assertion',
+    summary: 'an added or changed test line compares an elapsed wall-clock or CPU time against a bound, or sleeps and then asserts (a warning, not a block)',
+    fix: 'assert on the outcome, an injected clock or a forced deadline instead; when the bound is the contract, add `gstack-timing-ok: <reason>` in a comment on the line or the line above',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

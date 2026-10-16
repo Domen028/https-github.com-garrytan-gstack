@@ -97,6 +97,12 @@ Two stages with separate clocks, both printed:
   searched for the old value; a consumer the branch did not update fails with
   `file:line`.
 
+- `timing`: added or changed test lines that compare an elapsed wall-clock or
+  CPU time against a bound, or sleep and then assert, print
+  `TIMING_ASSERTION: <file>:<line> <pattern>` and a
+  `TIMING_ASSERTIONS: found=<n> escaped=<n> files=<n>` summary. It warns
+  (`PREGATE_TIMING_ASSERTION`); it does not block. See [timing](#timing).
+
 - `guards`: each guard in `.gstack/pregate.json` whose `when` globs match a
   touched file (renames included) runs its `command` in its own process, under
   the verified launch Bun, with its own `timeout_s` (default `--timeout`). A
@@ -245,6 +251,54 @@ guard is a *command* with its own fix line. Older gstack refuses unknown keys
 (`PREGATE_CONFIG_INVALID`), so a repo commits `guards` only after the gstack
 that reads them ships. The worked gbrain configuration is in
 [gbrain worked configs](#gbrain-worked-configs).
+
+<a id="timing"></a>
+## Timing assertions
+
+`timing` reads only the lines the branch added or changed in test code (test
+files and files under `test/`, `tests/`, `spec/` or `__tests__/`; never
+fixture trees). It reports three patterns:
+
+| Pattern | Example |
+|---|---|
+| `wall-time-bound` | `expect(Date.now() - t0).toBeLessThan(400)`, `expect(elapsedMs).toBeLessThanOrEqual(2_000)`, `assert elapsed < 0.5` |
+| `cpu-time-bound` | `expect(cpuMs(() => parse(x))).toBeLessThan(150)`, `assert time.process_time() - c0 < 0.2` |
+| `sleep-then-assert` | `await Bun.sleep(50); expect(calls).toBe(1)` (a fixed sleep, not a polling loop) |
+
+A comparison with `0`, a named bound (`timeoutMs`, `TTL_MS`), a timestamp
+ordered against a bare `Date.now()` and a `while (… Date.now() < deadline)`
+poll are not reported. Changing the bound of an existing assertion is a changed
+line, so it is reported.
+
+**Escape.** When the bound is the contract (a hang check with wide headroom, a
+CPU-time bound on a pure function), put `gstack-timing-ok: <reason>` in a
+comment, in any comment syntax (`//`, `#`, `/* */`, `--`), on the line or
+the line above. The reason is required; an empty one is still reported with
+`(gstack-timing-ok needs a reason)`. `--explain` lists every escape and its
+reason.
+
+**Warn, not block (measured 2026-10-16).** The detector was run over:
+
+- gstack's own test tree: 263 hits in 123 of 1,566 test files (176
+  `wall-time-bound`, 87 `sleep-then-assert`), mostly real timing assertions,
+  most of them generous "does not hang" bounds.
+- gstack's last 51 commits on main: 9 of the 47 that touched tests would have
+  been flagged (29 hits; #3190 alone has 7).
+- gbrain's last 100 commits on master: 37 of the 95 that touched tests would
+  have been flagged (147 hits).
+- The five gbrain timing-flake fixes (#6050, #6493, #6726, #6746, #6862): 31 of
+  38 fix sites were flagged before the fix. The misses are flakes with no
+  timing comparison on the line (an injected deadline in #6050, a
+  `Promise.race` with a sleep and a deadline parameter in #6862) and ratio or
+  percentile checks computed far from the clock read. The correct fix in
+  #6726 (wall clock to thread CPU time) is still a bound and is reported 21
+  times.
+
+Blocking would stop about a fifth of gstack's and two fifths of gbrain's
+test-touching commits, including correct fixes, so the check warns. A repo
+that wants it stricter keeps the warning in its review rule (the /review
+checklist has the same rule) and /investigate's flake playbook says what to do
+with a timing flake: never raise the bound.
 
 <a id="sealed"></a>
 ## Sealed output: the pre-push hook and `gstack-pregate sealed`
