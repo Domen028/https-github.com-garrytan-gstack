@@ -155,6 +155,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/redact-diagram/**': ['test/redact-context-exemptions.test.ts'],
   'test/fixtures/remote-identity-vectors.json': ['test/bin-context-windows-slug.test.ts', 'test/gstack-slug-parity.test.ts', 'test/remote-identity-vectors.test.ts'],
   'test/fixtures/review-design-lite-reports-ci-36633323521.json': ['test/review-finalization-budget.test.ts'],
+  'test/fixtures/session-update-heartbeat.sh': ['test/session-update-heartbeat.test.ts'],
   'test/fixtures/shard-cli-parity/**': ['test/shard-cli-parity.test.ts'],
   'test/fixtures/shard-equivalence/**': ['test/shard-engine-equivalence.test.ts'],
   'test/fixtures/shared-libs-no-change-ci-public.json': ['test/shared-libs-fixture.test.ts'],
@@ -175,5 +176,6 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/trial-cause/replays.json': ['test/trial-cause.test.ts'],
   'test/fixtures/trial-cause/thinking-captures-37198445662.json': ['test/trial-cause.test.ts'],
   'test/fixtures/trial-record-v1-reader.ts': ['test/helpers/eval-store.test.ts'],
+  'test/fixtures/windows-bash-resolution.json': ['test/script-invocation.test.ts'],
   'test/fixtures/workflow-required-steps.json': ['test/workflow-required-steps.test.ts'],
 };

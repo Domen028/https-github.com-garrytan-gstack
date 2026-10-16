@@ -155,6 +155,11 @@ export const RESULT_CODES = {
     summary: 'a tool the installer needs before ./setup (git, curl, node, jq) is missing, or the Bun install recipe failed its checksum',
     fix: 'install the named tool, then re-run bin/gstack-capy-install',
   },
+  SETUP_PS1_EMPTY_ARGUMENT: {
+    anchor: 'setup-ps1-empty-argument',
+    summary: 'an argument given to .\\setup.ps1 is an empty string, which its Git Bash hand-off cannot carry, so nothing ran',
+    fix: 'drop the empty argument or give it a value, then run .\\setup.ps1 again',
+  },
   // C-stamp (plan C1, C2, C3, C5, C7): ship policy, restamp, tree receipt, ship receipt.
   POLICY_SOURCE_UNAVAILABLE: {
     anchor: 'policy-source-unavailable',
@@ -621,6 +626,35 @@ export const RESULT_CODES = {
     anchor: 'install-unverified',
     summary: 'a Capy session (GSTACK_CAPY=1) has no passing install verdict for this checkout, HEAD and workflow, so the workflow refused to start',
     fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
+  },
+  // Fix wave 2026-10-15, PR 1a (items 7 and 11).
+  BROWSE_TAB_UNRECOVERABLE: {
+    anchor: 'browse-tab-unrecoverable',
+    summary: 'every tab was closed outside browse and a new one could not be opened, because the browser or its context is gone',
+    fix: 'run `browse restart` (`$B restart` in a gstack skill); `browse status` and `browse stop` keep working',
+  },
+  BUN_VERSION_UNREADABLE: {
+    anchor: 'bun-version-unreadable',
+    summary: 'bun --version did not print a version gstack can compare with the incoming release\'s Bun floor, so the update was held and nothing was changed',
+    fix: 'reinstall Bun from https://bun.sh (bun upgrade may not run on a broken install), check that bun --version prints a version such as 1.4.2, then update again',
+  },
+  // #3197: the one Windows bash resolver (lib/script-invocation.ts) found no usable Git Bash.
+  BASH_UNAVAILABLE: {
+    anchor: 'bash-unavailable',
+    summary: 'no Git Bash found to run gstack\'s bash scripts on Windows',
+    fix: 'install Git for Windows (winget install --id Git.Git -e), or set GSTACK_GIT_BASH to its bash.exe for good: in PowerShell, [Environment]::SetEnvironmentVariable(\'GSTACK_GIT_BASH\', \'C:\\Program Files\\Git\\bin\\bash.exe\', \'User\') and restart Claude Code, or add it to the "env" block of ~/.claude/settings.json',
+  },
+  // Fix wave 2026-10-15, PR 3 (item 23, #1796).
+  IOS_LAUNCH_ENV_INVALID: {
+    anchor: 'ios-launch-env-invalid',
+    summary: 'GSTACK_IOS_LAUNCH_ENV is set but is not a JSON object of string to string, or sets a GSTACK_ variable the debug bridge reserves, so the app was not launched',
+    fix: 'set it to a JSON object such as GSTACK_IOS_LAUNCH_ENV=\'{"DEBUG_BRIDGE":"1"}\' (string values, no GSTACK_ keys), or unset it, then restart gstack-ios-qa-daemon',
+  },
+  // Fix wave 2026-10-15, PR 4 (item 17, #3182).
+  OUTSIDE_VOICE_UNAVAILABLE: {
+    anchor: 'outside-voice-unavailable',
+    summary: 'a plan review ran without its second opinion: the outside provider did not run or failed, and the bounded native Plan reviewer was not offered or did not finish within five minutes',
+    fix: 'repair the provider the line names (install it, or log in with `codex login`); for the native fallback use Claude Code 2.1.277 or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` unset), then re-run the review',
   },
 } as const satisfies Record<string, ResultCode>;
 

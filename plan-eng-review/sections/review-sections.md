@@ -985,54 +985,52 @@ only its `OUTSIDE VOICE (...)` subagent report; never print both for one review.
 
 **Native fallback — provider unavailable or execution failed, with reviews enabled:**
 
-Use this fallback only after the routing row says to use it. Immediately before
-dispatch, check the preflight result again: disabled means no replacement;
+Immediately before dispatch, check the preflight result again: disabled means no replacement;
 record disabled coverage and do not dispatch. If still enabled, run the bounded
-native attempt below. A native result never supplies outside coverage.
+native attempt below.
 
-**Bounded outside-voice wait — one five-minute wait plus dispatch/cancellation overhead:**
+**Bounded outside-voice wait — one five-minute host timer:**
 
-Before dispatch, verify TaskOutput and TaskStop in this session's tool definitions,
-and Plan in Agent's declared subagent types. Do not launch a task to test availability.
-If any capability is missing or undeclared, take the unavailable path below.
+Before dispatch, check this session's tools for TaskStop, Bash's `run_in_background`
+and Plan among Agent's subagent types. Do not launch a task to test availability;
+if any is missing, take the unavailable path without launching.
 Use Plan, which denies native Edit, Write and NotebookEdit tools. Do not set a model
 override; keep the inherited model. This is not a filesystem sandbox: the review-only
-prompt also forbids mutations through other tools. The subagent has fresh context
-but is the same harness; model identity stays unknown unless the runtime reports it.
-A native result never supplies outside coverage.
+prompt also forbids mutations through other tools. A native result never supplies
+outside coverage. This is the one exception to foreground dispatch here.
+Execute the four steps once:
 
-This is the single bounded-wait exception to foreground dispatch for this outside
-voice. Execute the four steps once:
-
-1. Dispatch via the Agent tool with `subagent_type: "Plan"` and
-   `run_in_background: true`. Subagent prompt: same plan review prompt as above.
-   Keep the returned `agentId`; do not guess an ID or launch a second task.
-   If dispatch fails without an ID, take the unavailable path without guessing one.
-2. Immediately call TaskOutput with that exact ID as `task_id`, `block: true`,
-   and `timeout: 300000`. Make one wait only; do not poll or renew the budget.
-3. Check TaskOutput's outer fields: `<retrieval_status>` must be `success`,
-   `<task_id>` must match, `<task_type>` must be `local_agent`, `<status>`
-   must be `completed`, `<output>` must be nonempty, and there must be no outer
-   `<error>`. Accept findings only if that output is an identifiable complete
+1. Start the timer: Bash `command: "sleep 300"`, `run_in_background: true`,
+   `timeout: 300000`. Dispatch via the Agent tool with `subagent_type: "Plan"`
+   and `run_in_background: true` where offered, with the same plan review prompt.
+   Keep the returned agent ID; do not guess an ID or launch a second task.
+2. End your turn and wait for task notifications. Make one wait only: do not poll,
+   sleep, Read either output file or renew the timer.
+3. Only the agent's `<task-notification>` arriving before the timer's counts:
+   `<task-id>` must match the agent ID, `<status>` must be `completed`, `<summary>`
+   must say it finished ("is waiting on its own background work": keep waiting; a
+   turn limit: partial) and `<result>` must be nonempty; a "[Subagent hand-back]"
+   header only frames it. Accept findings only if it is an identifiable complete
    final reviewer report. Reject raw or in-progress transcripts; do not extract
    finding fragments from them. Terminal status or warning markers alone do not
-   establish report completeness. If any check fails or the report cannot be identified, follow step 4. Otherwise present it under an `OUTSIDE VOICE (Claude subagent):`
+   establish report completeness. If any check fails or the report cannot be identified, follow step 4. Otherwise call TaskStop with the timer's ID, present it under an `OUTSIDE VOICE (Claude subagent):`
    header, then continue to Cross-model tension.
-4. On any noncompletion (timeout, error, missing/mismatched result, failed/killed
-   status, raw transcript or empty report), call TaskStop with the same ID as
-   `task_id`. TaskOutput timeout does not stop the agent. Record the stop result;
-   if cancellation fails, say cancellation is unconfirmed. If TaskStop reports the
-   task already completed after the timeout, still give no late-result credit.
+4. Otherwise (timer first, no ID, failed or stopped status, partial or empty result,
+   or Agent returns a report directly: no enforced deadline, so no credit), call
+   TaskStop with the same ID as the agent, and call TaskStop with the timer's ID if it runs.
+   Record each stop result; if one fails, cancellation is unconfirmed.
+   For a completion after the timer or TaskStop, still give no late-result credit.
 
-**Unavailable path:** "Outside voice unavailable. Continuing to planning decisions and Approval readiness."
+**Unavailable path:** "Outside voice unavailable: <cause>. Fix: <fix>. Continuing to planning decisions and Approval readiness. (OUTSIDE_VOICE_UNAVAILABLE)"
+The cause adds to the provider's diagnosis: Plan agent type not offered, TaskStop not offered,
+background tasks unavailable (fix: Claude Code 2.1.277+, background tasks on), no complete report within five minutes, or a failed status.
 Do not retry with a general-purpose agent. Report missing outside-voice coverage.
 Ignore partial or late results for critique, agreement, clean status or coverage.
 Skip Cross-model tension. Persist an unavailable result using the command below
-with STATUS = "unavailable", SOURCE = "none", OUTSIDE_STATUS = "unavailable";
-then continue directly to the remaining planning decisions and Approval readiness. The storage policy still applies.
-Do not record a clean review when no reviewer completed within the accepted wait.
+with STATUS = "unavailable", SOURCE = "none", OUTSIDE_STATUS = "unavailable", adding `"unavailable_reason":"<cause>"`;
+then continue directly to the remaining planning decisions and Approval readiness.
+Do not record a clean review when no reviewer completed.
 
-(On `CODEX_MODE: disabled` you already skipped this section per the preflight — do not reach here.)
 
 **Cross-model tension:**
 

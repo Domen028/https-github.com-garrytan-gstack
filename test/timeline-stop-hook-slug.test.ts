@@ -27,6 +27,8 @@ const HOOK_FILES = [
   'lib/state-root.ts',
   'lib/bin-context.ts',
   'lib/remote-identity.ts',
+  'lib/script-invocation.ts',
+  'lib/result-codes.ts',
 ];
 const SLUG = 'stop-hook-slug-test';
 const BUDGET_MS = 2000;

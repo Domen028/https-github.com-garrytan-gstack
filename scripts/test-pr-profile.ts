@@ -247,6 +247,7 @@ export const FREE_ONLY_PR_FILES = [
   'scripts/ship-measure-sweep.ts', // The weekly sweep CLI; it launches paid cases, never runs inside one.
   '.github/workflows/version-gate.yml',
   '.github/workflows/windows-free-tests.yml',
+  '.github/workflows/windows-pregate-e2e.yml',
   '.github/workflows/windows-setup-e2e.yml',
 ] as const;
 

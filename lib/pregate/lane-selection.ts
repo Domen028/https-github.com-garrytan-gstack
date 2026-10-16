@@ -7,8 +7,8 @@
  * runner-owned selection manifest `.gstack/pregate.json` declares for a
  * planner-computed matrix. Every uncertainty widens the selection.
  */
-import { spawnSync } from 'node:child_process';
 import { GENERATED_PATH } from '../regen';
+import { runBashSync } from '../script-invocation';
 import { matchesAny } from '../ship-policy';
 import { PREGATE_CONFIG_PATH } from './config';
 import { buildGraph, isTestFile, listRepoFiles, testsFor, type Graph } from './import-graph';
@@ -31,15 +31,33 @@ export interface Selection {
   provenance: string[];
 }
 
+/** One path-shaped token: framework route segments (`(group)`, `[id]`, `[...slug]`, `@slot`, `$param`, `+page`) stay whole. */
+const PATH_TOKEN = /[\w.@()[\]$+~-]+(?:\/[\w.@()[\]$+~-]+)*/g;
+
+/** Test files a selection manifest printed, in order: every path-shaped token the import graph calls a test file. */
+export function manifestTestPaths(output: string): string[] {
+  const found = new Set<string>();
+  for (const line of output.split('\n')) {
+    for (const [token] of line.matchAll(PATH_TOKEN)) {
+      const bare = token.replace(/^\.\//, '');
+      const trimmed = bare.replace(/^[([]+/, '').replace(/[)\].,]+$/, '');
+      const hit = [bare, trimmed].find(isTestFile);
+      if (hit) found.add(hit);
+    }
+  }
+  return [...found];
+}
+
 /** Resolve one lane's test-file set: literal paths, then the declared selection manifest, else `?` when its matrix is an expression. */
 export function laneFileSet(ctx: PregateContext, lane: Lane): string[] | '?' | 'all' {
   const files = new Set(lane.testFiles);
   const manifest = ctx.config.selection[lane.id];
   if (manifest) {
     if (!ctx.allowRepoCommands) { ctx.explain.push(`lane ${lane.id}: selection manifest \`${manifest}\` not run (pass --allow-repo-commands); treated as unknown`); return files.size ? [...files] : '?'; }
-    const r = spawnSync('bash', ['-c', `set -o pipefail; ${manifest}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
+    const r = runBashSync(`set -o pipefail; ${manifest}`, { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
+    if (r.error && r.status === null && r.signal === null) { ctx.explain.push(`lane ${lane.id}: selection manifest could not start (${r.error.message}); treated as unknown`); return '?'; }
     if (r.status !== 0) { ctx.explain.push(`lane ${lane.id}: selection manifest exited ${r.status}; treated as unknown`); return '?'; }
-    for (const line of (r.stdout ?? '').split('\n')) { const m = /((?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?|(?:[\w.-]+\/)*test_[\w.-]+\.py)/.exec(line.trim()); if (m) files.add(m[1]!); }
+    for (const f of manifestTestPaths(r.stdout ?? '')) files.add(f);
     ctx.explain.push(`lane ${lane.id}: ${files.size} files from manifest \`${manifest}\``);
     return [...files];
   }
