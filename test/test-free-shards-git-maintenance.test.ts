@@ -22,7 +22,7 @@ const scratch = () => {
 };
 const gitConfigEnv = (env: NodeJS.ProcessEnv) => Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith('GIT_CONFIG_')).sort());
 const cleanGitEnv = (home: string): NodeJS.ProcessEnv => ({
-  PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: os.devNull,
+  PATH: process.env.PATH ?? '', HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(home, 'no-global-gitconfig'),
   ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
 });
 
