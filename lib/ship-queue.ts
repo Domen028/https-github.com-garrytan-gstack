@@ -131,7 +131,7 @@ export function ready(ctx: QueueContext, o: { pr: string; pregate?: string }): S
 
 export interface StampOptions {
   pr: string; version: string; expectGated: string; expectBase: string; expectOrder?: string[]; allowRepoCommands: boolean;
-  gateExit?: number; gateLog?: string;
+  gateExit?: number; gateLog?: string; failAfter?: string;
 }
 interface StageRow { name: 'preflight' | 'restamp' | 'commit' | 'receipt'; status: 'done' | 'failed'; detail: string }
 interface StampJournal {
@@ -217,11 +217,12 @@ export function stamp(ctx: QueueContext, o: StampOptions): StepOutput {
   const save = () => writeJsonAtomic(file, journal);
   const done = (name: StageRow['name']) => journal.stages.some(s => s.name === name && s.status === 'done');
   const mark = (name: StageRow['name'], status: StageRow['status'], detail: string) => { journal.stages = journal.stages.filter(s => s.name !== name); journal.stages.push({ name, status, detail }); save(); };
-  const refusal = (stage: StageRow['name'], failure: QueueFailure): StepOutput => {
-    mark(stage, 'failed', failure.message);
+  const stopped = (stage: StageRow['name'], failure: QueueFailure): StepOutput => {
     const now = git(ctx.repoRoot, ['rev-parse', 'HEAD']).out;
     return fail(failure, [`QUEUE_STAMP_REFUSED: ${o.pr} head=${now} committed=${now !== journal.start_head ? `yes ${now}` : 'no'} stage=${stage}`, ...journal.stages.map(s => `stage ${s.name}: ${s.status} (${s.detail})`)], run);
   };
+  const refusal = (stage: StageRow['name'], failure: QueueFailure): StepOutput => { mark(stage, 'failed', failure.message); return stopped(stage, failure); };
+  const injected = (stage: StageRow['name']) => (o.failAfter === stage ? stopped(stage, { code: 'QUEUE_PROOF_MISSING', message: `injected failure after ${stage}; rerun the identical command to resume` }) : null);
   const policy = loadBasePolicy(ctx);
   if ('message' in policy) return refusal('preflight', policy);
   const gated = git(ctx.repoRoot, ['rev-parse', '--verify', '--quiet', `${o.expectGated}^{commit}`]).out;
@@ -231,17 +232,23 @@ export function stamp(ctx: QueueContext, o: StampOptions): StepOutput {
     if ('message' in pre) return refusal('preflight', pre);
     journal.gate = pre.gate;
     mark('preflight', 'done', pre.detail);
+    const stop = injected('preflight');
+    if (stop) return stop;
   }
   if (!done('restamp')) {
     const r = restamp({ repoRoot: ctx.repoRoot, base: ctx.base, version: o.version, pr: o.pr, expectBase: o.expectBase, expectOrder: o.expectOrder, policyFrom: 'base', allowRepoCommands: o.allowRepoCommands, dryRun: false });
     if (r.status === 'refused' || r.status === 'failed') return refusal('restamp', { code: r.code ?? 'RESTAMP_CONFLICT', message: r.message ?? r.status, fix: r.recompute ?? r.fix });
     journal.files = r.files ?? [];
     mark('restamp', 'done', `${r.status}: ${r.oldVersion} -> ${r.newVersion}, ${journal.files.length} file(s)`);
+    const stop = injected('restamp');
+    if (stop) return stop;
   }
   if (!done('commit')) {
     const c = journal.files.length ? stampCommit(ctx, o, journal) : 'nothing to commit (restamp was a noop)';
     if (typeof c !== 'string') return refusal('commit', c);
     mark('commit', 'done', c);
+    const stop = injected('commit');
+    if (stop) return stop;
   }
   const head = git(ctx.repoRoot, ['rev-parse', 'HEAD']).out;
   const rcpt = treeReceipt(ctx, policy, gated, head);
