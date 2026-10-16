@@ -2354,12 +2354,17 @@ and Heavy-only files included.
 <a id="pregate-no-lane"></a>
 ### `PREGATE_NO_LANE`
 
-**Meaning.** A touched file maps to no test through static imports, repo-path
-string literals, the `bin/<name>` → `test/<name>*.test.ts` convention or a
-`dependencies` declaration. That is a failure, not a pass.
+**Meaning.** A touched source file maps to no test through static imports,
+repo-path string literals, the `bin/<name>` → `test/<name>*.test.ts` convention
+or a `dependencies` declaration. That is a failure, not a pass. Planning and
+evidence Markdown is a docs/no-tests empty lane and is not this error: a `docs/`
+tree, a `.work` plan, a redproof or evidence note, and README/CHANGELOG/LICENSE.
+A test that names one of those files still selects that test. An unmapped
+source or code file still fails.
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
-for files with no behaviour, such as docs) in `.gstack/pregate.json`. `--explain`
+for files with no behaviour) under `dependencies` in `.gstack/pregate.json`.
+Other documentation goes in `empty_lanes` on the base branch. `--explain`
 prints every mapping and why.
 
 <a id="pregate-lane-failed"></a>

@@ -8,6 +8,9 @@
  *   dependencies  glob → test files for subprocess targets, runtime reads and
  *                 generated inputs the import graph cannot see; `[]` declares
  *                 "no lane needed" for docs and the like
+ *   empty_lanes   extra globs for the docs/no-tests empty lane (planning and
+ *                 evidence Markdown already qualifies without a pin file;
+ *                 source code and test trees never do)
  *   selection     `<workflow.yml>/<job>` → the runner-owned command that lists
  *                 the lane's test files when the matrix is planner-computed
  *   warn          check ids downgraded to warn (never `secrets`; `lanes` keeps
@@ -39,6 +42,8 @@ export interface PregateConfig {
   $schema?: string;
   runner: string | null;
   dependencies: Record<string, string[]>;
+  /** Extra docs/no-tests globs. Built-in planning and evidence Markdown always qualifies. */
+  empty_lanes: string[];
   selection: Record<string, string>;
   warn: string[];
   strays: { allow: string[] };
@@ -47,12 +52,12 @@ export interface PregateConfig {
   price_file: string | null;
 }
 export interface Guard { id: string; when: string[]; command: string; fix?: string; timeout_s?: number }
-export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, selection: {}, warn: [], strays: { allow: [] }, guards: [], serial_patterns: DEFAULT_SERIAL_PATTERNS, price_file: null };
+export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, empty_lanes: [], selection: {}, warn: [], strays: { allow: [] }, guards: [], serial_patterns: DEFAULT_SERIAL_PATTERNS, price_file: null };
 export interface ConfigError { code: ResultCodeName; path: string; message: string }
 
 const MAX_LIST = 256;
 const MAX_COMMAND = 512;
-const KEYS = ['runner', 'dependencies', 'selection', 'warn', 'strays', 'guards', 'serial_patterns', 'price_file', 'sealed'];
+const KEYS = ['runner', 'dependencies', 'empty_lanes', 'selection', 'warn', 'strays', 'guards', 'serial_patterns', 'price_file', 'sealed'];
 const MAX_GUARDS = 32;
 const GUARD_KEYS = ['id', 'when', 'command', 'fix', 'timeout_s'];
 
@@ -111,6 +116,11 @@ export function validateConfig(raw: unknown, knownChecks: readonly string[] = []
     if (!Array.isArray(list) || list.some(g => typeof g !== 'string')) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'serial_patterns', message: 'must be an array of globs' });
     else (list as string[]).forEach((g, i) => { const why = globError(g); if (why) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: `serial_patterns[${i}]`, message: `${JSON.stringify(g)} ${why}` }); });
   }
+  if ('empty_lanes' in obj) {
+    const list = obj.empty_lanes;
+    if (!Array.isArray(list) || list.some(g => typeof g !== 'string')) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'empty_lanes', message: 'must be an array of globs (extra docs/no-tests paths; source files and test trees never qualify)' });
+    else (list as string[]).forEach((g, i) => { const why = globError(g); if (why) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: `empty_lanes[${i}]`, message: `${JSON.stringify(g)} ${why}` }); });
+  }
   if ('dependencies' in obj) {
     const deps = obj.dependencies;
     if (!deps || typeof deps !== 'object' || Array.isArray(deps)) errors.push({ code: 'PREGATE_CONFIG_INVALID', path: 'dependencies', message: 'must be an object of glob → test file list' });
@@ -162,7 +172,7 @@ export function parseConfig(text: string, knownChecks: readonly string[] = []): 
   const errors = validateConfig(raw, knownChecks);
   if (errors.length) return { config: DEFAULT_CONFIG, errors };
   const o = raw as Partial<PregateConfig>;
-  return { config: { $schema: o.$schema, runner: o.runner ?? null, dependencies: o.dependencies ?? {}, selection: o.selection ?? {}, warn: o.warn ?? [], strays: { allow: o.strays?.allow ?? [] }, guards: o.guards ?? [], serial_patterns: o.serial_patterns ?? DEFAULT_SERIAL_PATTERNS, price_file: o.price_file ?? null }, errors: [] };
+  return { config: { $schema: o.$schema, runner: o.runner ?? null, dependencies: o.dependencies ?? {}, empty_lanes: o.empty_lanes ?? [], selection: o.selection ?? {}, warn: o.warn ?? [], strays: { allow: o.strays?.allow ?? [] }, guards: o.guards ?? [], serial_patterns: o.serial_patterns ?? DEFAULT_SERIAL_PATTERNS, price_file: o.price_file ?? null }, errors: [] };
 }
 
 export type ConfigLoad = { config: PregateConfig; errors: ConfigError[]; present: boolean; label: string; kind: 'base' | 'head' | 'none' } | { unavailable: true; base: string; detail: string };
@@ -196,6 +206,7 @@ export function exampleConfigJson(): string {
     $schema: PREGATE_CONFIG_SCHEMA,
     runner: null,
     dependencies: { 'bin/example-tool': ['test/example-tool.test.ts'], 'docs/**': [] },
+    empty_lanes: [],
     selection: {},
     warn: [],
     strays: { allow: [] },
@@ -207,6 +218,7 @@ export function explainConfig(): string {
   return [
     'runner: the test command with a {files} placeholder; null detects bun test / vitest / jest / pytest from the repo',
     'dependencies: glob → test files the import graph cannot see (subprocess targets, runtime reads, generated inputs); [] declares no lane needed',
+    'empty_lanes: extra globs treated as docs/no-tests when nothing else maps them. Built-in, with or without this file: a docs/doc/documentation tree, a .work plan, plans/evidence/redproof directories, markdown whose name says plan, planning, redproof or evidence, and README/CHANGELOG/CONTRIBUTING/LICENSE/AGENTS/CLAUDE. Source code and files under a test directory never qualify. A test that names the file still selects that test',
     'selection: <workflow.yml>/<job> → the runner-owned command that lists that lane’s test files when its matrix is planner-computed',
     `warn: check ids downgraded to warn; never ${NON_DOWNGRADABLE.join(', ')}; lanes keeps its required-lane and requires-remote verdicts`,
     'strays.allow: root files or new top-level directories that are intentional',
