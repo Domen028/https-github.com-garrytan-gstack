@@ -59,6 +59,7 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 |---|---|
 | `runner` | the local test command with `{files}` (gstack: `bun test {files}`); without it `lanes` is `incomplete` |
 | `dependencies` | glob → test files for subprocess targets, runtime reads and generated inputs the import graph cannot see; `[]` declares "no lane needed" (docs, licences) |
+| `empty_lanes` | extra globs for the docs/no-tests empty lane. Planning and evidence Markdown already qualifies with no pin file (a `docs/` / `doc/` / `documentation/` tree, a `.work` plan, `plans/` / `evidence/` / `redproof/`, and markdown named plan, planning, redproof or evidence, plus README, CHANGELOG, CONTRIBUTING, LICENSE, AGENTS, CLAUDE). Source code and files under a test directory never qualify. A test that names the file still selects that test |
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
@@ -118,8 +119,13 @@ Two stages with separate clocks, both printed:
   (static imports ∪ repo-path string literals ∪ the `bin/<name>` →
   `test/<name>*.test.ts` convention ∪ `dependencies`), transitively through
   non-test files; deleted and renamed files select the tests that named them.
-  A touched file with no lane is `FAIL lanes — <file> has no test lane`, never
-  a pass. Lanes and platform tiers come from `.github/workflows/*.yml`
+  A touched source file with no lane is `FAIL lanes — <file> has no test lane`,
+  never a pass. Planning and evidence Markdown is a docs/no-tests empty lane
+  instead (`docs/no-tests: N documentation file(s)`), including when the base
+  branch has no `.gstack/pregate.json`. `empty_lanes` adds globs for other
+  documentation; it cannot clear a source file or a file under a test
+  directory. A test that names a Markdown file still selects that test.
+  Lanes and platform tiers come from `.github/workflows/*.yml`
   (`gstack-pregate lanes` prints them): local ones run through the runner under
   `set -o pipefail`, judged on the runner's summary line (zero tests ran is a
   failure, a `| tail`-hidden exit is still an exit); a platform lane this

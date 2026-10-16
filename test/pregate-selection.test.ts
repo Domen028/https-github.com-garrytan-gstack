@@ -16,6 +16,7 @@ import { EXIT } from '../lib/headless-artifacts';
 import { changedLiterals, constantsIn } from '../lib/pregate/checks/literals';
 import { parseSummary } from '../lib/pregate/checks/lanes';
 import { validateConfig } from '../lib/pregate/config';
+import { isDocsEmptyLane } from '../lib/pregate/docs-lane';
 import { buildGraph, testsFor } from '../lib/pregate/import-graph';
 import { CHECK_IDS } from '../lib/pregate/index';
 import { parseWorkflow } from '../lib/pregate/workflows';
@@ -88,8 +89,37 @@ describe('literals (pure)', () => {
     expect(codes({ warn: ['bogus'] })).toEqual(['PREGATE_CONFIG_INVALID:warn']);
     expect(codes({ runner: 'bun test' })).toEqual(['PREGATE_CONFIG_INVALID:runner']);
     expect(codes({ dependencies: { '../x': [] } })).toEqual(['PREGATE_CONFIG_INVALID:dependencies["../x"]']);
+    expect(codes({ empty_lanes: 'docs/**' })).toEqual(['PREGATE_CONFIG_INVALID:empty_lanes']);
+    expect(codes({ empty_lanes: ['../x'] })).toEqual(['PREGATE_CONFIG_INVALID:empty_lanes[0]']);
+    expect(codes({ empty_lanes: ['notes/**/*.md'] })).toEqual([]);
     expect(codes({ selection: { 'ci/job': 'x' } })).toEqual(['PREGATE_CONFIG_INVALID:selection["ci/job"]']);
     expect(codes({ extra: 1 })).toEqual(['PREGATE_CONFIG_INVALID:extra']);
+  });
+});
+
+describe('docs/no-tests empty lane', () => {
+  const docs = [
+    '.work/round-3-plan.md', 'pkg/.work/notes.md', 'notes/redproof.md', 'notes/REDPROOF.md',
+    'notes/round-3.red-proof.md', 'docs/evidence.md', 'docs/guide.md', 'Docs/Guide.MD',
+    'documentation/index.md', 'plans/2026-10-16.md', 'README.md', 'lib/README.md',
+    'CHANGELOG.md', 'LICENSE', 'notes/implementation-plan.md', 'notes/planning.md', 'src/plan.md',
+  ];
+  const blocked = [
+    'lib/orphan.js', 'src/app.ts', 'bin/tool', 'scripts/gen.sh', 'prompts/system.md', 'src/notes.md',
+    'src/explanation.md', 'planet.md', 'docs/example.ts', 'test/fixtures/plan.md', 'test/plans/plan.md',
+    '__tests__/redproof.md', 'my-docs/guide.md',
+  ];
+  test('built-in planning and evidence markdown qualifies; source, test trees and lookalikes do not', () => {
+    for (const file of docs) expect(isDocsEmptyLane(file)).toBe(true);
+    for (const file of blocked) expect(isDocsEmptyLane(file)).toBe(false);
+  });
+  test('empty_lanes adds documentation globs and cannot clear source code or a test-tree file', () => {
+    expect(isDocsEmptyLane('notes/scratch.md', ['notes/**/*.md'])).toBe(true);
+    expect(isDocsEmptyLane('prompts/system.md', ['prompts/**'])).toBe(true);
+    expect(isDocsEmptyLane('lib/orphan.js', ['**', 'lib/**', '**/*.js'])).toBe(false);
+    expect(isDocsEmptyLane('docs/example.ts', ['docs/**'])).toBe(false);
+    expect(isDocsEmptyLane('bin/tool', ['bin/**'])).toBe(false);
+    expect(isDocsEmptyLane('test/fixtures/plan.md', ['**/*.md', 'test/**'])).toBe(false);
   });
 });
 
@@ -185,6 +215,60 @@ describe('gstack-pregate (bin)', () => {
     expect(r.out).toContain('HIGH github.pat [secret]');
     fs.rmSync(path.join(ok.work, 'lib/token.js'));
     expect(pregate(ok, ['--stage', 'preflight', '--only', 'secrets']).status).toBe(EXIT.ok);
+  });
+
+  test('lanes: tracked planning and evidence markdown is docs/no-tests, and an unmapped source file still fails closed', () => {
+    // No .gstack/pregate.json on the base: documentation cannot be declared as [].
+    const docs = fixture({ pregate: null });
+    commit(docs, {
+      '.work/round-3-plan.md': '# plan\n\nImplementation notes, not a test subject.\n',
+      'notes/redproof.md': '# redproof\n\nThe lane failed, then this note recorded the green run.\n',
+      'docs/evidence.md': '# evidence\n',
+    });
+    const ok = pregate(docs, ['--only', 'lanes', '--explain']);
+    expect(ok.status).toBe(EXIT.ok);
+    expect(ok.err).not.toContain('PREGATE_NO_LANE');
+    expect(ok.out).toMatch(/docs\/no-tests: 3 documentation file\(s\)/);
+    expect(ok.out).toContain('.work/round-3-plan.md: docs/no-tests (empty lane)');
+    expect(ok.out).toContain('notes/redproof.md: docs/no-tests (empty lane)');
+    expect(ok.out).toContain('docs/evidence.md: docs/no-tests (empty lane)');
+    expect(ok.out).not.toContain('has no test lane');
+
+    const mixed = fixture({ pregate: null });
+    commit(mixed, {
+      '.work/round-3-plan.md': '# plan\n',
+      'lib/orphan.js': 'exports.lonely = () => 2;\n',
+    });
+    const bad = pregate(mixed, ['--only', 'lanes']);
+    expect(bad.status).toBe(EXIT.fail);
+    expect(bad.err).toContain('(PREGATE_NO_LANE)');
+    expect(bad.out).toContain('lanes: FAIL lanes — lib/orphan.js has no test lane');
+    expect(bad.out).toContain('docs/no-tests (empty lane): .work/round-3-plan.md');
+    expect(bad.out).not.toContain('.work/round-3-plan.md has no test lane');
+
+    const extra = fixture({ pregate: { empty_lanes: ['notes/**/*.md'], runner: 'node --test {files}' } });
+    commit(extra, { 'notes/scratch.md': '# a planning note outside the built-in names\n' });
+    const declared = pregate(extra, ['--only', 'lanes']);
+    expect(declared.status).toBe(EXIT.ok);
+    expect(declared.err).not.toContain('PREGATE_NO_LANE');
+    expect(declared.out).toContain('docs/no-tests (empty lane): notes/scratch.md');
+  });
+
+  test('lanes: a test that names a markdown file still runs that test', () => {
+    const repo = fixture({ pregate: null });
+    repo.git('checkout', '-q', 'main');
+    write(repo.work, 'test/readme-doc.test.js', "const test = require('node:test');\nconst fs = require('node:fs');\ntest('reads the readme', () => { fs.readFileSync('docs/README.md', 'utf8'); });\n");
+    repo.git('add', '-A');
+    repo.git('commit', '-q', '-m', 'name the doc');
+    repo.git('push', '-q', 'origin', 'main');
+    repo.git('checkout', '-q', 'feature');
+    repo.git('reset', '--hard', 'main');
+    commit(repo, { 'docs/README.md': '# docs\n\nupdated evidence\n' });
+    const r = pregate(repo, ['--only', 'lanes', '--explain']);
+    expect(r.status).toBe(EXIT.ok);
+    expect(r.out).toContain('test/readme-doc.test.js ← docs/README.md');
+    expect(r.err).not.toContain('PREGATE_NO_LANE');
+    expect(r.out).not.toContain('docs/no-tests');
   });
 
   test('lanes: a touched file with no test lane is FAIL lanes — <file> has no test lane; a declaration or an explicit [] clears it', () => {
