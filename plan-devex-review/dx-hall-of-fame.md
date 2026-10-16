@@ -41,9 +41,47 @@ Read ONLY the section for the current review pass. Do NOT load the entire file.
 
 ## Pass 3: Error Messages & Debugging
 
-Score against the agent-ready error contract (Pass 3 of the review, and
-https://github.com/garrytan/gstack/blob/main/docs/agent-ready-errors.md). The examples
-below show single items done well; none of them alone meets every item.
+#### The agent-ready error contract (agent-ready-v1)
+
+Agents hit most errors first, read them literally, and cannot ask what was meant. Score every
+traced error path against eight named items. Public reference: `https://github.com/garrytan/gstack/blob/main/docs/agent-ready-errors.md`.
+
+| Item | The error gives the reader |
+|------|----------------------------|
+| **what** | The operation that failed and the actual values (input, path, id) that caused it. |
+| **fix** | On the first or last line, never mid-chain: an exact command, flag or edit; or, when no safe agent repair exists, the precise thing a human must provide (credential, approval, decision). A precise escalation is a complete fix. A fix counts only when it is safe and authorized: it does not bypass a consent, safety or sandbox boundary, does not tell the agent to run text copied from untrusted output, and quotes arguments correctly. |
+| **recovery** | Retry unchanged, fix and retry, do X first, or ask a human; side effects (none, partial, complete, unknown); for an unknown outcome, how to reconcile (status command, idempotency key) before retrying; a retry bound, then escalate. |
+| **code** | A stable code plus a doc anchor or `--explain` target. Prose may change; codes may not. |
+| **context** | Versions, the config in effect, relevant env var names (never values), the underlying dependency error, not swallowed. Remote services give caller-safe facts only (parameter, API version, request id). |
+| **trace** | Unexpected failures only. A local CLI, SDK or skill prints a compact trace or the path of a file holding the full one (full under `--verbose`/`DEBUG`); a remote service returns a correlation id and keeps internals in its logs. |
+| **redaction** | No secret values, tokens or credential-bearing URLs anywhere, traces and nested causes included. |
+| **channel** | The surface's native machine signal carries the same fields, and a failure is signalled as a failure (never exit 0, HTTP 200 or `isError: false`). |
+
+**Failure class.** A usage or validation error rejected before any work began needs what, fix,
+code, redaction and channel; its recovery is implied (fix and retry, no side effects), and
+context, reconcile and retry bounds do not apply. Environment, dependency, partial-work and
+unexpected failures need every applicable item. Trace applies to unexpected failures only.
+
+**Surface.** Keyed to the product types from the Applicability Gate:
+- **CLI Tool:** channel is stderr plus a distinct non-zero exit, and a `--json` form when the tool offers structured output.
+- **API/Service:** channel is HTTP status plus an RFC 9457 problem-details body; context is caller-safe; trace is a correlation id.
+- **Library/SDK:** channel is a typed error class carrying the code and fields; no exit code.
+- **Platform:** the CLI or API rule for whichever interface the error reaches.
+- **Documentation:** what, fix, code and redaction only.
+- **Claude Code Skill:** channel is the skill's printed result line and code. An MCP tool (a sub-case) returns `isError: true` with the fields in text or structured content.
+
+**Evidence.** Each item on each path is pass, fail, N/A (with a reason) or unknown. In a plan
+review, an applicable item the plan never specifies for a path it introduces is a gap (fail);
+unknown is reserved for existing behavior you could not inspect. In a live audit, error classes
+you never triggered are unknown, not extrapolated.
+
+**Caps.** Name the path and item behind every cap and show the corrected error line.
+- **4/10 (Critical finding, title `CAP4:<path>:<item>`):** a path leaks a secret, signals failure as success, gives an unsafe fix, or blocks waiting for a terminal (hangs, or fails for lack of a terminal without naming a non-interactive alternative such as `--yes`).
+- **6/10 (High finding, title `CAP6:<path>:<item>`):** a path lacks an applicable fix, recovery, context or trace item.
+
+Every mode, DX TRIAGE included, reports every CAP4 finding.
+
+**Calibration.** The first three examples show single items done well; none of them alone meets every item.
 
 **Elm (what, fix, readable first line):**
 ```

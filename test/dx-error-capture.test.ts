@@ -234,7 +234,9 @@ describe('gstack-error-capture containment', () => {
     expect(result.status).toBe(0);
     const record = JSON.parse(result.stdout);
     expect(record.launch).toBe('ok');
-    expect(record.argv).toEqual([process.execPath, '--version']);
+    // argv is redacted like the streams, so a home-directory execPath may be masked.
+    expect(record.argv).toHaveLength(2);
+    expect(record.argv[1]).toBe('--version');
   });
 });
 

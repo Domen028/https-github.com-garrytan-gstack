@@ -43,7 +43,7 @@ describe('agent-ready error contract reaches every DX reviewer', () => {
 
   test('rendered skills carry the contract where each consumer reads it', () => {
     expect(read('plan-devex-review/sections/review-sections.md').includes(DX_ERROR_COMPACT)).toBe(true);
-    expect(read('plan-devex-review/sections/review-sections.md')).toContain('docs/agent-ready-errors.md');
+    expect(read('plan-devex-review/dx-hall-of-fame.md').includes(DX_ERROR_CONTRACT)).toBe(true);
     expect(read('autoplan/sections/dx-phase.md')).toContain('2. Errors, agent-ready (what, fix, recovery, code, context, trace, redaction, channel)');
     const devex = read('devex-review/SKILL.md');
     expect(devex).toContain(DX_ERROR_ITEMS.join(', '));

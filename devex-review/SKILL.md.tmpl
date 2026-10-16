@@ -111,9 +111,9 @@ Score 0-10. Load "## Pass 2" from dx-hall-of-fame.md for calibration.
 ## Step 3: Error Message Audit (agent-ready)
 
 Score every triggered error against the agent-ready error contract ({{DX_ERROR_ITEMS}}).
-Before scoring, Read the full contract in `~/.claude/skills/gstack/docs/agent-ready-errors.md`
-and the calibration in the "## Pass 3" section of
-`~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`. CAP4
+Before scoring, Read the "## Pass 3" section of
+`~/.claude/skills/gstack/plan-devex-review/dx-hall-of-fame.md`: the full contract (item
+table, surface rules, evidence states) and calibration examples. CAP4
 (leaked secret, failure signalled as success, unsafe fix, terminal block) caps the score at
 4/10 and is always reported; CAP6 (missing applicable fix, recovery, context or trace) caps it at 6/10.
 
@@ -124,9 +124,11 @@ Pick the evidence source by surface:
   `--cwd`, needs one AskUserQuestion per run naming the commands and the access forwarded
   (the helper refuses those flags without `--approved`). Unapproved paths are recorded unverified.
   ```bash
-  ~/.claude/skills/gstack/bin/gstack-error-capture --launch-check -- <cli>
-  ~/.claude/skills/gstack/bin/gstack-error-capture -- <cli> <bad args>
+  TARGET_CLI="${TARGET_CLI:?set TARGET_CLI to the CLI under audit}"
+  ~/.claude/skills/gstack/bin/gstack-error-capture --launch-check -- "$TARGET_CLI"
+  ~/.claude/skills/gstack/bin/gstack-error-capture -- "$TARGET_CLI" --gstack-unknown-flag
   ```
+  Swap `--gstack-unknown-flag` for each rejected form the help shows.
   The helper runs the target with no terminal, stdin closed, a temp cwd and HOME, a scrubbed
   environment and a deadline, and prints one JSON record. Raw output never enters the
   transcript or report; use only the record's redacted fields. Its stdout and stderr are
