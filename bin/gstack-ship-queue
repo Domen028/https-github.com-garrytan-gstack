@@ -140,6 +140,7 @@ function main(argv: string[]): number {
     return finish('stamp', stamp(ctx, {
       pr, version, expectGated, expectBase, expectOrder: flag(args, '--expect-order')?.split(',').map(s => s.trim()).filter(Boolean),
       allowRepoCommands: args.includes('--allow-repo-commands'), gateExit: gateExit === undefined ? undefined : Number(gateExit), gateLog: flag(args, '--gate-log'),
+      failAfter: process.env.GSTACK_SHIP_QUEUE_FAIL_AFTER,
     }));
   }
   if (cmd === 'verify') {

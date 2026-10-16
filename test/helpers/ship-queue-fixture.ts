@@ -74,3 +74,28 @@ export function gbrainPairRepo(): { repo: FixtureRepo; pair: GbrainPair; gated: 
   };
   return { repo, pair, gated, stamp };
 }
+
+/** A `gh` on PATH answering `gh pr view <n> --json …` and `gh api …/commits/<sha>/check-runs…` from fixed data, so ready runs offline. */
+export function ghQueueShim(repo: FixtureRepo, data: { prs: Record<string, unknown>; checks: Record<string, unknown> }): { PATH: string } {
+  const dir = path.join(repo.root, 'gh-queue-shim');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(data));
+  const js = [
+    "const d = require(process.argv[2]); const a = process.argv.slice(3);",
+    "if (a[0] === 'pr' && a[1] === 'view') { const p = d.prs[a[2]]; if (!p) { console.error('no pull request found'); process.exit(1); } console.log(JSON.stringify(p)); process.exit(0); }",
+    "if (a[0] === 'api') { const m = /commits\\/([0-9a-f]+)\\/check-runs/.exec(a[1] || ''); const c = m && d.checks[m[1]]; if (!c) { console.error('HTTP 404'); process.exit(1); } console.log(JSON.stringify(c)); process.exit(0); }",
+    "console.error('gh shim: unsupported ' + a.join(' ')); process.exit(1);",
+  ].join('\n');
+  fs.writeFileSync(path.join(dir, 'shim.js'), js);
+  fs.writeFileSync(path.join(dir, 'gh'), `#!/bin/sh\nexec node "${path.join(dir, 'shim.js')}" "${path.join(dir, 'data.json')}" "$@"\n`, { mode: 0o755 });
+  return { PATH: `${dir}:${process.env.PATH ?? ''}` };
+}
+
+/** A coordinator's separate clone of the fixture origin. */
+export function coordinatorClone(repo: FixtureRepo): string {
+  const dir = path.join(repo.root, 'coordinator');
+  const r = spawnSync('git', ['clone', '-q', repo.origin, dir], { timeout: 60_000, env: { ...process.env, ...repo.env } });
+  if (r.status !== 0) throw new Error(`clone failed: ${r.stderr?.toString()}`);
+  return dir;
+}
+
