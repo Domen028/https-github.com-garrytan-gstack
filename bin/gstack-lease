@@ -9,16 +9,23 @@
 #
 # Usage:
 #   gstack-lease touch [--root <checkout>] [--pid <p> | --from <pid>]
-#       write <git dir>/gstack-leases/<pid>; pid defaults to the harness pid
-#       behind this call (bin/gstack-harness-pid.sh, the same derivation the
-#       session marker uses), or behind --from (a caller whose own parent is
-#       short-lived passes its parent pid); leases older than 120 min are pruned
+#       write <git dir>/gstack-leases/<pid> holding the pid's start identity;
+#       pid defaults to the harness pid behind this call
+#       (bin/gstack-harness-pid.sh, the same derivation the session marker
+#       uses), or behind --from (a caller whose own parent is short-lived
+#       passes its parent pid); leases older than 120 min are pruned
 #   gstack-lease live [--root <checkout>] [--exclude-ancestry-of <pid>]
-#       print `<pid> <age>m` per lease whose pid is alive and is neither the
-#       given pid nor one of its ancestors (the caller's own session); exit 0
-#       when any live lease exists, 1 when none
+#       print `<pid> <age>m <command>` per lease held by a live process that
+#       is neither the given pid nor one of its ancestors (the caller's own
+#       session); exit 0 when any live lease exists, 1 when none. A stale lease
+#       is reclaimed (deleted, one `gstack-lease: reclaimed …` line on stderr)
 #   gstack-lease list [--root <checkout>]
-#       print `<pid> <age>m alive|dead` for every lease
+#       print `<pid> <age>m alive|dead|stale` for every lease
+# A pid alone is not a holder: pids are reused after a reboot or a machine
+# wake. A lease records its process's start identity (Linux: boot id and
+# /proc start time; elsewhere `ps -o lstart`), and a lease whose pid now
+# belongs to another process is stale. A lease without an identity (written by
+# an older gstack) is stale once it is older than the 120-minute prune window.
 # <checkout> defaults to the source checkout behind this bin (an installed
 # runtime root's .source-path, else ../). A root that is not a git checkout
 # exits 2 and writes nothing. GSTACK_LEASE_DIR overrides the lease directory
@@ -54,6 +61,27 @@ GIT_DIR_ABS=$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null) \
 DIR="${GSTACK_LEASE_DIR:-$GIT_DIR_ABS/gstack-leases}"
 
 alive() { kill -0 "$1" 2>/dev/null || ps -p "$1" >/dev/null 2>&1; }
+identity() { # PID — the process's start identity, empty when unknown
+  if [ -r "/proc/$1/stat" ] && [ -r /proc/sys/kernel/random/boot_id ]; then
+    _st=$(cat "/proc/$1/stat" 2>/dev/null) || return 0
+    _st=${_st##*) }
+    printf 'linux %s %s\n' "$(cat /proc/sys/kernel/random/boot_id)" "$(printf '%s\n' "$_st" | awk '{print $20}')"
+  else
+    _ls=$(ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//')
+    [ -n "$_ls" ] && printf 'ps %s\n' "$_ls"
+  fi
+  return 0
+}
+# state FILE PID — alive | dead | stale (the pid now belongs to another process)
+state() {
+  alive "$2" || { echo dead; return; }
+  _rec=$(head -1 "$1" 2>/dev/null)
+  if [ -n "$_rec" ]; then
+    [ "$_rec" = "$(identity "$2")" ] && echo alive || echo stale
+  elif [ "$(age_min "$1")" -ge 120 ]; then echo stale
+  else echo alive
+  fi
+}
 age_min() { # FILE — minutes since its mtime
   _m=$(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0)
   echo $(( ( $(date +%s) - _m ) / 60 ))
@@ -63,14 +91,14 @@ case "$VERB" in
   touch)
     [ -n "$PID" ] || PID=$(gstack_harness_pid "${FROM:-$PPID}")
     mkdir -p "$DIR" || exit 2
-    : > "$DIR/$PID" || exit 2
+    identity "$PID" > "$DIR/$PID" || exit 2
     find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null
     exit 0 ;;
   list)
     for f in "$DIR"/*; do
       [ -f "$f" ] || continue
       p=${f##*/}
-      if alive "$p"; then echo "$p $(age_min "$f")m alive"; else echo "$p $(age_min "$f")m dead"; fi
+      echo "$p $(age_min "$f")m $(state "$f" "$p")"
     done
     exit 0 ;;
 esac
@@ -89,8 +117,13 @@ for f in "$DIR"/*; do
   [ -f "$f" ] || continue
   p=${f##*/}
   case "$ANCESTRY" in *" $p "*) continue ;; esac
-  alive "$p" || continue
-  echo "$p $(age_min "$f")m"
+  case "$(state "$f" "$p")" in
+    dead) continue ;;
+    stale)
+      echo "gstack-lease: reclaimed stale lease $p ($(age_min "$f")m; recorded '$(head -1 "$f")', pid $p is now $(ps -o comm= -p "$p" 2>/dev/null | head -1) '$(identity "$p")')" >&2
+      rm -f "$f"; continue ;;
+  esac
+  echo "$p $(age_min "$f")m $(ps -o comm= -p "$p" 2>/dev/null | head -1 | sed 's|.*/||')"
   FOUND=0
 done
 exit $FOUND

@@ -86,7 +86,7 @@ describe('gstack-lease', () => {
     expect(run(['touch', '--root', dir, '--pid', String(live)]).status).toBe(0);
     const some = run(['live', '--root', dir]);
     expect(some.status, some.stdout + some.stderr).toBe(0);
-    expect(some.stdout.trim().split('\n')).toEqual([expect.stringMatching(new RegExp(`^${live} \\d+m$`))]);
+    expect(some.stdout.trim().split('\n')).toEqual([expect.stringMatching(new RegExp(`^${live} \\d+m sleep$`))]);
 
     const list = run(['list', '--root', dir]);
     expect(list.status).toBe(0);
@@ -94,12 +94,42 @@ describe('gstack-lease', () => {
     expect(list.stdout).toMatch(new RegExp(`^${dead} \\d+m dead$`, 'm'));
   });
 
+  // GBRA-105 / GBRA-106: after a machine wake the recorded pid was dbus-daemon
+  // and systemd-logind, and every upgrade refused with UPGRADE_BUSY.
+  test('a reused pid is not a holder: a lease whose recorded start identity differs is reclaimed by live and listed stale', () => {
+    const { dir, leases } = checkout();
+    const reused = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(reused)]).status).toBe(0);
+    const recorded = fs.readFileSync(path.join(leases, String(reused)), 'utf8').trim();
+    expect(recorded).toMatch(/^(linux [0-9a-f-]+ \d+|ps .+)$/);
+    fs.writeFileSync(path.join(leases, String(reused)), recorded.replace(/\S+$/, 'x1') + '\n');
+    expect(run(['list', '--root', dir]).stdout).toMatch(new RegExp(`^${reused} \\d+m stale$`, 'm'));
+    const live = run(['live', '--root', dir]);
+    expect(live.status, live.stdout + live.stderr).toBe(1);
+    expect(live.stdout.trim()).toBe('');
+    expect(live.stderr).toMatch(new RegExp(`^gstack-lease: reclaimed stale lease ${reused} \\(\\d+m; recorded '.+', pid ${reused} is now sleep '.+'\\)$`, 'm'));
+    expect(fs.existsSync(path.join(leases, String(reused)))).toBe(false);
+  });
+
+  test('a lease without a recorded identity (older gstack) counts while fresh and is stale past the 120-minute window', () => {
+    const { dir, leases } = checkout();
+    const holder = sleeper();
+    fs.mkdirSync(leases, { recursive: true });
+    fs.writeFileSync(path.join(leases, String(holder)), '');
+    expect(run(['live', '--root', dir]).status).toBe(0);
+    const old = new Date(Date.now() - 130 * 60_000);
+    fs.utimesSync(path.join(leases, String(holder)), old, old);
+    const r = run(['live', '--root', dir]);
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(r.stderr).toContain(`reclaimed stale lease ${holder}`);
+  });
+
   test('live --exclude-ancestry-of <pid> drops a lease held by that pid or one of its ancestors (this test process)', () => {
     const { dir } = checkout();
     expect(run(['touch', '--root', dir, '--pid', String(process.pid)]).status).toBe(0);
     const unfiltered = run(['live', '--root', dir]);
     expect(unfiltered.status, unfiltered.stdout + unfiltered.stderr).toBe(0);
-    expect(unfiltered.stdout).toMatch(new RegExp(`^${process.pid} \\d+m$`, 'm'));
+    expect(unfiltered.stdout).toMatch(new RegExp(`^${process.pid} \\d+m \\S+$`, 'm'));
     // $$ inside the bin is a child of this bun process, so our own lease is ancestry.
     const own = spawnSync('bash', ['-c', `"$LEASE" live --root "$ROOT" --exclude-ancestry-of $$`], {
       encoding: 'utf8', env: { ...baseEnv, LEASE, ROOT: dir }, timeout: 30_000,
@@ -112,7 +142,7 @@ describe('gstack-lease', () => {
       encoding: 'utf8', env: { ...baseEnv, LEASE, ROOT: dir }, timeout: 30_000,
     });
     expect(mixed.status).toBe(0);
-    expect(mixed.stdout.trim().split('\n')).toEqual([expect.stringMatching(new RegExp(`^${foreign} \\d+m$`))]);
+    expect(mixed.stdout.trim().split('\n')).toEqual([expect.stringMatching(new RegExp(`^${foreign} \\d+m sleep$`))]);
   });
 
   test('touch without --pid uses the same harness pid gstack-skill-start derives (this process past the tool-call shell)', () => {

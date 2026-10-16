@@ -279,6 +279,17 @@ describe('gstack-capy-install', () => {
     expect(lastLine(run(f, [], { ...behind, STUB_DOCTOR_FAIL: '1' }).stdout)).toBe('gstack: fail codex');
   });
 
+  test('a skipped session-start upgrade is never ok: the trailer is `fail behind` with the reason, the fix and the code, exit 1, and the verdict records the failure', () => {
+    const f = fixture();
+    const busy = { GSTACK_CAPY_BEHIND: '3', GSTACK_CAPY_BEHIND_TO: '1.2.6', GSTACK_CAPY_BEHIND_FIX: `${f.root}/bin/gstack-upgrade`, GSTACK_CAPY_BEHIND_BLOCKED: 'live gstack sessions hold this installation: pid 379 (124m dbus-daemon); fix: wait for those sessions to finish, or re-run with GSTACK_UPGRADE_FORCE=1 when you know they are idle (UPGRADE_BUSY)' };
+    const r = run(f, [], busy);
+    expect(r.status, r.stdout + r.stderr).toBe(1);
+    expect(lastLine(r.stdout)).toBe('gstack: fail behind — installed 1.2.3 is 3 commits behind origin (latest 1.2.6) and the session-start upgrade was skipped: live gstack sessions hold this installation: pid 379 (124m dbus-daemon); fix: wait for those sessions to finish, or re-run with GSTACK_UPGRADE_FORCE=1 when you know they are idle (UPGRADE_BUSY)');
+    const bare = run(f, [], { ...busy, GSTACK_CAPY_BEHIND_BLOCKED: 'gstack-upgrade exit 9' });
+    expect(lastLine(bare.stdout)).toBe(`gstack: fail behind — installed 1.2.3 is 3 commits behind origin (latest 1.2.6) and the session-start upgrade was skipped: gstack-upgrade exit 9; fix: ${f.root}/bin/gstack-upgrade (UPGRADE_REFUSED)`);
+    expect(lastLine(run(f, [], { ...busy, STUB_DOCTOR_FAIL: '1' }).stdout)).toBe('gstack: fail codex');
+  });
+
   test('--root clones when the directory is absent and refuses a non-gstack directory', () => {
     const f = fixture();
     const clone = path.join(f.base, 'clone');
