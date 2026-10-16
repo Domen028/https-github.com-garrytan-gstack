@@ -45,7 +45,7 @@ export function aggregateFindings(state: RunState): FindingRow[] {
     for (const row of voiceRows(state, phase, 'native')) out.push({ ...row, native_counterpart: null });
     for (const row of voiceRows(state, phase, 'outside')) {
       const r = byOutside.get(row.id);
-      out.push({ ...row, native_counterpart: r?.native_id ?? null, ...(r ? { reconciliation: r.disposition, reconciliation_resolution: r.resolution } : {}) } as FindingRow);
+      out.push({ ...row, native_counterpart: r?.disposition === 'unverified' ? null : r?.native_id ?? null, ...(r ? { reconciliation: r.disposition, reconciliation_resolution: r.resolution } : {}) } as FindingRow);
     }
   }
   return out;

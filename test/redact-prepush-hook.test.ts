@@ -406,6 +406,7 @@ describe("install UX surfaces (#1946 / eng review D3+D10)", () => {
   describe("one-time consent prompt in setup (#1946, decision 6)", () => {
     const setup = fs.readFileSync(path.join(ROOT, "setup"), "utf8");
     const block = setup.slice(setup.indexOf("# ─── Redact pre-push guard consent"));
+    const readyLine = setup.slice(setup.indexOf("_setup_ready_line() {"), setup.indexOf("\n}\n", setup.indexOf("_setup_ready_line() {")) + 3);
 
     test("prompt is gated on key ABSENCE and a real TTY, with a timed default-N read", () => {
       expect(block).toContain("grep -q '^redact_prepush_hook:'");
@@ -432,6 +433,7 @@ describe("install UX surfaces (#1946 / eng review D3+D10)", () => {
           "QUIET=0",
           'log() { echo "$@"; }',
           `GSTACK_CONFIG="${path.join(ROOT, "bin", "gstack-config")}"`,
+          readyLine,
           block,
         ].join("\n");
         const r = spawnSync("bash", ["-c", script], {
@@ -459,6 +461,7 @@ describe("install UX surfaces (#1946 / eng review D3+D10)", () => {
           "QUIET=0",
           'log() { echo "$@"; }',
           `GSTACK_CONFIG="${path.join(ROOT, "bin", "gstack-config")}"`,
+          readyLine,
           block,
         ].join("\n");
         const r = spawnSync("bash", ["-c", script], {

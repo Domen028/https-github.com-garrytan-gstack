@@ -52,7 +52,7 @@ in an unattended run, never a warning; interactive runs follow the repair rule a
   }
   if (mode === 'autoplan') {
     return `Reality rows: the loaded skill's \`REALITY:\` lines, one per applicable row;
-   \`${BIN} check --phase ${args?.[1] ?? 'ceo'} <review-file|->\` prints \`PLAN_REALITY: … verdict=complete\` before the phase closes
+   \`${BIN} check --phase ${args?.[1] ?? 'ceo'} --plan <reviewed snapshot> <review-file|->\` prints \`PLAN_REALITY: … verdict=complete\` before the phase closes
    (unattended: \`incomplete\` keeps it open).`;
   }
   const phase = phaseFor(ctx, mode);

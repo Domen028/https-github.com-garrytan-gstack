@@ -7,6 +7,7 @@
  * thread id against an owner-maintained thread cohort).
  */
 import { ARTIFACT_SCHEMAS, checkSchema, type ShipReceipt, type ValidationError } from './headless-artifacts';
+import { renderIssueLines } from './issue-links';
 
 export const RECEIPT_FENCE = 'gstack-ship-receipt';
 const KEY_ORDER: Array<keyof ShipReceipt> = [
@@ -52,6 +53,20 @@ export function placeReceiptFirst(body: string, receipt: ShipReceipt): string {
   const block = renderReceiptBlock(receipt);
   const stripped = body.replace(BLOCK_RE, '').replace(/^\s+/, '');
   return block + (stripped ? '\n' + stripped : '');
+}
+
+/** The receipt's `issues` object from a gstack-issue-links --out or --json file (its other keys are preview-only). */
+export function receiptIssuesFrom(file: Record<string, unknown>): ShipReceipt['issues'] {
+  const issues: Record<string, unknown> = {};
+  for (const key of ['fixes', 'refs', 'flakes', 'related']) if (file[key] !== undefined) issues[key] = file[key];
+  return issues as ShipReceipt['issues'];
+}
+
+/** Lines the receipt's issues imply that the body does not carry (a line may continue, e.g. `Refs #N (unreadable …)`). */
+export function missingIssueLines(body: string, issues: NonNullable<ShipReceipt['issues']>): string[] {
+  const have = body.split(/\r?\n/).map(l => l.trim());
+  const expected = renderIssueLines({ fixes: issues.fixes ?? [], refs: issues.refs ?? [], flakes: issues.flakes ?? [], cross: [], unreadable: [], ...(issues.related ? { related: issues.related } : {}) });
+  return expected.filter(e => !have.some(l => l === e || l.startsWith(`${e} `)));
 }
 
 /** The first lines of the completion message to the coordinator: identifiers only. */

@@ -18,6 +18,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/autoplan-edit-digests-al.json': ['test/autoplan-edit-digests-al.test.ts'],
   'test/fixtures/autoplan-home-phase-entry-fb10.json': ['test/autoplan-method-read-audit.test.ts'],
   'test/fixtures/autoplan-owned-state-edit.json': ['test/autoplan-owned-state.test.ts'],
+  'test/fixtures/autoplan-pairing/run-20261014-pairs.json': ['test/autoplan-pairing.test.ts'],
   'test/fixtures/autoplan-phase-consumption-491.json': ['test/autoplan-publication-guard.test.ts'],
   'test/fixtures/autoplan-phase-dash-ao.json': ['test/autoplan-phase-observer.test.ts'],
   'test/fixtures/autoplan-phase-entry-alias-f359.json': ['test/autoplan-method-read-audit.test.ts'],

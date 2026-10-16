@@ -9,6 +9,8 @@
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { wtreeFingerprint, isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type Registry } from '../regen';
 import { isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, type ConfigError, type PregateConfig } from './config';
 import type { CheckResult, PregateContext, TouchedFile } from './types';
@@ -18,6 +20,17 @@ import type { RegistryError } from '../regen';
 export interface BuildContextOptions {
   repoRoot: string; base: string; policyFrom: 'base' | 'head'; allowRepoCommands: boolean;
   timeoutMs?: number; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; knownChecks?: readonly string[];
+  /** `--stall-timeout`; default the config's `stall_timeout_s`, else 300 s. */
+  stallTimeoutMs?: number; progress?: (line: string) => void; cores?: number; testBackend?: string; remote?: { spendCapUsd: number } | null;
+}
+
+export const DEFAULT_STALL_TIMEOUT_S = 300;
+const GSTACK_CONFIG = path.resolve(import.meta.dir, '..', '..', 'bin', 'gstack-config');
+
+/** `gstack-config get test_backend` (local | ubicloud); `local` when unreadable. */
+export function readTestBackend(env: NodeJS.ProcessEnv): string {
+  const r = spawnSync(GSTACK_CONFIG, ['get', 'test_backend'], { encoding: 'utf8', timeout: 15_000, env, stdio: ['ignore', 'pipe', 'ignore'] });
+  return (r.status === 0 && (r.stdout ?? '').trim()) || 'local';
 }
 export type ContextLoad = { ctx: PregateContext } | { refused: { code: 'POLICY_SOURCE_UNAVAILABLE' | 'PREGATE_CONFIG_INVALID' | 'REGEN_REGISTRY_INVALID'; message: string; errors?: Array<ConfigError | RegistryError> } };
 
@@ -66,11 +79,17 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   const wtree = wtreeFingerprint(o.repoRoot);
   if (!wtree) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: 'cannot fingerprint the working tree (gstack-wtree failed)' } };
   const platform = o.platform ?? process.platform;
+  const env = o.env ?? process.env;
+  const config = configLoad.config as PregateConfig;
   return {
     ctx: {
       repoRoot: o.repoRoot, base, baseRef, baseSha: baseSha.out, mergeBase, head, wtree, touched: touchedFiles(o.repoRoot, mergeBase),
-      config: configLoad.config as PregateConfig, configLabel: configLoad.label, registry: registryLoad.registry as Registry, registryLabel: registryLoad.source.label,
-      lanes: discoverLanes(o.repoRoot, platform), platform, allowRepoCommands: o.allowRepoCommands, timeoutMs: o.timeoutMs ?? 600_000, env: o.env ?? process.env, explain: [],
+      config, configLabel: configLoad.label, registry: registryLoad.registry as Registry, registryLabel: registryLoad.source.label,
+      lanes: discoverLanes(o.repoRoot, platform), platform, allowRepoCommands: o.allowRepoCommands, timeoutMs: o.timeoutMs ?? 600_000,
+      stallTimeoutMs: o.stallTimeoutMs ?? (config.stall_timeout_s ?? DEFAULT_STALL_TIMEOUT_S) * 1000,
+      progress: o.progress ?? (line => process.stderr.write(`${line}\n`)),
+      cores: o.cores ?? os.availableParallelism(), testBackend: o.testBackend ?? readTestBackend(env), policyFrom: o.policyFrom, remote: o.remote ?? null,
+      env, explain: [],
     },
   };
 }
@@ -84,13 +103,14 @@ export function baseInputs(ctx: PregateContext, extra: Record<string, string> = 
 
 /**
  * Run one check under the before/after fingerprint (bin/gstack-evidence:394):
- * a tree that changed while the check ran, a thrown error or a timeout is
- * `incomplete`. Wall time is measured here so every row carries `ms`.
+ * a tree that changed while the check ran, a thrown error or rejected promise
+ * or a timeout is `incomplete`. Wall time is measured here so every row
+ * carries `ms`.
  */
-export function withFingerprint(ctx: PregateContext, id: string, stage: CheckResult['stage'], fn: () => CheckResult): CheckResult {
+export async function withFingerprint(ctx: PregateContext, id: string, stage: CheckResult['stage'], fn: () => CheckResult | Promise<CheckResult>): Promise<CheckResult> {
   const started = Date.now();
   let result: CheckResult;
-  try { result = fn(); }
+  try { result = await fn(); }
   catch (e: any) {
     result = { id, stage, status: 'incomplete', detail: `threw: ${e?.message ?? e}`, code: 'PREGATE_INCOMPLETE', fix: 'read the error and rerun the check', inputs: baseInputs(ctx) };
   }

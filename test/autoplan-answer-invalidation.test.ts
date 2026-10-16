@@ -13,7 +13,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { attemptsOf, autoplan, journal, readRun, review, ROOT, runPhase, SMALL_PLAN, startSmallRun } from './helpers/autoplan-run-fixture';
+import { attemptsOf, autoplan, journal, readRun, resultOf, review, ROOT, runPhase, SMALL_PLAN, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-answer-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -31,9 +31,9 @@ function gatedRun(name: string): string {
   review(path.join(out, 'ceo-native-prompt.md'));
   review(path.join(out, 'ceo-outside-prompt.md'), { FIXTURE_FINDINGS: disagree });
   const ids = attemptsOf(out, 'ceo');
-  expect(autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]).status).toBe(0);
-  const close = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', path.join(out, 'ceo-outside.md'), '--model', 'gpt-5.5', '--attempt', ids.outside]);
-  expect(close.stdout).toMatch(/PHASE_CLOSED: ceo confirmed=1 disagree=1 new=1/);
+  expect(autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]).status).toBe(0);
+  const close = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', resultOf(out, 'ceo', 'outside'), '--model', 'gpt-5.5', '--attempt', ids.outside]);
+  expect(close.stdout).toMatch(/PHASE_CLOSED: ceo confirmed=0 unverified=1 disagree=1 new=1/);
   const eng = runPhase(out, 'eng');
   expect(eng.outside.stdout).toContain('status=gate_pending');
   return out;
@@ -112,25 +112,30 @@ describe('answer', () => {
     expect(readRun(out).attempt_counter).toBe(counter);
   });
 
-  test('a non-recommended choice on a ceo item reopens ceo and eng only, archives their bound files, and the next gate is gate_rev 2', () => {
+  test('a non-recommended choice on a ceo item is recorded without reopening; revise reopens the changed phases, archives their bound files, and the next gate is gate_rev 2', () => {
     const out = gatedRun('reopen');
     const r = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'all except d1b', '--json']);
     expect(r.status, r.stderr).toBe(0);
     const runId = readRun(out).run;
-    expect(JSON.parse(r.stdout)).toMatchObject({ status: 'running', outcome: 'reopened', reopened: ['ceo', 'eng'], amendments: [`${runId}-d1`] });
+    expect(JSON.parse(r.stdout)).toMatchObject({ status: 'amend_pending', outcome: 'amend_pending', reopened: [], amendments: [`${runId}-d1`] });
+    expect(readRun(out).phases.ceo.closed_at).toBeTruthy();
+    expect(journal(out).filter(j => j.event === 'reopened')).toEqual([]);
+    // the accepted change is applied to the plan and named; revise reopens the phases that reviewed the old plan, once
+    const revised = incorporate(out, [`${runId}-d1`], 'Gate reuse also checks the lockfile hash.');
+    expect(revised.stdout).toMatch(/^REVISED: plan=\S+ reopened=ceo,eng$/m);
     const run = readRun(out);
     expect(run.phases.ceo).toEqual({});
     expect(run.phases.eng).toEqual({});
     expect(run.phases.design.skipped).toBeTruthy();
     expect(run.history.map((h: any) => [h.phase, h.gate_rev])).toEqual([['ceo', 1], ['eng', 1]]);
-    for (const f of ['ceo-native.r1.md', 'ceo-outside.r1.md', 'ceo-consensus.r1.json', 'eng-native.r1.md', 'gate.r1.json']) expect(fs.existsSync(path.join(out, f))).toBe(true);
-    for (const f of ['ceo-native.md', 'eng-consensus.md', 'gate.json']) expect(fs.existsSync(path.join(out, f))).toBe(false);
-    expect(Object.keys(run.artifacts)).not.toContain('ceo-native.md');
+    expect(run.status).toBe('running');
+    for (const f of ['ceo-native-prompt.r1.md', 'ceo-outside-prompt.r1.md', 'ceo-consensus.r1.json', 'eng-native-prompt.r1.md', 'gate.r1.json']) expect(fs.existsSync(path.join(out, f))).toBe(true);
+    for (const f of ['ceo-native-prompt.md', 'eng-consensus.md', 'gate.json']) expect(fs.existsSync(path.join(out, f))).toBe(false);
+    // sealed copies are attempt-owned: they stay in place and bound across the reopen
+    const sealed = run.history.flatMap((h: any) => ['native', 'outside'].map(v => h.previous[v].output));
+    expect(sealed.every((o: string) => /\.a\d+\.bound\.md$/.test(o) && fs.existsSync(path.join(out, o)) && run.artifacts[o])).toBe(true);
     const d1 = decisions(out).find((d: any) => d.label === 'D1');
     expect(d1).toMatchObject({ status: 'overridden', chosen: 'b', gate_rev: 1 });
-    expect(journal(out).filter(j => j.event === 'reopened').map(j => j.phase)).toEqual(['ceo', 'eng']);
-    // the accepted change is applied to the plan and named before any phase reruns; the reopened phases stay reopened once
-    incorporate(out, [`${runId}-d1`], 'Gate reuse also checks the lockfile hash.');
     expect(journal(out).filter(j => j.event === 'reopened').map(j => j.phase)).toEqual(['ceo', 'eng']);
     // the loop continues: ceo first, then eng, then a new gate at gate_rev 2 whose rows join the old ones
     const ceo = runPhase(out, 'ceo');
@@ -160,16 +165,16 @@ describe('answer', () => {
     expect(valid.status).toBe(0);
   });
 
-  test('an eng-only override reopens eng alone; p1d reopens every phase; p1c keeps the gate; p1e ends incomplete', () => {
+  test('an eng-only override reopens nothing at answer; revise reruns every phase that reviewed the old plan; p1d reopens every phase; p1c keeps the gate; p1e ends incomplete', () => {
     const out = gatedRun('eng-only');
     const engOnly = autoplan(['answer', '--by', 'human', '--out', out, '--gate-rev', '1', '--reply', 'all except uc2b', '--json']);
     const runId = readRun(out).run;
-    expect(JSON.parse(engOnly.stdout)).toMatchObject({ outcome: 'reopened', reopened: ['eng'], amendments: [`${runId}-uc2`] });
+    expect(JSON.parse(engOnly.stdout)).toMatchObject({ outcome: 'amend_pending', reopened: [], amendments: [`${runId}-uc2`] });
     expect(readRun(out).phases.ceo.closed_at).toBeTruthy();
-    // the revised plan changes the hash ceo reviewed, so revise (not the answer) reruns ceo on v2 before eng
+    // the revised plan changes the hash both phases reviewed, so revise (not the answer) reruns ceo, then eng, on v2
     const revised = incorporate(out, [`${runId}-uc2`], 'Retries stop at the dead-letter queue.');
-    expect(revised.stdout).toMatch(/^REVISED: plan=\S+ reopened=ceo$/m);
-    expect(journal(out).filter(j => j.event === 'reopened').map(j => [j.phase, j.reason ?? null])).toEqual([['eng', expect.anything()], ['ceo', expect.stringContaining('revise')]]);
+    expect(revised.stdout).toMatch(/^REVISED: plan=\S+ reopened=ceo,eng$/m);
+    expect(journal(out).filter(j => j.event === 'reopened').map(j => [j.phase, j.reason ?? null])).toEqual([['ceo', expect.stringContaining('revise')], ['eng', expect.stringContaining('revise')]]);
     expect(runPhase(out, 'ceo').outside.stdout).toMatch(/PHASE_CLOSED: ceo/);
     const eng = runPhase(out, 'eng');
     expect(eng.outside.stdout).toContain('status=gate_pending');

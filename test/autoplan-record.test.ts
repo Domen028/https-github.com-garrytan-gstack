@@ -14,6 +14,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { RESULT_CODES } from '../lib/result-codes';
 import { capyRunner, readJsonl, readRunJson, writePlan } from './helpers/autoplan-capy';
+import { boundOf, resultOf } from './helpers/autoplan-run-fixture';
 
 const r = capyRunner();
 afterAll(() => r.cleanup());
@@ -64,8 +65,8 @@ describe('submit --record', () => {
     expect(ok.stdout).toMatch(new RegExp(`^BOUND: ${attempt} phase=ceo voice=native .*findings=2 .*receipt=attested`, 'm'));
     const v = readRunJson(out).phases.ceo.native;
     expect(v).toMatchObject({ status: 'completed', receipt: 'attested', attest_reason: 'subagent ran from the prompt file', findings_source: 'table' });
-    expect(fs.readFileSync(path.join(out, 'ceo-native.md'), 'utf8')).toBe(TABLE);
-    const rows = readJsonl(path.join(out, 'ceo-native.md.findings.jsonl'));
+    expect(fs.readFileSync(boundOf(out, 'ceo', 'native'), 'utf8')).toBe(TABLE);
+    const rows = readJsonl(`${boundOf(out, 'ceo', 'native')}.findings.jsonl`);
     expect(rows.map(x => [x.severity, x.title, x.file ?? null, x.line ?? null])).toEqual([['High', 'Retry cap is unbounded on restart', 'lib/worker.ts', 10], ['Medium', 'Split persistence change into its own plan', null, null]]);
     expect(readRunJson(out).deviations.some((d: string) => /attested.*ceo native/.test(d))).toBe(true);
   });
@@ -107,7 +108,7 @@ describe('submit --record', () => {
   test('the canonical --result path binds without --attempt when exactly one attempt is open', () => {
     const out = start();
     expect(r.review(path.join(out, 'ceo-native-prompt.md')).status).toBe(0);
-    const ok = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'anthropic/claude-opus-5-5']);
+    const ok = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'anthropic/claude-opus-5-5']);
     expect(ok.status, ok.stderr).toBe(0);
     expect(ok.stdout).toMatch(/^BOUND: \S+-a1 phase=ceo voice=native .*findings=3/m);
   });
@@ -139,14 +140,14 @@ describe('submit --record', () => {
     expect(resumed.stdout).not.toContain(outsideAttempt);
     expect(readRunJson(out).phases.ceo.outside.status).toBe('unavailable');
     expect(r.review(path.join(out, 'ceo-native-prompt.md')).status).toBe(0);
-    const close = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'anthropic/claude-opus-5-5']);
+    const close = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'anthropic/claude-opus-5-5']);
     expect(close.stdout).toMatch(/^PHASE_CLOSED: ceo .*coverage=native_only/m);
   });
 
   test('--failed records a failed outside voice and closes the phase once native is bound', () => {
     const out = start();
     expect(r.review(path.join(out, 'ceo-native-prompt.md')).status).toBe(0);
-    expect(r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'anthropic/claude-opus-5-5']).status).toBe(0);
+    expect(r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'anthropic/claude-opus-5-5']).status).toBe(0);
     const failed = r.ap(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--failed', 'runner exited 1']);
     expect(failed.status, failed.stderr).toBe(0);
     expect(failed.stdout).toMatch(/^PHASE_CLOSED: ceo .*coverage=native_only/m);

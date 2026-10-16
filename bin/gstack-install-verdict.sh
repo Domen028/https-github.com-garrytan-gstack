@@ -4,19 +4,26 @@
 # twin gstack-autoplan's mutating verbs call; test/install-verdict.test.ts
 # pins both. Bash 3.2 plus POSIX tools (sha256sum or shasum).
 #
-# The verdict is what the last install check certified on this machine:
-#   <state root>/install-verdicts/<sha256 of the source checkout realpath>.json
+# The verdict is what the last install check certified on this machine for
+# one checkout and one project (the caller's git toplevel, or none):
+#   <state root>/install-verdicts/<sha256(checkout realpath)>/<sha256(project realpath | "none")>.json
 # written atomically by bin/gstack-capy-install (install and --check) with
-#   schema_version, checkout, head, for, required[], pins_planning_only, ok,
-#   trailer, min_revision, launch_path, time
-# and named in the GSTACK_LAUNCH line as GSTACK_INSTALL_VERDICT=<path>.
+#   schema_version 2, checkout, head, for, required[], pins_planning_only, ok,
+#   trailer, min_revision, launch_path, time, project, pin (the exact Bun pin),
+#   bun_path (realpath), bun_version, bun_rule (gstack_bun_resolve), bun_install
+# and named in the GSTACK_LAUNCH line as GSTACK_INSTALL_VERDICT=<path>. It is
+# the one record the bun shim, lib/pregate/runtime.ts and admission read.
+# Readers fall back to the schema 1 file keyed by the checkout alone,
+# <state root>/install-verdicts/<sha256(checkout realpath)>.json.
 #
 # Admission (gstack-skill-start, after SESSION_KIND): an unattended session,
 # or an explicit GSTACK_SESSION_KIND=spawned session with GSTACK_CAPY=1,
 # refuses when the Bun first on PATH is below gstack's supported minimum and,
 # with GSTACK_CAPY=1 only, when the verdict is missing, failing, for another
 # checkout or HEAD, or narrower than the workflow (a component it needs, or a
-# planning-only pins SKIP for a workflow that runs the repo's tests). Other
+# planning-only pins SKIP for a workflow that runs the repo's tests), when a
+# workflow that runs the repo's tests starts in a project the verdict did not
+# check, and when the Bun running is not the one the verdict recorded. Other
 # spawned sessions (ambient OpenClaw) only warn. GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1
 # admits anyway and says so.
 
@@ -42,12 +49,25 @@ _gstack_iv_sha256() {
   else printf '%s' "$1" | shasum -a 256 | cut -d' ' -f1; fi
 }
 
-# gstack_install_verdict_path STATE_ROOT CHECKOUT_REALPATH
-gstack_install_verdict_path() { printf '%s/install-verdicts/%s.json\n' "$1" "$(_gstack_iv_sha256 "$2")"; }
+# gstack_install_verdict_path STATE_ROOT CHECKOUT_REALPATH [PROJECT_REALPATH]
+gstack_install_verdict_path() { printf '%s/install-verdicts/%s/%s.json\n' "$1" "$(_gstack_iv_sha256 "$2")" "$(_gstack_iv_sha256 "${3:-none}")"; }
+# gstack_install_verdict_legacy_path STATE_ROOT CHECKOUT_REALPATH — the schema 1 file.
+gstack_install_verdict_legacy_path() { printf '%s/install-verdicts/%s.json\n' "$1" "$(_gstack_iv_sha256 "$2")"; }
+
+# gstack_install_project CHECKOUT_REALPATH — the project a verdict is keyed by
+# for this working directory: its git toplevel (realpath), empty outside a
+# repository or inside the checkout itself.
+gstack_install_project() {
+  local top
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || return 0
+  top=$(cd "$top" 2>/dev/null && pwd -P) || return 0
+  [ "$top" = "$1" ] || printf '%s\n' "$top"
+}
 
 _gstack_iv_json() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037')"; }
 
 # gstack_install_verdict_write FILE CHECKOUT HEAD FOR REQUIRED(space list) PINS_PLANNING_ONLY(0|1) OK(0|1) TRAILER MIN LAUNCH_PATH
+#                              PROJECT PIN BUN_PATH BUN_VERSION BUN_RULE BUN_INSTALL
 gstack_install_verdict_write() {
   local file="$1" tmp id req="" first=1
   for id in $5; do
@@ -58,9 +78,11 @@ gstack_install_verdict_write() {
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
   tmp="$file.tmp.$$"
   {
-    printf '{\n "schema_version": 1,\n "checkout": %s,\n "head": %s,\n "for": %s,\n' "$(_gstack_iv_json "$2")" "$(_gstack_iv_json "$3")" "$(_gstack_iv_json "$4")"
+    printf '{\n "schema_version": 2,\n "checkout": %s,\n "head": %s,\n "for": %s,\n' "$(_gstack_iv_json "$2")" "$(_gstack_iv_json "$3")" "$(_gstack_iv_json "$4")"
     printf ' "required": [%s],\n "pins_planning_only": %s,\n "ok": %s,\n' "$req" "$([ "$6" = 1 ] && echo true || echo false)" "$([ "$7" = 1 ] && echo true || echo false)"
-    printf ' "trailer": %s,\n "min_revision": %s,\n "launch_path": %s,\n "time": %s\n}\n' "$(_gstack_iv_json "$8")" "$(_gstack_iv_json "$9")" "$(_gstack_iv_json "${10}")" "$(_gstack_iv_json "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    printf ' "trailer": %s,\n "min_revision": %s,\n "launch_path": %s,\n' "$(_gstack_iv_json "$8")" "$(_gstack_iv_json "$9")" "$(_gstack_iv_json "${10}")"
+    printf ' "project": %s,\n "pin": %s,\n "bun_path": %s,\n "bun_version": %s,\n' "$(_gstack_iv_json "${11:-}")" "$(_gstack_iv_json "${12:-}")" "$(_gstack_iv_json "${13:-}")" "$(_gstack_iv_json "${14:-}")"
+    printf ' "bun_rule": %s,\n "bun_install": %s,\n "time": %s\n}\n' "$(_gstack_iv_json "${15:-}")" "$(_gstack_iv_json "${16:-}")" "$(_gstack_iv_json "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
   } > "$tmp" && mv -f "$tmp" "$file"
 }
 
@@ -71,7 +93,7 @@ gstack_install_verdict_field() {
   flat=$(tr '\n' ' ' < "$1" 2>/dev/null) || return 1
   case "$(printf '%s' "$flat" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\(.\).*/\1/p")" in
     '"') printf '%s' "$flat" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/p" ;;
-    '[') printf '%s' "$flat" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p" | tr -d '",' | tr -s ' ' | sed 's/^ //; s/ $//' ;;
+    '[') printf '%s' "$flat" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\[\([^]]*\)\].*/\1/p" | tr ',' ' ' | tr -d '"' | tr -s ' ' | sed 's/^ //; s/ $//' ;;
     *) printf '%s' "$flat" | sed -n "s/.*\"$2\"[[:space:]]*:[[:space:]]*\([A-Za-z0-9.]*\).*/\1/p" ;;
   esac
 }
@@ -81,7 +103,7 @@ gstack_install_verdict_field() {
 # _ia_line (the INSTALL: or INSTALL_VERDICT: line to print, may be empty).
 # Needs gstack-bun-version.sh and gstack-doctor-components.sh sourced.
 gstack_install_admission() {
-  local bin="$1" skill="$2" kind="$3" hard=0 capy=0 src where found detail="" fix="" code="" file trailer v_head head id
+  local bin="$1" skill="$2" kind="$3" hard=0 capy=0 src where found detail="" fix="" code="" file trailer v_head head id project v_project running v_bun
   _ia_applies=0 _ia_refuse=0 _ia_warn=0 _ia_status=ok _ia_line=""
   case "$kind" in unattended|spawned) _ia_applies=1 ;; *) return 0 ;; esac
   [ "${GSTACK_CAPY:-}" = 1 ] && capy=1
@@ -91,13 +113,15 @@ gstack_install_admission() {
   if [ "$(gstack_bun_status "${found:-0.0.0}")" != ok ]; then
     _ia_status=runtime code=RUNTIME_BELOW_MINIMUM
     if [ -n "$where" ]; then detail="bun $found at $where is below the supported minimum $GSTACK_BUN_TESTED"; else detail="bun not found on PATH (gstack needs $GSTACK_BUN_TESTED)"; fi
-    file=$(gstack_bun_launch_dir 2>/dev/null) || file=""
+    file=""; gstack_bun_resolve "$(gstack_bun_store "${_GH:-$HOME/.gstack}")" 2>/dev/null && file=$(dirname "$_gb_bin")
     if [ -n "$file" ]; then fix="launch with the GSTACK_LAUNCH line (PATH=$file:\$PATH)"
     else fix="run the Capy skill installer (scripts/install.sh --for $skill), which installs the verified Bun $GSTACK_BUN_TESTED, then launch with its GSTACK_LAUNCH line"; fi
   elif [ "$capy" -eq 1 ]; then
     src=$(gstack_source_root "$bin") || src=""
-    file="${GSTACK_INSTALL_VERDICT:-}"
-    [ -n "$file" ] || file=$(gstack_install_verdict_path "${_GH:-$HOME/.gstack}" "$src")
+    project=$(gstack_install_project "$src")
+    file=$(gstack_install_verdict_path "${_GH:-$HOME/.gstack}" "$src" "$project")
+    [ -f "$file" ] || [ -z "${GSTACK_INSTALL_VERDICT:-}" ] || file="$GSTACK_INSTALL_VERDICT"
+    [ -f "$file" ] || file=$(gstack_install_verdict_legacy_path "${_GH:-$HOME/.gstack}" "$src")
     code=INSTALL_UNVERIFIED
     fix="run the Capy skill installer (scripts/install.sh --for $skill) on this machine, then launch with the GSTACK_LAUNCH line it prints"
     if [ ! -f "$file" ]; then
@@ -114,14 +138,28 @@ gstack_install_admission() {
         detail="the install verdict is for another HEAD (${v_head:0:12}; $src is at ${head:0:12})"
       elif [ "$(gstack_install_verdict_field "$file" pins_planning_only)" = true ] && ! gstack_doctor_skill_pins_advisory "$skill"; then
         detail="the install verdict is planning-only (pins skipped for $(gstack_install_verdict_field "$file" for)) and $skill runs the repo's tests"
+      elif [ "$(gstack_install_verdict_field "$file" schema_version)" != 1 ] && ! gstack_doctor_skill_pins_advisory "$skill" \
+           && v_project=$(gstack_install_verdict_field "$file" project) && [ "$v_project" != "$project" ]; then
+        detail="the install verdict checked ${v_project:-no project}, not ${project:-this directory (no project)}, and $skill runs the repo's tests"
+        fix="run the Capy skill installer (scripts/install.sh --for $skill) from ${project:-this directory}, then launch with the GSTACK_LAUNCH line it prints"
       else
         for id in $(gstack_doctor_skill_requires "$skill" 2>/dev/null); do
           case " $(gstack_install_verdict_field "$file" required) " in *" $id "*) ;; *) detail="the install verdict certified for=$(gstack_install_verdict_field "$file" for), which does not cover $id that $skill needs"; break ;; esac
         done
       fi
+      v_bun=$(gstack_install_verdict_field "$file" bun_path)
+      if [ -z "$detail" ] && [ -n "$v_bun" ]; then
+        running=$(gstack_realpath "$where" 2>/dev/null)
+        _gstack_bun_is_shim "$where" && running=$(bun -p process.execPath </dev/null 2>/dev/null | head -1)
+        if [ -n "$running" ] && [ "$running" != "$v_bun" ]; then
+          _ia_status=runtime code=BUN_RESOLUTION_DRIFT
+          detail="bun $found at $running is running, but the install verdict recorded bun $(gstack_install_verdict_field "$file" bun_version) at $v_bun"
+          fix="launch with the GSTACK_LAUNCH line (PATH=$(dirname "$v_bun"):\$PATH), or re-run the Capy skill installer with --check (scripts/install.sh --check --for $skill) to see what changed"
+        fi
+      fi
       [ -n "$detail" ] || { _ia_line="INSTALL_VERDICT: ok $trailer"; return 0; }
     fi
-    _ia_status=verdict
+    [ "$_ia_status" = runtime ] || _ia_status=verdict
   else
     return 0
   fi
