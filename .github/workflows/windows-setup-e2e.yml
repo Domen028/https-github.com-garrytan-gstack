@@ -214,11 +214,13 @@ jobs:
         # A copy of this built checkout (build outputs keep their mtimes, so
         # setup does not rebuild; node_modules is reinstalled) under a path
         # with a space, installed through powershell.exe into an isolated HOME.
+        # -h stores symlinks as their targets: MSYS tar cannot extract a
+        # symlink that precedes its target (connect-chrome, #3184).
         run: |
           set -euo pipefail
           SPACED="$(cygpath -u "$RUNNER_TEMP")/gstack checkout"
           mkdir -p "$SPACED"
-          tar --exclude=./node_modules -cf - . | tar -xpf - -C "$SPACED"
+          tar --exclude=./node_modules -chf - . | tar -xpf - -C "$SPACED"
           E2E_HOME="$RUNNER_TEMP/gstack-ps1-home"
           mkdir -p "$E2E_HOME"
           set +e
