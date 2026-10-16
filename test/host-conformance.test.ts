@@ -129,6 +129,7 @@ describe.skipIf(process.platform === 'win32')('host conformance kit', () => {
       const rows = registryRows(f);
       expect(rows.map(row => [row[0], row[1], row[3], row[5], row[6]])).toEqual([[host, 'global', dest, realpathSync(src), readFileSync(join(src, 'VERSION'), 'utf8').trim()]]);
       expect(r.stdout + r.stderr).toMatch(new RegExp(`Install summary:[\\s\\S]*\\b${host}\\s+\\S+\\s+global\\s+installed`));
+      expect(r.stdout.trim().split('\n').at(-1)).toBe(`gstack ready (${host})`);
 
       const status = runSetup(f, join(src, 'setup'), ['--status']);
       expect(status.status).toBe(0);
@@ -231,6 +232,7 @@ describe.skipIf(process.platform === 'win32')('host conformance kit', () => {
     expect(upgrade.status, upgrade.stdout + upgrade.stderr).toBe(0);
     expect(upgrade.stdout).toContain(`Refreshing registered gstack installs from source: ${realpathSync(src)}`);
     expect(upgrade.stdout).toMatch(/Upgrade summary:\n[\s\S]*claude\s+full\s+global\s+unchanged\s+1\.91\.14\.0[\s\S]*codex\s+experimental\s+global\s+installed\s+1\.91\.14\.0/);
+    expect(upgrade.stdout.trim().split('\n').at(-1)).toBe('gstack ready (claude, codex)');
     expect(registryRows(f).map(r => [r[0], r[6]]).sort()).toEqual([['claude', '1.91.14.0'], ['codex', '1.91.14.0']]);
     // The refreshed Codex install runs the new checkout's render.
     expect(realpathSync(join(f.home, '.codex/skills/gstack-review/SKILL.md'))).toBe(join(realpathSync(src), '.agents/skills/gstack-review/SKILL.md'));

@@ -7,13 +7,16 @@
  * refuses a wrong receipt, a missing findings fence, a same-family outside
  * model and a stale attempt; the whole wave plan runs through the loop with a
  * fixture reviewer and validates. Pins tokens, codes and exit codes.
+ * Next-wave B4: each attempt writes `<phase>-<voice>.<attempt>.md`, and submit
+ * binds a sealed `.bound.md` copy, so a late write or an interruption between
+ * sealing and the journal binds nothing twice.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { AUTOPLAN, ROOT, WAVE_PLAN, attemptsOf, autoplan, env, journal, readRun, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
+import { AUTOPLAN, ROOT, WAVE_PLAN, attemptsOf, autoplan, env, journal, readRun, resultOf, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-recovery-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -46,36 +49,36 @@ describe('next/submit loop', () => {
     const ids = attemptsOf(out, 'ceo');
     const before = fs.readFileSync(path.join(out, 'run.json'), 'utf8');
     review(path.join(out, 'ceo-native-prompt.md'), { FIXTURE_BREAK: 'receipt' });
-    let r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    let r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/\(RESULT_RECEIPT_MISSING\)$/m);
     review(path.join(out, 'ceo-native-prompt.md'), { FIXTURE_BREAK: 'fence' });
-    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/\(RESULT_FINDINGS_MISSING\)$/m);
     review(path.join(out, 'ceo-native-prompt.md'), { FIXTURE_BREAK: 'row' });
-    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(r.status).toBe(1);
     expect(r.stderr).toMatch(/\(RESULT_FINDINGS_MISSING\)$/m);
-    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', 'nope-a9']);
+    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', 'nope-a9']);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/\(ATTEMPT_MISMATCH\)$/m);
-    r = autoplan(['submit', '--out', out, '--phase', 'dx', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    r = autoplan(['submit', '--out', out, '--phase', 'dx', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/\(PHASE_NOT_AWAITING\)$/m);
     expect(fs.readFileSync(path.join(out, 'run.json'), 'utf8')).toBe(before);
     expect(journal(out).filter(j => j.event === 'submitted')).toEqual([]);
     // a good native, then an outside model from the same family
     review(path.join(out, 'ceo-native-prompt.md'));
-    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^BOUND: \S+ phase=ceo voice=native model=claude-opus-4-7 findings=3/m);
     review(path.join(out, 'ceo-outside-prompt.md'));
-    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', path.join(out, 'ceo-outside.md'), '--model', 'claude-sonnet-5', '--attempt', ids.outside]);
+    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', resultOf(out, 'ceo', 'outside'), '--model', 'claude-sonnet-5', '--attempt', ids.outside]);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/both anthropic.*\(MODEL_FAMILY_CONFLICT\)$/m);
     // exactly once: the bound native attempt cannot be submitted again
-    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    r = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(r.status).toBe(3);
     expect(r.stderr).toMatch(/\(PHASE_NOT_AWAITING\)$/m);
   });
@@ -85,14 +88,14 @@ describe('next/submit loop', () => {
     const ceo = runPhase(out, 'ceo');
     expect(ceo.native.status, ceo.native.stderr).toBe(0);
     expect(ceo.outside.status, ceo.outside.stderr).toBe(0);
-    expect(ceo.outside.stdout).toMatch(/^PHASE_CLOSED: ceo confirmed=2 disagree=0 new=1 native_only=1 coverage=both$/m);
+    expect(ceo.outside.stdout).toMatch(/^PHASE_CLOSED: ceo confirmed=0 unverified=2 disagree=0 new=1 native_only=1 coverage=both$/m);
     expect(ceo.outside.stdout).toContain('GSTACK_RESULT: skill=autoplan status=running run=');
     const consensus = JSON.parse(fs.readFileSync(path.join(out, 'ceo-consensus.json'), 'utf8'));
     const run = readRun(out).run;
     expect(consensus.rows.map((r: any) => [r.outside_id, r.native_id, r.disposition, r.basis])).toEqual([
-      [`${run}-ceo-outside-1`, `${run}-ceo-native-1`, 'confirmed', 'file_line'],
+      [`${run}-ceo-outside-1`, `${run}-ceo-native-1`, 'unverified', 'file_line'],
       [`${run}-ceo-outside-2`, null, 'new', 'none'],
-      [`${run}-ceo-outside-3`, `${run}-ceo-native-3`, 'confirmed', 'title'],
+      [`${run}-ceo-outside-3`, `${run}-ceo-native-3`, 'unverified', 'title'],
     ]);
     expect(consensus.native_only_ids).toEqual([`${run}-ceo-native-2`]);
     const eng = runPhase(out, 'eng');
@@ -107,8 +110,9 @@ describe('next/submit loop', () => {
     const decisions = fs.readFileSync(path.join(out, 'decisions.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
     expect(decisions.every((d: any) => d.status === 'pending' && d.gate_rev === 1)).toBe(true);
     const tasks = fs.readFileSync(path.join(out, 'tasks.jsonl'), 'utf8').trim().split('\n').map(l => JSON.parse(l));
-    expect(tasks.length).toBe(4);
-    expect(tasks[0]).toMatchObject({ schema_version: 2, status: 'blocked_on_decision', blocked_by: [`${run}-p1`], findings: [`${run}-ceo-native-1`, `${run}-ceo-outside-1`] });
+    expect(tasks.length).toBe(6);
+    expect(tasks[0]).toMatchObject({ schema_version: 2, status: 'blocked_on_decision', blocked_by: [`${run}-p1`], findings: [`${run}-ceo-native-1`] });
+    expect(tasks.flatMap((t: any) => t.findings).filter((f: string) => f.endsWith('-ceo-outside-1'))).toHaveLength(1);
     expect(fs.readFileSync(path.join(out, 'review-record.md'), 'utf8')).toContain('GUARD_NOT_INSTALLED');
     expect(fs.readFileSync(path.join(out, 'plan.md'), 'utf8').startsWith('## URGENT, outside this plan')).toBe(true);
     // a missing prior consensus refuses the Eng dispatch
@@ -140,7 +144,7 @@ describe('recovery', () => {
     expect(readRun(out).attempt_counter).toBe(2);
     // the provider had finished after all: the late result binds under the same attempt id
     review(path.join(out, 'ceo-native-prompt.md'));
-    const late = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    const late = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(late.status, late.stderr).toBe(0);
     // the outside attempt is redispatched only when named explicitly; its charge stays as unknown, never zero
     const redo = autoplan(['next', '--out', out, '--redispatch', ids.outside, '--estimate-usd', '1']);
@@ -157,7 +161,7 @@ describe('recovery', () => {
     const ids = attemptsOf(out, 'ceo');
     review(path.join(out, 'ceo-native-prompt.md'));
     const snapshotBefore = fs.readFileSync(path.join(out, 'run.json'), 'utf8');
-    const ok = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
+    const ok = autoplan(['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native]);
     expect(ok.status, ok.stderr).toBe(0);
     // simulate the crash: the journal and the ledger have the submit, run.json does not
     fs.writeFileSync(path.join(out, 'run.json'), snapshotBefore);
@@ -171,6 +175,52 @@ describe('recovery', () => {
     const spend = JSON.parse(fs.readFileSync(path.join(out, 'spend.json'), 'utf8'));
     expect(spend.settled.filter((s: any) => s.attempt === ids.native)).toHaveLength(1);
     expect(spend.reserved.map((r: any) => r.attempt)).toEqual([ids.outside]);
+  });
+
+  test('killed after sealing, before the journal: nothing is bound, resume reports the attempt unknown, and the same submit then binds once', () => {
+    const out = startSmallRun(path.join(TMP, 'kill-sealed'));
+    const ids = attemptsOf(out, 'ceo');
+    review(path.join(out, 'ceo-native-prompt.md'));
+    const args = ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native];
+    const faulted = autoplan(args, { env: env({ GSTACK_AUTOPLAN_FAULT: 'submit-after-seal' }) });
+    expect(faulted.status).not.toBe(0);
+    const sealed = path.join(out, `ceo-native.${ids.native.split('-').pop()}.bound.md`);
+    expect(fs.existsSync(sealed)).toBe(true);
+    expect(journal(out).some(r => r.event === 'submitted')).toBe(false);
+    expect(readRun(out).phases.ceo.native.status).toBe('running');
+    const resumed = JSON.parse(autoplan(['resume', '--out', out, '--json']).stdout);
+    expect(resumed).toMatchObject({ rebound: [], execution_unknown: [ids.native, ids.outside] });
+    const ok = autoplan(args);
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(journal(out).filter(r => r.event === 'submitted')).toHaveLength(1);
+    expect(readRun(out).phases.ceo.native).toMatchObject({ status: 'completed', output: path.basename(sealed), attempt: ids.native });
+  });
+
+  test('the bound result is a sealed attempt-owned copy: a late write to the reviewer file changes nothing bound, and another attempt\'s file is refused', () => {
+    const out = startSmallRun(path.join(TMP, 'sealed'));
+    runPhase(out, 'ceo');
+    const result = resultOf(out, 'ceo', 'native');
+    const run = readRun(out);
+    const bound = path.join(out, run.phases.ceo.native.output);
+    expect(path.basename(bound)).toMatch(/^ceo-native\.a\d+\.bound\.md$/);
+    expect(fs.readFileSync(bound, 'utf8')).toBe(fs.readFileSync(result, 'utf8'));
+    if (process.platform !== 'win32') expect(fs.statSync(bound).mode & 0o222).toBe(0);
+    fs.appendFileSync(result, '\nLate edit after submit.\n');
+    runPhase(out, 'eng');
+    expect(readRun(out).status).toBe('gate_pending');
+    const v = validate(out);
+    expect(v.status, v.stdout + v.stderr).toBe(0);
+    expect(fs.readFileSync(bound, 'utf8')).not.toContain('Late edit');
+    const eng = attemptsOf(out, 'eng');
+    expect(path.basename(resultOf(out, 'eng', 'native'))).toBe(`eng-native.${eng.native.split('-').pop()}.md`);
+    const other = startSmallRun(path.join(TMP, 'sealed-other'));
+    const otherIds = attemptsOf(other, 'ceo');
+    review(path.join(other, 'ceo-native-prompt.md'));
+    const foreign = path.join(other, `ceo-native.a999.md`);
+    fs.copyFileSync(resultOf(other, 'ceo', 'native'), foreign);
+    const refused = autoplan(['submit', '--out', other, '--phase', 'ceo', '--voice', 'native', '--result', foreign, '--model', 'claude-opus-4-7', '--attempt', otherIds.native]);
+    expect(refused.status).toBe(3);
+    expect(refused.stderr).toMatch(/\(ATTEMPT_MISMATCH\)/);
   });
 
   test('a runner process killed mid-command leaves no lock behind that a later command cannot reclaim; a live owner is never stolen', () => {

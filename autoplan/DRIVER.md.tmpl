@@ -25,14 +25,22 @@ line yourself; gstack never writes the plan.
    a subagent on another model family (or `gstack-outside-voice run`). Each writes `result=`.
 2. Submit each voice exactly once (`BOUND:`). Both voices in closes the phase (`PHASE_CLOSED:`).
 3. Repeat `next` until `status=gate_pending` (`GATE: gate_rev=<n>`); render it with
-   `gstack-gate render <dir>/gate.json`. You never approve the gate for the owner: relay it.
+   `gstack-gate render <dir>/gate.json --all` and relay every page. You never approve the
+   gate for the owner. Offer `rec` (every recommendation, plan changes included) as the default.
 4. `answer` with the owner's reply and `--by human` (the owner typed the tokens) or
-   `--by agent:<id>` (you relayed or decided them); without it an unattended run refuses
-   (`ANSWER_BY_REQUIRED`). `all` leaves every item recommended `b` pending: only the owner's
-   own token changes their stated direction. `APPLY: <id> <title> -> <change>` lines are
-   accepted plan changes: edit the plan, then `revise` (the printed `NEXT:` names it). Until
+   `--by agent:<id> --owner-reply "<their words>"` (you relayed them); without `--by` an
+   unattended run refuses (`ANSWER_BY_REQUIRED`). `APPLY: <id> <title> -> <change>` lines are
+   accepted plan changes (status `amend_pending`): edit the plan, then `revise` (the printed
+   `NEXT:` names it), or `revise --settle <id>` when the line says no plan edit is needed. Until
    then `next` refuses with `PLAN_AMEND_PENDING` and `export` will not mark the run complete.
 5. `REOPENED: <phases>` means loop `next` again (Eng last). `APPROVED:` means `export`.
+
+### On Capy
+
+- Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
+  hand is not an autoplan run: do not present it as one.
+- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder so a run at rest
+  survives machine replacement; restore with `resume --out <new dir> --from <dir>/<run>`.
 
 ### Commands
 
@@ -54,7 +62,8 @@ A reply binds to the `gate_rev` you read (`--gate-rev`). Bare `yes`/`no` is unpa
 ## Run directory
 
 {{AUTOPLAN_DRIVER_FILES}} Reviewer files: `<phase>-native-prompt.md`,
-`<phase>-outside-prompt.md`, `<phase>-native.md`, `<phase>-outside.md`, `<phase>-consensus.{json,md}`,
+`<phase>-outside-prompt.md`, `<phase>-<voice>.<attempt>.md` (the reviewer writes it), its sealed
+`<phase>-<voice>.<attempt>.bound.md` (what submit bound), `<phase>-consensus.{json,md}`,
 `gate.json`, `decisions.jsonl`. `export` writes `plan.md`, `review-record.md`, `findings.jsonl`,
 `tasks.jsonl`, `timing.json` and rehashes `run.json`; `gstack-artifact validate <dir>/run.json`
 is the completion check. Copy the whole directory, never single files.

@@ -136,6 +136,54 @@ describe('collectPins and evaluatePins', () => {
   });
 });
 
+// Integration item 1: CI exact pins for this platform are alternatives (any
+// one satisfies CI); non-CI pins stay required.
+describe('CI exact pins are alternatives', () => {
+  const lane = (name: string, version: string, os = 'ubuntu-latest') => [`  ${name}:`, `    runs-on: ${os}`, '    steps:', '      - uses: oven-sh/setup-bun@v2', '        with:', `          bun-version: ${version}`];
+  const workflow = (...jobs: string[][]) => ['jobs:', ...jobs.flat(), ''].join('\n');
+
+  test('the real gstack checkout (CI 1.4.2 lanes plus the 1.4.3 install-default job) passes on 1.4.2 and on 1.4.3, and names the alternatives on 1.4.1', () => {
+    const pins = collectPins(ROOT);
+    const ci = [...new Set(pins.filter(p => p.tool === 'bun' && p.field === 'CI' && p.kind === 'exact' && p.lane !== 'windows' && p.lane !== 'macos').map(p => p.constraint))].sort();
+    expect(ci).toEqual(['1.4.2', '1.4.3']);
+    for (const bun of ['1.4.2', '1.4.3']) expect(evaluatePins(pins, { bun }, 'linux').failures.filter(f => f.startsWith('bun'))).toEqual([]);
+    const low = evaluatePins(pins, { bun: '1.4.1' }, 'linux').failures.find(f => f.startsWith('bun '))!;
+    expect(low).toStartWith('bun 1.4.1 outside engines.bun >=1.4.2 (package.json:');
+    expect(low).toContain('CI exact pins are alternatives, any one of 1.4.2, 1.4.3 satisfies CI');
+    expect(renderPinLines(evaluatePins(pins, { bun: '1.4.2' }, 'linux'), 'linux')).toContain('PIN_CI_ALTERNATIVES: bun 1.4.2 1.4.3');
+  });
+
+  test('gbrain-like (every CI lane 1.4.3) still fails a local 1.4.2 exactly as before', () => {
+    const dir = project({ '.github/workflows/ci.yml': workflow(lane('a', '1.4.3'), lane('b', '1.4.3')) });
+    const fail = evaluatePins(collectPins(dir), { bun: '1.4.2' }, 'linux');
+    expect(fail.verdict).toBe('fail');
+    expect(fail.failures).toEqual(['bun 1.4.2 outside CI 1.4.3 (.github/workflows/ci.yml:7)']);
+    expect(evaluatePins(collectPins(dir), { bun: '1.4.3' }, 'linux').verdict).toBe('pass');
+  });
+
+  test('GBRA-39, gbrain-evals-like: one workflow pins 1.4.2, another 1.4.3; a local 1.4.3 used to fail "outside CI 1.4.2" and now passes', () => {
+    const dir = project({
+      '.github/workflows/test.yml': workflow(lane('unit', '1.4.3')),
+      '.github/workflows/evals.yml': workflow(lane('evals', '1.4.2')),
+    });
+    for (const bun of ['1.4.2', '1.4.3']) expect(evaluatePins(collectPins(dir), { bun }, 'linux').verdict).toBe('pass');
+    expect(evaluatePins(collectPins(dir), { bun: '1.4.4' }, 'linux').failures).toEqual([expect.stringContaining('any one of ')]);
+  });
+
+  test('non-CI exact pins stay required beside CI alternatives; another platform\'s CI pin is not an alternative here', () => {
+    const dir = project({
+      '.bun-version': '1.4.2\n',
+      '.github/workflows/ci.yml': workflow(lane('linux', '1.4.3'), lane('mac', '1.4.4', 'macos-latest')),
+    });
+    const r = evaluatePins(collectPins(dir), { bun: '1.4.3' }, 'linux');
+    expect(r.failures).toEqual(['bun 1.4.3 outside .bun-version 1.4.2 (.bun-version:1)']);
+    const lines = renderPinLines(r, 'linux');
+    expect(lines).toContain('PIN_EXACT_REQUIRED: bun 1.4.2 .bun-version:1');
+    expect(lines).toContain('PIN_CI_ALTERNATIVES: bun 1.4.3');
+    expect(evaluatePins(collectPins(dir), { bun: '1.4.4' }, 'linux').verdict).toBe('fail');
+  });
+});
+
 describe('bin/gstack-runtime-pins.ts', () => {
   const run = (args: string[]) => spawnSync(process.execPath, [path.join(ROOT, 'bin/gstack-runtime-pins.ts'), ...args], { encoding: 'utf8', timeout: 30_000 });
 

@@ -111,14 +111,14 @@ JSON Schema for any of `findings`, `decisions`, `tasks`, `timing`, `run`,
 3. **List what is pending.**
    ```bash
    jq -c 'select(.status=="pending")' <dir>/decisions.jsonl
-   gstack-gate render <dir>/gate.json          # the numbered list and reply grammar
+   gstack-gate render <dir>/gate.json --all    # the numbered list and reply grammar, every page
    ```
-4. **Answer the gate** by composing the reply grammar (`all`, `<id><option>`
-   tokens such as `d3b uc1a`, or `all except <tokens>`; bare yes/no is
-   rejected) and feeding it back with the gate revision you read:
+4. **Answer the gate** by composing the reply grammar (`rec`, `as-is`,
+   `<id><option>` tokens such as `d3b uc1a`, or `rec except <tokens>`; bare
+   yes/no is rejected) and feeding it back with the gate revision you read:
    ```bash
-   gstack-gate parse <dir>/gate.json --reply "all except d3b" --gate-rev 1 --json
-   gstack-gate decisions <dir>/gate.json --reply "all except d3b" --gate-rev 1 >> <dir>/decisions.jsonl
+   gstack-gate parse <dir>/gate.json --reply "rec except d3b" --gate-rev 1 --json
+   gstack-gate decisions <dir>/gate.json --reply "rec except d3b" --gate-rev 1 >> <dir>/decisions.jsonl
    ```
    A stale revision is `GATE_REV_STALE` and a reply with unparsed tokens is
    `GATE_REPLY_UNPARSED`; both exit `1` and write nothing.
@@ -150,8 +150,8 @@ $AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--no-dx
 #   SCOPE: ui=yes (...) dx=yes (detected: ...) source=ui:detected,dx:detected
 #   DRIVER: <root>/autoplan/DRIVER.md
 #   Skipped sections: none (scope: ui=yes,dx=yes,source=ui:detected,dx:detected; checklist=loaded)
-#   ATTEMPT: <run>-a1 phase=ceo voice=native  prompt=<dir>/ceo-native-prompt.md  result=<dir>/ceo-native.md  model_family=...
-#   ATTEMPT: <run>-a2 phase=ceo voice=outside prompt=<dir>/ceo-outside-prompt.md result=<dir>/ceo-outside.md model_family=differs from the native reviewer
+#   ATTEMPT: <run>-a1 phase=ceo voice=native  prompt=<dir>/ceo-native-prompt.md  result=<dir>/ceo-native.a1.md  model_family=...
+#   ATTEMPT: <run>-a2 phase=ceo voice=outside prompt=<dir>/ceo-outside-prompt.md result=<dir>/ceo-outside.a2.md model_family=differs from the native reviewer
 #   SPEND: spent=0.00 reserved=0.00 unknown=0(0.00) worst_case=0.00 cap=none
 #   GSTACK_RESULT: skill=autoplan status=awaiting_result run=<dir>
 ```
@@ -173,18 +173,21 @@ the plan.
    `release --attempt <id>` returns its reservation).
 2. **Submit each result exactly once.**
    ```bash
-   $AP submit --out <dir> --phase ceo --voice native  --result <dir>/ceo-native.md  --model <id> --attempt <run>-a1
-   $AP submit --out <dir> --phase ceo --voice outside --result <dir>/ceo-outside.md --model <id> --attempt <run>-a2 [--runner host-subagent] [--usage-usd <n>]
+   $AP submit --out <dir> --phase ceo --voice native  --result <dir>/ceo-native.a1.md  --model <id> --attempt <run>-a1
+   $AP submit --out <dir> --phase ceo --voice outside --result <dir>/ceo-outside.a2.md --model <id> --attempt <run>-a2 [--runner host-subagent (default)] [--usage-usd <n>]
    #   BOUND: <run>-a1 phase=ceo voice=native model=<id> findings=7 sha256=<result hash prefix>
    #   PHASE_CLOSED: ceo confirmed=4 disagree=1 new=2 native_only=1 coverage=both
    ```
+   Submit seals the bytes it bound as `<phase>-<voice>.<attempt>.bound.md`
+   (read-only); a later write to the reviewer's file changes nothing bound,
+   and another attempt's result file is refused (`ATTEMPT_MISMATCH`).
    Binding checks the receipt line against the phase snapshot
    (`RESULT_RECEIPT_MISSING`), parses the canonical findings fence
    (`RESULT_FINDINGS_MISSING`), refuses an outside model from the native
    family (`MODEL_FAMILY_CONFLICT`), and refuses a second bind of the same
    attempt or a bind while the phase is not awaiting it (`ATTEMPT_MISMATCH`,
    `PHASE_NOT_AWAITING`, exit 3). Both voices in closes the phase: the
-   reconciliation (`confirmed` / `disagree` / `new` per outside finding, with
+   reconciliation (`confirmed` / `unverified` / `disagree` / `new` per outside finding, with
    disagreement and resolution kept separate) is written to
    `<phase>-consensus.{json,md}`, and every later phase's prompts (DX, design
    and Eng alike) carry each closed predecessor's consensus as data; a phase
@@ -194,40 +197,56 @@ the plan.
    disagreements as auto items and `p1` plan approval; nothing is approved.
 4. **Answer the gate** with the reply grammar and the revision you read:
    ```bash
-   $AP answer --out <dir> --gate-rev 1 --reply "all" --by human            # every recommendation the owner may delegate; agreeing plan changes stay pending
-   $AP answer --out <dir> --gate-rev 1 --reply "all as-is" --by human      # APPROVED: keeps every direction, no new paid phase
-   $AP answer --out <dir> --gate-rev 1 --reply "all except d1b" --by human # APPLY: <id> ...; REOPENED: ceo,eng; NEXT: gstack-autoplan revise ...
+   $AP answer --out <dir> --gate-rev 1 --reply "rec" --by human            # every recommendation, plan changes included (APPLY: ...; amend_pending)
+   $AP answer --out <dir> --gate-rev 1 --reply "as-is" --by human          # APPROVED: keeps every direction, no new paid phase
+   $AP answer --out <dir> --gate-rev 1 --reply "rec except d1b" --by agent:<id> --owner-reply "<owner's words>"
    ```
    `--by human` means the owner typed the tokens; `--by agent:<thread or id>`
-   means an agent relayed or decided them. An unattended run refuses an answer
-   without it (`ANSWER_BY_REQUIRED`, exit 3) and records the value as
+   means an agent relayed them, and then `--owner-reply` (or `-` for stdin,
+   `--owner-reply-file <path>`) stores the owner's words verbatim
+   (`OWNER_REPLY_REQUIRED`); owner words that parse to different choices are
+   refused (`GATE_OWNER_REPLY_MISMATCH`). An unattended run refuses an answer
+   without `--by` (`ANSWER_BY_REQUIRED`, exit 3) and records the value as
    `answered_by` on every decision row and in the review record's gate line,
    so a gate an agent closed is distinguishable from one the owner closed.
-   A user challenge both voices raised on a confirmed finding with the same
-   `changes` value is recommended as `b`, and option b shows both voices'
-   remedies (`recommended: b (both voices; remedies shown)`); a `--reconcile`
-   record naming one shared `proposal` shows that instead. Disagreeing or
-   missing remedies keep `a`. `all` never answers an item recommended `b`:
-   that would change the owner's stated direction on their behalf, so those
-   items stay pending (`GATE_PENDING: uc1 unanswered (reply with uc1a|uc1b; all
-   does not answer items recommended b)`) until their own token arrives, and
-   the rendered gate names them under the reply grammar. Every accepted plan change prints
+   `gstack-autoplan recommend` changes one recommendation before relay; it
+   bumps the gate's `rec_rev`, and a later `rec` needs the `--rec-hash` from
+   the render the owner saw (`GATE_REC_STALE`).
+   A user challenge both voices raised on a confirmed finding (a title match,
+   not file:line proximity alone, which is `unverified`) with the same
+   `changes` value is recommended as `b` only with one shared proposal: a
+   `--reconcile` record naming it, or the same remedy from both voices.
+   Different or missing remedies keep `a`, and option b shows both verbatim
+   with the basis. `rec` (alias `all`) takes every recommendation, so it
+   accepts the items recommended `b`. Every accepted plan change prints
    `APPLY: <decision id> <title> -> <chosen text>` and becomes a pending
    amendment: `next` refuses with `PLAN_AMEND_PENDING` and `export` refuses a
-   `complete` run until `revise --incorporates` names it (see below).
+   `complete` run until `revise --incorporates` names it, or `revise --settle
+   <id>` settles a packaging or ordering change that needs no plan edit.
    A stale revision (`GATE_REV_STALE`, exit 3), bare `yes`/`no`, or a
    conflicting reply (`GATE_REPLY_UNPARSED`) writes nothing. A reply that
    leaves approval items pending records only the answered auto items and
-   keeps the gate; a later reply never overwrites an earlier answer. A choice
-   that changes the plan reopens that phase plus Eng, archives their bound
-   files as `*.r<rev>.*`, and the next gate is `gate_rev + 1`; `p1d` reruns
-   every phase on the current plan; `p1e` ends `incomplete`.
+   keeps the gate; a later reply never overwrites an earlier answer. An
+   accepted change reopens nothing at answer (status `amend_pending`); `revise`
+   reopens each phase whose reviewed plan changed plus Eng, archives their
+   prompts and consensus as `*.r<rev>.*` (sealed `*.bound.md` results stay in
+   place), and the next gate is `gate_rev + 1`; `p1d` reruns every phase on the
+   current plan; `p1e` ends `incomplete`.
 5. **Export and validate.** `$AP export --out <dir>` writes `plan.md` (with
    the `## URGENT, outside this plan` block first), `review-record.md`,
    `tasks.jsonl`, `decisions.jsonl`, `findings.jsonl`, `timing.json` and
    `run.json`; then `gstack-artifact validate <dir>/run.json` and the
    consumption steps above apply unchanged. `$AP status --out <dir>` and
-   `resume` work after the run directory moves (paths are re-rooted).
+   `resume` work after the run directory moves (paths are re-rooted; journal
+   paths are run-relative). With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set, a run
+   at rest publishes an immutable, hash-listed generation under
+   `<dir>/<run>/generations/` and switches `current.json` to it (the previous
+   generation is kept; a stale copy never replaces a newer one; a directory
+   overlapping the run is refused with `CHECKPOINT_OVERLAP`; a failure is a
+   `CHECKPOINT: failed` warning that leaves the command's exit code alone).
+   `$AP checkpoints --from <dir>` lists generations with their hash status, and
+   `$AP resume --out <new dir> --from <dir>/<run>` restores the newest valid
+   one after validating the staged run (`CHECKPOINT_INVALID`).
 
 Concurrency and recovery: every state write is a locked read-modify-write
 (`run.lock`; a second writer sees `RUN_LOCKED`), attempts are journaled to

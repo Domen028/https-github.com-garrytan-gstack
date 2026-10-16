@@ -49,6 +49,15 @@ export function readRun(out: string): any {
 export function journal(out: string): any[] {
   return fs.readFileSync(path.join(out, 'attempts.jsonl'), 'utf8').split('\n').filter(Boolean).map(l => JSON.parse(l));
 }
+/** The result path the open (else the latest) attempt of a voice owns: `<phase>-<voice>.<attempt>.md`. */
+export function resultOf(out: string, phase: string, voice: 'native' | 'outside'): string {
+  const attempts: Array<{ state: string; result: string }> = readRun(out).phases[phase]?.[voice]?.attempts ?? [];
+  const attempt = attempts.find(a => a.state === 'dispatched' || a.state === 'execution_unknown') ?? attempts[attempts.length - 1];
+  if (!attempt) throw new Error(`${phase} ${voice} has no attempt in ${out}`);
+  return attempt.result;
+}
+/** The sealed copy a completed voice is bound to. */
+export const boundOf = (out: string, phase: string, voice: 'native' | 'outside'): string => path.join(out, readRun(out).phases[phase][voice].output);
 export function attemptsOf(out: string, phase: string): { native: string; outside: string } {
   const run = readRun(out);
   return { native: run.phases[phase].native.attempt, outside: run.phases[phase].outside.attempt };
@@ -65,8 +74,8 @@ export function runPhase(out: string, phase: string, o: PhaseRunOptions = {}): {
     if (r.status !== 0) throw new Error(`fixture reviewer failed: ${r.stderr}`);
   }
   const ids = attemptsOf(out, phase);
-  const native = autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'native', '--result', path.join(out, `${phase}-native.md`), '--model', o.nativeModel ?? 'anthropic/claude-opus-4-7', '--attempt', ids.native, '--runner', 'host-subagent']);
-  const outside = autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'outside', '--result', path.join(out, `${phase}-outside.md`), '--model', o.outsideModel ?? 'openai/gpt-6-astra', '--attempt', ids.outside, '--runner', 'host-subagent', ...(o.reconcile ? ['--reconcile', o.reconcile] : [])]);
+  const native = autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'native', '--result', resultOf(out, phase, 'native'), '--model', o.nativeModel ?? 'anthropic/claude-opus-4-7', '--attempt', ids.native, '--runner', 'host-subagent']);
+  const outside = autoplan(['submit', '--out', out, '--phase', phase, '--voice', 'outside', '--result', resultOf(out, phase, 'outside'), '--model', o.outsideModel ?? 'openai/gpt-6-astra', '--attempt', ids.outside, '--runner', 'host-subagent', ...(o.reconcile ? ['--reconcile', o.reconcile] : [])]);
   return { next, native, outside };
 }
 
