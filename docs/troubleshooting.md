@@ -3334,3 +3334,40 @@ unset, not in bare mode). Then re-run the review.
 
 **Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
 review — outside voice)` when the provider runs.
+
+<a id="wtree-unavailable"></a>
+### `gstack-pregate: cannot fingerprint the working tree: bin/gstack-wtree could not start (on Windows, no Git Bash was found) or it ran and failed (<detail>); fix: <fix> (WTREE_UNAVAILABLE)`
+
+**Meaning.** `gstack-pregate` fingerprints the working tree with
+`bin/gstack-wtree` before any check runs, and refuses (exit 3) when it cannot.
+There are two causes, and the line says which:
+
+- **It could not start.** On Windows no Git Bash was found to run the script.
+  The detail lists every candidate tried with the reason it was rejected
+  (`GSTACK_GIT_BASH (unset): not set; git --exec-path …; install path …;
+  PATH bash: …`), in the order [`BASH_UNAVAILABLE`](#bash-unavailable)
+  describes. On macOS or Linux it means `bin/gstack-wtree` is missing.
+- **It ran and failed.** The detail is the script's own message, and the fix
+  is the repair it printed, for example `set TMPDIR to a writable directory`.
+
+Before this, both cases were reported as `policy source unavailable:
+origin/<base> is not a resolvable commit` with `git fetch` as the fix, which
+changed nothing.
+
+**Fix.** Run the fix the line prints. For the Windows case, point gstack at
+Git Bash's `bash.exe`, then rerun `gstack-pregate`:
+
+- Git Bash (this shell only): `export GSTACK_GIT_BASH='C:/Program Files/Git/bin/bash.exe'`
+- Windows PowerShell 5.1 or PowerShell 7 (this shell only):
+  `$env:GSTACK_GIT_BASH = 'C:\Program Files\Git\bin\bash.exe'`
+
+To set it for good (Claude Code reads it on its next start), follow the
+recipes under [`BASH_UNAVAILABLE`](#bash-unavailable), or install Git for
+Windows (`winget install --id Git.Git -e` in PowerShell).
+
+**With `--json`.** Every refusal before a check runs (this one, an
+unavailable base, an invalid pin file) is one JSON object on stdout,
+`{"ok":false,"status":"refused","code":"WTREE_UNAVAILABLE","detail":"…","fix":"…","docs":"…#wtree-unavailable"}`,
+with exit 3. A run's object carries the same `ok` and `status`
+(`complete` or `incomplete`), so `status` tells a refusal from a run. The
+`GSTACK_RESULT:` line goes to stderr under `--json`.
