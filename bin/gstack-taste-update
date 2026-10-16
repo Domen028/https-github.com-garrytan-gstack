@@ -29,6 +29,7 @@
 //
 // Confidence is computed with Laplace smoothing + 5% weekly decay at read time.
 
+import { resolveSlug, claimArtifactProject } from "../lib/bin-context";
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
@@ -65,12 +66,7 @@ interface TasteProfile {
 }
 
 function getSlug(): string {
-  try {
-    const output = execSync('git rev-parse --show-toplevel', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-    return path.basename(output);
-  } catch {
-    return 'unknown';
-  }
+  return resolveSlug(path.join(import.meta.dir, 'gstack-slug'));
 }
 
 function profilePath(slug: string): string {
@@ -107,6 +103,7 @@ function load(slug: string): TasteProfile {
 }
 
 function save(slug: string, profile: TasteProfile): void {
+  claimArtifactProject(STATE_DIR, slug);
   const p = profilePath(slug);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   profile.updated_at = new Date().toISOString();

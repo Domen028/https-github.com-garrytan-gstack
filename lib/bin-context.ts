@@ -234,6 +234,13 @@ export function readVersionedSlugCache(stateRoot: string, cwd: string): string |
   return slug && slug !== "." && slug !== ".." ? slug : undefined;
 }
 
+export function claimArtifactProject(home: string, slug: string): void {
+  const guard = spawnSync("python3", [join(import.meta.dir, "../bin/gstack-artifact-paths.py"), "claim", home, slug], {
+    encoding: "utf8", timeout: 125000, maxBuffer: 65536,
+  });
+  if (guard.status !== 0) throw new Error(guard.stderr?.trim() || "ARTIFACT_PATH_CHECK_UNAVAILABLE: no artifact written");
+}
+
 export function slugFromEnvironment(gstackHome?: string, cwd: string = process.cwd()): string {
   const home = gstackHome || resolveStateRoot();
   const cacheDir = join(home, "slug-cache");
@@ -244,7 +251,7 @@ export function slugFromEnvironment(gstackHome?: string, cwd: string = process.c
   // 0. explicit env override — per-invocation escape hatch, never persisted
   //    (caching it would rebind THIS cwd's slug for every later env-less run).
   const envSlug = sanitizeSlug((process.env.GSTACK_PROJECT_SLUG || "").trim());
-  if (envSlug && envSlug !== "." && envSlug !== "..") return envSlug;
+  if (envSlug && envSlug !== "." && envSlug !== "..") { claimArtifactProject(home, envSlug); return envSlug; }
 
   // 1. outermost project root along the cwd ancestor chain (may be "").
   const projectRoot = outermostProjectRoot(cwd);
@@ -323,7 +330,8 @@ export function slugFromEnvironment(gstackHome?: string, cwd: string = process.c
   // 4. project root's basename, else pwd basename for plain folders.
   if (!slug && projectRoot) slug = sanitizeSlug(basename(projectRoot));
   if (!slug) slug = sanitizeSlug(basename(cwd));
-  if (!slug) return "unknown";
+  if (!slug) slug = "unknown";
+  claimArtifactProject(home, slug);
 
   // 5. cache it, as gstack-slug does — atomic, self-healing (only rewrites when
   //    the value changed — single-shot, key-local), and failures stay silent.
@@ -372,15 +380,19 @@ export const NEEDS_NATIVE_SLUG_ON_WINDOWS = process.platform === "win32";
  * WSL, whose $HOME and /mnt/c paths yield a different slug AND a different cache
  * directory, trading one split store for another.
  *
- * POSIX behaviour is unchanged: the fallback is win32-only, where the previous result
- * was unconditionally wrong and so has nothing to regress.
+ * The launch fallback is win32-only. A running helper's explicit refusal
+ * propagates on every platform instead of redirecting writes to "unknown".
  */
 export function resolveSlug(slugBinPath: string): string {
   const r = spawnSync(slugBinPath, { encoding: "utf-8" });
-  const m = (r.stdout || "").match(/^SLUG=(.+)$/m);
-  if (m) return m[1].trim();
-  if (NEEDS_NATIVE_SLUG_ON_WINDOWS) return slugFromEnvironment();
-  return "unknown";
+  // Native Windows cannot launch a shebang script; do not confuse that
+  // launch limitation with an explicit nonzero refusal from a running guard.
+  if (NEEDS_NATIVE_SLUG_ON_WINDOWS && r.error &&
+      ["ENOENT", "ENOEXEC", "EINVAL"].includes((r.error as NodeJS.ErrnoException).code || "")) return slugFromEnvironment();
+  if (r.status !== 0) throw new Error((r.stderr || "").trim() || "ARTIFACT_SLUG_RESOLUTION_FAILED");
+  const m = (r.stdout || "").match(/^SLUG=([a-zA-Z0-9._-]+)$/m);
+  if (!m || [".", ".."].includes(m[1])) throw new Error("ARTIFACT_SLUG_RESOLUTION_FAILED: missing valid project identity");
+  return m[1];
 }
 
 /** Current git branch, or undefined on detached HEAD / outside a repo. */

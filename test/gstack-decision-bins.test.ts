@@ -19,20 +19,22 @@ let tmpDir: string;
 function opts(): ExecSyncOptionsWithStringEncoding {
   return { cwd: ROOT, env: { ...process.env, GSTACK_HOME: tmpDir }, encoding: "utf-8", timeout: 20000 };
 }
+// Keep executable paths literal when the checkout lives under a space-containing volume.
+const shellPath = (value: string) => "'" + value.replace(/'/g, "'\\''") + "'";
 function log(arg: string, expectFail = false): { out: string; code: number } {
   try {
-    return { out: execSync(`${LOG} '${arg.replace(/'/g, "'\\''")}'`, opts()).trim(), code: 0 }; // timeout via opts()
+    return { out: execSync(`${shellPath(LOG)} '${arg.replace(/'/g, "'\\''")}'`, opts()).trim(), code: 0 }; // timeout via opts()
   } catch (e: any) {
     if (expectFail) return { out: (e.stderr?.toString() || "").trim(), code: e.status || 1 };
     throw e;
   }
 }
 function logFlag(flag: string): string {
-  return execSync(`${LOG} ${flag}`, opts()).trim(); // timeout via opts()
+  return execSync(`${shellPath(LOG)} ${flag}`, opts()).trim(); // timeout via opts()
 }
 function search(args = ""): string {
   try {
-    return execSync(`${SEARCH} ${args}`, opts()).trim(); // timeout via opts()
+    return execSync(`${shellPath(SEARCH)} ${args}`, opts()).trim(); // timeout via opts()
   } catch {
     return "";
   }
@@ -228,7 +230,7 @@ describe("gstack-decision-search --semantic (optional gbrain enhancement)", () =
     const env = { ...process.env, GSTACK_HOME: tmpDir } as NodeJS.ProcessEnv;
     if (pathPrefix) env.PATH = `${pathPrefix}:${process.env.PATH}`;
     try {
-      return execSync(`${SEARCH} ${args}`, { cwd: ROOT, env, encoding: "utf-8", timeout: 20000 }).trim();
+      return execSync(`${shellPath(SEARCH)} ${args}`, { cwd: ROOT, env, encoding: "utf-8", timeout: 20000 }).trim();
     } catch {
       return "";
     }

@@ -891,6 +891,15 @@ hold_flagged_paths() {
   git -C "$GSTACK_HOME" diff --cached --no-renames > "$scan.diff" 2>/dev/null || rc=1
   git -C "$GSTACK_HOME" diff --cached --no-renames -z --name-only > "$scan.names" 2>/dev/null || rc=1
   [ "$rc" -eq 0 ] && { secret_scan attribute "$scan.diff" "$scan.names" "$scan.hits" || rc=1; }
+  # Reuse the scanner's NUL-delimited name snapshot: no fifth cached diff
+  # for a batch of 1,000 files. Keep its pre-existing fail-closed rescue first.
+  local path_guard_error
+  if [ "$rc" -eq 0 ] && ! path_guard_error=$(python3 "$SCRIPT_DIR/gstack-artifact-paths.py" staged "$GSTACK_HOME" "$paths_file" "$scan.names" 2>&1); then
+    write_status "error" "staged artifact path validation refused; index is staged, no commit/push; queue retained"
+    printf '%s\n' "$path_guard_error" >&2
+    echo 'BRAIN_SYNC: staged_changes_present; inspect the index; no automatic discard' >&2
+    return 1
+  fi
   if [ "$rc" -eq 0 ] && [ -s "$groups_file.batch" ]; then
     tr -d '\r' < "$groups_file.batch" | git -C "$GSTACK_HOME" cat-file --batch > "$scan.blobs" 2>/dev/null || rc=1
   fi
@@ -1035,6 +1044,15 @@ subcmd_once() {
   # network push; the mktemp block below re-traps with tempfile cleanup added.
   gstack_brain_lock_acquire "$GSTACK_HOME" try || exit 0
   trap 'gstack_brain_lock_release' EXIT INT TERM
+
+  # Also covers the empty-queue stranded-commit push below. Git add success
+  # alone is not proof that a tree is portable to the receiver's filesystem.
+  local path_guard_error
+  if ! path_guard_error=$(python3 "$SCRIPT_DIR/gstack-artifact-paths.py" outgoing "$GSTACK_HOME" 2>&1); then
+    write_status "error" "artifact path validation refused; queue retained; inspect conflicting spellings"
+    printf '%s\n' "$path_guard_error" >&2
+    exit 1
+  fi
 
   # Convert any legacy single-file queue lines into spool records before the
   # drain reads the spool (transition window for pre-spool writers).
@@ -1200,6 +1218,7 @@ subcmd_once() {
   # Stage explicit paths only. A path git refuses to add leaves $paths_file,
   # so its record stays queued and the commit count stays honest.
   stage_paths "$paths_file"
+
   if [ ! -s "$paths_file" ]; then
     ST_DRAINABLE=$n_stageable
     write_status "error" "git add failed for all $ADD_FAILED path(s): ${FIRST_ADD_ERR:-unknown error}; queue preserved (next run retries)"
@@ -1278,6 +1297,11 @@ subcmd_once() {
 
   # Nothing outside the transcript consent is pushed; a refused rewrite keeps the commit local.
   guard_unpublished_range || { write_status "push_failed" "push blocked: unpushed commits hold transcript pages outside your transcript consent; commit retained locally"; finalize_queue "$snapshot_file" "$class_file" "$paths_file"; exit 0; }
+  if ! path_guard_error=$(python3 "$SCRIPT_DIR/gstack-artifact-paths.py" outgoing "$GSTACK_HOME" 2>&1); then
+    write_status "push_failed" "outgoing tree refused after local commit; queue and local commit retained"
+    printf '%s\n' "$path_guard_error" >&2
+    exit 1
+  fi
   # Push. On reject, fetch + merge (merge driver handles JSONL) + retry once.
   local push_err
   push_err=$(git -C "$GSTACK_HOME" push origin HEAD 2>&1 >/dev/null) || {
@@ -1302,6 +1326,11 @@ subcmd_once() {
       local branch
       branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
       if git -C "$GSTACK_HOME" merge --no-edit "origin/$branch" >/dev/null 2>&1 && guard_unpublished_range; then
+        if ! path_guard_error=$(python3 "$SCRIPT_DIR/gstack-artifact-paths.py" outgoing "$GSTACK_HOME" 2>&1); then
+          write_status "push_failed" "merged outgoing tree refused; local merge and queue retained; nothing pushed"
+          printf '%s\n' "$path_guard_error" >&2
+          exit 1
+        fi
         if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-push "artifacts_sync_mode!=off" \
             bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
           finalize_queue "$snapshot_file" "$class_file" "$paths_file"

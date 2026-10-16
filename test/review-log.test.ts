@@ -124,7 +124,7 @@ describe('gstack-review-log', () => {
         encoding: 'utf-8',
         timeout: 10000,
       };
-      execSync(`${BIN}/gstack-review-log '{"skill":"review","status":"clean"}'`, execOpts); // timeout via execOpts
+      execSync(`"${BIN}/gstack-review-log" '{"skill":"review","status":"clean"}'`, execOpts); // timeout via execOpts
       // A record landed somewhere under projects/ without a wtree stamp.
       const found: string[] = [];
       const walk = (d: string) => {
@@ -156,7 +156,7 @@ describe('gstack-wtree', () => {
       fs.writeFileSync(path.join(repoDir, '.gitignore'), 'scratch.txt\n');
       git('add a.txt .gitignore');
       git('commit -q -m init');
-      const wtree = () => execSync(`${BIN}/gstack-wtree`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 }).trim();
+      const wtree = () => execSync(`"${BIN}/gstack-wtree"`, { cwd: repoDir, encoding: 'utf-8', timeout: 10000 }).trim();
       fn(repoDir, wtree);
     } finally {
       fs.rmSync(repoDir, { recursive: true, force: true });
@@ -232,7 +232,7 @@ describe('gstack-wtree', () => {
       const stubDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-touch-stub-'));
       fs.writeFileSync(path.join(stubDir, 'touch'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
       const wtreeStubbed = () =>
-        execSync(`${BIN}/gstack-wtree`, {
+        execSync(`"${BIN}/gstack-wtree"`, {
           cwd: repoDir,
           encoding: 'utf-8',
           timeout: 10000,
@@ -253,7 +253,7 @@ describe('gstack-wtree', () => {
   test('exits non-zero outside a git repo', () => {
     const nonGit = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-wtree-nongit-'));
     try {
-      expect(() => execSync(`${BIN}/gstack-wtree`, { cwd: nonGit, timeout: 10000, stdio: 'pipe' })).toThrow();
+      expect(() => execSync(`"${BIN}/gstack-wtree"`, { cwd: nonGit, timeout: 10000, stdio: 'pipe' })).toThrow();
     } finally {
       fs.rmSync(nonGit, { recursive: true, force: true });
     }
@@ -262,7 +262,7 @@ describe('gstack-wtree', () => {
 
 describe('gstack-review-read', () => {
   test('emits ---WTREE---, ---TREE--- and ---DIRTY--- sections', () => {
-    const out = execSync(`${BIN}/gstack-review-read`, {
+    const out = execSync(`"${BIN}/gstack-review-read"`, {
       cwd: ROOT,
       env: { ...process.env, GSTACK_HOME: tmpDir },
       encoding: 'utf-8',

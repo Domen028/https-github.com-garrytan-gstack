@@ -44,7 +44,8 @@ case "$(uname -s)" in
 esac
 PROFILE_FILE="$GSTACK_HOME/developer-profile.json"
 LEGACY_FILE="$GSTACK_HOME/builder-profile.jsonl"
-eval "$("$SCRIPT_DIR/gstack-slug" 2>/dev/null || true)"
+_GSTACK_SLUG_OUTPUT=$("$SCRIPT_DIR/gstack-slug") || exit $?
+eval "$_GSTACK_SLUG_OUTPUT"
 SLUG="${SLUG:-unknown}"
 
 CMD="${1:---read}"

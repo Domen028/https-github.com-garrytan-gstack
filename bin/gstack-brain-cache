@@ -19,6 +19,7 @@
  * unreachable. Concurrent-refresh dedup is a follow-up commit (T15).
  */
 
+import { claimArtifactProject } from "../lib/bin-context";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, statSync, unlinkSync, readdirSync, openSync, closeSync } from 'fs';
 import { join, dirname } from 'path';
 import { homedir, hostname } from 'os';
@@ -59,6 +60,7 @@ export function entityDir(entity: BrainCacheEntity, projectSlug: string | null):
   if (!projectSlug) {
     throw new Error(`Per-project entity needs a project slug: ${entity.file}`);
   }
+  claimArtifactProject(GSTACK_HOME, projectSlug);
   return join(GSTACK_HOME, 'projects', projectSlug, 'brain-cache');
 }
 
@@ -75,6 +77,7 @@ export function metaPath(scope: 'cross-project' | 'per-project', projectSlug: st
     return join(GSTACK_HOME, 'brain-cache', '_meta.json');
   }
   if (!projectSlug) throw new Error('Per-project meta needs a project slug');
+  claimArtifactProject(GSTACK_HOME, projectSlug);
   return join(GSTACK_HOME, 'projects', projectSlug, 'brain-cache', '_meta.json');
 }
 
@@ -301,6 +304,7 @@ export function cmdGet(entityName: string, projectSlug: string | null): GetResul
  * serialize naturally because they're rare and the lock window is short.
  */
 function lockPath(projectSlug: string | null): string {
+  if (projectSlug) claimArtifactProject(GSTACK_HOME, projectSlug);
   const dir = projectSlug
     ? join(GSTACK_HOME, 'projects', projectSlug, 'brain-cache')
     : join(GSTACK_HOME, 'brain-cache');

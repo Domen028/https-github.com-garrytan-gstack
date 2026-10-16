@@ -114,16 +114,18 @@ describe("the fallback stays win32-gated", () => {
   test("resolveSlug no longer returns a bare literal on a failed spawn", () => {
     const src = read("lib/bin-context.ts");
     expect(src).not.toMatch(/return m \? m\[1\]\.trim\(\) : "unknown";/);
-    expect(src).toMatch(/if \(NEEDS_NATIVE_SLUG_ON_WINDOWS\) return slugFromEnvironment\(\);/);
+    expect(src).toMatch(/if \(NEEDS_NATIVE_SLUG_ON_WINDOWS && r\.error/);
   });
 
   test("a spawn that cannot run resolves to a real slug, not 'unknown'", () => {
     // The exact production failure: the helper path does not exist / cannot exec.
-    const got = resolveSlug(path.join(tmp, "definitely-not-a-real-bin"));
     if (NEEDS_NATIVE_SLUG_ON_WINDOWS) {
+      const got = resolveSlug(path.join(tmp, "definitely-not-a-real-bin"));
       expect(got).not.toBe("unknown");
     } else {
-      expect(got).toBe("unknown"); // POSIX behaviour deliberately unchanged
+      // An explicit refusal must not redirect unrelated projects into a
+      // shared unknown bucket. Preserve the Windows launch-only fallback.
+      expect(() => resolveSlug(path.join(tmp, "definitely-not-a-real-bin"))).toThrow("ARTIFACT_SLUG_RESOLUTION_FAILED");
     }
   });
 });

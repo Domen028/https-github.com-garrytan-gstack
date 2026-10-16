@@ -420,6 +420,10 @@ fi
 #    basename (preserves the old behavior for plain non-project folders).
 SLUG="${SLUG:-$(basename "$PROJECT_DIR" | tr -cd 'a-zA-Z0-9._-')}"
 
+# Refuse an alternate project spelling before a caller can append through an
+# APFS alias. Read index names too: the physical directory cannot expose both.
+python3 "$(dirname "$0")/gstack-artifact-paths.py" claim "$GSTACK_STATE_ROOT" "$SLUG"
+
 # Cache compare/evict/write — self-healing. Compute the cache decision AFTER
 # fresh resolution so a stale cached value gets corrected on next invocation
 # rather than perpetuated. Single-shot: we only ever touch the cache entry for

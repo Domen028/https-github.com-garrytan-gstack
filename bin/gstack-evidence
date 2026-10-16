@@ -214,9 +214,11 @@ function ledgerPath(): { dir: string; file: string; logsDir: string } {
   // ONE gstack-slug spawn: its output carries both SLUG= and BRANCH= lines
   // (same branch→filename sanitization as reviews.jsonl).
   const slugOut = spawnSync(join(BIN_DIR, "gstack-slug"), { encoding: "utf-8" });
+  if (slugOut.status !== 0) throw new Error(slugOut.stderr?.trim() || "ARTIFACT_SLUG_RESOLUTION_FAILED");
   const sm = (slugOut.stdout || "").match(/^SLUG=(.+)$/m);
   const bm = (slugOut.stdout || "").match(/^BRANCH=(.+)$/m);
-  const slug = sm ? sm[1].trim() : "unknown";
+  if (!sm) throw new Error("ARTIFACT_SLUG_RESOLUTION_FAILED");
+  const slug = sm[1].trim();
   const branch = bm ? bm[1].trim() : "no-branch";
   const dir = join(home, "projects", slug);
   return { dir, file: join(dir, `${branch}-evidence.jsonl`), logsDir: join(dir, "logs") };

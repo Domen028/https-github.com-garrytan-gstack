@@ -7,27 +7,15 @@
  */
 
 import * as path from 'path';
-import * as os from 'os';
-import { execSync } from 'child_process';
-
+import { resolveSlug, claimArtifactProject } from '../../lib/bin-context';
+import { resolveStateRoot } from '../../lib/state-root';
 let cachedSlug: string | null = null;
-
 export function getCurrentProjectSlug(): string {
-  if (cachedSlug) return cachedSlug;
-  const explicit = process.env.GSTACK_PROJECT_SLUG;
-  if (explicit) {
-    cachedSlug = explicit;
-    return explicit;
-  }
-  try {
-    const slugBin = path.join(os.homedir(), '.claude/skills/gstack/bin/gstack-slug');
-    const out = execSync(slugBin, { encoding: 'utf8', timeout: 2000, windowsHide: true }).trim();
-    const m = out.match(/SLUG="?([^"\n]+)"?/);
-    cachedSlug = m ? m[1]! : (out || 'unknown');
-  } catch {
-    cachedSlug = 'unknown';
-  }
-  return cachedSlug;
+  // Cache is identity data, never permission to skip a fresh mutation guard.
+  const slug = cachedSlug ?? resolveSlug(path.join(import.meta.dir, '../../bin/gstack-slug'));
+  claimArtifactProject(resolveStateRoot(), slug);
+  cachedSlug = slug;
+  return slug;
 }
 
 /** Reset cache; for tests only. */

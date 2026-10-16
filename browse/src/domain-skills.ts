@@ -32,6 +32,7 @@
  *   - Punycode hostnames stored as-encoded
  */
 
+import { claimArtifactProject } from "../../lib/bin-context";
 import { promises as fs } from 'fs';
 import { open as fsOpen, constants as fsConstants } from 'fs';
 import * as path from 'path';
@@ -71,6 +72,7 @@ function globalFile(): string {
 }
 
 function projectFile(slug: string): string {
+  claimArtifactProject(gstackHome(), slug);
   return path.join(gstackHome(), 'projects', slug, 'learnings.jsonl');
 }
 

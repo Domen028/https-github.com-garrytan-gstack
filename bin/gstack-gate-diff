@@ -78,14 +78,11 @@ function parseArgs(argv: string[]): Args | string {
 }
 
 function projectSlug(cwd: string): string {
-  try {
-    const r = spawnSync(path.join(BIN_DIR, 'gstack-slug'), [], { cwd, encoding: 'utf-8', timeout: 30_000 });
-    const m = (r.stdout || '').match(/^SLUG=(.+)$/m);
-    return m ? m[1].trim() : 'unknown';
-  } catch (e: any) {
-    console.error(`gstack-gate-diff: gstack-slug failed (${e?.message ?? e}); artifact filed under projects/unknown`);
-    return 'unknown';
-  }
+  const r = spawnSync(path.join(BIN_DIR, 'gstack-slug'), [], { cwd, encoding: 'utf-8', timeout: 30_000 });
+  if (r.status !== 0) throw new Error(r.stderr?.trim() || 'ARTIFACT_SLUG_RESOLUTION_FAILED');
+  const m = (r.stdout || '').match(/^SLUG=([a-zA-Z0-9._-]+)$/m);
+  if (!m) throw new Error('ARTIFACT_SLUG_RESOLUTION_FAILED');
+  return m[1];
 }
 
 /** The artifact directory: the state root, or the OS temp dir when no home resolves (never the working tree). */

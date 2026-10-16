@@ -18,7 +18,7 @@ function runLog(input: string, opts: { expectFail?: boolean } = {}): { stdout: s
     timeout: 15000,
   };
   try {
-    const stdout = execSync(`${BIN}/gstack-timeline-log '${input.replace(/'/g, "'\\''")}'`, execOpts).trim();
+    const stdout = execSync(`"${BIN}/gstack-timeline-log" '${input.replace(/'/g, "'\\''")}'`, execOpts).trim();
     return { stdout, exitCode: 0 };
   } catch (e: any) {
     if (opts.expectFail) {
@@ -36,7 +36,7 @@ function runRead(args: string = ''): string {
     timeout: 15000,
   };
   try {
-    return execSync(`${BIN}/gstack-timeline-read ${args}`, execOpts).trim();
+    return execSync(`"${BIN}/gstack-timeline-read" ${args}`, execOpts).trim();
   } catch {
     return '';
   }

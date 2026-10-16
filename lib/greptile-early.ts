@@ -98,11 +98,9 @@ function visibility(env: EarlyEnv): "public" | "private" | "unknown" {
 
 function consentFile(env: EarlyEnv): string | undefined {
   const slug = env.run(path.join(env.binDir, "gstack-slug"), ["--get", "SLUG"]);
-  let id = slug.status === 0 ? slug.stdout.trim() : "";
-  if (!id) {
-    const origin = env.run("git", ["remote", "get-url", "origin"]);
-    id = origin.status === 0 ? remoteSlug(origin.stdout.trim()) : "";
-  }
+  if (slug.status !== 0) throw new Error(slug.stderr?.trim() || 'ARTIFACT_SLUG_RESOLUTION_FAILED');
+  const id = slug.stdout.trim();
+  if (!/^[a-zA-Z0-9._-]+$/.test(id) || ['.', '..'].includes(id)) throw new Error('ARTIFACT_SLUG_RESOLUTION_FAILED');
   return id ? path.join(resolveStateRoot(env.vars), "projects", id, "ship-greptile-early.json") : undefined;
 }
 

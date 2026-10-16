@@ -25,8 +25,7 @@
 #
 # The lock is a directory (mkdir is atomic on every POSIX filesystem; flock(1)
 # is not on macOS) holding `pid` and `owner`. A lock whose pid is dead is
-# stale and is cleared. A lock directory with no pid file is a holder killed
-# between mkdir and the pid write once it is older than 10 minutes.
+# stale and requires inspection. Missing owner metadata also refuses acquisition.
 
 _GSTACK_BRAIN_LOCK_DIR=""
 _GSTACK_BRAIN_LOCK_MINE=0
@@ -37,21 +36,18 @@ _gstack_brain_lock_try_once() {
   if mkdir "$dir" 2>/dev/null; then
     GSTACK_BRAIN_LOCK_TOKEN="$$-${RANDOM:-0}-$(date +%s 2>/dev/null || echo 0)"
     export GSTACK_BRAIN_LOCK_TOKEN
-    printf '%s\n' "$$" > "$dir/pid" 2>/dev/null || true
-    printf '%s\n' "$GSTACK_BRAIN_LOCK_TOKEN" > "$dir/owner" 2>/dev/null || true
+    if ! printf '%s\n' "$$" > "$dir/pid" || ! printf '%s\n' "$GSTACK_BRAIN_LOCK_TOKEN" > "$dir/owner"; then
+      echo "gstack: lock owner initialization failed; preserve $dir for inspection" >&2
+      return 1
+    fi
     _GSTACK_BRAIN_LOCK_MINE=1
     return 0
   fi
+  # Unknown/dead ownership is an explicit recovery condition. Never remove a
+  # lock after a liveness sample: another contender may now own that pathname.
   if [ -f "$dir/pid" ]; then
-    pid=$(head -1 "$dir/pid" 2>/dev/null || echo "")
-    _GSTACK_BRAIN_LOCK_HOLDER="$pid"
-    case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-    kill -0 "$pid" 2>/dev/null && return 1
-  elif [ -z "$(find "$dir" -maxdepth 0 -mmin +10 2>/dev/null)" ]; then
-    _GSTACK_BRAIN_LOCK_HOLDER=""
-    return 1
+    _GSTACK_BRAIN_LOCK_HOLDER=$(head -1 "$dir/pid" 2>/dev/null || echo "")
   fi
-  rm -rf "$dir" 2>/dev/null || true
   return 1
 }
 
