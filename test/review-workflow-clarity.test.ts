@@ -374,7 +374,7 @@ for (const skillName of ['review', 'ship']) {
       // A signal the scope block does not print must come from the helper its own selection line runs.
       const helper = /bin\/(gstack-[a-z-]+) detect\b/.exec(selection.split('\n').find(line => line.includes(signal))!)?.[1];
       expect(helper, signal).toBeDefined();
-      expect(readFileSync(join(root, 'bin', helper!), 'utf8'), signal).toContain(`${signal}=`);
+      expect(readFileSync(join(root, 'bin', helper!), 'utf8'), signal).toContain(`${signal}=\${`);
     }
   });
 
