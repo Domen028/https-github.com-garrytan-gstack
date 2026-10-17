@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+**Autoplan now enforces its round cap and spend budget and can export a public copy of a run, /eval-plan tests its preregistered diagnostics and checks every arm's model against repo rules before money moves, and a reviewer subagent can install gstack's read-only helpers in seconds.** These are the field list 2 wave A items from the gbrain crew (autoplan W5-W7, eval-plan W8/W9, reviewer install W11).
+
+### What this means for you
+
+- **Autoplan stops when it said it would.** A run that reaches its round cap with open findings closes as accepted-with-findings and defers them to the build instead of starting another round. The spend budget is enforced the same way.
+- **`gstack-autoplan export --out <run> --public <dir>` writes a shareable copy.** Recorded machine roots are rewritten in prose. A root that survives (for example inside a code span in the plan) is reported as `ARTIFACT_MACHINE_PATH`, and a target directory holding unrelated files is refused with `ARTIFACT_PUBLIC_TARGET_EXISTS`.
+- **Durable autoplan checkpoints are opt-in.** Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` or `gstack-config set autoplan_checkpoint drive`. `resume --from` never redispatches a voice that already bound.
+- **/eval-plan runs the preregistered diagnostics before the freeze.** `prereg --check` reads an optional `## Diagnostics` section, runs the summarizer on the declared fixture only with `--allow-repo-commands`, and reports any miscount as `PREREG_DIAGNOSTIC_UNTESTED`.
+- **`.gstack/eval-models.json` (read from the base branch) gates every arm.** `arms`, `dry-run`, `pilot start` and `price-gate` refuse unknown, denied or older-generation models before any money is reserved (`EVAL_MODELS_INVALID`, `EVAL_MODEL_DENIED`, `EVAL_MODEL_OLD_GENERATION`, `EVAL_MODEL_GENERATION_UNRESOLVED`). See `docs/eval-models.md`.
+- **`--for review-voice` installs only the read-only helpers.** No `./setup`, no host profiles, Bun at gstack's own minimum. Its trailer says `for=review-voice`, and every full workflow refuses that verdict with a `--for <skill>` fix. Autoplan reviewer prompts now ask each reviewer to run it and relay its `gstack:` line.
+
+### For contributors
+
+- New result codes and troubleshooting anchors are appended to `lib/result-codes.ts`, `docs/troubleshooting.md` and the generated `bin/gstack-doctor-components.sh`. The `capy/skill/gstack` context-budget ceiling is raised to its capture value under the ratchet protocol.
+- The doc-sync observer (`test/helpers/docsync-observer.ts`) accepts `GSTACK_SESSION_KIND=spawned <gstack-skill-start> --help` as the harmless read it is. Paid case ship-docsync-store went red on that command alone.
+- `test/capy-review-voice.test.ts` is curated out of the Windows subset: it is a POSIX launcher contract (tar -C into a drive-letter root, a colon-joined launch PATH).
+
 ## [1.91.114.0] - 2026-10-17
 
 **The DevEx reviews now score every error message for the reader that usually meets it first: an AI agent running unattended.** `/plan-devex-review`, the `/autoplan` DX phase and `/devex-review` used to ask for "problem + cause + fix". Now they score each error path against an eight-item agent-ready contract: what, fix, recovery, code, context, trace, redaction and channel. Two kinds of failure cap the Error Messages score. A leaked secret, a failure reported as success, an unsafe fix or a block on a terminal caps it at 4/10. A missing fix, recovery, context or trace caps it at 6/10.
