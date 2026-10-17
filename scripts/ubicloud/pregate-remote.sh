@@ -29,14 +29,17 @@
 #
 # Exit codes: 0 pass (or a paid-only selection, tests=0); 1 test failures (or
 # a rejected file list); 2 missing input; 3 tree or plan mismatch (or the tree
-# moved during the run); 4 infrastructure failure (create, setup, SSH, wall
-# timeout); 5 the spend cap refuses the run. Every refusal line starts with a
+# moved during the run); 4 infrastructure failure (create, setup, SSH, stop
+# deadline); 5 the spend cap or pregate's deadline refuses the run. Every refusal line starts with a
 # PREGATE_REMOTE_* reason code (docs/pregate.md#remote-gate). Nothing is
 # uploaded or spent before the local tree check.
 set -euo pipefail
 # Keep heredoc bodies on temp files, not the pipe window (test/heredoc-pipe-deadlock.test.ts).
 BASH_COMPAT=50
 
+# The whole script is one braced block, so bash parses it before running and an
+# edit to this file during a run cannot change what the run executes.
+{
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 rerun='gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands'
@@ -48,6 +51,7 @@ stop() { local code=$1 reason=$2; shift 2; say "$reason: $1"; shift; [ $# -eq 0 
 [ -n "${PREGATE_TREE:-}" ] || stop 2 PREGATE_REMOTE_USAGE "PREGATE_TREE is not set; run: $rerun"
 [ -f "$PREGATE_FILES_FILE" ] || stop 2 PREGATE_REMOTE_USAGE "PREGATE_FILES_FILE=$PREGATE_FILES_FILE does not exist; run: $rerun"
 
+started=$(date +%s)
 wtree() { (cd "$root" && bin/gstack-wtree); }
 tree=$(wtree) || stop 3 PREGATE_REMOTE_TREE_MISMATCH "bin/gstack-wtree could not fingerprint $root" "nothing uploaded, nothing spent" "rerun: $rerun"
 if [ "$tree" != "$PREGATE_TREE" ]; then
@@ -112,7 +116,35 @@ usd() { awk -v m="$1" -v p="$ppm" 'BEGIN { s = m * p; c = int(s * 100); if (c < 
 if [ "$wall_min" -lt "$min_min" ]; then
   stop 5 PREGATE_REMOTE_CAP_TOO_LOW "worst case \$$(usd "$min_min") ($min_min min x \$$ppm/min on $size) exceeds the spend cap \$$cap" "nothing created, nothing spent" "rerun with --spend-cap $(usd "$min_min") or more"
 fi
-say "$count files on one $size VM; wall timeout $wall_min min, worst case \$$(usd "$wall_min") under the cap \$$cap"
+# The enclosing gstack-pregate kills this gate at its --timeout (default 600 s)
+# with a 5 s grace, so the VM must be told to stop early enough for teardown to
+# be confirmed first: 120 s reserved for teardown plus 15 s margin. The deadline
+# comes from PREGATE_TIMEOUT_S, else from the gstack-pregate process this gate
+# runs under (its --timeout, else 600); run by hand there is none.
+outer_s=${PREGATE_TIMEOUT_S:-} outer_from=PREGATE_TIMEOUT_S
+if [ -z "$outer_s" ]; then
+  outer_from="" pid=$PPID
+  for _ in 1 2 3 4 5 6 7 8; do
+    { [ -n "$pid" ] && [ "$pid" -gt 1 ]; } || break
+    cmdline=$(ps -o args= -p "$pid" 2>/dev/null) || break
+    case $cmdline in
+      *gstack-pregate*)
+        outer_s=$(sed -n 's/.*--timeout[ =]\([0-9][0-9]*\).*/\1/p' <<<"$cmdline")
+        outer_s=${outer_s:-600} outer_from="gstack-pregate --timeout"
+        break ;;
+    esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+fi
+stop_after=$(( (wall_min - 3) * 60 )) stop_why="the cap's $wall_min min wall minus 3 min for teardown"
+if [ -n "$outer_s" ]; then
+  outer_stop=$(( outer_s - ($(date +%s) - started) - 135 ))
+  if [ "$outer_stop" -lt 300 ]; then
+    stop 5 PREGATE_REMOTE_TIMEOUT_TOO_SHORT "$outer_from ${outer_s}s leaves ${outer_stop}s for the VM after 120 s reserved for teardown and 15 s margin (at least 300 s needed)" "nothing created, nothing spent" "rerun with --timeout 2700: $rerun"
+  fi
+  if [ "$outer_stop" -lt "$stop_after" ]; then stop_after=$outer_stop stop_why="$outer_from ${outer_s}s minus 120 s teardown reserve and 15 s margin"; fi
+fi
+say "$count files on one $size VM; worst case \$$(usd "$wall_min") under the cap \$$cap; the VM is told to stop after ${stop_after}s ($stop_why)"
 
 digest=$(tr -d '\r' <"$files" | grep . | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
 prelude="$logs/vm-setup.sh"
@@ -171,7 +203,6 @@ exit "$rc"
 '
 stream="$logs/stream.log"
 at() { grep -m1 -E "^[0-9]+ $1" "$log" | cut -d' ' -f1 || true; }
-started=$(date +%s)
 ( while sleep 60 </dev/null >/dev/null 2>&1; do say "still running ($(( $(date +%s) - started )) s)"; done ) &
 heartbeat=$!
 vmrun="" tailer=""
@@ -185,8 +216,10 @@ while :; do
   : >"$stream"
   rm -f "$log.pid" "$log.timedout"
   t0=$(date +%s)
+  vm_name="ubirun-$(bash "$here/ubi-runner.sh" owner)-$(date +%s)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+  say "VM $vm_name; if this run is killed before its teardown line, destroy it with: bash scripts/ubicloud/ubi-runner.sh down $vm_name"
   python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' \
-    bash -c "$vm_session" pregate-remote-vm "$(( (wall_min - 3) * 60 ))" "$log" "$stream" "$here/ubi-runner.sh" "${args[@]}" &
+    bash -c "$vm_session" pregate-remote-vm "$stop_after" "$log" "$stream" "$here/ubi-runner.sh" "${args[@]}" -n "$vm_name" &
   vmrun=$!
   tail -n +1 -f "$stream" &
   tailer=$!
@@ -239,6 +272,7 @@ fi
 vm=$(sed -n 's/^[0-9]* ubi-runner: creating \([^ ]*\) .*/\1/p' "$log" | tail -1)
 down=$(grep -E 'ubi-runner: (destroyed|gone:|WARNING|FAILED to destroy)' "$log" | tail -1 | cut -d' ' -f2- || true)
 cause=$(grep -E 'ubi-runner: ' "$log" | grep -vE 'ubi-runner: (destroyed|gone:|destroy requested|waiting for an in-flight)' | tail -1 | cut -d' ' -f2- || true)
-[ "$rc" -ne 124 ] || cause="wall timeout of $(( wall_min - 3 )) min reached (cap \$$cap); the VM was torn down"
+[ "$rc" -ne 124 ] || cause="the VM was told to stop after ${stop_after}s ($stop_why) and torn down"
 stop 4 PREGATE_REMOTE_INFRA "infrastructure failure (ubi-runner exit $rc): ${cause:-no ubi-runner message}" \
   "VM: ${vm:-none created}${down:+; $down}" "log: $log" "spent=$spent ($billed billed min on $size)"
+}

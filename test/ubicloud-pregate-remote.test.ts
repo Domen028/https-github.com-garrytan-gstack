@@ -39,13 +39,15 @@ const UBI_RUNNER_STUB = `#!/usr/bin/env bash
 # sleeps before the command; TERM tears down as ubi-runner's trap does.
 # Every teardown is appended to $STUB_CALLS.down.
 set -uo pipefail
+[ "$1" != owner ] || { echo stub; exit 0; }
 [ "$1" = run ] || exit 2
 shift
 printf '%s\\n' "$*" >>"$STUB_CALLS"
-src=. setup="" size="" envs=()
+src=. setup="" size="" name=unnamed envs=()
 while [ $# -gt 0 ]; do
   case $1 in
     -s) size=$2; shift 2 ;;
+    -n) name=$2; shift 2 ;;
     --src) src=$2; shift 2 ;;
     --setup) setup=$2; shift 2 ;;
     --env) envs+=("$2"); shift 2 ;;
@@ -56,7 +58,6 @@ while [ $# -gt 0 ]; do
 done
 cmd=$*
 log() { echo "ubi-runner: $*" >&2; }
-name=ubirun-stub-1700000000-abcd
 log "creating eu-central-h1/$name ($size)"
 calls=$(wc -l <"$STUB_CALLS")
 fail=\${STUB_FAIL:-}
@@ -181,7 +182,7 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     expect(r.exit, r.out).toBe(0);
     expect(r.report).toEqual({ tree: f.tree, tests: 2, failed: 0, spent: '0.01' });
     expect(remoteReportProblem(r.report!, f.tree)).toBeNull();
-    expect(r.out).toContain('2 files on one standard-16 VM; wall timeout 45 min, worst case $0.38 under the cap $2');
+    expect(r.out).toContain("2 files on one standard-16 VM; worst case $0.38 under the cap $2; the VM is told to stop after 2520s (the cap's 45 min wall minus 3 min for teardown)");
     expect(r.out).toMatch(/phases: create \d+s, setup \d+s, run \d+s, teardown \d+s; total \d+s \(target 600s\)/);
     expect(r.out.trim().split('\n').at(-1)).toMatch(/^PREGATE_REMOTE: /);
     expect(r.calls).toHaveLength(1);
@@ -230,13 +231,14 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     const create = gate(fixture(), ['test/alpha.test.ts'], { ...KEY, STUB_FAIL: 'create' });
     expect(create.exit, create.out).toBe(4);
     expect(create.out).toContain('PREGATE_REMOTE_INFRA: infrastructure failure (ubi-runner exit 1): ubi-runner: create failed');
-    expect(create.out).toContain('VM: eu-central-h1/ubirun-stub-1700000000-abcd; ubi-runner: gone: eu-central-h1/ubirun-stub-1700000000-abcd (never existed or already destroyed)');
+    expect(create.out).toMatch(/VM: eu-central-h1\/(ubirun-stub-\d+-[0-9a-f]{8}); ubi-runner: gone: eu-central-h1\/\1 \(never existed or already destroyed\)/);
+    expect(create.out).toMatch(/VM (ubirun-stub-\d+-[0-9a-f]{8}); if this run is killed before its teardown line, destroy it with: bash scripts\/ubicloud\/ubi-runner\.sh down \1\n/);
     expect(create.out).toMatch(/log: \S+\/\.context\/pregate-remote\/\S+\/run\.log/);
     expect(create.out).toContain('spent=0.00 (0 billed min on standard-16)');
     const setup = gate(fixture(), ['test/alpha.test.ts'], { ...KEY, STUB_SETUP_FAIL: '1' });
     expect(setup.exit, setup.out).toBe(4);
     expect(setup.out).toContain('ubi-runner: setup failed');
-    expect(setup.out).toContain('; ubi-runner: destroyed eu-central-h1/ubirun-stub-1700000000-abcd');
+    expect(setup.out).toMatch(/; ubi-runner: destroyed eu-central-h1\/ubirun-stub-\d+-[0-9a-f]{8}/);
     expect(setup.out).toContain('spent=0.01 (1 billed min on standard-16)');
     const ssh = gate(fixture(), ['test/alpha.test.ts'], { ...KEY, STUB_FAIL: 'ssh' });
     expect(ssh.exit, ssh.out).toBe(4);
@@ -270,13 +272,13 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     expect([edited, listed, moved].every(r => r.report === null)).toBe(true);
   }, 90_000);
 
-  test('killing the gate\'s process group (pregate\'s timeout) never cuts teardown short; TERM to the gate tears the VM down', async () => {
+  test('killing the gate\'s process group (pregate\'s timeout) never cuts teardown short; TERM under an outer deadline tears the VM down; an edit to the script mid-run changes nothing', async () => {
     const run = (f: Fixture) => {
       const list = path.join(path.dirname(f.repo), 'files.txt');
       fs.writeFileSync(list, 'test/alpha.test.ts\n');
       return Bun.spawn(['bash', 'scripts/ubicloud/pregate-remote.sh'], { cwd: f.repo, detached: true, stdout: 'pipe', stderr: 'pipe',
         env: { ...process.env, ...KEY, UBI_SIZE: '', GSTACK_FREE_JOBS: '2', STUB_CALLS: f.calls, STUB_VM_HOME: f.vm, STUB_BIN: f.bin, STUB_HANG: '4',
-          PREGATE_FILES_FILE: list, PREGATE_TREE: f.tree, PREGATE_SPEND_CAP_USD: '2' } as Record<string, string> });
+          PREGATE_FILES_FILE: list, PREGATE_TREE: f.tree, PREGATE_SPEND_CAP_USD: '2', PREGATE_TIMEOUT_S: '900' } as Record<string, string> });
     };
     const until = async (cond: () => boolean, ms: number) => {
       const deadline = Date.now() + ms;
@@ -289,7 +291,7 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     process.kill(-a.pid, 'SIGKILL');
     await a.exited;
     await until(() => fs.existsSync(killed.calls + '.down'), 30_000);
-    expect(fs.readFileSync(killed.calls + '.down', 'utf8')).toBe('exit ubirun-stub-1700000000-abcd\n');
+    expect(fs.readFileSync(killed.calls + '.down', 'utf8')).toMatch(/^exit ubirun-stub-\d+-[0-9a-f]{8}\n$/);
     const termed = fixture();
     const b = run(termed);
     await until(() => vmLog(termed).includes('ubi-runner: running on'), 30_000);
@@ -297,8 +299,37 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     expect(await b.exited).toBe(130);
     expect(await new Response(b.stdout).text()).toContain('interrupted: ubi-runner is tearing the VM down on its own');
     await until(() => fs.existsSync(termed.calls + '.down'), 10_000);
-    expect(fs.readFileSync(termed.calls + '.down', 'utf8')).toBe('term ubirun-stub-1700000000-abcd\n');
+    expect(fs.readFileSync(termed.calls + '.down', 'utf8')).toMatch(/^term ubirun-stub-\d+-[0-9a-f]{8}\n$/);
+    const edited = fixture();
+    const c = run(edited);
+    await until(() => vmLog(edited).includes('ubi-runner: running on'), 30_000);
+    const script = path.join(edited.repo, 'scripts/ubicloud/pregate-remote.sh');
+    fs.writeFileSync(script, '#!/usr/bin/env bash\n# an edit that shifts every byte offset\n' + fs.readFileSync(script, 'utf8').split('\n').slice(1).join('\n'));
+    expect(await c.exited).toBe(0);
+    expect((await new Response(c.stdout).text()).trim().split('\n').at(-1)).toMatch(new RegExp(`^PREGATE_REMOTE: tree=${edited.tree} tests=1 failed=0 spent=`));
   }, 90_000);
+
+  test('an enclosing pregate deadline shorter than the wall sets when the VM is told to stop; one too short refuses before any VM', () => {
+    const f = fixture();
+    const viaEnv = gate(f, ['test/alpha.test.ts'], { ...KEY, PREGATE_TIMEOUT_S: '900' });
+    expect(viaEnv.exit, viaEnv.out).toBe(0);
+    expect(viaEnv.out).toMatch(/the VM is told to stop after (76[0-5])s \(PREGATE_TIMEOUT_S 900s minus 120 s teardown reserve and 15 s margin\)/);
+    const short = gate(f, ['test/alpha.test.ts'], { ...KEY, PREGATE_TIMEOUT_S: '400' });
+    expect(short.exit).toBe(5);
+    expect(short.out).toMatch(/PREGATE_REMOTE_TIMEOUT_TOO_SHORT: PREGATE_TIMEOUT_S 400s leaves 26\ds for the VM after 120 s reserved for teardown and 15 s margin \(at least 300 s needed\)/);
+    expect(short.out).toContain('nothing created, nothing spent');
+    expect(fs.readFileSync(f.calls, 'utf8').trim().split('\n')).toHaveLength(1);
+    // Run under a process named gstack-pregate, the deadline is read from its --timeout (600 s when it passes none).
+    const shim = path.join(path.dirname(f.repo), 'gstack-pregate');
+    fs.writeFileSync(shim, '#!/usr/bin/env bash\nexec bash scripts/ubicloud/pregate-remote.sh\n', { mode: 0o755 });
+    const run = (args: string[]) => {
+      const r = Bun.spawnSync(['bash', '-c', '"$0" "$@"; exit $?', shim, ...args], { cwd: f.repo, timeout: 90_000, env: { ...process.env, ...KEY, UBI_SIZE: '', GSTACK_FREE_JOBS: '2',
+        STUB_CALLS: f.calls, STUB_VM_HOME: f.vm, STUB_BIN: f.bin, PREGATE_FILES_FILE: path.join(path.dirname(f.repo), 'files.txt'), PREGATE_TREE: f.tree, PREGATE_SPEND_CAP_USD: '2' } as Record<string, string> });
+      return r.stdout.toString() + r.stderr.toString();
+    };
+    expect(run(['--stage', 'tests', '--remote', '--timeout', '1200'])).toMatch(/told to stop after 106[0-5]s \(gstack-pregate --timeout 1200s minus/);
+    expect(run(['--stage', 'tests', '--remote'])).toMatch(/told to stop after 46[0-5]s \(gstack-pregate --timeout 600s minus/);
+  }, 120_000);
 
   test('the VM environment is bun run test:ubicloud\'s (scripts/ubicloud/test-free.sh), so the two cannot drift', () => {
     const script = fs.readFileSync(path.join(ROOT, 'scripts/ubicloud/pregate-remote.sh'), 'utf8');
