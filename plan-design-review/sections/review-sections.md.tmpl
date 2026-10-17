@@ -166,6 +166,10 @@ review log; a proposed remedy or next-step answer contributes zero.
 
 ### Completion Summary
 Prepare this for the saved review; announce completion after the Read-back gate below.
+In the plan file, write it as its own `## Design Review Completion Summary` section
+(the box, the deferred list and the Unresolved Decisions below) above the terminal
+`## GSTACK REVIEW REPORT`, replacing this review's earlier one. Never write it inside
+the report: the next plan review deletes and regenerates everything under that heading.
 
 **Overall design score:** use the lowest of the six rated pass scores (1-6),
 separately before and after approved fixes. Pass 7 is unscored. Keep Step 0's

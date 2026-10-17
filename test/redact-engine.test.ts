@@ -234,6 +234,22 @@ describe("MEDIUM demoted credential-shaped patterns (TENSION-1)", () => {
     expect(ids(`authToken: ${v}`)).toContain("env.kv"); // (iv) credential camel
     expect(ids(`clientSecret: ${v}`)).toContain("env.kv"); // (iv) credential camel
   });
+  // #3208: a catalog entry whose whole name is a data-model word plus `_key`
+  // and whose value is a lowercase identifier names a field, not a credential.
+  // Either side alone is not enough: an entropic value, a longer name or a
+  // credential name still fires, in every config format.
+  test("env.kv skips schema field identifiers only when name and value both say so (#3208)", () => {
+    const v = "8Fk2pQ9vXz4wL7mN3rT6yB1cD5eG0hJ";
+    expect(ids('{\n  "input_key": "expected_media_rate_bits_per_second_ingress",\n  "unit": "bps"\n}')).not.toContain("env.kv");
+    for (const line of ["input_key: expected_media_rate_bits_per_second_ingress", '"output_key": "bits.per.second.egress"', "cache-key: user-profile-v2", "sort_key = created_at_desc"])
+      expect(ids(line)).not.toContain("env.kv");
+    for (const line of [
+      `input_key: ${v}`, `INPUT_KEY=${v}`, `input_key: expectedMediaRateBitsPerSecond`, "input_key: abcdefghijkmnop",
+      `cosmosdb_primary_key=${v}`, `cosmosdb_primary_key: ${v}`, `{\n  "cosmosdb_primary_key": "${v}"\n}`, `cosmosdb_primary_key = "${v}"`,
+      `primary_key: ${v}`, `api_cache_key: ${v}`, "api_key: expected_media_rate_bits_per_second_ingress", "cosmosdb_primary_key: expected_media_rate_bits_per_second",
+    ])
+      expect(ids(line)).toContain("env.kv");
+  });
   // #3048 — in a TS/JSX file an unquoted value after `:` is a type or an
   // expression, and a JSX brace of names is an expression. Decided by file
   // context: the same shapes in .env/YAML (or with no path) are literals.
