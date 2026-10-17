@@ -911,12 +911,10 @@ describe('gstack-doctor --check: wrapper and runtime drift', () => {
 
 // Lane F item D: the plain report lists rescue refs with their commands, warns
 // about a CLAUDE.md gstack section that enumerates skills (#3169), and on
-// Windows names the bash gstack's TypeScript hands its scripts to; --check's
-// upgrade fix names the held-install recovery forms on Windows, because
-// bin/gstack-upgrade refuses every Git Bash install. GSTACK_DOCTOR_PLATFORM
+// Windows names the bash gstack's TypeScript hands its scripts to. GSTACK_DOCTOR_PLATFORM
 // injects the platform and GSTACK_DOCTOR_BASH_PROBE the discovery inputs, so
 // every case runs on every OS.
-describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash, Windows upgrade fix', () => {
+describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash', () => {
   const git = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
     const r = spawnSync('git', args, {
       cwd: f.root, encoding: 'utf8', timeout: 20_000,
