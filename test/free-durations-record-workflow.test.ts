@@ -82,9 +82,78 @@ test('the propose step touches only the two seeds, never the allowlist, on one b
   expect(script).toContain('branch=bot/free-duration-seeds');
   expect(script).toContain('bun test test/free-seed-ratchet.test.ts');
   expect(script).toContain('gh workflow run free-tests.yml');
-  expect(proposeStep.env.OPEN_PR).toBe("${{ github.event_name == 'schedule' || inputs.open_pr }}");
+  expect(proposeStep.env.OPEN_PR).toBe("${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.open_pr) }}");
   expect(script.indexOf('if [ "$OPEN_PR" != true ]')).toBeLessThan(script.indexOf('git push'));
   expect(recorder.on.workflow_dispatch.inputs.open_pr).toMatchObject({ type: 'boolean', default: true });
+});
+
+test('a long ratchet report reaches the PR body instead of aborting the step under pipefail', () => {
+  const script: string = proposeStep.run;
+  const line = script.split('\n').find(entry => entry.trimStart().startsWith('ratchet_line="FAILS'))!.trim();
+  const ratchet = ['error: Free seed ratchet:', ...Array.from({ length: 3000 }, (_, i) => `- test/f${i}.test.ts is seeded at 61s, over the 60s ceiling. Fix: split it, then rerun the recording.`)].join('\n');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'seed-ratchet-'));
+  dirs.push(dir);
+  writeFileSync(path.join(dir, 'ratchet.txt'), ratchet);
+  const result = spawnSync('bash', ['-c', `set -euo pipefail\nratchet=$(cat "$1")\n${line}\nprintf '%s' "$ratchet_line"`, 'ratchet', path.join(dir, 'ratchet.txt')], { encoding: 'utf8', timeout: 10_000 });
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain('- test/f18.test.ts is seeded at 61s, over');
+  expect(result.stdout).not.toContain('- test/f19.test.ts');
+});
+
+test('a refresh keeps a maintainer\'s commits on the open seed PR and leases the bot branch it replaces', () => {
+  const script: string = proposeStep.run;
+  const publish = script.slice(script.indexOf('branch=bot/free-duration-seeds'), script.indexOf('cat > pr-body.md'));
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'seed-publish-'));
+  dirs.push(dir);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+  const git = (cwd: string, ...args: string[]) => {
+    const result = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 10_000, env });
+    expect(result.status, result.stderr).toBe(0);
+    return result.stdout.trim();
+  };
+  const origin = path.join(dir, 'origin.git');
+  const work = path.join(dir, 'work');
+  git(dir, 'init', '-q', '--bare', '-b', 'main', origin);
+  git(dir, 'clone', '-q', origin, work);
+  const commit = (email: string, file: string, message: string) => {
+    git(work, 'config', 'user.name', email);
+    git(work, 'config', 'user.email', email);
+    writeFileSync(path.join(work, file), message);
+    git(work, 'add', file);
+    git(work, 'commit', '-q', '-m', message);
+  };
+  for (const file of ['free-test-durations.json', 'free-test-durations-windows.json']) {
+    writeFileSync(path.join(work, file), '{}');
+  }
+  git(work, 'checkout', '-q', '-b', 'main');
+  commit('dev@example.com', 'README', 'main');
+  git(work, 'push', '-q', 'origin', 'main');
+  const subject = 'test(seed): refresh the free-suite duration seeds from the weekly recording';
+  git(work, 'checkout', '-q', '-b', 'bot/free-duration-seeds');
+  commit('bot@example.com', 'seed.txt', subject);
+  git(work, 'push', '-q', 'origin', 'bot/free-duration-seeds');
+  const stub = path.join(dir, 'bin');
+  spawnSync('mkdir', [stub], { timeout: 10_000 });
+  writeFileSync(path.join(stub, 'gh'), '#!/bin/sh\necho 7\n', { mode: 0o755 });
+  const run = () => {
+    git(work, 'checkout', '-q', 'main');
+    spawnSync('mkdir', ['-p', path.join(work, 'scripts')], { timeout: 10_000 });
+    writeFileSync(path.join(work, 'scripts/free-test-durations.json'), `{"run":${Date.now()}}`);
+    writeFileSync(path.join(work, 'scripts/free-test-durations-windows.json'), '{}');
+    const result = spawnSync('bash', ['-c', `set -euo pipefail\n${publish}`], { cwd: work, encoding: 'utf8', timeout: 20_000,
+      env: { ...env, PATH: `${stub}:${process.env.PATH}`, GITHUB_STEP_SUMMARY: path.join(dir, 'summary.md') } });
+    expect(result.status, result.stderr).toBe(0);
+    return git(origin, 'rev-parse', 'refs/heads/bot/free-duration-seeds');
+  };
+  const replaced = run();
+  expect(git(origin, 'log', '--format=%s', `main..${replaced}`)).toBe(subject);
+  expect(git(origin, 'show', `${replaced}:scripts/free-test-durations.json`)).toContain('"run"');
+  git(work, 'checkout', '-q', '-B', 'bot/free-duration-seeds', replaced);
+  commit('maintainer@example.com', 'allowlist.json', 'maintainer repair');
+  git(work, 'push', '-q', 'origin', 'HEAD:refs/heads/bot/free-duration-seeds');
+  const repaired = git(origin, 'rev-parse', 'refs/heads/bot/free-duration-seeds');
+  expect(run()).toBe(repaired);
+  expect(readFileSync(path.join(dir, 'summary.md'), 'utf8')).toContain("Seed PR #7 has commits besides the bot's one refresh commit");
 });
 
 test('the drift check counts added and removed files, so an unchanged file set proposes nothing', () => {

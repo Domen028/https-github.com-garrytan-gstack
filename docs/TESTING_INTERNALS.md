@@ -1200,7 +1200,9 @@ refresh to a maintainer.
   free checks decide whether the tree is healthy. An interrupted recording
   uploads no seed, and more than 5 red files on either OS proposes nothing. The
   bot never edits the allowlist: a ratchet failure is fixed on the branch by a
-  maintainer before the PR merges.
+  maintainer before the PR merges, and while the open seed PR holds any commit
+  besides the bot's one refresh commit, later runs leave it alone. Only runs on
+  `main` push the branch; a dispatch from another ref reports only.
 
 ### Windows free lane
 
