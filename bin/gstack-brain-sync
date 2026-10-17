@@ -891,6 +891,15 @@ hold_flagged_paths() {
   git -C "$GSTACK_HOME" diff --cached --no-renames > "$scan.diff" 2>/dev/null || rc=1
   git -C "$GSTACK_HOME" diff --cached --no-renames -z --name-only > "$scan.names" 2>/dev/null || rc=1
   [ "$rc" -eq 0 ] && { secret_scan attribute "$scan.diff" "$scan.names" "$scan.hits" || rc=1; }
+  # A successful add need not stage the requested spelling or current bytes
+  # (case-insensitive indexes and assume-unchanged can both report success).
+  # Reuse the scanner's name snapshot; refusal preserves the index and queue.
+  local index_error
+  if [ "$rc" -eq 0 ] && ! index_error=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" "$GSTACK_HOME" "$paths_file" "$scan.names" 2>&1); then
+    write_status "error" "staged artifact validation refused; index and queue preserved; inspect before retrying"
+    printf '%s\n' "$index_error" >&2
+    return 1
+  fi
   if [ "$rc" -eq 0 ] && [ -s "$groups_file.batch" ]; then
     tr -d '\r' < "$groups_file.batch" | git -C "$GSTACK_HOME" cat-file --batch > "$scan.blobs" 2>/dev/null || rc=1
   fi
