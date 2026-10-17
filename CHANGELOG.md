@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.124.0] - 2026-10-17
 
 **/cso runs finish on time.** In the first paid runtime qualification, one comprehensive run submitted its findings ten minutes in, kept working for another 25 minutes without calling the helper, and was killed before it called `finish`. Its report was never finished, so the cold-start gate scored 63/64. The agent had no clock to follow.
 
