@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+**Artifacts sync stops saying "ok" when two project folders differ only by letter case.** When the artifacts repo tracks two spellings of one project, such as `projects/MyApp/` and `projects/myapp/`, a Mac or Windows disk stores them as one file. Git there staged each write under the other spelling and the sync reported `ok`. One spelling then stayed modified forever, and other machines read the wrong bucket (#3220). This lands the detector from Kkkkkuro's #3223 and #3245, with credit, and holds those files instead of halting the whole sync.
+
+### Fixed
+- **Case-colliding paths are held, not staged.** A queued file whose path differs only by letter case (NFC plus casefold, at any folder level) from another path in the repo or the batch stays queued and is never staged. Everything else keeps syncing, and the status is `collision`, never `ok`. When one spelling is already tracked, it keeps syncing and only the new alias waits.
+- **Sync verifies what `git add` staged and what a push would publish** (Kkkkkuro, #3245). Paths or bytes that never reached the index keep the queue. A local commit or retry merge that would add a new case alias to the remote stays local, and that check now covers `--publish-removals` too.
+
+### Added
+- **One skill-start line names the collision and the repair:** `ARTIFACTS_SYNC: attention: case-collision held=<N> names=<names>. ...`, with the manual repair at `docs/troubleshooting.md#artifact-case-collision`. `gstack-doctor` warns the same way. Slug resolution and skill start are unchanged and never stop over this.
+
+### If you…
+- **…see the case-collision line:** keep one spelling with the repair steps in the troubleshooting doc. Nothing is merged or renamed automatically.
+
 ## [1.91.125.0] - 2026-10-17
 
 **/cso release qualification measures precision on the application, not on the evaluator's own test rigging.** In the first paid runtime qualification, the daily precision gate failed on every stack (8/34 to 8/49). 116 of the 132 findings counted as false positives pointed at instrumentation the evaluator plants in each fixture: canary credentials and the egress probe route. Most of the other 16 were real issues the fixtures happen to contain. Garry chose to keep the 0.95 bar and fix what it counts.
