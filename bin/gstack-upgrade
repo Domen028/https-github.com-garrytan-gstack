@@ -60,7 +60,12 @@ bounded() { if command -v timeout >/dev/null 2>&1; then timeout "${GSTACK_UPGRAD
 # shellcheck source=bin/gstack-egress-lib.sh
 . "$ROOT/bin/gstack-egress-lib.sh" 2>/dev/null || _receipted_git() { shift 5; "$@"; }
 
-[ -f "$ROOT/VERSION" ] && [ -f "$ROOT/setup" ] && [ "$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)" = "$ROOT" ] \
+# Git for Windows answers --show-toplevel as C:/x while pwd -P in Git Bash is
+# /c/x; compare the paths, not their spellings.
+# shellcheck source=bin/gstack-path-spelling.sh
+. "$ROOT/bin/gstack-path-spelling.sh" 2>/dev/null || gstack_path_same() { [ "$1" = "$2" ]; }
+TOPLEVEL=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null)
+[ -f "$ROOT/VERSION" ] && [ -f "$ROOT/setup" ] && [ -n "$TOPLEVEL" ] && gstack_path_same "$TOPLEVEL" "$ROOT" \
   || refuse "$ROOT is not a gstack checkout" "run gstack-upgrade from a git checkout of https://github.com/garrytan/gstack"
 export GIT_TERMINAL_PROMPT=0
 HOST=$(git -C "$ROOT" remote get-url origin 2>/dev/null); HOST="${HOST#*://}"; HOST="${HOST#*@}"; HOST="${HOST%%[/:]*}"
