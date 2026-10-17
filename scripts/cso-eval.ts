@@ -400,6 +400,8 @@ function validateReceipt(receipt: ProducerReceipt, cell: EvalCell, inputHash: st
   validateInstallationIdentity(receipt.installationIdentity, 'INVALID_PRODUCER_RECEIPT');
   validateProviderIdentity(receipt.providerIdentity, cell.host === 'codex' ? 'gpt' : cell.host, 'INVALID_PRODUCER_RECEIPT');
   validateArtifactInventory(receipt.artifacts, 'INVALID_PRODUCER_RECEIPT');
+  const timeline = receipt.toolTimeline;
+  if (timeline !== undefined && (!Array.isArray(timeline) || timeline.length > 4096 || timeline.some(entry => !entry || !Number.isSafeInteger(entry.atMs) || entry.atMs < 0 || (entry.endMs !== undefined && (!Number.isSafeInteger(entry.endMs) || entry.endMs < entry.atMs)) || typeof entry.tool !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(entry.tool) || !['main', 'subagent'].includes(entry.agent) || Object.keys(entry).some(key => !['atMs', 'endMs', 'tool', 'agent'].includes(key))))) throw new Error('INVALID_PRODUCER_RECEIPT');
 }
 
 function validateInstallationIdentity(identity: ProducerInstallationIdentity, error: string): void {

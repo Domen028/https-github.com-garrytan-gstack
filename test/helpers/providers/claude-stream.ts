@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import type { RunResult } from './types';
+import type { RunResult, ToolTimelineEntry } from './types';
 
 /** Usage, turns and the latest text from `claude -p --output-format stream-json --verbose --include-partial-messages`. */
 export interface ClaudeStreamState {
@@ -15,13 +15,14 @@ export interface ClaudeStreamState {
   result?: Record<string, unknown>;
   invalidLines: number;
   startedAt: number;
-  /** Content-free: each tool call's name, start offset and thread, never its input or output. */
-  toolTimeline: NonNullable<RunResult['toolTimeline']>;
-  toolUseIds: Set<string>;
+  /** Content-free: each tool call's name, start and end offsets and thread, never its input or output. */
+  toolTimeline: ToolTimelineEntry[];
+  /** Timeline index by tool-use id, for recorded calls only, so it stays within the timeline cap. */
+  toolUseIndex: Map<string, number>;
 }
 
 export function claudeStreamState(): ClaudeStreamState {
-  return { totals: { input: 0, output: 0, cached: 0 }, open: new Map(), subagents: new Map(), turns: 0, resultTurns: 0, lastText: '', invalidLines: 0, startedAt: Date.now(), toolTimeline: [], toolUseIds: new Set() };
+  return { totals: { input: 0, output: 0, cached: 0 }, open: new Map(), subagents: new Map(), turns: 0, resultTurns: 0, lastText: '', invalidLines: 0, startedAt: Date.now(), toolTimeline: [], toolUseIndex: new Map() };
 }
 
 const TOOL_TIMELINE_LIMIT = 4096;
@@ -29,16 +30,18 @@ const TOOL_TIMELINE_LIMIT = 4096;
 const count = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
 
 function recordToolUse(state: ClaudeStreamState, block: { id?: unknown; name?: unknown }, agent: 'main' | 'subagent'): void {
-  if (typeof block.id === 'string') {
-    if (state.toolUseIds.has(block.id)) return;
-    state.toolUseIds.add(block.id);
-  }
-  if (state.toolTimeline.length >= TOOL_TIMELINE_LIMIT) return;
+  if (typeof block.id !== 'string' || state.toolUseIndex.has(block.id) || state.toolTimeline.length >= TOOL_TIMELINE_LIMIT) return;
+  state.toolUseIndex.set(block.id, state.toolTimeline.length);
   state.toolTimeline.push({
     atMs: Date.now() - state.startedAt,
     tool: typeof block.name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(block.name) ? block.name : 'other',
     agent,
   });
+}
+
+function recordToolResult(state: ClaudeStreamState, block: { tool_use_id?: unknown }): void {
+  const index = typeof block.tool_use_id === 'string' ? state.toolUseIndex.get(block.tool_use_id) : undefined;
+  if (index !== undefined && state.toolTimeline[index].endMs === undefined) state.toolTimeline[index].endMs = Date.now() - state.startedAt;
 }
 
 function close(state: ClaudeStreamState, key: string): void {
@@ -60,6 +63,10 @@ export function consumeClaudeStreamLine(state: ClaudeStreamState, line: string):
   }
   if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
     for (const block of event.message.content) if (block?.type === 'tool_use') recordToolUse(state, block, typeof event.parent_tool_use_id === 'string' ? 'subagent' : 'main');
+  }
+  if (event.type === 'user' && Array.isArray(event.message?.content)) {
+    for (const block of event.message.content) if (block?.type === 'tool_result') recordToolResult(state, block);
+    return;
   }
   if (event.type === 'assistant' && typeof event.parent_tool_use_id === 'string') {
     const usage = event.message?.usage;

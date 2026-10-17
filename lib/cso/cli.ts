@@ -57,6 +57,7 @@ import {
   readJson,
   reclaimDeadAttemptScratch,
   repoId,
+  executionDeadline,
   requireTime,
   retention,
   runDirectory,
@@ -1609,6 +1610,7 @@ async function inspect(args: string[]) {
       ? readJson(join(dir, 'preparation.json'))
       : undefined,
     recovery: recoveryEvents(dir),
+    remainingSeconds: remainingSeconds(report.deadline),
   });
 }
 async function read(args: string[]) {
@@ -2796,6 +2798,24 @@ async function replay(args: string[], dependencies: CsoCliDependencies) {
   });
 }
 
+/** In-run replies that report the investigation time left; every one but `start` takes the run ID first. */
+const RUN_CLOCK_COMMANDS = new Set([
+  'start',
+  'resume',
+  'submit',
+  'scan',
+  'scanner-outcome',
+  'import-sarif',
+  'record-review',
+  'test-plan',
+  'runtime-plan',
+  'verify',
+]);
+/** Whole seconds until the investigation deadline (the final reporting minute excluded), or undefined if unknown. */
+function remainingSeconds(deadline: string): number | undefined {
+  const ends = executionDeadline({ deadline });
+  return Number.isFinite(ends) ? Math.max(0, Math.floor((ends - Date.now()) / 1000)) : undefined;
+}
 export async function dispatchCsoCommand(
   command: string,
   args: string[],
@@ -2877,27 +2897,19 @@ export async function dispatchCsoCommand(
     default:
       throw new CsoError('INVALID_ARGUMENT', `Unknown command: ${command}`);
   }
-  if (RUN_CLOCK_COMMANDS.has(command) && result && typeof result === 'object' && !Array.isArray(result)) {
-    const deadline = (result as { deadline?: unknown }).deadline;
-    const ends = Date.parse(
+  if (!RUN_CLOCK_COMMANDS.has(command) || !result || typeof result !== 'object' || Array.isArray(result))
+    return result;
+  const deadline = (result as { deadline?: unknown }).deadline;
+  let seconds: number | undefined;
+  try {
+    seconds = remainingSeconds(
       typeof deadline === 'string' ? deadline : loadReport(runDirectory(runId)).deadline,
     );
-    result = { ...result, remainingSeconds: Math.max(0, Math.floor((ends - Date.now()) / 1000)) };
+  } catch {
+    seconds = undefined;
   }
-  return result;
+  return seconds === undefined ? result : { ...result, remainingSeconds: seconds };
 }
-const RUN_CLOCK_COMMANDS = new Set([
-  'start',
-  'resume',
-  'submit',
-  'scan',
-  'scanner-outcome',
-  'import-sarif',
-  'record-review',
-  'test-plan',
-  'runtime-plan',
-  'verify',
-]);
 const PRODUCTION_CLI_DEPENDENCIES: CsoCliDependencies = Object.freeze({
   runtimeCatalog: RUNTIME_CATALOG,
   scannerCatalog: SCANNER_CATALOG,

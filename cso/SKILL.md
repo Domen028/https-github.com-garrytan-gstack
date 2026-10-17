@@ -99,7 +99,7 @@ Start first; inspect snapshot, readiness, deadline, transformations, and coverag
 
 When updating coverage, copy every record's `domain` and `scope` exactly from `inspect`; a new scope leaves the planned scope unassessed. Only helper commands may update helper-owned records.
 
-Budgets: ten minutes daily, thirty comprehensive. Use at most three investigation workers and two reproduction groups per Docker endpoint. Attempts get five minutes and three harness repairs per finding. Prioritize unresolved high impact. Report model usage only when exposed. Helper replies carry `remainingSeconds`: start only what fits; below 120, stop waiting and `finish`.
+Budgets: ten minutes daily, thirty comprehensive. Use at most three investigation workers and two reproduction groups per Docker endpoint. Attempts get five minutes and three harness repairs per finding. Prioritize unresolved high impact. Report model usage only when exposed. Helper replies carry investigation `remainingSeconds`: start only what fits; below 120, stop and `finish`.
 
 ---
 ## Section index — Read each section when its situation applies

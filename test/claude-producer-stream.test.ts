@@ -67,6 +67,18 @@ describe('Claude producer stream accounting', () => {
     expect(JSON.stringify(timeline)).not.toContain('SECRET_PATH');
   });
 
+  test('stamps a tool call end once from its tool_result and keeps the timeline and its id index at the cap', () => {
+    const state = claudeStreamState();
+    const toolResult = (id: string) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'SECRET_OUTPUT' }] } });
+    const call = (id: string) => ({ type: 'assistant', message: { id: `m${id}`, content: [{ type: 'tool_use', id, name: 'Bash', input: {} }] } });
+    for (const line of lines(call('t0'), toolResult('t0'), toolResult('t0'), toolResult('unknown'), call('t1'))) consumeClaudeStreamLine(state, line);
+    expect(state.toolTimeline.map(entry => entry.endMs === undefined)).toEqual([false, true]);
+    expect(JSON.stringify(state.toolTimeline)).not.toContain('SECRET_OUTPUT');
+    for (let i = 2; i < 5000; i++) consumeClaudeStreamLine(state, JSON.stringify(call(`t${i}`)));
+    expect(state.toolTimeline).toHaveLength(4096);
+    expect(state.toolUseIndex.size).toBe(4096);
+  });
+
   test('a killed run counts each subagent message once and never reports subagent text as the producer output', () => {
     const state = claudeStreamState();
     for (const line of lines(start('a', 1000), text('a', 'main note'), delta(100), stop, subagent('s1', 50000), subagent('s1', 50000), subagent('s2', 50001))) consumeClaudeStreamLine(state, line);

@@ -131,7 +131,7 @@ export interface ProducerReceipt {
   firstUsefulResultMs: null;
   toolCalls: number;
   /** Content-free tool timeline (name, offset, thread) for diagnosing overruns; absent when the adapter has none. */
-  toolTimeline?: Array<{ atMs: number; tool: string; agent: 'main' | 'subagent' }>;
+  toolTimeline?: Array<{ atMs: number; endMs?: number; tool: string; agent: 'main' | 'subagent' }>;
   output: string;
   outputHash: string;
   usage: {
