@@ -121,7 +121,10 @@ holder_gone() { case "$(state "${1%% *}" "${1#* }" 0)" in dead|stale) return 0 ;
 # break_lock OWNER — remove the lock only if it still names OWNER. Breakers
 # take a second symlink, .lock.break, and reread the lock under it, so a lock
 # taken since the verdict is never removed; a .lock.break whose holder is gone
-# is cleared. Returns 1 when another breaker holds .lock.break.
+# is cleared. Returns 1 when another breaker holds .lock.break. Known limit:
+# that clear is not atomic, so two gstack-lease processes killed in a row (one
+# holding .lock, the next inside this function) can let a reclaim delete a
+# renewal; one crash is always safe.
 break_lock() {
   if ! ln -s "$TOKEN" "$LOCK.break" 2>/dev/null; then
     _b=$(readlink "$LOCK.break" 2>/dev/null)
