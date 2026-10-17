@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.123.0] - 2026-10-17
 
 **/cso comprehensive repairs run again.** In the first paid runtime qualification, the agent recorded 148 repair reviews across 42 comprehensive runs, but not one verification attempt started. Every runtime scored 0/24 on held-out repairs. Two helper bugs stacked: the patch write failed on the snapshot's read-only files, and `runtime-plan` handed the agent a profile name that `verify` refused.
 
