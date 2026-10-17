@@ -81,7 +81,7 @@ export const SELECTION_DATA_MODULES: readonly string[] = [
   // The build entry list: every compiled binary, which skills reach through their `--outfile` path instead.
   'scripts/build.sh',
   // The reason-code table: its `fix:` prose names the command a person reruns, not a file the module consumes.
-  'lib/result-codes.ts',
+  'lib/result-codes.ts', 'lib/result-codes-release.ts',
 ];
 const DEFAULT_JUDGE_OWNER = 'test/skill-llm-eval.test.ts';
 

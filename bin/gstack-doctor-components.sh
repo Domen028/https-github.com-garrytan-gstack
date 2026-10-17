@@ -239,19 +239,6 @@ gstack_result_anchor() {
     EVAL_MODEL_DENIED) printf '%s' 'eval-model-denied' ;;
     EVAL_MODEL_OLD_GENERATION) printf '%s' 'eval-model-old-generation' ;;
     EVAL_MODEL_GENERATION_UNRESOLVED) printf '%s' 'eval-model-generation-unresolved' ;;
-    POLICY_GSTACK_TOO_OLD) printf '%s' 'policy-gstack-too-old' ;;
-    QUEUE_NOT_READY) printf '%s' 'queue-not-ready' ;;
-    QUEUE_PROOF_MISSING) printf '%s' 'queue-proof-missing' ;;
-    QUEUE_STAMP_NOT_STAMP_ONLY) printf '%s' 'queue-stamp-not-stamp-only' ;;
-    QUEUE_VERIFY_MISMATCH) printf '%s' 'queue-verify-mismatch' ;;
-    QUEUE_GATE_MISSING) printf '%s' 'queue-gate-missing' ;;
-    GATE_AHEAD_ATTEMPT_INVALID) printf '%s' 'gate-ahead-attempt-invalid' ;;
-    PREGATE_TIMING_ASSERTION) printf '%s' 'pregate-timing-assertion' ;;
-    APPROVAL_CLASSES_INVALID) printf '%s' 'approval-classes-invalid' ;;
-    APPROVAL_CLASS_FOUND) printf '%s' 'approval-class-found' ;;
-    APPROVAL_CITATION_MISSING) printf '%s' 'approval-citation-missing' ;;
-    APPROVAL_SOURCE_UNAVAILABLE) printf '%s' 'approval-source-unavailable' ;;
-    STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
     DX_CAPTURE_USAGE) printf '%s' 'dx-capture-usage' ;;
     DX_CAPTURE_BAD_DEADLINE) printf '%s' 'dx-capture-bad-deadline' ;;
     DX_CAPTURE_BAD_MAX_BYTES) printf '%s' 'dx-capture-bad-max-bytes' ;;
@@ -266,6 +253,19 @@ gstack_result_anchor() {
     DX_CAPTURE_INTERRUPTED) printf '%s' 'dx-capture-interrupted' ;;
     DX_CAPTURE_REDACTION_FAILED) printf '%s' 'dx-capture-redaction-failed' ;;
     DX_CAPTURE_INTERNAL) printf '%s' 'dx-capture-internal' ;;
+    POLICY_GSTACK_TOO_OLD) printf '%s' 'policy-gstack-too-old' ;;
+    QUEUE_NOT_READY) printf '%s' 'queue-not-ready' ;;
+    QUEUE_PROOF_MISSING) printf '%s' 'queue-proof-missing' ;;
+    QUEUE_STAMP_NOT_STAMP_ONLY) printf '%s' 'queue-stamp-not-stamp-only' ;;
+    QUEUE_VERIFY_MISMATCH) printf '%s' 'queue-verify-mismatch' ;;
+    QUEUE_GATE_MISSING) printf '%s' 'queue-gate-missing' ;;
+    GATE_AHEAD_ATTEMPT_INVALID) printf '%s' 'gate-ahead-attempt-invalid' ;;
+    PREGATE_TIMING_ASSERTION) printf '%s' 'pregate-timing-assertion' ;;
+    APPROVAL_CLASSES_INVALID) printf '%s' 'approval-classes-invalid' ;;
+    APPROVAL_CLASS_FOUND) printf '%s' 'approval-class-found' ;;
+    APPROVAL_CITATION_MISSING) printf '%s' 'approval-citation-missing' ;;
+    APPROVAL_SOURCE_UNAVAILABLE) printf '%s' 'approval-source-unavailable' ;;
+    STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
     *) return 1 ;;
   esac
 }
