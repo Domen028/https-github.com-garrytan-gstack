@@ -47,6 +47,16 @@ describe('gstack-state-matrix detect', () => {
     expect(d.out.trim().split('\n').every(l => /^SCOPE_STATE_MACHINE=(true|false)$/.test(l) || l.startsWith('# '))).toBe(true);
   });
 
+  test('review #3235 P1-4: diff.external and a textconv driver cannot hide the state machine from detect', () => {
+    const r = repo();
+    r.git('config', 'diff.external', '/bin/true');
+    expect(run(r.work, ['detect', '--base', 'main']).out.split('\n')[0]).toBe('SCOPE_STATE_MACHINE=true');
+    r.git('config', '--unset', 'diff.external');
+    fs.writeFileSync(path.join(r.work, '.git', 'info', 'attributes'), '*.ts diff=blank\n');
+    r.git('config', 'diff.blank.textconv', 'true');
+    expect(run(r.work, ['detect', '--base', 'main']).out.split('\n')[0]).toBe('SCOPE_STATE_MACHINE=true');
+  });
+
   test('negative controls: a test-only change and words that merely contain "hold" or "accept" do not dispatch', () => {
     const r = repo();
     r.git('checkout', '-q', '-b', 'unrelated', 'origin/main');
