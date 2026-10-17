@@ -1707,13 +1707,21 @@ export function exitCodeFor(status: FreeShardStatus): number {
   return status === 'timed-out' ? 124 : 1;
 }
 
+/** Per-file deadline for `--record-durations`: an explicit --wall-timeout, else the one-file default. */
+export function recordingWallTimeoutMs(options: Pick<CliOptions, 'wallTimeoutExplicit' | 'wallTimeoutMs'>): number {
+  return options.wallTimeoutExplicit ? options.wallTimeoutMs : wallTimeoutForShard(1);
+}
+
 /**
  * `--record-durations`: time every file in its own child (exact per-file wall,
  * immune to bun's stream buffering) and write the committed seed atomically.
  * Uses the same isolated, strictly classified children as a normal run.
  * Run against an immutable checkout; never time while editing its inputs.
+ * An explicit --wall-timeout sets the per-file deadline, so a file slower than
+ * the default deadline is timed in full instead of being killed and recorded
+ * at the deadline.
  */
-async function recordFreeTestDurations(files: string[], jobs: number): Promise<number> {
+async function recordFreeTestDurations(files: string[], jobs: number, wallTimeoutMs: number): Promise<number> {
   const durations: Record<string, number> = {};
   const failed: string[] = [];
   const expectedCount = files.length;
@@ -1722,7 +1730,7 @@ async function recordFreeTestDurations(files: string[], jobs: number): Promise<n
   // As in full-suite mode, finish parallel work before exclusive host-state fixtures.
   await forEachFileAlone(files.filter(file => !(file in TREE_MUTATING)), files.filter(file => file in TREE_MUTATING), jobs, async (file, index) => {
     const outcome = await runFreeShard([file], index + 1, files.length, {
-      wallTimeoutMs: wallTimeoutForShard(1), quiet: true, homeGuard: sharedFreeHome,
+      wallTimeoutMs, quiet: true, homeGuard: sharedFreeHome,
     });
     durations[normalizeRelativePath(file)] = outcome.elapsedMs;
     if (outcome.status !== 'passed') failed.push(file);
@@ -1907,7 +1915,7 @@ async function main(): Promise<number> {
   }
 
   if (options.recordDurations) {
-    return recordFreeTestDurations(files, fullSuiteJobs());
+    return recordFreeTestDurations(files, fullSuiteJobs(), recordingWallTimeoutMs(options));
   }
   if (options.attributeHome) return attributeFreeHomeWriters(files.filter(file => !(file in TREE_MUTATING)), files.filter(file => file in TREE_MUTATING),
     fullSuiteJobs(), (file, index, homeGuard) => runFreeShard([file], index + 1, files.length, { wallTimeoutMs: wallTimeoutForShard(1), quiet: true, log: () => {}, homeGuard }));

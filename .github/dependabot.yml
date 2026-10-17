@@ -21,6 +21,14 @@ updates:
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
       - dependency-name: "playwright-core"
         update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      # The eval harness pins the agent SDK exactly. Its 0.x breaking releases
+      # are semver-minor to dependabot: agent-sdk 0.2 -> 0.3 and sdk 0.78 ->
+      # 0.133 (#3228) break typecheck:test and overlay-sdk-cancel-eof. Patch
+      # updates still flow; the SDK migration lands as its own maintainer PR.
+      - dependency-name: "@anthropic-ai/claude-agent-sdk"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
+      - dependency-name: "@anthropic-ai/sdk"
+        update-types: ["version-update:semver-minor", "version-update:semver-major"]
     open-pull-requests-limit: 5
 
   - package-ecosystem: "github-actions"

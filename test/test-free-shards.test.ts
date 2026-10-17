@@ -18,6 +18,8 @@ import {
   DEFAULT_WALL_TIMEOUT_MS,
   PER_FILE_WALL_MS,
   wallTimeoutForShard,
+  recordingWallTimeoutMs,
+  parseCliOptions,
   KNOWN_WINDOWS_INCOMPATIBLE,
   TEST_ROOTS,
   TREE_MUTATING,
@@ -939,6 +941,11 @@ describe('test-free-shards: wall-timeout scaling', () => {
 
   test('an explicit base above the scaled value wins', () => {
     expect(wallTimeoutForShard(10, 10 * 60_000)).toBe(10 * 60_000);
+  });
+
+  test('--record-durations times each file under the one-file default unless --wall-timeout is explicit', () => {
+    expect(recordingWallTimeoutMs(parseCliOptions(['--record-durations']))).toBe(wallTimeoutForShard(1));
+    expect(recordingWallTimeoutMs(parseCliOptions(['--record-durations', '--wall-timeout', '1200']))).toBe(1_200_000);
   });
 });
 

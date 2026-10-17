@@ -262,7 +262,7 @@ test.each([
   [reviewStartLead, reviewStartLabels, 2],
   ['D1 — No design doc found: run /office-hours before the review?', ['Run /office-hours now', 'Skip — proceed with review (Recommended)'], 2],
   [reviewStartLead, ['Skip — standard review', 'Run /office-hours first'], 1],
-  ...['Example: ', 'If approved: ', 'Do not ', '> ', '    ', '"', '`'].map(prefix => [prefix + reviewStartLead, reviewStartLabels, 1]),
+  ...['Example: ', 'If approved: ', 'Do not ', '> ', '    ', '"', '`'].map(prefix => [prefix + reviewStartLead, reviewStartLabels, 1] as const),
   ['D1 — Discuss /office-hours in our documentation?', reviewStartLabels, 1],
   ['D1 — Run /office-hours instead of this review?', reviewStartLabels, 1],
   [reviewStartLead, ['Run /office-hours first', 'Skip'], 1],

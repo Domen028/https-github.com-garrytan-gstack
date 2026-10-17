@@ -62,11 +62,14 @@ test('a record_durations dispatch times each Windows-safe file alone and uploads
   expect(job.if).toBe('${{ inputs.record_durations }}');
   expect(job['runs-on']).toBe('windows-latest');
   const record = job.steps.find((step: any) => step.name === 'Time every Windows-safe file alone');
-  expect(record.run).toBe('bun run test:windows --record-durations');
+  expect(record.run).toBe('bun run test:windows --record-durations --wall-timeout 1200');
   expect(record.env.GSTACK_FREE_TEST_DURATIONS).toBeUndefined();
   const rename = job.steps.find((step: any) => step.name === 'Name the recording as the Windows seed');
   expect(rename.if).toBe('always()');
   expect(rename.run).toBe('cp scripts/free-test-durations.json "$RUNNER_TEMP/free-test-durations-windows.json"');
+  const logs = job.steps.find((step: any) => step.name === 'Upload full recording logs');
+  expect(logs.if).toBe('always()');
+  expect(logs.with['include-hidden-files']).toBe(true);
   expect(job.steps.at(-1).with.name).toBe('free-test-durations-windows');
 });
 
