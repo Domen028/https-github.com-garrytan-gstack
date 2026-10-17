@@ -120,12 +120,13 @@ describe('gstack-specialist-stats', () => {
     try {
       expect(spawnSync('git', ['init', '-q'], { cwd: root, timeout: 30_000 }).status).toBe(0);
       const stats = path.resolve(import.meta.dir, '..', 'bin', 'gstack-specialist-stats');
-      const slug = spawnSync(path.resolve(import.meta.dir, '..', 'bin', 'gstack-slug'), [], { cwd: root, encoding: 'utf8', timeout: 30_000 }).stdout.match(/^SLUG=(.+)$/m)![1];
+      const env = { ...process.env, GSTACK_STATE_ROOT: path.join(root, 'state') };
+      const slug = spawnSync(path.resolve(import.meta.dir, '..', 'bin', 'gstack-slug'), [], { cwd: root, encoding: 'utf8', timeout: 30_000, env }).stdout.match(/^SLUG=(.+)$/m)![1];
       const dir = path.join(root, 'state', 'projects', slug);
       fs.mkdirSync(dir, { recursive: true });
       const entry = { specialists: Object.fromEntries(['state-machines', 'testing'].map(n => [n, { dispatched: true, findings: 0 }])) };
       fs.writeFileSync(path.join(dir, 'main-reviews.jsonl'), Array(10).fill(JSON.stringify(entry)).join('\n') + '\n');
-      const r = spawnSync(stats, [], { cwd: root, encoding: 'utf8', timeout: 60_000, env: { ...process.env, GSTACK_STATE_ROOT: path.join(root, 'state') } });
+      const r = spawnSync(stats, [], { cwd: root, encoding: 'utf8', timeout: 60_000, env });
       expect(r.stdout).toContain('state-machines: 10/10 dispatched, 0 findings (0%) [NEVER_GATE]');
       expect(r.stdout).toContain('testing: 10/10 dispatched, 0 findings (0%) [GATE_CANDIDATE]');
     } finally {
