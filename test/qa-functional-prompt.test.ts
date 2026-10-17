@@ -303,8 +303,10 @@ test('fix runs rerun every pre-repair capture their verdict relies on; supersede
 
 test('exploratory sections state one stop rule tied to per-rule input probes, and fix runs close superseded captures', () => {
   // PR gates 38983306684, 39001107574 and 39073934326 (#3260 at 93449bc): cli-report counted `-5` as its sign probe and never
-  // probed the amount's digits-only rule with an otherwise valid value, so it missed the seeded non-digit defect.
-  const stop = "Stop when scoped contracts are tested or blocked: each field's documented input rule needs a probe breaking only it (a signed amount breaks sign and digits-only, covering neither); rules uncovered at a probe/time cap go in limits.";
+  // probed the amount's digits-only rule with an otherwise valid value, so it missed the seeded non-digit defect. A worked
+  // example naming the signed amount (0fe616e) was misread as 'a signed amount breaks only the digits-only rule' (local
+  // run fw3b-cli1), so the rule states the principle instead: break one rule, satisfy every other.
+  const stop = "Stop when scoped contracts are tested or blocked: each field's documented input rule needs a probe that breaks only it and satisfies every other rule; rules uncovered at a probe/time cap go in limits.";
   const fix = 'After a fix, every earlier capture is superseded, even from a client that prints no snapshot: rerun each one your verdict relies on, or report it as an open remainder.';
   for (const rel of ['qa/sections/exploratory.md', 'qa-only/sections/exploratory.md']) {
     const section = readFileSync(join(import.meta.dir, '..', rel), 'utf8');

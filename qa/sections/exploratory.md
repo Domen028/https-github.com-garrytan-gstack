@@ -30,7 +30,7 @@ For /qa and /qa-only:
 - Functional Full, Quick and Regression have no default total timer.
 Set SECONDS to the shorter mode/caller limit; an unlimited mode uses the caller's bound.
 Without a total time limit, do not create DEADLINE_FILE; announce finite command timeouts.
-Stop when scoped contracts are tested or blocked: each field's documented input rule needs a probe breaking only it (a signed amount breaks sign and digits-only, covering neither); rules uncovered at a probe/time cap go in limits.
+Stop when scoped contracts are tested or blocked: each field's documented input rule needs a probe that breaks only it and satisfies every other rule; rules uncovered at a probe/time cap go in limits.
 Clocks/checkpoints use REPORT_DIR; mixed standalone runs use REPORT_DIR/browser and REPORT_DIR/functional, with one final report at REPORT_DIR. Caller paths win.
 Names used below (quote every path):
 - PROBE_DIR: this surface's owned probe directory per the line above. DEADLINE_FILE: `PROBE_DIR/deadline.json`, which exists only for a bounded run.
