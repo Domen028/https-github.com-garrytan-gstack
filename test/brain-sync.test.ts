@@ -743,6 +743,35 @@ describe('gstack-brain-sync per-file hold', () => {
     expect(spoolText()).toContain(WS_LOWER);
   });
 
+  test('publish-removals refuses to push a retained commit that adds a case alias', () => {
+    init();
+    const victim = 'projects/other/ceo-plans/remove.md';
+    seedIndexedPaths(['projects/P/ceo-plans/old.md', victim]);
+    write('projects/P/ceo-plans/old.md', '# historical artifact\n', false);
+    const alias = 'projects/p/ceo-plans/local.md';
+    write(alias, '# unsafe local alias\n', false);
+    expect(git(['add', '-f', '--', alias]).status).toBe(0);
+    expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'retained local alias']).status).toBe(0);
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(run(['gstack-brain-sync', '--publish-removals', '--yes']).status).toBe(1);
+    expect(remoteFiles()).not.toContain(alias);
+    expect(remoteFiles()).toContain(victim);
+  });
+
+  test('the cached outgoing verdict is re-checked when the remote baseline moves', () => {
+    init();
+    const initial = git(['rev-parse', 'HEAD']).stdout.trim();
+    seedIndexedPaths(['projects/MyApp/ceo-plans/a.md', 'projects/myapp/ceo-plans/b.md']);
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).not.toBe('error');
+    expect(git(['--git-dir=' + bareRemote, 'update-ref', 'refs/heads/main', initial]).status).toBe(0);
+    expect(git(['fetch', '-q', 'origin']).status).toBe(0);
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(statusJson().case_names).toBe('MyApp,myapp');
+  });
+
   test('a tracked spelling keeps syncing while only the new case alias is held', () => {
     init();
     seedIndexedPaths(['projects/MyApp/ceo-plans/a.md']);

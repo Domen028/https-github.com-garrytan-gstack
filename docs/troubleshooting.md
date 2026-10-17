@@ -641,7 +641,7 @@ machines read stale data (#3220). Sync now holds every queued file under such a
 path instead of staging it: the file stays queued, everything else keeps
 syncing, and the status is `collision` rather than `ok`. When only one
 spelling is tracked, that spelling keeps syncing and only the new alias is
-held. `<names>` are the colliding folder or file names; `gstack-brain-sync
+held; when neither is tracked yet, both wait. `<names>` are the colliding folder or file names; `gstack-brain-sync
 --status` lists the held paths in `message`. A local commit that would push a
 new alias to the remote (two machines created both spellings at once) is
 refused with status `error` and kept locally.
@@ -658,28 +658,37 @@ unaffected; only the sync holds files.
 2. Fold the other spelling's tracked files into the kept one. Read both
    spellings from git, because a Mac's working tree shows only one of them,
    and the working files too, because they hold the held, unsynced writes.
-   For JSONL logs, concatenate and drop duplicate lines:
+   This loop folds JSONL logs (concatenated, duplicate lines dropped) and
+   prints every other file for you to decide:
 
    ```bash
    cd ~/.gstack
    keep=projects/MyApp; drop=projects/myapp
    git -c core.ignorecase=false ls-files -- "$drop" | while IFS= read -r f; do
      rel=${f#"$drop"/}
+     case "$rel" in *.jsonl) ;; *) echo "decide by hand: $f"; continue ;; esac
      { git show ":$keep/$rel"; git show ":$f"; cat "$keep/$rel" "$f"; } 2>/dev/null | awk '!seen[$0]++' > "$HOME/.gstack-fold.tmp"
      mkdir -p "$keep/$(dirname "$rel")" && mv "$HOME/.gstack-fold.tmp" "$keep/$rel"
      git -c core.ignorecase=false add -f -- "$keep/$rel"
      git -c core.ignorecase=false rm -q --cached -- "$f"
    done
+   ```
+
+   For each file it prints (Markdown, JSON snapshots such as
+   `decisions.active.json`), compare `git show ":$keep/<file>"` with
+   `git show ":$drop/<file>"`, write the content to keep to `"$keep/<file>"`,
+   then run the same `git -c core.ignorecase=false add -f -- "$keep/<file>"`
+   and `git -c core.ignorecase=false rm -q --cached -- "$drop/<file>"`. Never
+   concatenate a JSON snapshot. Then commit and push:
+
+   ```bash
    git -c core.ignorecase=false commit -m "repair: fold $drop into $keep"
    git push origin HEAD
    ```
 
-   For Markdown and other non-log files that exist under both spellings,
-   compare `git show ":$keep/<file>"` with `git show ":$drop/<file>"` and keep
-   the right content instead of concatenating. On Linux the two folders are
-   separate on disk: remove the dropped folder after the commit
-   (`rm -r "$drop"`). On a Mac or Windows they are the same folder, so do not
-   remove anything.
+   On Linux the two folders are separate on disk: remove the dropped folder
+   after the commit (`rm -r "$drop"`). On a Mac or Windows they are the same
+   folder, so do not remove anything.
 3. Clear the held records of the dropped spelling and queue the kept files:
    `gstack-brain-sync --skip-file <dropped path>` for each held path that
    `--status` lists, then `gstack-brain-enqueue <kept path>` and

@@ -783,13 +783,13 @@ stage_paths() {
 # spellings, and a retained local commit can be pushed with an empty queue.
 # Also records the tree's case-colliding names for skill start. Without
 # python3 no drain can stage anything, so there is no new tree to check. A
-# passing verdict is cached by HEAD's commit id, so the empty-queue drain at
-# every skill boundary skips the tree walk until HEAD moves. A cached HEAD
-# that falls behind origin is only pushed after a merge, which moves HEAD.
+# passing verdict is cached by the commit ids of HEAD and every ref (origin's
+# included, the comparison baseline), so the empty-queue drain at every skill
+# boundary skips the tree walk until one of them moves.
 validate_outgoing_paths() {
   local out err key cached cache="$GSTACK_HOME/.brain-case-check"
   command -v python3 >/dev/null 2>&1 || return 0
-  key=$(git -C "$GSTACK_HOME" rev-parse --verify -q HEAD 2>/dev/null)
+  key=$(git -C "$GSTACK_HOME" show-ref --head 2>/dev/null | cksum)
   cached=$(head -1 "$cache" 2>/dev/null || true)
   if [ "${cached%%	*}" = "$key" ]; then
     [ -n "$ST_CASE_NAMES" ] || ST_CASE_NAMES=${cached#*	}
@@ -797,13 +797,14 @@ validate_outgoing_paths() {
   fi
   err=$(mktemp "${TMPDIR:-/tmp}/brain-sync-outgoing.XXXXXX") || return 0
   if ! out=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --outgoing "$GSTACK_HOME" 2>"$err"); then
-    ST_CASE_NAMES=$out
+    ST_CASE_NAMES=${out%$'\r'}
     write_status "error" "outgoing artifact path validation refused: a local commit adds a path that differs only by letter case from a path on the remote; local commits and queue preserved. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision"
     cat "$err" >&2
     rm -f "$err"
     return 1
   fi
   rm -f "$err"
+  out=${out%$'\r'}
   printf '%s\t%s\n' "$key" "$out" > "$cache" 2>/dev/null || true
   [ -n "$ST_CASE_NAMES" ] || ST_CASE_NAMES=$out
 }
@@ -815,6 +816,8 @@ hold_case_collisions() {
   local paths_file="$1" out
   tr -d '\r' < "$paths_file" > "$paths_file.lf" && mv -f "$paths_file.lf" "$paths_file" || return 1
   out=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --hold "$GSTACK_HOME" "$paths_file" "$paths_file.case") || return 1
+  out=${out%$'\r'}
+  tr -d '\r' < "$paths_file.case" > "$paths_file.case.lf" && mv -f "$paths_file.case.lf" "$paths_file.case" || return 1
   ST_CASE_HELD=$(grep -c . "$paths_file.case" 2>/dev/null || true)
   ST_CASE_HELD=${ST_CASE_HELD:-0}
   [ "$ST_CASE_HELD" -gt 0 ] || return 0
@@ -1032,6 +1035,7 @@ publish_removals() {
   git --literal-pathspecs -C "$GSTACK_HOME" -c user.email="gstack@localhost" -c user.name="gstack-brain-sync" \
     commit -q -m "sync: remove $n file(s) | $(date -u +%Y-%m-%dT%H:%M:%SZ)" --pathspec-from-file="$list" >/dev/null 2>&1 || return 1
   guard_unpublished_range || return 2
+  validate_outgoing_paths || return 2
   GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$(remote_host)" curated-memory-git-push "artifacts_sync_mode!=off" \
     bash -c 'GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME" || return 2
   date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"

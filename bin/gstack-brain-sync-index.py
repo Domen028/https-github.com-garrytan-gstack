@@ -90,7 +90,8 @@ def hold(root, requested_file, held_file):
                 held.add(path)
                 colliding.append((key.count('/'), key))
                 break
-    Path(held_file).write_text(''.join(p + '\n' for p in sorted(held)), encoding='utf-8')
+    with open(held_file, 'w', encoding='utf-8', newline='\n') as f:
+        f.writelines(p + '\n' for p in sorted(held))
     return groups[min(colliding)[1]] if colliding else ()
 
 
