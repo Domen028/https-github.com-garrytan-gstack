@@ -4,7 +4,7 @@ import { chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempS
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { collectProducerReceipts, createEvalBaseline, createEvalMatrix, createPortableSkillPayload, loadPortableSkillPayload, prepareEvalJobs, REQUIRED_CONTAINMENT, scoreCollectedEval, scoreEval, validateMatrix, validatePortableSkillPayload, type EvalBaseline, type EvalCell, type EvalMatrix, type EvalResult, type PreparedEvalSchedule } from '../scripts/cso-eval';
+import { collectProducerReceipts, createEvalBaseline, createEvalMatrix, createPortableSkillPayload, loadPortableSkillPayload, prepareEvalJobs, REQUIRED_CONTAINMENT, scoreCollectedEval, scoreEval, validateMatrix, validatePortableSkillPayload, type EvalBaseline, type EvalCell, type EvalFinding, type EvalMatrix, type EvalResult, type PreparedEvalSchedule } from '../scripts/cso-eval';
 import { assertProducerArtifactPath, PRODUCER_PROVIDER_POLICY, producerFailureMessage, producerProviderTimeoutMs, producerInstallationIdentity, resolveProducerHelperBinding, runProducerCell, sanitizeProducerRun, validateProductionProducerInstallation } from '../scripts/cso-eval-producer';
 import { producerArtifactInventoryHash, producerHostPlatform, producerInstallationIdentityHash, producerProviderIdentityHash, producerReceiptHash, sha256, type ProducerArtifactInventory, type ProducerInstallationIdentity, type ProducerProviderIdentity, type ProducerReceipt } from '../scripts/cso-eval-protocol';
 import type { Family, ProviderAdapter, RunOpts, RunResult } from './helpers/providers/types';
@@ -268,6 +268,11 @@ describe('CSO matched evaluation accounting', () => {
     artifactTamper.artifacts.totalBytes = 1;
     expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [rehashReceipt(artifactTamper)])).toThrow('INVALID_PRODUCER_RECEIPT');
 
+    const timed = rehashReceipt({ ...structuredClone(first), toolTimeline: [{ atMs: 5, endMs: 9, tool: 'Bash', agent: 'main' }, { atMs: 7, tool: 'Agent', agent: 'subagent' }] });
+    expect(collectProducerReceipts(matrix, syntheticSchedule(), [timed]).receipts[0]).not.toHaveProperty('toolTimeline');
+    for (const entry of [{ atMs: 9, endMs: 5, tool: 'Bash', agent: 'main' }, { atMs: 1, tool: 'cat /secret', agent: 'main' }, { atMs: 1, tool: 'Bash', agent: 'main', input: 'x' }])
+      expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [rehashReceipt({ ...structuredClone(first), toolTimeline: [entry] } as ProducerReceipt)])).toThrow('INVALID_PRODUCER_RECEIPT');
+
     const mixedInstallation = syntheticReceipt(cells[1]);
     mixedInstallation.installationIdentity = syntheticInstallationIdentity('different-installation');
     expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [first, rehashReceipt(mixedInstallation)])).toThrow('UNMATCHED_PRODUCER_INSTALLATIONS');
@@ -310,6 +315,25 @@ describe('CSO matched evaluation accounting', () => {
     const one = syntheticResult(positive); one.findings.push({ ...one.findings[0], id: 'duplicate' });
     const two = syntheticResult(negative); two.findings.push({ id: 'false-positive', evidence: 'supported', claimedTested: false, judgment: 'incorrect' });
     expect(group(scoreEval(matrix, [one, two]), 'v3', 'daily').precision).toEqual({ numerator: 1, denominator: 3, value: 1 / 3 });
+  });
+  test('confirmed incidental issues count once each for precision, declared instrumentation counts in neither term, and recall still needs the seeded issue', () => {
+    const positive = matrix.cells.find(item => item.version === 'v3' && item.mode === 'daily' && item.variant === 'vulnerable')!;
+    const negative = matrix.cells.find(item => item.version === 'v3' && item.mode === 'daily' && item.variant === 'fixed')!;
+    const key = (seed: string) => createHash('sha256').update(seed).digest('hex');
+    const one = syntheticResult(positive);
+    one.findings.push({ id: 'jwt', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('jwt') }, { id: 'jwt-again', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('jwt') });
+    one.findings.push({ id: 'canary', evidence: 'supported', claimedTested: false, judgment: 'instrumentation' }, { id: 'guess', evidence: 'hypothesis', claimedTested: false, judgment: 'incidental', incidentalKey: key('guess') });
+    const two = syntheticResult(negative);
+    two.findings.push({ id: 'admin', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('admin') }, { id: 'probe', evidence: 'supported', claimedTested: false, judgment: 'instrumentation' }, { id: 'noise', evidence: 'supported', claimedTested: false, judgment: 'incorrect' });
+    expect(() => scoreEval(matrix, [one])).toThrow('INVALID_FINDING_JUDGMENT');
+    one.findings.pop();
+    expect(group(scoreEval(matrix, [one, two]), 'v3', 'daily').precision).toEqual({ numerator: 3, denominator: 5, value: 3 / 5 });
+    const missed = syntheticResult(positive); missed.findings = [{ id: 'only-incidental', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('x') }];
+    expect(group(scoreEval(matrix, [missed]), 'v3', 'daily').recall.numerator).toBe(0);
+    for (const bad of [{ judgment: 'incidental' }, { judgment: 'incidental', incidentalKey: 'short' }, { judgment: 'incorrect', incidentalKey: key('y') }, { judgment: 'instrumentation', matchedCaseId: positive.caseId }, { judgment: 'incidental', incidentalKey: key('z'), matchedCaseId: positive.caseId }]) {
+      const result = syntheticResult(positive); result.findings.push({ id: 'bad', evidence: 'supported', claimedTested: false, ...bad } as EvalFinding);
+      expect(() => scoreEval(matrix, [result])).toThrow('INVALID_FINDING_JUDGMENT');
+    }
   });
   test('producer tested claims require independent successful held-out repair evidence', () => {
     const cell = matrix.cells.find(item => item.version === 'v3' && item.mode === 'comprehensive' && item.variant === 'vulnerable')!;

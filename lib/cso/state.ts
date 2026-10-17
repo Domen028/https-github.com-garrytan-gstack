@@ -944,7 +944,7 @@ export function loadReport(dir: string): RunReportV3 {
 export function event(report: RunReportV3, kind: string, message: string): void {
   report.events.push({ at: new Date().toISOString(), kind, message: redact(message) });
 }
-export function executionDeadline(report: RunReportV3): number {
+export function executionDeadline(report: Pick<RunReportV3, 'deadline'>): number {
   return Date.parse(report.deadline) - 60_000;
 }
 export function requireTime(report: RunReportV3): void {

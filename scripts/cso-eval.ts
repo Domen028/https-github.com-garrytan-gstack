@@ -98,8 +98,15 @@ export interface PortableSkillPayloadIdentity {
 }
 export interface EvalFinding {
   id: string; evidence: 'supported' | 'hypothesis' | 'legacy_review'; claimedTested: boolean;
-  /** Written only by the independent evaluator after reviewing the reported trace. */
-  judgment: 'correct' | 'incorrect' | 'unadjudicated'; matchedCaseId?: string;
+  /**
+   * Written only by the independent evaluator after reviewing the reported trace. `correct`: the seeded issue.
+   * `incidental`: a different issue a unanimous judge panel confirmed is real in this source; a precision true
+   * positive, never recall. `instrumentation`: it targets the evaluator's declared fixture instrumentation
+   * (canary overlay files, egress probe), so precision leaves it out of both terms.
+   */
+  judgment: 'correct' | 'incidental' | 'instrumentation' | 'incorrect' | 'unadjudicated'; matchedCaseId?: string;
+  /** `incidental` only: the evaluator's opaque key for the confirmed issue, so restatements count once per cell. */
+  incidentalKey?: string;
   /**
    * Written only by the independent evaluator.  A producer's tested claim is
    * valid only when this finding, rather than merely another finding in the
@@ -400,6 +407,8 @@ function validateReceipt(receipt: ProducerReceipt, cell: EvalCell, inputHash: st
   validateInstallationIdentity(receipt.installationIdentity, 'INVALID_PRODUCER_RECEIPT');
   validateProviderIdentity(receipt.providerIdentity, cell.host === 'codex' ? 'gpt' : cell.host, 'INVALID_PRODUCER_RECEIPT');
   validateArtifactInventory(receipt.artifacts, 'INVALID_PRODUCER_RECEIPT');
+  const timeline = receipt.toolTimeline;
+  if (timeline !== undefined && (!Array.isArray(timeline) || timeline.length > 4096 || timeline.some(entry => !entry || !Number.isSafeInteger(entry.atMs) || entry.atMs < 0 || (entry.endMs !== undefined && (!Number.isSafeInteger(entry.endMs) || entry.endMs < entry.atMs)) || typeof entry.tool !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(entry.tool) || !['main', 'subagent'].includes(entry.agent) || Object.keys(entry).some(key => !['atMs', 'endMs', 'tool', 'agent'].includes(key))))) throw new Error('INVALID_PRODUCER_RECEIPT');
 }
 
 function validateInstallationIdentity(identity: ProducerInstallationIdentity, error: string): void {
@@ -530,7 +539,7 @@ export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEv
       estimatedCost: { measured: costs.length, denominator: expected.length, totalUSD: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null, source: 'pricing-table-estimate' },
     });
   }
-  const indexes: ProducerReceiptIndex[] = bound.map(({ output: _output, error, ...receipt }) => ({ ...receipt, ...(error ? { error: { code: error.code } } : {}) }));
+  const indexes: ProducerReceiptIndex[] = bound.map(({ output: _output, toolTimeline: _toolTimeline, error, ...receipt }) => ({ ...receipt, ...(error ? { error: { code: error.code } } : {}) }));
   const base = { schemaVersion: 1 as const, matrixHash: matrixHash(matrix), scheduleHash: digest(JSON.stringify(schedule)), receipts: indexes.sort((left, right) => left.cell.id.localeCompare(right.cell.id)), summary: {
     scheduled: matrix.cells.length, prepared: schedule.preparedCells, submitted: bound.length, missing: matrix.cells.length - bound.length,
     matchedPairsExpected: expectedMatchedPairs(matrix), matchedPairsSubmitted: completePairs.length, modelMismatches, groups,
@@ -640,9 +649,11 @@ function validateResult(result: EvalResult, cell: EvalCell, corpus: EvalCorpusMa
   if (result.producerReceiptHash !== undefined && !HEX.test(result.producerReceiptHash)) throw new Error('INVALID_PRODUCER_RECEIPT_PROVENANCE');
   const ids = new Set<string>(), repairEvidence = new Set<string>(), recheckEvidence = new Set<string>();
   for (const finding of result.findings) {
-    if (!finding.id || ids.has(finding.id) || !['supported', 'hypothesis', 'legacy_review'].includes(finding.evidence) || !['correct', 'incorrect', 'unadjudicated'].includes(finding.judgment) || typeof finding.claimedTested !== 'boolean') throw new Error('INVALID_FINDING_JUDGMENT');
+    if (!finding.id || ids.has(finding.id) || !['supported', 'hypothesis', 'legacy_review'].includes(finding.evidence) || !['correct', 'incidental', 'instrumentation', 'incorrect', 'unadjudicated'].includes(finding.judgment) || typeof finding.claimedTested !== 'boolean') throw new Error('INVALID_FINDING_JUDGMENT');
     ids.add(finding.id);
     if (finding.judgment === 'correct' && (cell.variant !== 'vulnerable' || finding.matchedCaseId !== cell.caseId)) throw new Error('INVALID_ORACLE_MATCH');
+    if ((finding.judgment === 'incidental' || finding.judgment === 'instrumentation') && (finding.evidence === 'hypothesis' || finding.matchedCaseId !== undefined)) throw new Error('INVALID_FINDING_JUDGMENT');
+    if ((finding.judgment === 'incidental') !== (finding.incidentalKey !== undefined) || (finding.incidentalKey !== undefined && !HEX.test(finding.incidentalKey))) throw new Error('INVALID_FINDING_JUDGMENT');
     if (finding.trustedVerification !== undefined) {
       const verification = finding.trustedVerification as Record<string, unknown>, allowed = new Set(['repair', 'repairEvidenceHash', 'recheck', 'recheckEvidenceHash']);
       if (!verification || typeof verification !== 'object' || Array.isArray(verification) || Object.keys(verification).some(key => !allowed.has(key)) ||
@@ -743,10 +754,11 @@ export function scoreEval(matrix: EvalMatrix, observations: EvalResult[], qualif
     let correct = 0, reported = 0, unadjudicated = 0;
     for (const cell of selected) {
       const result = results.get(cell.id);
-      const findings = result?.reportFinished ? result.findings.filter(finding => finding.evidence !== 'hypothesis') : [];
+      const findings = result?.reportFinished ? result.findings.filter(finding => finding.evidence !== 'hypothesis' && finding.judgment !== 'instrumentation') : [];
       reported += findings.length;
       unadjudicated += findings.filter(finding => finding.judgment === 'unadjudicated').length;
       correct += Number(findings.some(finding => eligibleFinding(cell, finding) && finding.judgment === 'correct')); // Duplicate reports do not increase true positives.
+      correct += new Set(findings.filter(finding => eligibleFinding(cell, finding) && finding.judgment === 'incidental').map(finding => finding.incidentalKey)).size;
     }
     const firstUseful = completed.flatMap(result => result.firstUsefulResultMs === null ? [] : [result.firstUsefulResultMs]);
     const costs = completed.flatMap(result => result.usage?.costUSD === undefined ? [] : [result.usage.costUSD]);

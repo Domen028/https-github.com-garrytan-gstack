@@ -1,5 +1,40 @@
 # Changelog
 
+## [1.91.125.0] - 2026-10-17
+
+**/cso release qualification measures precision on the application, not on the evaluator's own test rigging.** In the first paid runtime qualification, the daily precision gate failed on every stack (8/34 to 8/49). 116 of the 132 findings counted as false positives pointed at instrumentation the evaluator plants in each fixture: canary credentials and the egress probe route. Most of the other 16 were real issues the fixtures happen to contain. Garry chose to keep the 0.95 bar and fix what it counts.
+
+### Changed
+- **Daily precision leaves out findings on declared fixture instrumentation.** The trusted evaluator marks them `instrumentation`, and they count in neither term.
+- **A confirmed real issue counts as a true positive.** When a unanimous judge panel confirms a non-seeded finding is a real issue in that source, the evaluator marks it `incidental` with an opaque key. Each distinct key adds one true positive per cell, so restating it never inflates precision. It never counts toward recall.
+- **Recall, the v2 baseline and every threshold are unchanged.** Validation rejects either new judgment on a hypothesis or with a seeded match, and rejects a missing or malformed key.
+
+### If you…
+- **…write an evaluator for `cso-eval.ts`:** `incidental` needs a 64-hex `incidentalKey`, and no other judgment may carry one.
+
+## [1.91.124.0] - 2026-10-17
+
+**/cso runs finish on time.** In the first paid runtime qualification, one comprehensive run submitted its findings ten minutes in, kept working for another 25 minutes without calling the helper, and was killed before it called `finish`. Its report was never finished, so the cold-start gate scored 63/64. The agent had no clock to follow.
+
+### Added
+- **Helper replies carry `remainingSeconds`.** `start`, `resume`, `submit`, `scan`, `scanner-outcome`, `import-sarif`, `record-review`, `test-plan`, `runtime-plan`, `verify` and `inspect` report the whole seconds of investigation time left. The count stops where `scan`, `verify` and `record-review` start refusing with DEADLINE, so the final reporting minute stays free for `submit` and `finish`. The field is added after the command and only omitted if the deadline can't be read, so it never turns a saved change into an error.
+- **The /cso skill follows the clock.** It now says to start only work that fits and, below 120 seconds, to stop waiting and `finish`.
+- **Producer receipts record a content-free tool timeline.** For each tool call the eval producer records the name, its start and end offsets, and whether a subagent made it. It never records inputs or outputs. The timeline is capped at 4096 entries, validated on read, and left out of the batch index. Scoring is unchanged.
+
+### If you…
+- **…drive `gstack-cso` from your own agent:** read `remainingSeconds` from each reply and stop starting work below two minutes. `inspect` refreshes it without side effects.
+
+## [1.91.123.0] - 2026-10-17
+
+**/cso comprehensive repairs run again.** In the first paid runtime qualification, the agent recorded 148 repair reviews across 42 comprehensive runs, but not one verification attempt started. Every runtime scored 0/24 on held-out repairs. Two helper bugs stacked: the patch write failed on the snapshot's read-only files, and `runtime-plan` handed the agent a profile name that `verify` refused.
+
+### Fixed
+- **`verify` can patch read-only snapshot files.** Snapshot copies keep their 0444 modes, so writing the patched file failed with EACCES for any non-root user, which is how real users and the evaluator run. The error surfaced as a generic "unexpected or unsafe input". The helper now makes the file owner-writable for the write and restores its mode afterwards.
+- **`runtime-plan` returns the qualified runtime ID** (for example `node-24.4.0-amd64`) instead of the stack alias, and the skill copies that value into the verification request. `verify` rejects any other profile with an `INVALID_ARGUMENT` that names the expected ID, before an attempt is counted.
+
+### If you…
+- **…build a verification request by hand:** use the `runtimeProfile` that `runtime-plan` printed. The stack alias is refused.
+
 ## [1.91.122.0] - 2026-10-17
 
 **Main no longer goes red on 2026-11-16.** All seven `.osv-scanner.toml` suppressions expired on 2026-11-30, and `test/osv-ignore-expiry.test.ts` fails 14 days early. Six are gone and the seventh is re-dated with an upstream link. Dependabot's grouped dev bump (#3228) is replaced by hand, and Version Gate stops failing every dependabot package.json PR.
