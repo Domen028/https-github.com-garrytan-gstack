@@ -2,8 +2,8 @@
 # gstack-doctor-check.sh — `gstack-doctor --check`: the one-line install verdict.
 #
 # Sourced by bin/gstack-doctor after its prelude (ROOT, ROOT_REAL, BIN, SRC,
-# DOCS, STATE_ROOT, EXE, WINDOWS, clamp, sq, psq, the launch probe, the codex
-# status helpers) and never executed on its own. Prints `required: <ids>`, one
+# DOCS, STATE_ROOT, EXE, clamp, the launch probe, the codex status helpers)
+# and never executed on its own. Prints `required: <ids>`, one
 # `PASS | FAIL | SKIP <id>` row per component in bin/gstack-doctor-components.sh
 # (generated from lib/doctor-components.ts; the same ids feed --for, --require
 # and --json), then exactly one trailer: `gstack: ok <revision> for=<what>` on
@@ -16,8 +16,7 @@
 # Inputs (set by bin/gstack-doctor): CHECK_FOR (skill), CHECK_REQUIRE (csv),
 # CHECK_JSON (0|1), CHECK_PROJECT (path or ""), CHECK_REVISION (ref or ""),
 # CHECK_MIN_REVISION (the supported minimum the Capy wrapper read from the
-# remote's capy/support.env, `unknown` when its fetch failed, or ""), LIVE,
-# WINDOWS (1 on Windows; GSTACK_DOCTOR_PLATFORM overrides the detection).
+# remote's capy/support.env, `unknown` when its fetch failed, or ""), LIVE.
 # GSTACK_CAPY_WRAPPER_PATH (optional) names the wrapper a below-minimum fix runs.
 
 . "$BIN/gstack-doctor-components.sh" || { echo "gstack-doctor: $BIN/gstack-doctor-components.sh is missing; reinstall with cd $SRC && ./setup" >&2; exit 1; }
@@ -379,21 +378,6 @@ _dc_version_below() {
   return 1
 }
 
-# _dc_upgrade_cmd — the command that moves this install to the latest release.
-# On Windows bin/gstack-upgrade refuses every Git Bash install (it compares a
-# pwd -P /c/... path with git's C:/... toplevel), so the held-install recovery
-# forms from docs/troubleshooting.md#auto-update-held-install-recovery are
-# named instead, one per shell, with the install path quoted for each.
-_dc_upgrade_cmd() {
-  local win
-  if [ "$WINDOWS" -ne 1 ]; then printf '%s' "$SRC/bin/gstack-upgrade"; return; fi
-  win=$(cygpath -w "$SRC" 2>/dev/null) || win="$SRC"
-  printf '%s' "run the held-install recovery (bin/gstack-upgrade refuses on Git Bash installs): in Git Bash: cd $(sq "$SRC")"
-  printf '%s' ' && git fetch origin main && d=$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > "$d/gstack-ff-update" && bash "$d/gstack-ff-update" . FETCH_HEAD; s=$?; rm -rf "$d"; [ "$s" = 0 ] && ./setup'
-  printf '%s' " — or in Windows PowerShell 5.1: Set-Location -LiteralPath $(psq "$win")"
-  printf '%s' " -ErrorAction Stop; \$gb = Join-Path (git --exec-path) '..\\..\\..\\bin\\bash.exe'; & \$gb -c 'set -f; IFS=; git fetch origin main && d=\$(mktemp -d) && git show FETCH_HEAD:bin/gstack-ff-update > \$d/gstack-ff-update && bash \$d/gstack-ff-update . FETCH_HEAD; s=\$?; rm -rf -- \$d; exit \$s'; if (\$LASTEXITCODE -eq 0) { .\\setup.ps1 }"
-}
-
 # _dc_check_min_revision INSTALLED HEAD — sets the PASS-row suffix _dc_min_note,
 # or prints the REVISION_BELOW_MINIMUM FAIL row for --min-revision and returns 1.
 # Returns 1 after printing a FAIL row.
@@ -406,9 +390,7 @@ _dc_check_min_revision() {
   esac
   if _dc_version_below "$installed" "$CHECK_MIN_REVISION"; then
     if [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ]; then
-      fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (fast-forwards), or $(_dc_upgrade_cmd)"
-    elif [ "$WINDOWS" -eq 1 ]; then
-      fix="$(_dc_upgrade_cmd)"
+      fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (fast-forwards), or $SRC/bin/gstack-upgrade"
     else
       fix="$SRC/bin/gstack-upgrade (fast-forwards to the remote default branch, then reinstalls)"
     fi
@@ -437,9 +419,7 @@ _dc_check_revision() {
     _dc_row PASS revision "$installed ($head) is --revision $want$_dc_min_note"
     return
   fi
-  local latest="run $SRC/bin/gstack-upgrade to move to the latest release (interactive: /gstack-upgrade)"
-  [ "$WINDOWS" -eq 1 ] && latest="to move to the latest release, $(_dc_upgrade_cmd)"
-  _dc_row FAIL revision "installed ${installed:-unknown}${head:+ at $head} (requested $want)" "cd $SRC && git fetch origin && git checkout $want && ./setup, or $latest" REVISION_UNMET
+  _dc_row FAIL revision "installed ${installed:-unknown}${head:+ at $head} (requested $want)" "cd $SRC && git fetch origin && git checkout $want && ./setup, or run $SRC/bin/gstack-upgrade to move to the latest release (interactive: /gstack-upgrade)" REVISION_UNMET
 }
 
 # _dc_wrapper_rev FILE — the GSTACK_CAPY_WRAPPER revision a Capy skill copy
