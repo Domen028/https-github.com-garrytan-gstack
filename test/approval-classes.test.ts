@@ -9,11 +9,13 @@
  * Real fixture repositories, real autoplan runs and a `gh` shim on PATH.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { extractReceipt } from '../lib/ship-receipt';
-import { parseCitations } from '../lib/approval-citations';
+import { evaluateApprovals, parseCitations } from '../lib/approval-citations';
+import { scopeOf, type ApprovalHit } from '../lib/approval-classes';
 import { autoplan, runPhase } from './helpers/autoplan-run-fixture';
 import { BASE_POLICY, cleanup, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/restamp-fixture';
 
@@ -212,7 +214,7 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     commit(repo, { 'src/commands/repair/clear-never-installed.ts': 'export const wipe = true;\n' }, 'post-approval addition');
     const after = write(repo, `Approved by garrytan 2026-10-16 via ${COMMENT}\n`, [], gh);
     expect(after.status).toBe(EXIT.fail);
-    expect(after.err).toMatch(/effects in src\/commands\/repair\/accepted-takes\.ts, src\/commands\/repair\/clear-never-installed\.ts\).*names neither.*\(APPROVAL_CITATION_MISSING\)$/m);
+    expect(after.err).toMatch(/effects in src\/commands\/repair\/accepted-takes\.ts, src\/commands\/repair\/clear-never-installed\.ts\).*names data-repair@[0-9a-f]{12}, not the current data-repair@[0-9a-f]{12}; a token is authoritative.*\(APPROVAL_CITATION_MISSING\)$/m);
   }, 30_000);
 
   test('a plan sha resolves through an APPROVED autoplan run whose plan names the class and every effect path; a pending gate, an unrelated plan and a later file do not', () => {
@@ -287,3 +289,81 @@ describe('gstack-ship-receipt write enforces declared classes (APPROVAL_CITATION
     expect(JSON.parse(gone.out).approval).toMatchObject({ status: 'unavailable', classes: [] });
   }, 30_000);
 });
+
+describe('review #3235 regressions: what counts as approval, stale tokens, and native diffs', () => {
+  const hit = (blob: string): ApprovalHit => ({ class: 'data-repair', file: 'src/repair.ts', line: 1, via: 'path', text: 'modified', declared: true, effect: `path\0src/repair.ts\0${blob}` });
+  const before = scopeOf('data-repair', [hit('preview-true')]);
+  const after = scopeOf('data-repair', [hit('preview-false-wipe-all')]);
+  const judge = (scope: typeof before, ref: string, response: Record<string, unknown>) => evaluateApprovals([scope], parseCitations(`Approved by garrytan 2026-10-16 via ${ref}`), { runDirs: [], maintainers: ['garrytan'], gh: () => ({ ok: true, out: JSON.stringify({ user: { login: 'garrytan' }, ...response }), err: '' }) });
+  const REVIEW = 'https://github.com/acme/brain/pull/7#pullrequestreview-55';
+
+  test('P1-2: a maintainer comment naming the token without an approval line approves nothing; an approval line does', () => {
+    const rejection = judge(after, COMMENT, { body: `Do NOT approve ${after.token}. This deletes customer data.` });
+    expect(rejection.records).toEqual([]);
+    expect(rejection.missing[0]!.reasons[0]).toMatch(/names neither data-repair@[0-9a-f]{12} nor data-repair with every effect path \(src\/repair\.ts\) on an approval line/);
+    expect(judge(after, COMMENT, { body: `Looks fine.\nNot approving ${after.token} yet.` }).records).toEqual([]);
+    expect(judge(after, COMMENT, { body: `Context first.\n> Approved ${after.token}: preview-first.` }).records.map(r => `${r.citation}/${r.binding}`)).toEqual(['verified/token']);
+    expect(judge(after, COMMENT, { body: `- approve ${after.token}` }).records.map(r => r.citation)).toEqual(['verified']);
+  });
+
+  test('P1-2: only an APPROVED review counts, and it still needs an approval line naming the scope', () => {
+    for (const state of ['COMMENTED', 'DISMISSED', 'PENDING']) {
+      const r = judge(after, REVIEW, { state, body: `Approved ${after.token}` });
+      expect(r.records).toEqual([]);
+      expect(r.missing[0]!.reasons[0]).toContain(`is a ${state.toLowerCase()} review; only an APPROVED review counts`);
+    }
+    expect(judge(after, REVIEW, { state: 'APPROVED', body: `Approved ${after.token}` }).records.map(r => `${r.citation}/${r.binding}/${r.evidence}`)).toEqual(['verified/token/review by garrytan']);
+    expect(judge(after, REVIEW, { state: 'APPROVED', body: `LGTM ${after.token}` }).records).toEqual([]);
+  });
+
+  test('P1-3: a stale explicit token is not approval and never falls back to the class and paths; untokened class and paths still bind', () => {
+    const approval = `Approved ${before.token} (src/repair.ts).`;
+    expect(judge(before, COMMENT, { body: approval }).records.map(r => r.binding)).toEqual(['token']);
+    const stale = judge(after, COMMENT, { body: approval });
+    expect(stale.records).toEqual([]);
+    expect(stale.missing[0]!.reasons[0]).toContain(`names ${before.token}, not the current ${after.token}; a token is authoritative`);
+    expect(judge(after, COMMENT, { body: `Approved data-repair@${before.digest} and ${after.token}` }).records.map(r => r.binding)).toEqual(['token']);
+    expect(judge(after, COMMENT, { body: 'Approved data-repair for src/repair.ts: preview-first.' }).records.map(r => r.binding)).toEqual(['paths']);
+  });
+
+  function defaultRepo(): FixtureRepo {
+    const repo = classRepo();
+    commit(repo, { 'src/config.ts': 'export const DEFAULT_TOKENMAX = true;\n' });
+    return repo;
+  }
+  const refusedWithoutCitation = (repo: FixtureRepo, env: Record<string, string> = {}) => {
+    const c = runBin(repo, 'gstack-approval-classes', ['check', '--base', 'main'], env);
+    expect(c.status, c.err).toBe(EXIT.fail);
+    expect(c.out).toMatch(/^APPROVAL_CLASS: default-change src\/config\.ts:1 \(pattern\)/m);
+    const w = write(repo, '', [], env);
+    expect(w.status).toBe(EXIT.fail);
+    expect(w.err).toMatch(/default-change \(default-change@[0-9a-f]{12}; effects in src\/config\.ts\).*\(APPROVAL_CITATION_MISSING\)$/m);
+  };
+
+  test('P1-4: diff.external and a textconv driver cannot hide a declared pattern from check or the receipt', () => {
+    const repo = defaultRepo();
+    repo.git('config', 'diff.external', '/bin/true');
+    refusedWithoutCitation(repo);
+    repo.git('config', '--unset', 'diff.external');
+    fs.writeFileSync(path.join(repo.work, '.git', 'info', 'attributes'), '*.ts diff=blank\n');
+    repo.git('config', 'diff.blank.textconv', 'true');
+    refusedWithoutCitation(repo);
+  }, 30_000);
+
+  test('P1-4: a content diff that is missing or disagrees with git\'s count fails closed with APPROVAL_SOURCE_UNAVAILABLE', () => {
+    const repo = defaultRepo();
+    const real = spawnSync('sh', ['-c', 'command -v git'], { encoding: 'utf8', timeout: 10_000 }).stdout.trim();
+    const dir = path.join(repo.root, 'git-shim');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'git'), `#!/bin/sh\ncase " $* " in *" --unified=0 "*) exit 0 ;; esac\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    const env = { PATH: `${dir}:${process.env.PATH ?? ''}` };
+    const c = runBin(repo, 'gstack-approval-classes', ['check', '--base', 'main'], env);
+    expect(c.status).toBe(EXIT.refused);
+    expect(c.err).toMatch(/the content diff for src\/config\.ts shows 0 added line\(s\) but git counts 1; the content diff could not be read, so nothing was checked.*\(APPROVAL_SOURCE_UNAVAILABLE\)$/m);
+    const w = write(repo, '', [], env);
+    expect(w.status).toBe(EXIT.fail);
+    expect(w.err).toMatch(/\(APPROVAL_SOURCE_UNAVAILABLE\)$/m);
+    expect(w.out).toBe('');
+  }, 30_000);
+});
+

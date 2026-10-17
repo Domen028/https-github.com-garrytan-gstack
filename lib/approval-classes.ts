@@ -149,13 +149,26 @@ export function baseMigrationRule(repoRoot: string, base: string): MigrationRule
 
 export interface ChangedFile { file: string; status: string; blob: string; added: Array<{ line: number; text: string }> }
 
-/** Files changed between `diffBase` and `head` (the working tree when `head` is omitted), with added lines and blob ids. */
-export function changedFiles(repoRoot: string, diffBase: string, head?: string): ChangedFile[] | { error: string } {
+/** Native, unquoted git diff output: no external diff driver and no textconv, whatever the repository's config says. */
+const NATIVE_DIFF = ['-c', 'core.quotePath=false', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames'];
+
+/**
+ * Files changed between `diffBase` and `head` (the working tree when `head` is omitted), with added lines and blob ids.
+ * Fails closed (`unreadable`) when the content diff cannot be read or its added lines disagree with git's numstat count.
+ */
+export function changedFiles(repoRoot: string, diffBase: string, head?: string): ChangedFile[] | { error: string; unreadable: true } {
   const range = head ? [diffBase, head] : [diffBase];
-  const names = git(repoRoot, ['diff', '--name-status', '-z', '--no-renames', ...range], 120_000);
-  const diff = git(repoRoot, ['diff', '--unified=0', '--no-color', '--no-renames', ...range], 120_000);
-  if (!names.ok || !diff.ok) return { error: `git diff ${range.join(' ')} failed` };
+  const names = git(repoRoot, [...NATIVE_DIFF, '--name-status', '-z', ...range], 120_000);
+  const counts = git(repoRoot, [...NATIVE_DIFF, '--numstat', '-z', ...range], 120_000);
+  const diff = git(repoRoot, [...NATIVE_DIFF, '--unified=0', ...range], 120_000);
+  if (!names.ok || !counts.ok || !diff.ok) return { error: `git diff ${range.join(' ')} failed; the content diff could not be read`, unreadable: true };
   const added = addedLines(diff.out);
+  for (const entry of counts.out.split('\0').filter(Boolean)) {
+    const [n, , file] = entry.split('\t');
+    if (!file || n === '-') continue;
+    const got = added.get(file)?.length ?? 0;
+    if (got !== Number(n)) return { error: `the content diff for ${file} shows ${got} added line(s) but git counts ${n}; the content diff could not be read`, unreadable: true };
+  }
   const parts = names.out.split('\0').filter(Boolean);
   const out: ChangedFile[] = [];
   for (let i = 0; i + 1 < parts.length; i += 2) {
@@ -217,7 +230,7 @@ export type ScanOutcome =
   | { scan: ApprovalScan; absent: boolean }
   | { errors: ApprovalClassesError[]; source: string }
   | { unavailable: string; source: string }
-  | { error: string };
+  | { error: string; unreadable?: true };
 
 /** Load the base's classes and migration rule, diff since the merge base, scan. Skips the diff when nothing could match. */
 export function runApprovalScan(req: ScanRequest): ScanOutcome {

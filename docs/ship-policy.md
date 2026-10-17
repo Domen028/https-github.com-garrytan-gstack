@@ -527,7 +527,11 @@ detectors only report: the ship policy's migration files, when no class sets
 `migrations: true`, print as `(built-in, report-only)` and need no citation.
 
 The digest covers the class's effects: each matched file with its blob at the
-scanned head, and each matched added line. Adding, removing or editing an
+scanned head, and each matched added line. The scan reads git's native diff
+(`--no-ext-diff --no-textconv`), so a configured external diff driver or text
+conversion cannot hide a line; when the content diff cannot be read, or its
+added lines disagree with git's own count, `check` and the receipt refuse with
+`APPROVAL_SOURCE_UNAVAILABLE` instead of passing. Adding, removing or editing an
 effect changes the token, so an approval given earlier no longer binds.
 
 **Enforcement.** `gstack-ship-receipt write` refuses with
@@ -544,9 +548,16 @@ that resolves and binds:
   passed with `--approval-run <run dir>` whose gate is APPROVED, and the plan
   must name the scope token, or the class and every effect path.
 - A GitHub comment or review URL must be written by a `maintainers` login from
-  the base's ship policy that equals the cited owner (a review requesting
-  changes is not an approval), and its body must name the token, or the class
-  and every effect path.
+  the base's ship policy that equals the cited owner. A review must be in
+  state `APPROVED`; a comment-only, dismissed or changes-requested review is
+  not an approval. Only approval lines count as evidence: a line that starts
+  (after any list or quote markers) with `Approve` or `Approved`, any case,
+  and names the token, or the class and every effect path, such as
+  `Approved data-repair@0123456789ab: preview-first, never at upgrade.` A
+  comment saying `Do not approve data-repair@0123456789ab` approves nothing.
+- A token is authoritative. Evidence that names the class with a different
+  digest approved earlier effects: it does not bind, and it never falls back
+  to matching the class and paths.
 - Anything else (a thread code, a chat message, a URL gstack cannot read) is
   recorded `citation: unverified` for the coordinator, and only when the line
   attests which scope it covers with `for <class>@<digest12>` matching the
