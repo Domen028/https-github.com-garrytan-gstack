@@ -420,11 +420,15 @@ that resolves and binds:
 - A GitHub comment or review URL must be written by a `maintainers` login from
   the base's ship policy that equals the cited owner. A review must be in
   state `APPROVED`; a comment-only, dismissed or changes-requested review is
-  not an approval. Only approval lines count as evidence: a line that starts
-  (after any list or quote markers) with `Approve` or `Approved`, any case,
-  and names the token, or the class and every effect path, such as
-  `Approved data-repair@0123456789ab: preview-first, never at upgrade.` A
-  comment saying `Do not approve data-repair@0123456789ab` approves nothing.
+  not an approval. Only approval lines count as evidence: a line the
+  maintainer wrote at top level that starts (after an optional list marker)
+  with `Approve` or `Approved`, any case, and names the token, or the class
+  and every effect path, such as
+  `Approved data-repair@0123456789ab: preview-first, never at upgrade.`
+  Quoted and code text never counts: a blockquote (`>`), a fenced or indented
+  code block and an HTML comment are skipped, so a rejection that quotes an
+  example approval approves nothing, and neither does
+  `Do not approve data-repair@0123456789ab`.
 - A token is authoritative. Evidence that names the class with a different
   digest approved earlier effects: it does not bind, and it never falls back
   to matching the class and paths.
