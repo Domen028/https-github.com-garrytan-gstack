@@ -59,6 +59,7 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
   // commands through the pre-gate's POSIX `bash -o pipefail` runner. The pure parsers and the
   // import graph are covered by test/pregate-selection.test.ts, which the bin/ pattern excludes too.
   { file: 'test/gstack-regen.test.ts', reason: 'spawns bin/gstack-regen through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and POSIX fixture regen commands' },
+  { file: 'test/pregate-docs-lane-review.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess); the docs-lane selection rules it drives are POSIX-run like the other pregate fixtures' },
   { file: 'test/pregate-guards.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and runs node guard and lane fixture commands through the POSIX runner' },
   { file: 'test/pregate-remote.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and runs POSIX remote-gate fixture commands through the lane runner' },
   { file: 'test/pregate-regate.test.ts', reason: 'spawns bin/gstack-pregate regate through test/helpers/restamp-fixture.ts runBin (shebang via CreateProcess)' },
