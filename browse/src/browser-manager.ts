@@ -307,6 +307,8 @@ export const TAB_PROBE_TIMEOUT_MS = 1_000;
  */
 const TAB_STORAGE_READ_TIMEOUT_MS = 5_000;
 
+type TabReadKind = 'probe' | 'title';
+
 /**
  * Resolve with `work`'s value, or with undefined once `ms` passes. The losing
  * read settles on its own when the renderer frees up, so callers pass a promise
@@ -391,6 +393,11 @@ export class BrowserManager {
   private extensionContext = false;
   /** Pending and recorded navigation-guard verdicts per page (D2). */
   private navigationGuards = new WeakMap<Page, { pending: Set<Promise<void>>; blocked: string | null }>();
+  /** One pending read per page and kind (#3247). A read that outlives its
+   * budget stays queued in the renderer until the page frees up, so a stuck
+   * tab reuses it instead of collecting a new one on every /health poll or
+   * `tabs` call. */
+  private pendingTabReads = new WeakMap<Page, Map<TabReadKind, Promise<unknown>>>();
   // Our own 'disconnected' listeners per browser. Detach only these: removing
   // every 'disconnected' listener also strips Playwright's internal one that
   // resolves browser.close(), so each close waited the full race timeout (and
@@ -1141,8 +1148,23 @@ export class BrowserManager {
     const id = this.activeTabId;
     const page = this.pages.get(id);
     if (!page) return null;
-    const answered = await withinTabBudget(page.evaluate('1').then(() => true, () => false), timeoutMs);
-    return { id, responsive: answered === true };
+    const probe = this.sharedTabRead(page, 'probe', () => page.evaluate('1').then(() => true, () => false));
+    return { id, responsive: (await withinTabBudget(probe, timeoutMs)) === true };
+  }
+
+  /** Join the page's pending read of this kind, or start one. `read` must not
+   * reject. */
+  private sharedTabRead<T>(page: Page, kind: TabReadKind, read: () => Promise<T>): Promise<T> {
+    let reads = this.pendingTabReads.get(page);
+    if (!reads) {
+      reads = new Map();
+      this.pendingTabReads.set(page, reads);
+    }
+    const pending = reads.get(kind);
+    if (pending) return pending as Promise<T>;
+    const started = read().finally(() => reads.delete(kind));
+    reads.set(kind, started);
+    return started;
   }
 
   // ─── Tab Management ────────────────────────────────────────
@@ -1347,7 +1369,8 @@ export class BrowserManager {
    */
   async getTabListWithTitles(): Promise<Array<{ id: number; url: string; title: string; active: boolean; busy: boolean }>> {
     return Promise.all([...this.pages].map(async ([id, page]) => {
-      const title = await withinTabBudget(page.title().catch(() => ''), TAB_PROBE_TIMEOUT_MS);
+      const title = await withinTabBudget(
+        this.sharedTabRead(page, 'title', () => page.title().catch(() => '')), TAB_PROBE_TIMEOUT_MS);
       return {
         id,
         url: page.url(),

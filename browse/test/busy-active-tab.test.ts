@@ -6,12 +6,14 @@
  * session away, and `tabs` and `state save` hung on the tab as well.
  *
  * A real Chromium tab is held in a busy loop while a second tab stays idle;
- * each surface must answer within its bound and name the busy tab.
+ * each surface must answer within its bound and name the busy tab, without
+ * piling up reads on the stuck renderer.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import type { Page } from 'playwright';
 import { BrowserManager, TAB_PROBE_TIMEOUT_MS } from '../src/browser-manager';
 import { HEALTH_REQUEST_TIMEOUT_MS } from '../src/cli';
 import { handleMetaCommand } from '../src/meta-commands';
@@ -25,6 +27,7 @@ let testServer: ReturnType<typeof startTestServer>;
 let bm: BrowserManager;
 let busyId = 0;
 let idleId = 0;
+let busyPage: Page;
 let profileDir = '';
 const originalProfile = process.env.CHROMIUM_PROFILE;
 
@@ -39,7 +42,8 @@ beforeAll(async () => {
   await bm.getPage().goto(`${testServer.url}/basic.html`);
   idleId = await bm.newTab(`${testServer.url}/basic.html`);
   bm.switchTab(busyId, { bringToFront: false });
-  await bm.getPage().evaluate((ms) => {
+  busyPage = bm.getPage();
+  await busyPage.evaluate((ms) => {
     setTimeout(() => { const end = Date.now() + ms; while (Date.now() < end) { /* busy */ } }, 50);
   }, BUSY_MS);
   await Bun.sleep(300); // let the loop start
@@ -82,6 +86,19 @@ describe('busy active tab (#3247)', () => {
     expect(out).toContain(`Active tab ${busyId}`);
     expect(out).toContain(`closetab ${busyId}`);
   });
+
+  test('a stuck tab gets one pending probe, not one per poll', async () => {
+    let evaluates = 0;
+    const evaluate = busyPage.evaluate.bind(busyPage);
+    Object.assign(busyPage, { evaluate: (...args: Parameters<Page['evaluate']>) => { evaluates++; return evaluate(...args); } });
+    try {
+      for (let i = 0; i < 3; i++) expect(await bm.probeActiveTab()).toEqual({ id: busyId, responsive: false });
+    } finally {
+      delete (busyPage as { evaluate?: unknown }).evaluate; // back to the prototype method
+    }
+    // The /health check above may already hold the pending probe.
+    expect(evaluates).toBeLessThanOrEqual(1);
+  }, 10_000);
 
   test('saveState finishes with every tab, skipping only the busy tab storage', async () => {
     const state = await bm.saveState();
