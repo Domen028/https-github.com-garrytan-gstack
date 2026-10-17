@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+**/cso runs finish on time.** In the first paid runtime qualification, one comprehensive run submitted its findings ten minutes in, kept working for another 25 minutes without calling the helper, and was killed before it called `finish`. Its report was never finished, so the cold-start gate scored 63/64. The agent had no clock to follow.
+
+### Added
+- **Helper replies carry `remainingSeconds`.** `start`, `resume`, `submit`, `scan`, `scanner-outcome`, `import-sarif`, `record-review`, `test-plan`, `runtime-plan`, `verify` and `inspect` report the whole seconds of investigation time left. The count stops where `scan`, `verify` and `record-review` start refusing with DEADLINE, so the final reporting minute stays free for `submit` and `finish`. The field is added after the command and only omitted if the deadline can't be read, so it never turns a saved change into an error.
+- **The /cso skill follows the clock.** It now says to start only work that fits and, below 120 seconds, to stop waiting and `finish`.
+- **Producer receipts record a content-free tool timeline.** For each tool call the eval producer records the name, its start and end offsets, and whether a subagent made it. It never records inputs or outputs. The timeline is capped at 4096 entries, validated on read, and left out of the batch index. Scoring is unchanged.
+
+### If you…
+- **…drive `gstack-cso` from your own agent:** read `remainingSeconds` from each reply and stop starting work below two minutes. `inspect` refreshes it without side effects.
+
 ## [1.91.123.0] - 2026-10-17
 
 **/cso comprehensive repairs run again.** In the first paid runtime qualification, the agent recorded 148 repair reviews across 42 comprehensive runs, but not one verification attempt started. Every runtime scored 0/24 on held-out repairs. Two helper bugs stacked: the patch write failed on the snapshot's read-only files, and `runtime-plan` handed the agent a profile name that `verify` refused.
