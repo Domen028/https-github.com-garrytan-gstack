@@ -113,4 +113,13 @@ describe('workflow action pins', () => {
       expect(ignored[name]).toEqual({ 'dependency-name': name, 'update-types': ['version-update:semver-minor', 'version-update:semver-major'] });
     }
   });
+
+  test('Dependabot holds the Anthropic SDKs to patch updates; their 0.x breaking releases arrive as semver-minor', () => {
+    const config = Bun.YAML.parse(fs.readFileSync(path.join(GITHUB_DIR, 'dependabot.yml'), 'utf-8')) as any;
+    const bun = (config.updates ?? []).find((update: any) => update['package-ecosystem'] === 'bun');
+    const ignored = Object.fromEntries((bun?.ignore ?? []).map((rule: any) => [rule['dependency-name'], rule]));
+    for (const name of ['@anthropic-ai/claude-agent-sdk', '@anthropic-ai/sdk']) {
+      expect(ignored[name]).toEqual({ 'dependency-name': name, 'update-types': ['version-update:semver-minor', 'version-update:semver-major'] });
+    }
+  });
 });
