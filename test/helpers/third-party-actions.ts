@@ -20,6 +20,6 @@ export function asideDriveOptions(text: string): string[] {
       /\b(?:I|we)(?:['’]ll| will) (?:re[- ]?ask|ask again)(?: (?:you|this question))? with (?:the )?(?:"[^"]+"|“[^”]+”|[\w -]+?) option(?: included)?\b/gi,
       '',
     );
-    return /\bAside\b/i.test(option) && /\b(?:drive|driving|browse|browsing|navigate|click)\b/i.test(currentOffer);
+    return /\bAside\b/.test(option) && /\b(?:drive|driving|browse|browsing|navigate|click)\b/i.test(currentOffer);
   });
 }
