@@ -109,6 +109,7 @@ function cmdWrite(rest: string[], json: boolean): number {
     for (const line of approval.lines) process.stderr.write(resultLine('gstack-ship-receipt write', 'APPROVAL_CLASSES_INVALID', line) + '\n');
     return EXIT.fail;
   }
+  if (approval.kind === 'error' && approval.code) { process.stderr.write(resultLine('gstack-ship-receipt write', approval.code, `${approval.message}; nothing written`) + '\n'); return EXIT.fail; }
   if (approval.kind === 'error') { process.stderr.write(`gstack-ship-receipt write: approval classes: ${approval.message}; nothing written\n`); return EXIT.fail; }
   if (approval.kind === 'missing') {
     for (const m of approval.missing) process.stderr.write(resultLine('gstack-ship-receipt write', 'APPROVAL_CITATION_MISSING', `${m.class} (${m.token}; effects in ${m.files.join(', ')}): ${m.reasons.join('; ')}`) + '\n');

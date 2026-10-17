@@ -9,15 +9,18 @@
  *   decision answered and not reject/interrogate), with plan.md matching its
  *   manifest hash;
  * - a GitHub comment or review URL must be written by a ship-policy
- *   maintainer whose login is the cited owner (a review requesting changes is
- *   not an approval);
+ *   maintainer whose login is the cited owner, and only its approval lines
+ *   (APPROVAL_LINE: a line starting with "Approve" or "Approved") count; a
+ *   review must also be in state APPROVED;
  * - anything else, or a ref that cannot be read here, is `unverified`.
  *
  * Resolution alone is not enough: the evidence (the approved plan text or
- * the comment body) must bind to the class's current effects, by carrying the
- * scope token `<class>@<digest12>` or by naming the class and every effect
- * path. An authentic approval of other work, or one given before an effect
- * was added, does not bind. An unverified citation counts only as an explicit
+ * the comment's approval lines) must bind to the class's current effects, by
+ * carrying the scope token `<class>@<digest12>` or by naming the class and
+ * every effect path. A token is authoritative: evidence naming the class with
+ * another digest approved earlier effects and never falls back to paths. An
+ * authentic approval of other work, or one given before an effect was added,
+ * does not bind. An unverified citation counts only as an explicit
  * applicability attestation: `for <class>@<digest12>` on the line, matching
  * the current scope, so a later effect change invalidates it.
  * Caller: bin/gstack-ship-receipt write (APPROVAL_CITATION_MISSING).
@@ -31,7 +34,7 @@ import { isUnavailable, loadPolicyFromBase } from './ship-policy';
 
 export interface Citation { raw: string; owner: string; date: string; ref: string; for: Array<{ class: string; digest?: string }> }
 export type Resolution =
-  | { state: 'resolved'; evidence: string; text: string }
+  | { state: 'resolved'; evidence: string; text: string; approvalLines?: true }
   | { state: 'rejected'; why: string }
   | { state: 'unresolved'; why: string };
 export type GhRunner = (args: string[]) => { ok: boolean; out: string; err: string };
@@ -93,9 +96,12 @@ export function resolvePlan(ref: string, runDirs: string[]): Resolution {
   return rejected ?? { state: 'unresolved', why: runDirs.length ? `no --approval-run directory holds a plan with sha ${ref}` : `plan sha ${ref}: pass the autoplan run with --approval-run <dir>` };
 }
 
+/** An affirmative approval in a comment or review: the line starts (after list or quote markers) with "Approve" or "Approved". */
+export const APPROVAL_LINE = /^[\s>*_-]*approved?\b/i;
+
 const GH_URL = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)#(?:issuecomment-(\d+)|pullrequestreview-(\d+)|discussion_r(\d+))$/;
 
-/** A comment or review URL: authored by a ship-policy maintainer whose login is the cited owner. */
+/** A comment or review URL: authored by a ship-policy maintainer whose login is the cited owner; a review must be APPROVED; only approval lines are evidence. */
 export function resolveGithub(c: Citation, ctx: CitationContext): Resolution {
   const m = GH_URL.exec(c.ref)!;
   const [, owner, repo, num, issueComment, review, discussion] = m;
@@ -111,7 +117,9 @@ export function resolveGithub(c: Citation, ctx: CitationContext): Resolution {
   if (!ctx.maintainers.some(x => x.toLowerCase() === login.toLowerCase())) return { state: 'rejected', why: `${c.ref} is by ${login || 'an unknown author'}, not a ship-policy maintainer` };
   if (login.toLowerCase() !== c.owner.toLowerCase()) return { state: 'rejected', why: `the citation names ${c.owner} but ${c.ref} is by ${login}` };
   if (review && body.state === 'CHANGES_REQUESTED') return { state: 'rejected', why: `${c.ref} requests changes; it is not an approval` };
-  return { state: 'resolved', evidence: `${review ? 'review' : 'comment'} by ${login}`, text: String(body.body ?? '') };
+  if (review && body.state !== 'APPROVED') return { state: 'rejected', why: `${c.ref} is a ${String(body.state ?? 'stateless').toLowerCase()} review; only an APPROVED review counts` };
+  const approvals = String(body.body ?? '').split(/\r?\n/).filter(l => APPROVAL_LINE.test(l));
+  return { state: 'resolved', evidence: `${review ? 'review' : 'comment'} by ${login}`, text: approvals.join('\n'), approvalLines: true };
 }
 
 export function resolveCitation(c: Citation, ctx: CitationContext): Resolution {
@@ -120,10 +128,16 @@ export function resolveCitation(c: Citation, ctx: CitationContext): Resolution {
   return { state: 'unresolved', why: `${c.ref} is neither a plan sha nor a GitHub comment or review URL` };
 }
 
-/** How the evidence names this exact scope: the token, or the class plus every effect path; null when it does not. */
+/** The digests `text` names for this class (`<class>@<hex>`), lowercased. */
+function namedDigests(text: string, cls: string): string[] {
+  return [...text.toLowerCase().matchAll(new RegExp(`(?:^|[^a-z0-9-])${cls}@([0-9a-f]{12,64})(?![0-9a-f])`, 'g'))].map(m => m[1]!);
+}
+
+/** How the evidence names this exact scope: the token, or (when it names no token for the class) the class plus every effect path; null otherwise. */
 export function binding(text: string, scope: ApprovalScope): 'token' | 'paths' | null {
+  const digests = namedDigests(text, scope.class);
+  if (digests.length) return digests.some(d => scope.digest.startsWith(d)) ? 'token' : null;
   const lower = text.toLowerCase();
-  if (lower.includes(scope.token.toLowerCase())) return 'token';
   const named = new RegExp(`(^|[^a-z0-9-])${scope.class}([^a-z0-9-]|$)`).test(lower);
   return named && scope.files.every(f => text.includes(f)) ? 'paths' : null;
 }
@@ -140,7 +154,10 @@ function judge(c: Citation, scope: ApprovalScope, res: Resolution): ApprovalReco
   if (res.state === 'resolved') {
     const how = binding(res.text, scope);
     if (how) return { ...base, citation: 'verified', binding: how, evidence: res.evidence };
-    return `${c.ref}: ${res.evidence} names neither ${scope.token} nor ${scope.class} with every effect path (${scope.files.join(', ')}); an approval of other work, or one given before these effects, does not cover them`;
+    const stale = namedDigests(res.text, scope.class)[0];
+    if (stale) return `${c.ref}: ${res.evidence} names ${scope.class}@${stale.slice(0, 12)}, not the current ${scope.token}; a token is authoritative, so approval of earlier effects never falls back to paths`;
+    const where = res.approvalLines ? ' on an approval line (one starting with "Approved" or "Approve")' : '';
+    return `${c.ref}: ${res.evidence} names neither ${scope.token} nor ${scope.class} with every effect path (${scope.files.join(', ')})${where}; an approval of other work, or one given before these effects, does not cover them`;
   }
   const attested = c.for.find(f => f.class === scope.class);
   if (attested?.digest && scope.digest.startsWith(attested.digest)) return { ...base, citation: 'unverified', binding: 'attested', evidence: `unresolved: ${res.why}` };
@@ -174,7 +191,7 @@ export type ReceiptApproval =
   | { kind: 'skip' }
   | { kind: 'ok'; approval: Record<string, unknown>; note?: string }
   | { kind: 'invalid'; lines: string[] }
-  | { kind: 'error'; message: string }
+  | { kind: 'error'; message: string; code?: 'APPROVAL_SOURCE_UNAVAILABLE' }
   | { kind: 'missing'; missing: MissingApproval[] };
 
 const reportOnly = (hits: ApprovalHit[]) => hits.map(h => `${h.class} ${h.file}:${h.line} (${h.text})`);
@@ -184,7 +201,7 @@ export function approvalForReceipt(req: ReceiptApprovalRequest): ReceiptApproval
   const outcome = runApprovalScan({ repoRoot: req.repoRoot, base: req.base, head: req.head });
   if ('unavailable' in outcome) return { kind: 'ok', approval: { source: outcome.source, status: 'unavailable', detail: outcome.unavailable, classes: [] }, note: `APPROVAL_CLASSES: unavailable (${outcome.unavailable}); approval classes were not checked` };
   if ('errors' in outcome) return { kind: 'invalid', lines: outcome.errors.map(e => `${e.message} at ${e.path || '<root>'} (${outcome.source})`) };
-  if ('error' in outcome) return { kind: 'error', message: outcome.error };
+  if ('error' in outcome) return { kind: 'error', message: outcome.error, ...(outcome.unreadable ? { code: 'APPROVAL_SOURCE_UNAVAILABLE' as const } : {}) };
   const { scan, absent } = outcome;
   if (absent && !scan.report_only.length) return { kind: 'skip' };
   const policy = loadPolicyFromBase(req.repoRoot, req.base);

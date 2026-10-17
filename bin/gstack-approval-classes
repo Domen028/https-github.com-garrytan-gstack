@@ -73,6 +73,7 @@ function main(argv: string[]): number {
   const outcome = runApprovalScan({ repoRoot, base, head: flag(rest, '--head'), diffBase: flag(rest, '--diff-base') });
   if ('unavailable' in outcome) { process.stderr.write(resultLine('gstack-approval-classes', 'APPROVAL_SOURCE_UNAVAILABLE', `${outcome.unavailable}; classes are read only from the base, so nothing was checked`) + '\n'); return EXIT.refused; }
   if ('errors' in outcome) { for (const e of outcome.errors) process.stderr.write(resultLine('gstack-approval-classes', 'APPROVAL_CLASSES_INVALID', `${e.message} at ${e.path || '<root>'} (${outcome.source})`) + '\n'); return EXIT.refused; }
+  if ('error' in outcome && outcome.unreadable) { process.stderr.write(resultLine('gstack-approval-classes', 'APPROVAL_SOURCE_UNAVAILABLE', `${outcome.error}, so nothing was checked`) + '\n'); return EXIT.refused; }
   if ('error' in outcome) { process.stderr.write(`gstack-approval-classes: ${outcome.error}\n`); return EXIT.usage; }
   const { scan, absent } = outcome;
   process.stdout.write(json ? JSON.stringify({ ...scan, absent }) + '\n' : renderApprovalScan(scan, absent));
