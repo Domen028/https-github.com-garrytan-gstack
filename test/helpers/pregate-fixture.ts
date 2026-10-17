@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runScriptSync } from '../../lib/script-invocation';
 import { gitArgvIn } from './scratch-repo';
 
 export const ROOT = path.resolve(import.meta.dir, '..', '..');
@@ -153,7 +154,7 @@ export function commit(repo: FixtureRepo, files: Record<string, string | null>, 
 }
 
 export function runBin(repo: FixtureRepo, name: string, args: string[], extraEnv: Record<string, string> = {}, cwd = repo.work) {
-  const r = spawnSync(BIN(name), args, { cwd, encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...repo.env, ...extraEnv } });
+  const r = runScriptSync(BIN(name), args, { cwd, encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...repo.env, ...extraEnv } });
   return { status: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
