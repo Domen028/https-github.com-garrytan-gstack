@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.91.121.0] - 2026-10-17
+
+**Main no longer goes red on 2026-11-16.** All seven `.osv-scanner.toml` suppressions expired on 2026-11-30, and `test/osv-ignore-expiry.test.ts` fails 14 days early. Six are gone and the seventh is re-dated with an upstream link. Dependabot's grouped dev bump (#3228) is replaced by hand, and Version Gate stops failing every dependabot package.json PR.
+
+### Fixed
+- **Six OSV suppressions removed (#2754, #2753).** The hono, @anthropic-ai/sdk and sprintf-js ignores no longer matched either lockfile. image-size is overridden to 2.0.4. braces leaves `lib/diagram-render` because chokidar is overridden to 4.0.3; that bundle's sha256 is unchanged. katex (low) is re-dated to 2027-01-31: its fix needs a mermaid 11 release that allows katex 0.18 (mermaid-js/mermaid#8388). osv-scanner reports no issues and no unused ignores.
+- **`make-pdf --to docx` no longer hangs on an ICNS image.** html-to-docx 1.8.0 sizes images with its own bundled image-size 1.x, which the override cannot reach and which loops forever on GHSA-w3rx-r6r6-pgpr's input. ICNS images are dropped with a warning before conversion. The result is re-parsed with html-to-docx's own html-to-vdom, so a tag the guard misreads fails the conversion instead of hanging it. Every other image format embeds as before; a golden test pins the Word output.
+- **Version Gate passes dependabot dependency PRs.** Hard rule 1 (VERSION above base) is skipped only when the author is `dependabot[bot]` and every changed file is a `package.json`, a `bun.lock` or `.github/dependabot.yml`. A failed file lookup keeps the rule.
+
+### Changed
+- **@types/bun 1.4.3 and prettier 3.9.10.** The test type baseline drops 18 diagnostics.
+- **Dependabot holds both Anthropic SDKs to patch updates.** Their breaking 0.x releases (agent-sdk 0.2 to 0.3, sdk 0.78 to 0.133) count as minor bumps to dependabot and break `typecheck:test` and `overlay-sdk-cancel-eof`.
+
+### If you…
+- **…delete an OSV ignore after adding an override:** check that the vulnerable code loads from node_modules. A dependency that bundles its own copy keeps the old code even though the lockfile looks fixed.
+- **…convert untrusted markdown with `--to docx --allow-network`:** html-to-docx still downloads remote images and sizes them with its bundled copy (#2753 stays open for this).
+
 ## [1.91.120.0] - 2026-10-17
 
 **The Windows doctor test no longer times out.** The `windows bash` test from v1.91.117.0 ran five full `gstack-doctor` passes in one test. Each pass takes up to about 6 s on a Windows runner, so the test took 20 to 30 s against the 30 s per-test limit, and it timed out on one pull request run.
