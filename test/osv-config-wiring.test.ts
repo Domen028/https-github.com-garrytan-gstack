@@ -50,4 +50,12 @@ describe("osv-scanner config wiring", () => {
     const page = fs.readFileSync(path.join(ROOT, "lib", "diagram-render", "dist", "diagram-render.html"), "utf8");
     expect(page).not.toMatch(/chokidar|FSWatcher/);
   });
+
+  test("the chokidar override keeps braces (GHSA-vfj7-8cjw-p6xm, no fixed release) out of lib/diagram-render", () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, "lib", "diagram-render", "package.json"), "utf8"));
+    expect(pkg.overrides.chokidar).toMatch(/^4\./);
+    const lock = fs.readFileSync(path.join(ROOT, "lib", "diagram-render", "bun.lock"), "utf8");
+    expect(lock).toMatch(/"chokidar": \["chokidar@4\.\d+\.\d+"/);
+    expect(lock).not.toMatch(/"braces": \["braces@/);
+  });
 });

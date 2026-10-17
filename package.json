@@ -105,6 +105,7 @@
     "adm-zip": "^0.6.1",
     "fast-uri": "3.1.8",
     "hono": "4.13.13",
+    "image-size": "2.0.4",
     "ip-address": "10.7.3",
     "proxy-addr": "2.0.8",
     "sharp": "0.35.5"
