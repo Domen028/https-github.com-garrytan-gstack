@@ -148,7 +148,7 @@ Not repaired, kept visible: Q3 webhook-report (4; the two denied `cat` calls bec
 - **D1. Preamble-hub diffs.** 46 hub files reach the whole gate under any sound map. A cheaper contract (a free contract suite for the preamble bins plus a 2-3 case paid canary for hub-only diffs) trades PR-time coverage for cost; Garry's call after A1-3's metrics and A2's shadow data. Recommendation: later.
 - **D2. Generator-input narrowing** (resolvers/index.ts, preamble/**, gen-skill-docs.ts through committed outputs; 29 runs leave full-fallback on replay, mostly into dependents-all). Waits until every host output a paid case loads is shown committed and freshness-gated.
 - **D3. Map activation** (A2 selects instead of shadowing; free-fixtures-data.ts leaves the global set with it). Needs PTY command capture for the six blind cases, two weeks of shadow data with zero shadow misses, and Garry's call on the measured saving.
-- **D4. Run-count levers** (225 paid runs for 68 PRs; #3226 ran 13 full gates): readiness-gated or reuse-across-push dispatch, analysed read-only next wave.
+- **D4. Run-count levers** (225 paid runs for 68 PRs; #3226 ran 13 full gates): readiness-gated or reuse-across-push dispatch, analysed read-only as the next wave's first job (gate rev 2, d1a).
 - **D5. Red attribution in the paid report** (does the diff reach a red case directly, or only through a hub or the fallback). Report-only; next wave.
 - **D6. Nested child output pollutes free-runner failure attribution** (scripts/lib/shard-engine.ts); filed in TODOS.
 
@@ -173,3 +173,5 @@ W4 (seed recorder), W5 (pregate lanes, lib/pregate/**), W6-W9, map activation (D
 ## Review record
 
 Revision 1, autoplan run run1-20261017181219 (CEO, DX, Eng; Claude Opus 5.5 native, GPT-6.1 Sol outside): CEO 13 + 3 findings, DX 16 + 9 (1 Critical: the scope detector's output used without its exit status, now W3-5), Eng 15 + 11. Gate rev 1 recommendations d3b, d4b, d5b, d6b, d7b, d8b changed this revision; d1a and d2a kept the direction. All other findings are build obligations folded into the items above.
+
+Revision 2 confirm review, same run (CEO, DX, Eng; six voices): gate rev 2 (rec_hash ea407059bbb4) recommended d1a (keep the direction; the D4 per-PR paid-run analysis becomes the next wave's first job) and p1a (approve as written). Garry approved it on 2026-10-17 ("Acceptable recommendations", relayed by GSTA-36): APPROVED gate_rev=2 as-is, checkpoint generation g000030. Remaining confirm-round findings were build obligations in A1-A3 and PR B.
