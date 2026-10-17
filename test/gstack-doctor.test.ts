@@ -627,12 +627,12 @@ describe('gstack-doctor --check', () => {
   test('project pins: a Node pin mismatch names the node it read and a fix that installs the pinned Node', () => {
     const f = makeFixture();
     const project = path.join(f.base, 'project');
-    write(path.join(project, '.github/workflows/native-locks.yml'), 'jobs:\n  locks:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 24.18.0\n');
+    write(path.join(project, '.github/workflows/native-locks.yml'), 'jobs:\n  locks:\n    steps:\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 24.18.0\n');
     script(path.join(f.stub, 'node'), ['echo v24.21.0']);
     const wrapper = '/drive/skills/gstack/scripts/install.sh';
     const capy = row(f, ['--project', project, '--for', 'review'], { GSTACK_CAPY_WRAPPER_PATH: wrapper });
     expect(capy.rows.pins.status).toBe('FAIL');
-    expect(capy.rows.pins.rest).toContain(`node 24.21.0 outside CI 24.18.0 (.github/workflows/native-locks.yml:7); node read from ${path.join(f.stub, 'node')}`);
+    expect(capy.rows.pins.rest).toContain(`node 24.21.0 outside CI 24.18.0 (.github/workflows/native-locks.yml:6); node read from ${bashPath(f.stub)}/node`);
     expect(capy.rows.pins.rest).toContain(`fix: bash ${wrapper} --for review (installs the project's pinned Node 24.18.0 into gstack's runtime store and launches it through the GSTACK_LAUNCH PATH), or change the pin in ${project}`);
     expect(capy.rows.pins.rest).toContain('(PROJECT_PIN_MISMATCH; ');
     const plain = row(f, ['--project', project, '--for', 'review']);
