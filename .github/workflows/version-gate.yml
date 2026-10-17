@@ -73,6 +73,10 @@ jobs:
 
       - name: Compare PR VERSION to next free slot
         env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_VERSION: ${{ steps.versions.outputs.pr_version }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          PR_CHANGED_FILES=$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename' || true)
+          export PR_CHANGED_FILES
           bun run scripts/compare-pr-version.ts next.json "${{ github.event.pull_request.number }}"
