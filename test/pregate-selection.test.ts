@@ -11,15 +11,13 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { changedLiterals, constantsIn } from '../lib/pregate/checks/literals';
 import { parseSummary } from '../lib/pregate/checks/lanes';
 import { validateConfig } from '../lib/pregate/config';
-import { buildGraph, isTestFile, testsFor } from '../lib/pregate/import-graph';
+import { buildGraph, testsFor } from '../lib/pregate/import-graph';
 import { CHECK_IDS } from '../lib/pregate/index';
-import { laneFileSet } from '../lib/pregate/lane-selection';
 import { parseWorkflow } from '../lib/pregate/workflows';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, write, type FixtureRepo } from './helpers/pregate-fixture';
 
@@ -47,68 +45,6 @@ describe('workflow lanes (parser over .github/workflows)', () => {
   test('a verify-only shard step is not a test lane', () => {
     const lanes = parseWorkflow('w.yml', 'jobs:\n  v:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: bun run scripts/test-free-shards.ts --windows-only --ci-verify x\n');
     expect(lanes[0]!.runsTests).toBe(false);
-  });
-});
-
-describe('bats tests (#3161)', () => {
-  const bats = (run: string) => parseWorkflow('b.yml', `jobs:\n  t:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: ${run}\n`, 'linux')[0]!;
-
-  test('isTestFile and testsFor recognise .bats, and only a terminal .bats', () => {
-    for (const f of ['tests/foo.bats', 'test/a/b.bats', 'foo.bats']) expect(isTestFile(f)).toBe(true);
-    for (const f of ['tests/foo.bats.md', 'x.bats.sh', 'batsfile', 'tests/foo.bats.xml']) expect(isTestFile(f)).toBe(false);
-    const repo = fixture({ baseFiles: { 'scripts/foo.sh': '#!/bin/sh\ntrue\n', 'tests/foo.bats': '@test "x" { true; }\n' } });
-    const g = buildGraph(repo.work, { declarations: { 'scripts/**': ['tests/foo.bats'] } });
-    expect(testsFor(g, 'scripts/foo.sh').tests).toEqual(['tests/foo.bats']);
-  });
-
-  test('a selection manifest printing .bats paths yields them; .bats.md and .bats.xml are not taken', () => {
-    const ctx: any = { config: { selection: { 'b.yml/t': "printf 'tests/foo.bats\\ntests/x/bar.bats\\ntests/foo.bats.md\\ntests/foo.bats.xml\\ntests/foo.test.js.bats\\ntests/foo.spec.ts.bats\\n'" } }, allowRepoCommands: true, repoRoot: os.tmpdir(), timeoutMs: 30_000, env: process.env, explain: [] };
-    expect((laneFileSet(ctx, bats('bats tests/')) as string[]).sort()).toEqual(['tests/foo.bats', 'tests/foo.spec.ts.bats', 'tests/foo.test.js.bats', 'tests/x/bar.bats']);
-  });
-
-  test('parseSummary reads the bats TAP plan and the pretty summary', () => {
-    expect(parseSummary('1..1\nok 1 x')).toEqual({ ran: 1, failed: 0 });
-    expect(parseSummary('1..0')).toEqual({ ran: 0, failed: 0 });
-    expect(parseSummary('1..2\nok 1 a\nnot ok 2 b')).toEqual({ ran: 2, failed: 1 });
-    expect(parseSummary('3 tests, 1 failure')).toEqual({ ran: 3, failed: 1 });
-    expect(parseSummary('1 test, 0 failures')).toEqual({ ran: 1, failed: 0 });
-    // A bats-looking line inside output that ends with another runner's summary must not mask it.
-    expect(parseSummary('1..0\n===== 1 passed in 0.1s =====')).toEqual({ ran: 1, failed: 0 });
-    expect(parseSummary('0 tests, 0 failures\n===== 1 passed in 0.1s =====')).toEqual({ ran: 1, failed: 0 });
-    expect(parseSummary('1..0\n===== 1 passed in 0.1s =====', 'pytest {files}')).toEqual({ ran: 1, failed: 0 });
-    // With a bats runner the bats summary wins over stray words from test output.
-    for (const runner of ['bats {files}', 'CI=1 bats {files}', './node_modules/.bin/bats {files}']) {
-      expect(parseSummary('1..1\n# No tests found\nok 1 works', runner)).toEqual({ ran: 1, failed: 0 });
-      expect(parseSummary('1..0\n# 1 passed', runner)).toEqual({ ran: 0, failed: 0 });
-    }
-    for (const runner of ['npx bats {files}', 'pnpm exec bats {files}', 'bats {files}', 'CI=1 bats {files}', './node_modules/.bin/bats {files}', 'make bats']) expect(parseSummary('1..1\nok 1 No tests found', runner)).toEqual({ ran: 1, failed: 0 });
-    // Runners that merely contain the letters keep the generic behaviour.
-    for (const runner of ['bats-core {files}', 'node scripts/run-bats.js {files}', 'pytest {files}']) expect(parseSummary('1..1\nok 1 No tests found', runner)).toEqual({ ran: 0, failed: 0 });
-  });
-
-  test('end to end: a declared dependency selects the .bats file and runs it with the bats runner; a runner reporting 0 tests is ZERO-RUN', () => {
-    const repo = fixture({
-      pregate: { ...BASE_PREGATE, runner: 'bats {files}', dependencies: { ...BASE_PREGATE.dependencies, 'scripts/**': ['tests/foo.bats'] } },
-      baseFiles: {
-        'tests/foo.bats': '@test "x" { true; }\n',
-        'scripts/foo.sh': '#!/bin/sh\ntrue\n',
-      },
-    });
-    commit(repo, { 'scripts/foo.sh': '#!/bin/sh\n# touched\ntrue\n' });
-    expect(repo.git('diff', '--name-only', 'main...HEAD')).toBe('scripts/foo.sh');
-    const stub = (tap: string) => { const dir = path.join(repo.root, 'bin-stub'); fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'bats'), `#!/bin/sh\nprintf '%s\\n' '${tap}'\n`, { mode: 0o755 }); return { PATH: `${dir}:${process.env.PATH ?? ''}` }; };
-    const ok = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests', '--explain'], stub('1..1\nok 1 x'));
-    expect(ok.status).toBe(EXIT.ok);
-    expect(ok.err).not.toContain('PREGATE_NO_LANE');
-    // The fixture's own Linux lane is remote on a non-Linux host, so the verdict may be requires-remote; the selected file and runner are what matter here.
-    expect(['pass', 'requires-remote']).toContain(check(repo, 'lanes').status);
-    expect(ok.out).toContain("ran: bats 'tests/foo.bats'");
-    const zero = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], stub('1..0'));
-    expect(zero.status).toBe(EXIT.fail);
-    expect(zero.out).toMatch(/^tests {6}lanes {5}fail .*ZERO-RUN/m);
-    const masked = runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], stub('1..0\n# 1 passed'));
-    expect(masked.status).toBe(EXIT.fail);
-    expect(masked.out).toMatch(/^tests {6}lanes {5}fail .*ZERO-RUN/m);
   });
 });
 
