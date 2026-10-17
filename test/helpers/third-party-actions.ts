@@ -1,3 +1,12 @@
+/**
+ * The NEEDS_ASIDE: Darwin download pitch. The full canonical phrase counts anywhere unless a negation precedes it; the
+ * short forms count only at the start of a sentence, bullet or quote, so narration such as "no download pitch applies"
+ * or "you can download it at aside.com" is not a pitch.
+ */
+const ASIDE_DOWNLOAD_PITCH = String.raw`(?:^|[.!?;:]\s*|\n)\s*(?:[>*-]\s*)*["\u201C]?download (?:it|Aside) at aside\.com\b|(?<!(?:\bnot|\bnever|n['\u2019]t)\s+)download Aside \(macOS 15\+\) at aside\.com\b`;
+export const asideDownloadPitch = new RegExp(ASIDE_DOWNLOAD_PITCH, 'im');
+export const asideDownloadPitchCount = (text: string): number => [...text.matchAll(new RegExp(ASIDE_DOWNLOAD_PITCH, 'gim'))].length;
+
 /** Inspect lettered consent options, not narration that quotes an unavailable option. */
 export function asideDriveOptions(text: string): string[] {
   const options: string[] = [];

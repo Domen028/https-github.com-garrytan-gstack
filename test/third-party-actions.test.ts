@@ -25,8 +25,9 @@ import { marked } from "marked";
 import { generateThirdPartyActions } from "../scripts/resolvers/third-party-actions";
 import { generateAsideSetup } from "../scripts/resolvers/aside";
 import { HOST_PATHS } from "../scripts/resolvers/types";
-import { asideDriveOptions } from './helpers/third-party-actions';
+import { asideDownloadPitch, asideDownloadPitchCount, asideDriveOptions } from './helpers/third-party-actions';
 import recoveryFixture from './fixtures/third-party-actions-recovery-public.json';
+import pitchCaptures from './fixtures/third-party-actions-pitch-captures.json';
 import { expectMentions, expectTokens } from './helpers/prompt-structure';
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -398,5 +399,50 @@ describe("repo-wide generated output: Aside anti-drift tripwires", () => {
       expect(text, path.relative(ROOT, file)).not.toContain("releases.aside.com");
       expect(text, path.relative(ROOT, file)).not.toMatch(/brew install aside/);
     }
+  });
+});
+
+describe("NEEDS_ASIDE: Darwin download pitch detector", () => {
+  const darwinRed = pitchCaptures.captures.find(c => c.case === 'tpa-absent-darwin' && c.run === '39075977549')!;
+
+  test("the captured d6d82fb pitch (gate 39075977549) counts: the canonical phrase mid-sentence", () => {
+    expect(darwinRed.passed).toBe(false);
+    expect(darwinRed.text).toContain('you can download Aside (macOS 15+) at aside.com');
+    expect(darwinRed.text).toMatch(asideDownloadPitch);
+    expect(asideDownloadPitchCount(darwinRed.text)).toBe(1);
+  });
+
+  test("every captured passing Darwin pitch counts exactly once", () => {
+    const passing = pitchCaptures.captures.filter(c => c.case === 'tpa-absent-darwin' && c.passed);
+    expect(passing.length).toBeGreaterThanOrEqual(4);
+    for (const c of passing) expect(asideDownloadPitchCount(c.text), c.run).toBe(1);
+  });
+
+  test("captured Linux and READY narrations and both recovery-public responses never count", () => {
+    const narrations = pitchCaptures.captures.filter(c => c.case !== 'tpa-absent-darwin');
+    expect(narrations.map(c => c.case).sort()).toEqual([...Array(5).fill('tpa-absent-linux'), ...Array(5).fill('tpa-present')]);
+    for (const c of narrations) {
+      expect(c.text, `${c.case} ${c.run}`).not.toMatch(asideDownloadPitch);
+      expect(asideDownloadPitchCount(c.text)).toBe(0);
+    }
+    expect(recoveryFixture.responses).toHaveLength(2);
+    for (const response of recoveryFixture.responses) {
+      expect(response.text).toMatch(/no (?:Aside )?download pitch/);
+      expect(response.text).not.toMatch(asideDownloadPitch);
+    }
+  });
+
+  test("short forms count only at a sentence start; negated canonical phrases never count", () => {
+    expect('you can download it at aside.com').not.toMatch(asideDownloadPitch);
+    expect('you can download Aside at aside.com').not.toMatch(asideDownloadPitch);
+    expect('Download it at aside.com').toMatch(asideDownloadPitch);
+    expect('Note: download Aside at aside.com.').toMatch(asideDownloadPitch);
+    expect('Do not Download Aside (macOS 15+) at aside.com').not.toMatch(asideDownloadPitch);
+    expect("You don't need to download Aside (macOS 15+) at aside.com").toMatch(asideDownloadPitch);
+    expect("I won't download Aside (macOS 15+) at aside.com").not.toMatch(asideDownloadPitch);
+  });
+
+  test("a duplicated canonical phrase counts twice", () => {
+    expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Again: you can download Aside (macOS 15+) at aside.com.')).toBe(2);
   });
 });
