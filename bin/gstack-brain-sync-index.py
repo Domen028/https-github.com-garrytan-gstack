@@ -6,22 +6,47 @@ from pathlib import Path
 import stat
 import subprocess
 import sys
+import unicodedata
 
 
 class Refusal(Exception):
     pass
 
 
-def git(root, *args, data=None):
+def git(root, *args, data=None, allow_missing=False):
     try:
         result = subprocess.run(
             ['git', '-C', str(root), *args], input=data,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise Refusal('index verification could not read Git') from error
+    if result.returncode == 1 and allow_missing:
+        return b''
     if result.returncode:
         raise Refusal('index verification Git command failed')
     return result.stdout
+
+
+def prefixes(paths):
+    groups = {}
+    for path in paths:
+        parts = path.split('/')
+        for i in range(1, len(parts) + 1):
+            spelling = '/'.join(parts[:i])
+            key = unicodedata.normalize('NFC', spelling).casefold()
+            groups.setdefault(key, set()).add(spelling)
+    return groups
+
+
+def refuse_new_collisions(root, paths, baseline='HEAD'):
+    # Compare complete component prefixes: Foo/a and foo/b collide too.
+    # Existing aliases are historical data; this check does not migrate them
+    # or block unrelated writes, but it refuses any additional spelling.
+    head = git(root, 'ls-tree', '-rz', '--name-only', baseline) if baseline else b''
+    previous = prefixes(p.decode('utf-8') for p in head.split(b'\0') if p)
+    for key, spellings in prefixes(paths).items():
+        if len(spellings) > 1 and not spellings <= previous.get(key, set()):
+            raise Refusal('new casefold path collision; inspect path spellings before retrying')
 
 
 def verify(root, requested_file, names_file):
@@ -38,6 +63,7 @@ def verify(root, requested_file, names_file):
             raise Refusal('unmerged index entries; inspect the index')
         entries[name] = (mode, oid)
     changed = {p.decode('utf-8') for p in Path(names_file).read_bytes().split(b'\0') if p}
+    refuse_new_collisions(root, set(entries) | requested)
     if requested - entries.keys() or changed - requested:
         raise Refusal('requested/index path mismatch; inspect exact path spellings and unrelated staged entries')
 
@@ -63,9 +89,20 @@ def verify(root, requested_file, names_file):
             raise Refusal('requested/index content mismatch; queued content is not in the index')
 
 
+def outgoing(root):
+    branch = git(root, 'rev-parse', '--abbrev-ref', 'HEAD').decode('utf-8').strip()
+    remote = 'refs/remotes/origin/' + branch
+    baseline = remote if git(root, 'rev-parse', '--verify', '--quiet', remote, allow_missing=True) else None
+    head = git(root, 'ls-tree', '-rz', '--name-only', 'HEAD')
+    refuse_new_collisions(root, (p.decode('utf-8') for p in head.split(b'\0') if p), baseline)
+
+
 if __name__ == '__main__':
     try:
-        verify(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
+        if sys.argv[1] == '--outgoing':
+            outgoing(Path(sys.argv[2]))
+        else:
+            verify(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
     except (Refusal, OSError, UnicodeError, ValueError, IndexError) as error:
         print('BRAIN_SYNC: staged artifact validation refused: ' + str(error), file=sys.stderr)
         sys.exit(1)

@@ -661,6 +661,73 @@ describe('gstack-brain-sync per-file hold', () => {
     expect(spoolFiles()).toHaveLength(0);
   });
 
+  function seedIndexedPaths(paths: string[]) {
+    const oid = spawnSync('git', ['-C', tmpHome, 'hash-object', '-w', '--stdin'], {
+      input: '# historical artifact\n', encoding: 'utf-8', timeout: 30_000,
+    });
+    expect(oid.status).toBe(0);
+    for (const p of paths) {
+      expect(git(['update-index', '--add', '--cacheinfo', `100644,${oid.stdout.trim()},${p}`]).status).toBe(0);
+    }
+    expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'historical paths']).status).toBe(0);
+    expect(git(['push', '-q', 'origin', 'HEAD']).status).toBe(0);
+  }
+
+  for (const [oldPath, newPath] of [
+    ['projects/P/ceo-plans/old.md', CLEAN],
+    ['projects/p/ceo-plans/Foo/old.md', 'projects/p/ceo-plans/foo/new.md'],
+    ['projects/Straße/ceo-plans/old.md', 'projects/STRASSE/ceo-plans/new.md'],
+  ]) {
+    test(`new casefold prefix collision is refused: ${oldPath}`, () => {
+      init();
+      // Create the historical tree directly so this works on either a case-
+      // sensitive or insensitive host, without materializing conflicting dirs.
+      seedIndexedPaths([oldPath]);
+      expect(git(['config', 'core.ignorecase', 'false']).status).toBe(0);
+      write(newPath, '# queued plan\n');
+      const before = git(['rev-parse', 'HEAD']).stdout;
+      expect(drain().status).toBe(0);
+      expect(statusJson().status).toBe('error');
+      expect(spoolText()).toContain(newPath);
+      expect(git(['rev-parse', 'HEAD']).stdout).toBe(before);
+      expect(remoteFiles()).not.toContain(newPath);
+      expect(staged()).toContain(newPath);
+    });
+  }
+
+  test('an unchanged historical collision does not block an unrelated artifact', () => {
+    init();
+    seedIndexedPaths(['projects/OLD/ceo-plans/a.md', 'projects/old/ceo-plans/b.md']);
+    write(CLEAN, '# independent plan\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('ok');
+    expect(remoteFiles()).toContain(CLEAN);
+    expect(spoolFiles()).toHaveLength(0);
+  });
+
+  test('a retry merge introducing casefold aliases stays local and keeps the queue', () => {
+    init();
+    const peer = fs.mkdtempSync(path.join(tmpHome, 'peer-'));
+    expect(git(['clone', '-q', bareRemote, peer]).status).toBe(0);
+    const peerPath = 'projects/P/ceo-plans/remote.md';
+    fs.mkdirSync(path.dirname(path.join(peer, peerPath)), { recursive: true });
+    fs.writeFileSync(path.join(peer, peerPath), '# remote plan\n');
+    expect(git(['add', '-f', '--', peerPath], peer).status).toBe(0);
+    expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'remote plan'], peer).status).toBe(0);
+    expect(git(['push', '-q', 'origin', 'HEAD'], peer).status).toBe(0);
+    expect(git(['config', 'core.ignorecase', 'false']).status).toBe(0);
+    write(CLEAN, '# local plan\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(spoolText()).toContain(CLEAN);
+    expect(remoteFiles()).toContain(peerPath);
+    expect(remoteFiles()).not.toContain(CLEAN);
+    // A following empty/ordinary retry must not auto-push the retained merge.
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(remoteFiles()).not.toContain(CLEAN);
+  });
+
   test('a git add failure is reported, never swallowed', () => {
     if (!canRevokeWrites()) return; // chmod is advisory here (win32, root)
     init();
