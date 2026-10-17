@@ -809,6 +809,9 @@ describe('gstack-brain-sync per-file hold', () => {
     expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'remote plan'], peer).status).toBe(0);
     expect(git(['push', '-q', 'origin', 'HEAD'], peer).status).toBe(0);
     expect(git(['config', 'core.ignorecase', 'false']).status).toBe(0);
+    // The retry merge commits with the ambient identity; a CI runner has none.
+    expect(git(['config', 'user.name', 'fixture']).status).toBe(0);
+    expect(git(['config', 'user.email', 'fixture@example.com']).status).toBe(0);
     write(CLEAN, '# local plan\n');
     expect(drain().status).toBe(0);
     expect(statusJson().status).toBe('error');
