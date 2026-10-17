@@ -114,7 +114,7 @@ describe('import graph (static imports ∪ repo-path literals ∪ bin convention
     ]);
   });
 
-  test('python: a package and a same-named module both map, statements after ; and : map, a path literal does not hide its patch target, and adversarial dotted input stays linear', () => {
+  test('python: a package and a same-named module both map, statements after ; and : map, escaped triple quotes and deep modules map, a path literal does not hide its patch target, and adversarial input stays linear', () => {
     const repo = fixture();
     commit(repo, {
       'app.py': 'A = 1\n',
@@ -127,15 +127,19 @@ describe('import graph (static imports ∪ repo-path literals ∪ bin convention
       'tests/test_semicolon.py': 'import os; import pkg.core\n',
       'tests/test_inline.py': 'def test_core():\n    if True: from pkg.core import C\n',
       'tests/test_patch.py': "from unittest import mock\n\n@mock.patch('pkg.patched.Thing.run')\ndef test_run(run):\n    pass\n",
-      'tests/test_adversarial.py': `from ${'.'.repeat(100_000)}x\nX = '${Array.from({ length: 20_000 }, () => 'pkg').join('.')}'\n`,
+      'tests/test_adversarial.py': `from ${'.'.repeat(100_000)}x\nfrom ${' '.repeat(100_000)}x\nX = '${Array.from({ length: 20_000 }, () => 'pkg').join('.')}'\n${'\\"""'.repeat(20_000)}\n`,
+      'tests/test_escaped.py': 'DOC = """text \\"""\nstill doc"""\nimport pkg.core\nTAIL = """x"""\n',
+      [`${Array.from({ length: 33 }, (_, i) => `d${i}`).join('/')}/leaf.py`]: 'L = 1\n',
+      'tests/test_deep.py': `import ${Array.from({ length: 33 }, (_, i) => `d${i}`).join('.')}.leaf\n`,
     });
     const g = buildGraph(repo.work);
     expect(testsFor(g, 'app/__init__.py').tests).toEqual(['tests/test_app.py']);
     expect(testsFor(g, 'app.py').tests).toEqual(['tests/test_app.py']);
-    expect(testsFor(g, 'pkg/core.py').tests).toEqual(['tests/test_inline.py', 'tests/test_semicolon.py']);
+    expect(testsFor(g, 'pkg/core.py').tests).toEqual(['tests/test_escaped.py', 'tests/test_inline.py', 'tests/test_semicolon.py']);
+    expect(testsFor(g, `${Array.from({ length: 33 }, (_, i) => `d${i}`).join('/')}/leaf.py`).tests).toEqual(['tests/test_deep.py']);
     expect(testsFor(g, 'pkg/patched.py').tests).toEqual(['tests/test_patch.py']);
     expect(testsFor(g, 'pkg.patched.Thing.run').tests).toEqual(['tests/test_patch.py']);
-    expect(testsFor(g, 'pkg/__init__.py').tests).toEqual(['tests/test_adversarial.py', 'tests/test_inline.py', 'tests/test_patch.py', 'tests/test_semicolon.py']);
+    expect(testsFor(g, 'pkg/__init__.py').tests).toEqual(['tests/test_adversarial.py', 'tests/test_escaped.py', 'tests/test_inline.py', 'tests/test_patch.py', 'tests/test_semicolon.py']);
   });
 });
 

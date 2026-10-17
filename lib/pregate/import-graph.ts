@@ -44,12 +44,9 @@ const scanner = new Bun.Transpiler({ loader: 'tsx' });
 const QUOTED = /['"`]([A-Za-z0-9_@][A-Za-z0-9_./@()[\]+-]*)['"`]/g;
 const JOIN = /\bjoin\(([^()]*)\)/g;
 const RESOLVE_EXT = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
-// One left-to-right pass, so a `#` inside a string and a quote inside a comment both stay inert.
-const PY_STRING_OR_COMMENT = /("""|''')[\s\S]*?\1|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|#[^\n]*/g;
-// A statement starts a line or follows `;` or a compound statement's `:`; the module spec never lets two repetitions share a dot.
-const PY_IMPORT = /(?:^|[;:])[ \t\f]*(?:from[ \t]+(\.*(?:\w[\w.]*)?)[ \t]+import[ \t]+(\([^)]*\)|[^\n;]+)|import[ \t]+([^\n;]+))/gm;
-// Deeper dotted names are not module paths; the cap keeps prefix resolution linear in the source size.
-const PY_MAX_DEPTH = 32;
+// A statement starts a line or follows `;` or a compound statement's `:`. The module spec is
+// non-empty and starts with a dot or a word character, so no two repetitions can share a dot or a space.
+const PY_IMPORT = /(?:^|[;:])[ \t\f]*(?:from[ \t]+(\.+(?:\w[\w.]*)?|\w[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n;]+)|import[ \t]+([^\n;]+))/gm;
 const PY_DOTTED = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/;
 
 export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel); }
@@ -195,6 +192,17 @@ function pathLike(config: PathAliases, ref: string): boolean {
   return chosen !== null || others.length > 0;
 }
 
+const pathDepths = new WeakMap<Set<string>, number>();
+/**
+ * Segments in the repo's deepest path. No module name resolves deeper, so
+ * dotted-name resolution is bounded by the repo rather than by the source.
+ */
+function maxPathDepth(files: Set<string>): number {
+  let depth = pathDepths.get(files);
+  if (depth === undefined) { depth = 0; for (const f of files) depth = Math.max(depth, f.split('/').length); pathDepths.set(files, depth); }
+  return depth;
+}
+
 /** The leading dotted name of each comma-separated `name [as alias]` clause. */
 function pyNames(list: string): string[] {
   return list.replace(/[()]/g, '').split(',').map(p => p.trim().split(/\s+/)[0]!).filter(n => n && n !== '*');
@@ -210,9 +218,32 @@ function pyFromBase(rel: string, spec: string): string | null {
   return [...pkg.slice(0, pkg.length - (dots - 1)), ...(rest ? [rest] : [])].join('.');
 }
 
+/**
+ * Python source with every string blanked to `''` and every comment dropped, in
+ * one linear pass, so a `#` inside a string and a quote inside a comment both
+ * stay inert. Backslash escapes are honoured; an unterminated string runs to
+ * its line end, or to the end of the file when triple-quoted.
+ */
+function pythonCode(source: string): string {
+  const parts: string[] = [];
+  let from = 0;
+  for (let i = 0; i < source.length;) {
+    const c = source[i]!;
+    if (c === '#') { parts.push(source.slice(from, i)); const end = source.indexOf('\n', i); i = from = end < 0 ? source.length : end; continue; }
+    if (c !== '"' && c !== "'") { i++; continue; }
+    parts.push(source.slice(from, i), "''");
+    const close = source.startsWith(c + c + c, i) ? c + c + c : c;
+    let j = i + close.length;
+    while (j < source.length && !source.startsWith(close, j) && (close.length === 3 || source[j] !== '\n')) j += source[j] === '\\' ? 2 : 1;
+    i = from = Math.min(source.length, source.startsWith(close, j) ? j + close.length : j);
+  }
+  parts.push(source.slice(from));
+  return parts.join('');
+}
+
 /** Dotted modules a Python source imports; `from a import b` also yields `a.b`, which may be a submodule. */
 function pythonImports(rel: string, source: string): string[] {
-  const code = source.replace(PY_STRING_OR_COMMENT, m => (m.startsWith('#') ? '' : "''")).replace(/\\\r?\n/g, ' ');
+  const code = pythonCode(source).replace(/\\\r?\n/g, ' ');
   const out: string[] = [];
   for (const m of code.matchAll(PY_IMPORT)) {
     if (m[3]) { out.push(...pyNames(m[3])); continue; }
@@ -228,11 +259,11 @@ function pythonImports(rel: string, source: string): string[] {
  * A dotted module → its repo files (`a/b/__init__.py`, which Python prefers,
  * and `a/b.py`; both when both exist) plus the package `__init__.py` files
  * Python executes on the way; [] for a module outside the repo (stdlib,
- * site-packages) or deeper than PY_MAX_DEPTH.
+ * site-packages), including one deeper than any repo path.
  */
 function pythonModuleFiles(files: Set<string>, dotted: string): string[] {
   const parts = dotted.split('.');
-  if (parts.length > PY_MAX_DEPTH || parts.some(p => !p)) return [];
+  if (parts.length > maxPathDepth(files) || parts.some(p => !p)) return [];
   const p = parts.join('/');
   const found = [`${p}/__init__.py`, `${p}.py`].filter(f => files.has(f));
   if (!found.length) return [];
@@ -242,7 +273,7 @@ function pythonModuleFiles(files: Set<string>, dotted: string): string[] {
 
 /** `'pkg.mod.Class.attr'` (a `mock.patch` target) → the longest dotted prefix that is a repo module. */
 function pythonPatchTarget(files: Set<string>, ref: string): string[] {
-  const parts = ref.split('.').slice(0, PY_MAX_DEPTH);
+  const parts = ref.split('.').slice(0, maxPathDepth(files));
   for (let n = parts.length; n >= 1; n--) {
     const hit = pythonModuleFiles(files, parts.slice(0, n).join('.'));
     if (hit.length) return hit;
