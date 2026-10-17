@@ -122,6 +122,7 @@ export interface RunPolicy {
   budgetSeconds: number;
   maxWorkers: 3;
   maxRepairs: 3;
+  paths?: string[];
 }
 export interface RunReportV3 {
   schemaVersion: 3;
