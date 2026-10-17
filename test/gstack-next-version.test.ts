@@ -1014,6 +1014,8 @@ describe("integration (smoke)", () => {
       expect(parsed.fallback).toBeNull();
       expect(parsed.warnings).toEqual([]);
       expect(parsed.claimed).toEqual([CLAIM]); // the canned PR's owner matches the canned repo owner
+      expect(parsed.complete).toBe(true);
+      expect(parsed.unknown_claims).toEqual([]);
       expect(parsed.version).toBe("1.6.5.0"); // the canned claim on 1.6.4.0 is skipped
     } finally {
       rmSync(stubDir, { recursive: true, force: true });
@@ -1319,29 +1321,55 @@ describe("concurrent VERSION fetches (W2-A3)", () => {
     expect(r.warnings).toEqual(["PR #52: VERSION fetch timed out after 0.5 s; claim unknown, the slot may collide; rerun, then ask the coordinator"]);
   }, 30_000);
 
+  function cliRepo(dir: string): string {
+    // A local origin whose path contains github.com pins host:"github" by the URL sniff, so no auth probe or network call runs.
+    const bare = join(dir, "github.com", "origin.git");
+    const work = join(dir, "work");
+    const git = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
+    mkdirSync(bare, { recursive: true });
+    mkdirSync(work);
+    git(bare, "init", "-q", "--bare", "-b", "main");
+    git(work, "init", "-q", "-b", "main");
+    writeFileSync(join(work, "VERSION"), "1.6.3.0\n");
+    git(work, "add", "-A");
+    git(work, "commit", "-qm", "v1.6.3.0 chore: base");
+    git(work, "remote", "add", "origin", bare);
+    git(work, "push", "-q", "origin", "main");
+    return work;
+  }
+
+  test("a timed-out worker beside successful ones makes the pick provisional: complete false, on stderr and in warnings", () => {
+    const dir = mkdtempSync(join(tmpdir(), "nextver-provisional-cli-"));
+    try {
+      delayedGh(dir, [{ pr: 91, version: "1.6.4.0", delay: 0 }, { pr: 92, version: "1.6.9.0", delay: 25 }, { pr: 93, version: "1.6.5.0", delay: 0.2 }]);
+      const proc = Bun.spawnSync(["bun", "run", join(import.meta.dir, "..", "bin", "gstack-next-version"), "--base", "main", "--bump", "patch",
+        "--current-version", "1.6.3.0", "--workspace-root", "null", "--exclude-pr", "999"],
+      { cwd: cliRepo(dir), timeout: 40_000, env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ""}` } });
+      const out = JSON.parse(proc.stdout.toString());
+      expect(out.claimed.map((c: { pr: number }) => c.pr)).toEqual([91, 93]);
+      expect(out.unknown_claims).toEqual([92]);
+      expect(out.complete).toBe(false);
+      expect(out.version).toBe("1.6.6.0");
+      const provisional = "provisional pick: the VERSION claims of PR #92 are unknown, so 1.6.6.0 is not a verified slot and may collide; rerun, then ask the coordinator before stamping";
+      expect(out.warnings).toEqual(["PR #92: VERSION fetch timed out after 15 s; claim unknown, the slot may collide; rerun, then ask the coordinator", provisional]);
+      expect(proc.stderr.toString()).toContain(`gstack-next-version: ${provisional}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 45_000);
+
   test("the CLI JSON carries unknown_claims", () => {
     const dir = mkdtempSync(join(tmpdir(), "nextver-unknown-cli-"));
     try {
       delayedGh(dir, [{ pr: 81, version: "1.6.4.0", delay: 0 }, { pr: 82, delay: 0, reply: "502" }]);
-      // A local origin whose path contains github.com pins host:"github" by the URL sniff, so no auth probe or network call runs.
-      const bare = join(dir, "github.com", "origin.git");
-      const work = join(dir, "work");
-      const git = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", ...args], { cwd, timeout: 30_000 });
-      mkdirSync(bare, { recursive: true });
-      mkdirSync(work);
-      git(bare, "init", "-q", "--bare", "-b", "main");
-      git(work, "init", "-q", "-b", "main");
-      writeFileSync(join(work, "VERSION"), "1.6.3.0\n");
-      git(work, "add", "-A");
-      git(work, "commit", "-qm", "v1.6.3.0 chore: base");
-      git(work, "remote", "add", "origin", bare);
-      git(work, "push", "-q", "origin", "main");
+      const work = cliRepo(dir);
       const proc = Bun.spawnSync(["bun", "run", join(import.meta.dir, "..", "bin", "gstack-next-version"), "--base", "main", "--bump", "patch",
         "--current-version", "1.6.3.0", "--workspace-root", "null", "--exclude-pr", "999"],
       { cwd: work, timeout: 30_000, env: { ...process.env, PATH: `${dir}:${process.env.PATH ?? ""}` } });
       const out = JSON.parse(proc.stdout.toString());
       expect(out.host, proc.stderr.toString()).toBe("github");
       expect(out.unknown_claims).toEqual([82]);
+      expect(out.complete).toBe(false);
       expect(out.claimed.map((c: { pr: number }) => c.pr)).toEqual([81]);
       expect(out.version).toBe("1.6.5.0");
       expect(out.warnings).toContain("PR #82: VERSION fetch failed (gh: Server Error (HTTP 502)); claim unknown, the slot may collide; rerun, then ask the coordinator");

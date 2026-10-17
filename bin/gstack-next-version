@@ -8,7 +8,8 @@
 // Contract: util NEVER writes files or mutates state. Pure reader + reporter.
 // /ship consumes the JSON and decides what to do. `unknown_claims` lists the
 // open PRs whose VERSION could not be read (a 15 s timeout or a non-404
-// failure): their claims are unknown, so the picked slot may collide.
+// failure): their claims are unknown, so the picked slot may collide, and
+// `complete` is false (a provisional pick, also said on stderr and in warnings).
 //
 // Usage:
 //   gstack-next-version --base <branch> --bump <major|minor|patch|micro> \
@@ -87,6 +88,7 @@ type Output = {
   reason: string;
   warnings: string[];
   unknown_claims: number[];
+  complete: boolean;
 };
 
 const ACTIVE_SIBLING_MAX_AGE_S = 24 * 60 * 60;
@@ -840,6 +842,12 @@ async function main() {
     finalReason = `bumped past active sibling ${fmtVersion(highest, width)}`;
   }
 
+  const complete = unknownClaims.length === 0;
+  if (!complete) {
+    const provisional = `provisional pick: the VERSION claims of PR ${unknownClaims.map((n) => `#${n}`).join(", ")} are unknown, so ${fmtVersion(finalVersion, width)} is not a verified slot and may collide; rerun, then ask the coordinator before stamping`;
+    warnings.push(provisional);
+    console.error(`gstack-next-version: ${provisional}`);
+  }
   const out: Output = {
     version: fmtVersion(finalVersion, width),
     current_version: args.current || baseVersion,
@@ -855,6 +863,7 @@ async function main() {
     reason: finalReason,
     warnings,
     unknown_claims: unknownClaims,
+    complete,
   };
   process.stdout.write(JSON.stringify(out, null, 2) + "\n");
 }
