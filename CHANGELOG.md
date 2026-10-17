@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.112.0] - 2026-10-17
 
 **`/cso --paths` audits part of a repository and says exactly what it skipped.** A repository over /cso's 64 MiB source cap used to get one piece of advice, "run /cso on a smaller checkout". The trimmed copy then read as the whole repository, and the verdict never said what was left out. `gstack-cso start --paths src/core,src/mcp` now audits only those prefixes and reports every other path as skipped, with snapshot and history coverage marked partial.
 
