@@ -130,5 +130,12 @@ describe('one Bun resolution contract, two twins', () => {
     expect(r.refusal).toBeNull();
     expect(r.verdict).toBe('ok');
     expect(r.label).toBe(`bun ${Bun.version} at ${REAL_BUN} (recorded by the install verdict)`);
+    expect(r.dir).toBe(path.dirname(REAL_BUN));
+    const launch = path.join(l.state, 'install-verdicts', 'x.launch');
+    fs.mkdirSync(launch, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), launch_path: launch }));
+    const viaLaunch = launchRuntime(ROOT, l.env);
+    expect(viaLaunch.dir).toBe(launch);
+    expect(viaLaunch.env.PATH?.split(path.delimiter)[0]).toBe(launch);
   });
 });

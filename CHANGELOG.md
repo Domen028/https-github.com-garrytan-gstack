@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.91.110.0] - 2026-10-16
+
+**A full install now ends ok on gbrain: the installer resolves and installs the project's pinned Node, and the launch PATH no longer puts a shared bin directory first.** On 1.91.107.0 a full install in gbrain still ended `gstack: fail pins`. gbrain pins node 24.18.0 in CI (`.github/workflows/native-locks.yml`), the Capy image ships 24.21.0 in `/usr/local/bin`, and the installer handled only Bun pins (GBRA-117). Changing nvm's default didn't help, because the launch PATH put the resolved Bun's directory first. When that Bun was `/usr/local/bin/bun`, the image's node came with it (GBRA-122).
+
+### What this means for you
+
+- **The project's Node pin is resolved like its Bun pin.** `engines.node`, `.nvmrc`, `.tool-versions` and CI `node-version:` pins are read by the same parser. Non-CI exact pins are required, and CI pins in different jobs are alternatives. The installer takes the first node that satisfies them, in this order: the node first on PATH, gstack's store copy of a wanted version, nvm's copy, then any other node on PATH. With no match, install mode downloads the pinned release from nodejs.org into `<state root>/runtimes/node/<version>`, checked against `SHASUMS256.txt`. `/usr/local/bin` and nvm are never written, and `--check` never installs.
+- **The install verdict records the Node** (`node_path`, `node_version`, `node_rule`), and `--check` keeps using it while it still reports its version and satisfies the pins.
+- **The launch PATH never exposes a shared bin directory.** A Bun from gstack's store still launches from its own version directory. Any other Bun, and a Node the launch needs, launch through a gstack-owned directory beside the verdict that holds only `bun`, `bunx` and, when needed, `node`, `npm`, `npx` and `corepack` symlinks. The pregate's lanes use the same directory.
+- **A Node pin mismatch says what to do.** The doctor's `pins` row names the node it read and gives a fix: on Capy, the installer command that installs the pinned Node; elsewhere, `nvm install <version>` and putting it first on PATH.
+
+### If you…
+
+- **…run gstack on a Capy machine in a repo that pins Node:** run `bash <skill>/scripts/install.sh --for <skill>` once, then launch with the `GSTACK_LAUNCH` line it prints.
+
+### For contributors
+
+- `bin/gstack-node-runtime.sh` holds Node resolution, the verified install and the launch-directory writer. `renderPinLines` now prints `PIN_EXACT_REQUIRED` and `PIN_CI_ALTERNATIVES` lines for node as well as bun.
+- `test/gstack-capy-install.test.ts` covers a Bun resolving into a directory that holds another node, gbrain's CI pin served from nvm and recorded, and a store install with a SHA-256 mismatch control. The doctor, runtime-pins and pregate launch tests cover the fix line, the node plan lines and the recorded launch directory.
+
 ## [1.91.109.0] - 2026-10-16
 
 **Pregate's secrets check stops passing real keys it never scanned, Windows Git Bash can run `gstack-upgrade` again, and four user-reported workflow bugs are fixed.** The secrets check could miss a committed AWS key in two ways and flagged ordinary TypeScript as secrets. `gstack-upgrade` refused every Git Bash install. Catalog field names failed a check that can't be downgraded. Browse treated some server-side writes as read-only, and a plan review could delete another review's summary. Each fix has a test that fails on the previous release.
