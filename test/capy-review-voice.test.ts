@@ -90,7 +90,10 @@ describe('--for review-voice through the no-Drive brief', () => {
     expect(out).toMatch(/^SKIP pins \(helper runtime; /m);
     expect(out).toMatch(/^SKIP claude \(not needed; /m);
     expect(out).not.toContain('gstack ready');
-    expect(out).toContain(`GSTACK_LAUNCH: PATH=${host.bunInstallBin}:$PATH `);
+    const launchDir = out.match(/GSTACK_LAUNCH_PATH: (\S+)/)?.[1] ?? '';
+    expect(launchDir).toBe(out.match(/GSTACK_INSTALL_VERDICT=(\S+)\.json/)![1] + '.launch');
+    expect(out).toContain(`GSTACK_LAUNCH: PATH=${launchDir}:$PATH `);
+    expect(fs.realpathSync(path.join(launchDir, 'bun'))).toBe(fs.realpathSync(path.join(host.bunInstallBin, 'bun')));
     expect(trailer(out)).toBe(OK_TRAILER);
     expect(out.trim().split('\n').at(-2)).toBe(OK_TRAILER);
     expect(out.trim().split('\n').at(-1)).toBe(`PWD_AFTER=${fs.realpathSync(sub)}`);
