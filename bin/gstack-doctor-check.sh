@@ -343,6 +343,19 @@ _dc_check_pins() {
           fi
           local fix="install the pinned version for this platform (bin/gstack-capy-install installs gstack's verified Bun alongside when a pin names it), or change the pin in $project" note=""
           [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ] && fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (installs the project's pinned Bun when it is a verified version: $GSTACK_BUN_VERIFIED; otherwise it names the conflict), or change the pin in $project"
+          if printf '%s\n' "$out" | grep -q '^PIN_FAIL: node '; then
+            local nwant
+            nwant=$(printf '%s\n' "$out" | sed -n 's/^PIN_EXACT_REQUIRED: node \([^ ]*\) .*/\1/p' | head -1)
+            [ -n "$nwant" ] || nwant=$(printf '%s\n' "$out" | sed -n 's/^PIN_CI_ALTERNATIVES: node //p' | tr ' ' '\n' | grep . | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
+            note="; node read from $(command -v node 2>/dev/null || echo 'nowhere (no node on PATH)')"
+            if [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ]; then
+              fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (installs the project's pinned Node${nwant:+ $nwant} into gstack's runtime store and launches it through the GSTACK_LAUNCH PATH), or change the pin in $project"
+            elif [ -n "$nwant" ]; then
+              fix="nvm install $nwant and put its bin directory first on PATH (the Capy skill installer installs it into gstack's runtime store instead), or change the pin in $project"
+            else
+              fix="install a Node that satisfies the project's Node pins and put it first on PATH, or change the pin in $project"
+            fi
+          fi
           if [ -n "$_dc_ln_dir" ] && [ "$_dc_ln_ver" != "$_dc_bun" ] \
              && bun "$BIN/gstack-runtime-pins.ts" --project "$project" --bun "$_dc_ln_ver" ${node:+--node "$node"} </dev/null 2>/dev/null | grep -q '^PINS_VERDICT: pass'; then
             note="; bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH) satisfies them" fix="$_dc_ln_fix"

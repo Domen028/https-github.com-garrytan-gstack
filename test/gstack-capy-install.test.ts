@@ -48,7 +48,7 @@ function fixture(opts: { bun?: string; jq?: boolean } = {}) {
   const log = path.join(base, 'calls.log');
   fs.mkdirSync(home, { recursive: true });
   fs.mkdirSync(stub, { recursive: true });
-  for (const rel of ['bin/gstack-capy-install', 'bin/gstack-bun-version.sh', 'bin/gstack-doctor-components.sh', 'bin/gstack-install-verdict.sh']) {
+  for (const rel of ['bin/gstack-capy-install', 'bin/gstack-bun-version.sh', 'bin/gstack-doctor-components.sh', 'bin/gstack-install-verdict.sh', 'bin/gstack-node-runtime.sh']) {
     fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
     fs.copyFileSync(path.join(REPO, rel), path.join(root, rel));
     fs.chmodSync(path.join(root, rel), fs.statSync(path.join(REPO, rel)).mode);
@@ -56,7 +56,7 @@ function fixture(opts: { bun?: string; jq?: boolean } = {}) {
   write(path.join(root, 'VERSION'), '1.2.3\n');
   script(path.join(root, 'setup'), ['echo "setup $*" >> "$CAPY_LOG"', 'echo "gstack ready ($2)"', 'echo "env GSTACK_SKIP_PLAYWRIGHT=${GSTACK_SKIP_PLAYWRIGHT:-} GSTACK_SKIP_FONTS=${GSTACK_SKIP_FONTS:-} bun=$(bun --version)" >> "$CAPY_LOG"', 'exit "${STUB_SETUP_EXIT:-0}"']);
   script(path.join(root, 'bin/gstack-doctor'), [
-    'echo "doctor $* GSTACK_EPHEMERAL=${GSTACK_EPHEMERAL:-}" >> "$CAPY_LOG"', 'echo "doctor-cwd $(pwd -P)" >> "$CAPY_LOG"',
+    'echo "doctor $* GSTACK_EPHEMERAL=${GSTACK_EPHEMERAL:-}" >> "$CAPY_LOG"', 'echo "doctor-cwd $(pwd -P)" >> "$CAPY_LOG"', 'echo "doctor-node $(node --version 2>/dev/null)" >> "$CAPY_LOG"',
     'echo "required: claude codex patch"', 'echo "PASS claude ok"', 'echo "SKIP browser (lazy)"', '[ -n "${STUB_PINS_SKIP:-}" ] && echo "SKIP pins ($STUB_PINS_SKIP)"',
     '[ "${STUB_DOCTOR_FAIL:-}" = 1 ] && { echo "FAIL codex — missing; fix: x (COMPONENT_MISSING; d)"; echo "gstack: fail codex"; exit 1; }',
     '[ -n "${GSTACK_DOCTOR_RUNTIME_DRIFT:-}" ] && { echo "FAIL runtime — bun resolution drifted: $GSTACK_DOCTOR_RUNTIME_DRIFT; fix: $GSTACK_DOCTOR_RUNTIME_DRIFT_FIX (BUN_RESOLUTION_DRIFT; d)"; echo "gstack: fail runtime"; exit 1; }',
@@ -67,7 +67,7 @@ function fixture(opts: { bun?: string; jq?: boolean } = {}) {
   sh(`git init -q && git add -A && git -c user.email=t@t -c user.name=t commit -qm init`, root);
   script(path.join(stub, 'bun'), [`[ "$1" = --version ] && { echo "${opts.bun ?? '1.4.2'}"; exit 0; }`, 'exit 0']);
   script(path.join(stub, 'node'), ['[ "$1" = --version ] && { echo v24.18.0; exit 0; }', 'exit 0']);
-  script(path.join(stub, 'curl'), ['echo "curl $*" >> "$CAPY_LOG"', 'out=""; while [ $# -gt 0 ]; do [ "$1" = -o ] && out="$2"; shift; done', '[ -n "${STUB_CURL_ZIP:-}" ] && cp "$STUB_CURL_ZIP" "$out" && exit 0', 'exit 22']);
+  script(path.join(stub, 'curl'), ['echo "curl $*" >> "$CAPY_LOG"', 'out=""; url=""; while [ $# -gt 0 ]; do case "$1" in -o) out="$2"; shift ;; http*|file:*) url="$1" ;; esac; shift; done', '[ -n "${STUB_CURL_DIR:-}" ] && [ -f "$STUB_CURL_DIR/${url##*/}" ] && cp "$STUB_CURL_DIR/${url##*/}" "$out" && exit 0', '[ -n "${STUB_CURL_ZIP:-}" ] && cp "$STUB_CURL_ZIP" "$out" && exit 0', 'exit 22']);
   if (opts.jq !== false) {
     const real = sh('command -v jq').stdout.trim();
     if (real) fs.symlinkSync(real, path.join(stub, 'jq'));
@@ -446,6 +446,14 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     return zip;
   };
   const verdictFor = (f: ReturnType<typeof fixture>, r: { stdout: string }) => JSON.parse(fs.readFileSync(r.stdout.match(/GSTACK_INSTALL_VERDICT=(\S+)/)![1], 'utf8'));
+  /** A Bun outside the store launches through the gstack-owned directory beside the verdict, holding only bun and bunx. */
+  const expectLaunch = (r: { stdout: string }, bun: string) => {
+    const dir = r.stdout.match(/GSTACK_LAUNCH_PATH: (\S+)/)?.[1] ?? '';
+    expect(dir).toBe(r.stdout.match(/GSTACK_INSTALL_VERDICT=(\S+)\.json/)![1] + '.launch');
+    expect(r.stdout).toContain(`GSTACK_LAUNCH: PATH=${dir}:$PATH `);
+    expect(fs.readdirSync(dir).sort()).toEqual(['bun', 'bunx']);
+    expect(fs.realpathSync(path.join(dir, 'bun'))).toBe(bun);
+  };
 
   test('GBRA-60: 1.4.2 in $BUN_INSTALL and 1.4.3 in ~/.bun/bin with a CI-lane pin of 1.4.3 — install and --check agree on ~/.bun/bin/bun, nothing is downloaded or overwritten', () => {
     const f = fixture({ bun: '1.3.14' });
@@ -463,10 +471,10 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     expect(verdictFor(f, r)).toMatchObject({ project, pin: '1.4.3', bun_path: `${f.home}/.bun/bin/bun`, bun_version: '1.4.3', bun_rule: 'home' });
     const c = run(f, ['--check', '--for', 'review'], env, project);
     expect(c.status, c.stdout + c.stderr).toBe(0);
-    expect(c.stdout).toContain(`GSTACK_LAUNCH: PATH=${f.home}/.bun/bin:$PATH `);
+    expectLaunch(c, `${f.home}/.bun/bin/bun`);
     const outside = run(f, ['--check', '--for', 'autoplan'], env, f.base);
     expect(outside.status, outside.stdout + outside.stderr).toBe(0);
-    expect(outside.stdout).toContain(`GSTACK_LAUNCH: PATH=${bi}/bin:$PATH `);
+    expectLaunch(outside, `${bi}/bin/bun`);
   });
 
   // Integration item 1: gstack's own CI pins 1.4.2 on every lane and 1.4.3 on
@@ -566,12 +574,12 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: one resoluti
     expect(run(f, ['--for', 'autoplan'], { BUN_INSTALL: bi }).status).toBe(0);
     const unset = run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: '' });
     expect(unset.status, unset.stdout + unset.stderr).toBe(0);
-    expect(unset.stdout).toContain(`GSTACK_LAUNCH: PATH=${bi}/bin:$PATH `);
+    expectLaunch(unset, `${bi}/bin/bun`);
     realBun(path.join(store(f, '1.4.3'), 'bun'), '1.4.3');
     const newer = run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: bi });
     expect(newer.status, newer.stdout + newer.stderr).toBe(0);
     expect(newer.stdout).toContain(`note: the recorded bun 1.4.2 at ${bi}/bin/bun stays certified; bun 1.4.3 at ${store(f, '1.4.3')}/bun (default) would now resolve first; run ${f.root}/bin/gstack-capy-install --for autoplan to record the current resolution`);
-    expect(newer.stdout).toContain(`GSTACK_LAUNCH: PATH=${bi}/bin:$PATH `);
+    expectLaunch(newer, `${bi}/bin/bun`);
     expect(newer.stdout).not.toContain('BUN_RESOLUTION_DRIFT');
     expect(run(f, ['--for', 'autoplan'], { BUN_INSTALL: bi }).status).toBe(0);
     const recorded = run(f, ['--check', '--for', 'autoplan'], { BUN_INSTALL: bi });
@@ -777,6 +785,113 @@ describe.skipIf(process.platform !== 'linux')('gstack-capy-install: the per-dire
     };
     const overhead = time('bun --version') - time(`"${storeBun}" --version`);
     expect(overhead).toBeLessThan(250);
+  });
+});
+
+// GBRA-117 / GBRA-122: a project's Node pin resolves and installs like its Bun
+// pin, and the launch PATH never puts a shared bin directory (with another
+// node in it) in front of PATH.
+describe.skipIf(process.platform !== 'linux')('gstack-capy-install: the project Node pin and the launch directory', () => {
+  const realBun = (file: string, version: string) => script(file, [`[ "$1" = --version ] && { echo ${version}; exit 0; }`, `exec "${process.execPath}" "$@"`]);
+  const fakeNode = (file: string, version: string) => script(file, [`echo v${version}`]);
+  const withPins = (f: ReturnType<typeof fixture>) => { for (const rel of ['bin/gstack-runtime-pins.ts', 'lib/runtime-pins.ts']) write(path.join(f.root, rel), fs.readFileSync(path.join(REPO, rel), 'utf8'), 0o755); };
+  const nodeProject = (f: ReturnType<typeof fixture>, nodePin: string) => {
+    const project = path.join(f.base, 'gbrain');
+    write(path.join(project, 'package.json'), '{ "engines": { "bun": ">=1.4.0" } }\n');
+    write(path.join(project, '.github/workflows/native-locks.yml'), `jobs:\n  locks:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/setup-node@v4\n        with:\n          node-version: ${nodePin}\n`);
+    sh('git init -q', project);
+    return project;
+  };
+  const launchOf = (r: { stdout: string }) => r.stdout.match(/GSTACK_LAUNCH_PATH: (\S+)/)?.[1] ?? '';
+  const nodeSeen = (f: ReturnType<typeof fixture>) => f.calls().filter(l => l.startsWith('doctor-node ')).at(-1);
+  const nodeTarget = () => (sh('uname -m').stdout.trim() === 'x86_64' ? 'linux-x64' : 'linux-arm64');
+
+  test('Bun resolving into a directory that also holds another node launches through a bun-only directory, so the doctor reads PATH\'s node', () => {
+    const f = fixture({ bun: '1.3.14' });
+    const bi = path.join(f.base, 'bun-install');
+    realBun(path.join(bi, 'bin/bun'), '1.4.2');
+    fakeNode(path.join(bi, 'bin/node'), '20.0.0');
+    const r = run(f, ['--for', 'autoplan'], { BUN_INSTALL: bi });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    const dir = launchOf(r);
+    expect(dir).toBe(r.stdout.match(/GSTACK_INSTALL_VERDICT=(\S+)\.json/)![1] + '.launch');
+    expect(r.stdout).toContain(`GSTACK_LAUNCH: PATH=${dir}:$PATH `);
+    expect(r.stdout).not.toContain(`PATH=${bi}/bin:`);
+    expect(fs.readdirSync(dir).sort()).toEqual(['bun', 'bunx']);
+    expect(fs.realpathSync(path.join(dir, 'bun'))).toBe(path.join(bi, 'bin/bun'));
+    expect(nodeSeen(f)).toBe('doctor-node v24.18.0');
+  });
+
+  test('gbrain\'s CI Node pin 24.18.0 with node 24.21.0 first on PATH: nvm\'s 24.18.0 is launched and recorded, and --check reuses it', () => {
+    const f = fixture();
+    withPins(f);
+    realBun(path.join(f.stub, 'bun'), '1.4.2');
+    fakeNode(path.join(f.stub, 'node'), '24.21.0');
+    const nvmNode = path.join(f.home, '.nvm/versions/node/v24.18.0/bin/node');
+    fakeNode(nvmNode, '24.18.0');
+    const project = nodeProject(f, '24.18.0');
+    const r = run(f, ['--for', 'review'], {}, project);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stdout).toContain(`node 24.18.0 at ${nvmNode} (nvm; satisfies the project's Node pins node 24.18.0 (CI linux lane, native-locks.yml:7))`);
+    const dir = launchOf(r);
+    expect(fs.readdirSync(dir).sort()).toEqual(['bun', 'bunx', 'node']);
+    expect(fs.realpathSync(path.join(dir, 'node'))).toBe(nvmNode);
+    expect(fs.realpathSync(path.join(dir, 'bun'))).toBe(path.join(f.stub, 'bun'));
+    expect(nodeSeen(f)).toBe('doctor-node v24.18.0');
+    expect(f.calls().some(l => l.startsWith('curl '))).toBe(false);
+    const verdict = JSON.parse(fs.readFileSync(r.stdout.match(/GSTACK_INSTALL_VERDICT=(\S+)/)![1], 'utf8'));
+    expect(verdict).toMatchObject({ node_path: nvmNode, node_version: '24.18.0', node_rule: 'nvm', launch_path: dir });
+    const c = run(f, ['--check', '--for', 'review'], {}, project);
+    expect(c.status, c.stdout + c.stderr).toBe(0);
+    expect(launchOf(c)).toBe(dir);
+    expect(nodeSeen(f)).toBe('doctor-node v24.18.0');
+    fakeNode(path.join(f.stub, 'node'), '24.18.0');
+    const kept = run(f, ['--check', '--for', 'review'], {}, project);
+    expect(launchOf(kept)).toBe(dir);
+    const onPath = run(f, ['--for', 'review'], {}, project);
+    expect(onPath.status, onPath.stdout + onPath.stderr).toBe(0);
+    expect(onPath.stdout).not.toContain('GSTACK_LAUNCH_PATH');
+    expect(JSON.parse(fs.readFileSync(onPath.stdout.match(/GSTACK_INSTALL_VERDICT=(\S+)/)![1], 'utf8'))).toMatchObject({ node_path: path.join(f.stub, 'node'), node_rule: 'PATH', launch_path: '' });
+  });
+
+  test('no installed Node satisfies the pin: --check installs nothing; install downloads it into the runtime store checked against SHASUMS256.txt; a mismatch installs nothing', () => {
+    const f = fixture();
+    withPins(f);
+    realBun(path.join(f.stub, 'bun'), '1.4.2');
+    fakeNode(path.join(f.stub, 'node'), '24.21.0');
+    const project = nodeProject(f, '24.18.0');
+    const dist = path.join(f.base, 'dist');
+    const name = `node-v24.18.0-${nodeTarget()}`;
+    fakeNode(path.join(f.base, 'tree', name, 'bin/node'), '24.18.0');
+    fs.mkdirSync(dist, { recursive: true });
+    expect(sh(`tar -czf "${dist}/${name}.tar.gz" -C "${f.base}/tree" ${name}`).status).toBe(0);
+    const sum = sh(`sha256sum "${dist}/${name}.tar.gz" | cut -d' ' -f1`).stdout.trim();
+    write(path.join(dist, 'SHASUMS256.txt'), `${'0'.repeat(64)}  node-v24.18.0-other.tar.gz\n${sum}  ${name}.tar.gz\n`);
+    const nodeStore = path.join(f.home, '.gstack-state/runtimes/node/24.18.0');
+
+    run(f, ['--check', '--for', 'review'], { STUB_CURL_DIR: dist }, project);
+    expect(f.calls().some(l => l.startsWith('curl '))).toBe(false);
+    expect(fs.existsSync(nodeStore)).toBe(false);
+
+    write(path.join(dist, 'SHASUMS256.txt'), `${'1'.repeat(64)}  ${name}.tar.gz\n`);
+    const bad = run(f, ['--for', 'review'], { STUB_CURL_DIR: dist }, project);
+    expect(bad.status).toBe(3);
+    expect(bad.stderr).toContain(`${name}.tar.gz SHA-256 ${sum} does not match SHASUMS256.txt (${'1'.repeat(64)}); nothing installed`);
+    expect(bad.stderr).toContain('(INSTALL_PREFLIGHT_FAILED; ');
+    expect(fs.existsSync(nodeStore)).toBe(false);
+
+    write(path.join(dist, 'SHASUMS256.txt'), `${sum}  ${name}.tar.gz\n`);
+    const r = run(f, ['--for', 'review'], { STUB_CURL_DIR: dist }, project);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('curl ')).slice(-2).map(l => l.split(' ').find(a => a.startsWith('https://')))).toEqual([
+      'https://nodejs.org/dist/v24.18.0/SHASUMS256.txt', `https://nodejs.org/dist/v24.18.0/${name}.tar.gz`,
+    ]);
+    expect(r.stdout).toContain(`node 24.18.0 at ${nodeStore}/bin/node (store; `);
+    expect(fs.realpathSync(path.join(launchOf(r), 'node'))).toBe(path.join(nodeStore, 'bin/node'));
+    expect(nodeSeen(f)).toBe('doctor-node v24.18.0');
+    const calls = f.calls().filter(l => l.startsWith('curl ')).length;
+    expect(run(f, ['--for', 'review'], { STUB_CURL_DIR: dist }, project).status).toBe(0);
+    expect(f.calls().filter(l => l.startsWith('curl ')).length).toBe(calls);
   });
 });
 
