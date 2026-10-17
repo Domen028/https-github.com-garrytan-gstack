@@ -73,6 +73,7 @@ describe('version gate: dependabot dependency-manifest exemption', () => {
     expect(step.env.GH_TOKEN).toBe('${{ secrets.GITHUB_TOKEN }}');
     expect(step.run).toContain('pulls/${{ github.event.pull_request.number }}/files');
     expect(step.run).toContain('--paginate');
+    expect(step.run).toContain('then PR_CHANGED_FILES=""; fi');
     expect(step.run).toContain('export PR_CHANGED_FILES');
     expect(workflow.jobs.check.permissions).toEqual({ contents: 'read', 'pull-requests': 'read' });
   });

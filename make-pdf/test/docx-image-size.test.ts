@@ -1,11 +1,10 @@
 /**
  * DOCX image sizing (#2753). package.json overrides image-size to 2.x, which
- * fixes GHSA-5p2g-fcmc-qvqq and GHSA-w3rx-r6r6-pgpr for the lockfile, but
- * html-to-docx 1.8.0 runs a bundled image-size 1.x copy the override cannot
- * reach. The golden document.xml was captured before the override, so any
- * change to the Word output shows up as a diff here. The orchestrator only
- * hands html-to-docx images whose bytes are PNG, JPEG, GIF, WebP or SVG, so
- * the bundled ICNS parser's infinite loop never runs.
+ * fixes GHSA-5p2g-fcmc-qvqq and GHSA-w3rx-r6r6-pgpr in the lockfile, but
+ * html-to-docx 1.8.0 never loads it: it runs its own bundled image-size 1.x.
+ * The golden document.xml pins the Word output the change must not move. The
+ * guard tests prove ICNS bytes, which hang that bundled copy, never reach it,
+ * however the <img> tag is spelled.
  */
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
@@ -13,7 +12,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import { docxSafeImage } from "../src/image-size";
+import { guardDocxImages } from "../src/docx-images";
 import { generate } from "../src/orchestrator";
 
 const FIXTURES = path.join(import.meta.dir, "fixtures", "docx-images");
@@ -56,18 +55,42 @@ describe("make-pdf --to docx image sizing", () => {
       }
 
       const normalized = xml.replace(/image-[A-Za-z0-9_-]{21}\.(png|jpeg|gif)/g, "image-ID.$1");
-      expect(normalized.trimEnd()).toBe(fs.readFileSync(path.join(FIXTURES, "document.golden.xml"), "utf8").trimEnd());
+      const golden = fs.readFileSync(path.join(FIXTURES, "document.golden.xml"), "utf8").replace(/\r\n/g, "\n");
+      expect(normalized.trimEnd()).toBe(golden.trimEnd());
     } finally {
       fs.rmSync(workDir, { recursive: true, force: true });
     }
   });
 
-  test("only PNG, JPEG, GIF, WebP and SVG markup reach html-to-docx's bundled sizer", () => {
-    for (const img of IMAGES) expect(docxSafeImage(fs.readFileSync(path.join(FIXTURES, img.file)))).toBe(true);
-    expect(docxSafeImage(Buffer.from('<?xml version="1.0"?>\n<svg xmlns="http://www.w3.org/2000/svg"></svg>'))).toBe(true);
-    expect(docxSafeImage(icnsLoop())).toBe(false);
-    expect(docxSafeImage(Buffer.concat([icnsLoop(), Buffer.from('<svg width="1" height="1">')]))).toBe(false);
-    expect(docxSafeImage(Buffer.from("BM not an image at all"))).toBe(false);
+  test("the guard drops ICNS images however the tag is spelled and keeps every other format", () => {
+    const icns = "data:image/png;base64," + icnsLoop().toString("base64");
+    const png = "data:image/png;base64," + fs.readFileSync(path.join(FIXTURES, "wide.png")).toString("base64");
+    const bmp = "data:image/bmp;base64," + Buffer.from("BM" + "\0".repeat(52)).toString("base64");
+    const warnings: string[] = [];
+    const guard = (html: string) => guardDocxImages(html, msg => warnings.push(msg));
+    expect(guard(`<p><img src="${png}"><img src="${bmp}"></p>`)).toBe(`<p><img src="${png}"><img src="${bmp}"></p>`);
+    expect(warnings).toEqual([]);
+    for (const tag of [
+      `<img src="${icns}">`,
+      `<img src='${icns}' alt="x">`,
+      `<img src=${icns}>`,
+      `<IMG SRC="${icns}">`,
+      `<img data-src="${png}" src="${icns}">`,
+      `<img src="${icns.replace("base64,a", "base64,%61")}">`,
+      `<img src="${icns.replace(";", "%3B")}">`,
+      `<img src=${icns.replace(":", "%3A")}>`,
+    ]) expect(guard(`<p>${tag}</p>`)).toBe("<p></p>");
+    expect(warnings).toHaveLength(8);
+  });
+
+  test("a tag the regex misreads fails closed through html-to-docx's own parser", () => {
+    const icns = "data:image/png;base64," + icnsLoop().toString("base64");
+    expect(() => guardDocxImages(`<p><img alt=">" src="${icns}"></p>`, () => {})).toThrow("hides an ICNS image");
+  });
+
+  test("the re-parse uses the html-to-vdom copy html-to-docx loads", () => {
+    const fromDocx = require.resolve("html-to-vdom/package.json", { paths: [path.dirname(require.resolve("html-to-docx/package.json"))] });
+    expect(fromDocx).toBe(require.resolve("html-to-vdom/package.json"));
   });
 
   test("an ICNS file named .png is dropped with a warning instead of hanging the conversion", () => {
@@ -81,7 +104,7 @@ await generate({ input: ${JSON.stringify(path.join(workDir, "doc.md"))}, output:
       const run = Bun.spawnSync([process.execPath, "-e", script], { timeout: 30_000, stdout: "pipe", stderr: "pipe" });
       const stderr = run.stderr.toString();
       expect(run.exitCode).toBe(0);
-      expect(stderr.match(/docx: dropped an image that is not PNG, JPEG, GIF, WebP or SVG/g)).toHaveLength(2);
+      expect(stderr.match(/docx: dropped an ICNS image/g)).toHaveLength(2);
       expect(unzip(["-p", out, "word/document.xml"]).toString("utf8")).not.toContain("<w:drawing>");
     } finally {
       fs.rmSync(workDir, { recursive: true, force: true });

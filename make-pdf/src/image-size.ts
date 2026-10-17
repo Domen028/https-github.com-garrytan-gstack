@@ -21,18 +21,6 @@ export function imageDims(buf: Buffer): ImageDims | null {
   return pngDims(buf) ?? jpegDims(buf) ?? gifDims(buf) ?? webpDims(buf) ?? svgDims(buf);
 }
 
-/**
- * html-to-docx 1.8.0 sizes every embedded image with its own bundled copy of
- * image-size 1.x. The package.json override cannot reach that copy, and its
- * ICNS parser loops forever on a zero-length entry (GHSA-w3rx-r6r6-pgpr), so
- * DOCX conversion only hands it bytes that are recognizably PNG, JPEG, GIF or
- * WebP, or text that opens as SVG markup.
- */
-export function docxSafeImage(buf: Buffer): boolean {
-  if (pngDims(buf) ?? jpegDims(buf) ?? gifDims(buf) ?? webpDims(buf)) return true;
-  return /^\uFEFF?\s*</.test(buf.toString("utf8", 0, 64)) && /<svg\b/i.test(buf.toString("utf8", 0, 4096));
-}
-
 function pngDims(b: Buffer): ImageDims | null {
   // 8-byte signature, then IHDR chunk: length(4) "IHDR"(4) width(4) height(4)
   if (b.length < 24) return null;

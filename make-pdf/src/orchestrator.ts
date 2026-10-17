@@ -41,7 +41,7 @@ import {
   substituteSlots,
 } from "./diagram-prepass";
 import { applyImagePolicy } from "./image-policy";
-import { docxSafeImage } from "./image-size";
+import { guardDocxImages } from "./docx-images";
 
 /** Default output location (`$P generate letter.md` → /tmp/letter.pdf). */
 export const OUTPUT_TMP_DIR = process.platform === "win32" ? os.tmpdir() : "/tmp";
@@ -175,18 +175,7 @@ export async function generate(opts: GenerateOptions): Promise<string> {
       progress.end("Rasterizing diagrams for DOCX");
     }
     finalHtml = convertDiagnosticsForDocx(finalHtml);
-    finalHtml = finalHtml.replace(/<img\b[^>]*>/gi, (tag) => {
-      const src = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
-      const payload = (src?.[1] ?? src?.[2] ?? src?.[3] ?? "").match(/^data:[^;,]+;base64,([\s\S]+)$/)?.[1];
-      if (payload === undefined) return tag;
-      let base64 = "";
-      try {
-        base64 = decodeURIComponent(payload);
-      } catch { /* malformed escape: drop it below */ }
-      if (/^[A-Za-z0-9+/=\s]+$/.test(base64) && docxSafeImage(Buffer.from(base64, "base64"))) return tag;
-      warn("docx: dropped an image that is not PNG, JPEG, GIF, WebP or SVG");
-      return "";
-    });
+    finalHtml = guardDocxImages(finalHtml, warn);
   }
 
   // ─── --to html: write the self-contained document, no print round-trip ──
