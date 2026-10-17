@@ -767,6 +767,17 @@ stage_paths() {
   rm -f "$paths_file.lf"
 }
 
+# Check outgoing trees too: a retry merge can combine two individually safe
+# spellings, and a retained local commit can be pushed with an empty queue.
+validate_outgoing_paths() {
+  local path_error
+  if ! path_error=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --outgoing "$GSTACK_HOME" 2>&1); then
+    write_status "error" "outgoing artifact path validation refused; local commits and queue preserved; inspect path spellings"
+    printf '%s\n' "$path_error" >&2
+    return 1
+  fi
+}
+
 # Plan the holds for one drain (one Python pass):
 #   $1 scanner hits ("<family>\t<path>"), $2 groups JSON from
 #   compute_paths_to_stage, $3 `git cat-file --batch` output for every group
@@ -1045,6 +1056,8 @@ subcmd_once() {
   gstack_brain_lock_acquire "$GSTACK_HOME" try || exit 0
   trap 'gstack_brain_lock_release' EXIT INT TERM
 
+  validate_outgoing_paths || exit 0
+
   # Convert any legacy single-file queue lines into spool records before the
   # drain reads the spool (transition window for pre-spool writers).
   migrate_legacy_queue
@@ -1287,6 +1300,7 @@ subcmd_once() {
 
   # Nothing outside the transcript consent is pushed; a refused rewrite keeps the commit local.
   guard_unpublished_range || { write_status "push_failed" "push blocked: unpushed commits hold transcript pages outside your transcript consent; commit retained locally"; finalize_queue "$snapshot_file" "$class_file" "$paths_file"; exit 0; }
+  validate_outgoing_paths || exit 0
   # Push. On reject, fetch + merge (merge driver handles JSONL) + retry once.
   local push_err
   push_err=$(git -C "$GSTACK_HOME" push origin HEAD 2>&1 >/dev/null) || {
@@ -1311,6 +1325,7 @@ subcmd_once() {
       local branch
       branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
       if git -C "$GSTACK_HOME" merge --no-edit "origin/$branch" >/dev/null 2>&1 && guard_unpublished_range; then
+        validate_outgoing_paths || exit 0
         if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-push "artifacts_sync_mode!=off" \
             bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
           finalize_queue "$snapshot_file" "$class_file" "$paths_file"
