@@ -112,24 +112,25 @@ lock() {
   until ln -s "$TOKEN" "$LOCK" 2>/dev/null; do
     _tries=$((_tries + 1))
     LOCK_OWNER=$(readlink "$LOCK" 2>/dev/null)
-    if [ -n "$LOCK_OWNER" ]; then
-      case "$(state "${LOCK_OWNER%% *}" "${LOCK_OWNER#* }" 0)" in
-        dead|stale) break_lock "$LOCK_OWNER"; continue ;;
-      esac
-    fi
+    [ -n "$LOCK_OWNER" ] && holder_gone "$LOCK_OWNER" && break_lock "$LOCK_OWNER" && continue
     [ "$_tries" -ge "${GSTACK_LEASE_LOCK_TRIES:-300}" ] && return 1
     sleep 0.1
   done
 }
-# break_lock OWNER — move the lock aside and delete it only if it still names
-# OWNER; a lock another process took meanwhile is put back.
+holder_gone() { case "$(state "${1%% *}" "${1#* }" 0)" in dead|stale) return 0 ;; esac; return 1; }
+# break_lock OWNER — remove the lock only if it still names OWNER. Breakers
+# take a second symlink, .lock.break, and reread the lock under it, so a lock
+# taken since the verdict is never removed; a .lock.break whose holder is gone
+# is cleared. Returns 1 when another breaker holds .lock.break.
 break_lock() {
-  _aside="$DIR/.lock.broken.$$"
-  rm -f "$_aside"
-  mv "$LOCK" "$_aside" 2>/dev/null || return 0
-  _moved=$(readlink "$_aside" 2>/dev/null)
-  [ "$_moved" = "$1" ] || ln -s "$_moved" "$LOCK" 2>/dev/null
-  rm -f "$_aside"
+  if ! ln -s "$TOKEN" "$LOCK.break" 2>/dev/null; then
+    _b=$(readlink "$LOCK.break" 2>/dev/null)
+    [ -n "$_b" ] && holder_gone "$_b" && [ "$(readlink "$LOCK.break" 2>/dev/null)" = "$_b" ] && rm -f "$LOCK.break"
+    return 1
+  fi
+  [ "$(readlink "$LOCK" 2>/dev/null)" = "$1" ] && rm -f "$LOCK"
+  rm -f "$LOCK.break"
+  return 0
 }
 unlock() { [ "$(readlink "$LOCK" 2>/dev/null)" = "$TOKEN" ] && rm -f "$LOCK"; return 0; }
 # reclaim FILE RECORD — delete a stale lease only if, under the lock, it still

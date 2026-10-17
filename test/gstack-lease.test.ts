@@ -210,6 +210,34 @@ describe('gstack-lease', () => {
     expect(fs.readlinkSync(lockPath)).toBe(ownerToken);
   });
 
+  test('two breakers of one dead lock: the second rereads under .lock.break and leaves the lock the first one took', () => {
+    const { dir, leases } = checkout();
+    const owner = sleeper();
+    const holder = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(owner)]).status).toBe(0);
+    const ownerToken = `${owner} ${fs.readFileSync(path.join(leases, String(owner)), 'utf8').trim()}`;
+    const lockPath = path.join(leases, '.lock');
+    fs.symlinkSync(`${deadPid()} `, lockPath);
+    // Between this breaker's dead verdict and its .lock.break, another breaker removes the dead lock and takes it.
+    const first = bashEnv(dir, `ln() { case "$*" in *"/.lock.break") command rm -f "${lockPath}"; command ln -s "${ownerToken}" "${lockPath}" ;; esac; command ln "$@"; }\n`);
+    const t = run(['touch', '--root', dir, '--pid', String(holder)], { BASH_ENV: first, GSTACK_LEASE_LOCK_TRIES: '3' });
+    expect(t.status, t.stdout + t.stderr).toBe(3);
+    expect(fs.readlinkSync(lockPath)).toBe(ownerToken);
+    expect(fs.existsSync(path.join(leases, '.lock.break'))).toBe(false);
+  });
+
+  test('a .lock.break left by a dead breaker is cleared and the dead lock is still broken', () => {
+    const { dir, leases } = checkout();
+    const holder = sleeper();
+    fs.mkdirSync(leases, { recursive: true });
+    fs.symlinkSync(`${deadPid()} `, path.join(leases, '.lock'));
+    fs.symlinkSync(`${deadPid()} `, path.join(leases, '.lock.break'));
+    const r = run(['touch', '--root', dir, '--pid', String(holder)], { GSTACK_LEASE_LOCK_TRIES: '5' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(fs.existsSync(path.join(leases, String(holder)))).toBe(true);
+    expect(fs.readdirSync(leases).filter((n) => n.startsWith('.'))).toEqual([]);
+  });
+
   test('unlock removes only its own lock: a lock that changed hands during a reclaim stays', () => {
     const { dir, leases } = checkout();
     const owner = sleeper();
@@ -296,5 +324,21 @@ describe('gstack-lease', () => {
     } finally {
       fs.rmSync(lease, { force: true });
     }
+  });
+
+  test('gstack-skill-start reports a lease the held lock kept from being written, and still starts', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-lease-home-'));
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-lease-state-'));
+    dirs.push(home, state);
+    fs.writeFileSync(path.join(state, 'config.yaml'), 'update_check: false\n');
+    const leaseDir = path.join(state, 'leases');
+    fs.mkdirSync(leaseDir);
+    fs.symlinkSync(`${sleeper()} `, path.join(leaseDir, '.lock'));
+    const r = spawnSync(START, ['--skill', 'testskill', '--parent-pid', '424244'], {
+      encoding: 'utf8', cwd: home, env: { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: state, GSTACK_LEASE_DIR: leaseDir, GSTACK_LEASE_LOCK_TRIES: '2' }, timeout: 30_000,
+    });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.stderr).toContain('this session holds no workflow lease');
+    expect(fs.existsSync(path.join(leaseDir, '424244'))).toBe(false);
   });
 });

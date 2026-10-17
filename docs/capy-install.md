@@ -93,8 +93,10 @@ by rename, prune) and reclaim (reread, then delete only the record judged
 stale) run under one lock in the lease directory, a symlink naming its holder's
 pid and start identity, so a renewal is never deleted and a live lease never
 disappears from a concurrent scan. The lock is broken only when its holder is
-dead or its pid was reused, never by age; while a live process holds it,
-`touch` exits 3 without writing and a reclaim keeps the lease. `bin/gstack-lease list` shows `alive|dead|stale`, and
+dead or its pid was reused, never by age, and breakers serialize on a second
+symlink and reread the lock before removing it. While a live process holds it,
+`touch` exits 3 without writing (`gstack-skill-start` reports that the
+session holds no lease) and a reclaim keeps the lease. `bin/gstack-lease list` shows `alive|dead|stale`, and
 `GSTACK_UPGRADE_FORCE=1` overrides.
 
 ## What the installer does
