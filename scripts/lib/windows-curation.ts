@@ -53,12 +53,12 @@ const WINDOWS_FRAGILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
   // C-pregate. Since fix wave PR 5 (item 10b) test/helpers/pregate-fixture.ts and restamp-fixture.ts
   // runBin launch bins through lib/script-invocation.ts, so gstack-pregate runs on windows-latest
-  // (windows-free-tests run 38984824731). These still fail there on Linux-host expectations, not
+  // (fix wave PR 5 windows-free-tests run). These still fail there on Linux-host expectations, not
   // on launching: the fixture's test lanes are Linux workflow jobs, which a Windows host records as
   // requires-remote obligations instead of running.
   { file: 'test/pregate-guards.test.ts', reason: 'expects the Linux-host lanes verdict and POSIX-spelled Bun paths ($HOME/.bun/bin, /gone/bun) and the POSIX fixture runner\'s runs.log; gstack-pregate itself launches through lib/script-invocation.ts' },
   { file: 'test/pregate-remote.test.ts', reason: 'expects the Linux-host lanes verdict: on Windows the fixture\'s Linux lane is a requires-remote obligation, so the small-machine and --remote cases see no local tier; gstack-pregate itself launches through lib/script-invocation.ts' },
-  { file: 'test/pregate-regate.test.ts', reason: 'its REGATE and MIGRATION_COLLISION verdicts differ on windows-latest (run 38984824731), not diagnosed in fix wave PR 5; gstack-pregate regate itself launches through lib/script-invocation.ts' },
+  { file: 'test/pregate-regate.test.ts', reason: 'its REGATE and MIGRATION_COLLISION verdicts differ on windows-latest, not diagnosed in fix wave PR 5; gstack-pregate regate itself launches through lib/script-invocation.ts' },
   { file: 'test/pregate-invalidation.test.ts', reason: 'expects the Linux-host lanes verdict (the windows lane as the requires-remote obligation); on Windows the Linux lane is the obligation instead; gstack-pregate itself launches through lib/script-invocation.ts' },
   { file: 'test/pregate-selection.test.ts', reason: 'its gstack-pregate (bin) cases expect the Linux-host lanes verdict (a local lane run); on Windows the fixture\'s Linux lane is a requires-remote obligation' },
   { file: 'test/pregate-bats-nested.test.ts', reason: 'expects the bats lane to run locally, which it does on a Linux host; on Windows the fixture\'s Linux lane is a requires-remote obligation' },
@@ -292,7 +292,7 @@ export const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
   { file: 'test/hook-scripts.test.ts', reason: '#3067 PowerShell and NotebookEdit hook coverage: every hook runs through spawnSync("bash", [script]) with the payload on stdin, scratch state lives under os.tmpdir(); its /tmp/ literals are payload strings, never opened; symlink, newline-path and POSIX-PATH cases are skipIf win32' },
   { file: 'test/gstack-doctor.test.ts', reason: 'runs bin/gstack-doctor and setup --status through explicit bash argv in an os.tmpdir fixture; its bun/codex/claude/probe stubs are found by bash PATH lookup, and expected paths use bash spellings' },
   // Fix wave PR 5 (item 10b, #3197): the fixture runBin launches bins through lib/script-invocation.ts
-  // (bun bins as Bun argv, bash bins through Git Bash); passed on windows-latest in run 38984824731.
+  // (bun bins as Bun argv, bash bins through Git Bash); passed on windows-latest in the fix wave PR 5 windows-free-tests run.
   { file: 'test/gstack-regen.test.ts', reason: 'runs bin/gstack-regen through the fixture runBin (lib/script-invocation.ts) and its regen commands through the resolved Git Bash' },
   {
     file: 'test/qa-evidence.test.ts',
