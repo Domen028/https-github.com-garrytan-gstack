@@ -266,6 +266,7 @@ gstack_result_anchor() {
     APPROVAL_CITATION_MISSING) printf '%s' 'approval-citation-missing' ;;
     APPROVAL_SOURCE_UNAVAILABLE) printf '%s' 'approval-source-unavailable' ;;
     STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
+    WTREE_UNAVAILABLE) printf '%s' 'wtree-unavailable' ;;
     *) return 1 ;;
   esac
 }

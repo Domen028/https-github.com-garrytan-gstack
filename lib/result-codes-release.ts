@@ -1,7 +1,8 @@
 /**
  * Result codes for the release path: gstack-ship-queue and the ship-policy
- * floor, pregate timing, approval classes and the state-machine matrix. Kept
- * beside lib/result-codes.ts (which spreads this table into RESULT_CODES) so
+ * floor, pregate timing and its working-tree fingerprint, approval classes and
+ * the state-machine matrix. Kept beside lib/result-codes.ts (which spreads
+ * this table into RESULT_CODES) so
  * the owner module stays within the module-size ratchet; the same rules apply:
  * one stable docs/troubleshooting.md anchor, a summary and a fix clause each.
  */
@@ -75,5 +76,11 @@ export const RELEASE_RESULT_CODES = {
     anchor: 'state-matrix-incomplete',
     summary: 'the state-machines specialist output lacks a kind × owner action cell, maps a cell to a test that does not exist, or leaves an untested cell without a CRITICAL finding',
     fix: 'rerun the state-machines specialist on the same diff; its review coverage stays incomplete until gstack-state-matrix check passes',
+  },
+  // Fix wave 2026-10-15, PR 5 (item 10b, #3197).
+  WTREE_UNAVAILABLE: {
+    anchor: 'wtree-unavailable',
+    summary: 'cannot fingerprint the working tree: bin/gstack-wtree could not start (on Windows, no Git Bash was found) or it ran and failed',
+    fix: 'on Windows point GSTACK_GIT_BASH at Git Bash\'s bash.exe (Git Bash: export GSTACK_GIT_BASH=\'C:/Program Files/Git/bin/bash.exe\'; PowerShell: $env:GSTACK_GIT_BASH = \'C:\\Program Files\\Git\\bin\\bash.exe\'), or install Git for Windows (winget install --id Git.Git -e); elsewhere rerun ./setup so bin/gstack-wtree is present; then rerun gstack-pregate',
   },
 } as const satisfies Record<string, ResultCode>;

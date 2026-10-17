@@ -17,7 +17,7 @@ function context(skillName: string, host: typeof ALL_HOST_CONFIGS[number]): Temp
   return {skillName, tmplPath: `${skillName}/SKILL.md.tmpl`, host: host.name,
     paths: HOST_PATHS[host.name]!, preambleTier: 3, interactive: true};
 }
-function assertScopedEntry(preamble: string) {
+function assertScopedEntry(preamble: string, planMode = true) {
   const command = preamble.indexOf('```bash');
   expect(command).toBeGreaterThan(0);
   const entry = preamble.slice(0, command);
@@ -25,14 +25,18 @@ function assertScopedEntry(preamble: string) {
   expect(entry).toContain('resolve the Scope gate above');
   expectMentions(entry, [['wait', 'question', 'answer']], 'entry');
   expect(preamble).not.toContain('## Preamble (run first)');
-  expect(preamble).toContain('starting from the Scope gate');
   expect(preamble).not.toContain('starting from Step 0;');
+  if (!planMode) {
+    expect(preamble).not.toContain('## Skill Invocation During Plan Mode');
+    return;
+  }
+  expect(preamble).toContain('starting from the Scope gate');
 }
 
 test('Design and Eng resolve the existing gate at the first executable preamble in every host', () => {
   for (const host of ALL_HOST_CONFIGS) for (const skill of ['plan-design-review', 'plan-eng-review']) {
     const ctx = context(skill, host);
-    assertScopedEntry(generatePreamble(ctx));
+    assertScopedEntry(generatePreamble(ctx), host.capabilities.planMode);
     const tmpl = fs.readFileSync(path.join(root, `${skill}/SKILL.md.tmpl`), 'utf8');
     expect(tmpl.indexOf(announcement)).toBeLessThan(tmpl.indexOf('{{PREAMBLE}}'));
     expect(tmpl).toContain('If the user explicitly named a DIFFERENT target');
@@ -51,7 +55,8 @@ test('other skills keep their existing preamble entry and plan-mode starting poi
   for (const host of ALL_HOST_CONFIGS) for (const skill of ['plan-ceo-review', 'plan-devex-review', 'ship', 'review']) {
     const ctx = context(skill, host);
     expect(generatePreambleBash(ctx).startsWith('## Preamble (run first)\n\n```bash')).toBe(true);
-    expect(generatePlanModeInfo(ctx)).toContain('starting from Step 0;');
+    if (host.capabilities.planMode) expect(generatePlanModeInfo(ctx)).toContain('starting from Step 0;');
+    else expect(generatePlanModeInfo(ctx)).toBe('');
     expect(generatePreambleBash(ctx)).not.toContain('Before the command below');
   }
 });

@@ -11,7 +11,10 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { wtreeFingerprint, isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type Registry } from '../regen';
+import { isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type Registry } from '../regen';
+import { RESULT_CODES, TROUBLESHOOTING_DOC, resultLine } from '../result-codes';
+import { runScriptSync, wtreeFingerprint, type InvocationOptions, type WtreeResult } from '../script-invocation';
+import { policyUnavailableLine } from '../ship-policy';
 import { isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, type ConfigError, type PregateConfig } from './config';
 import type { CheckResult, PregateContext, TouchedFile } from './types';
 import { discoverLanes } from './workflows';
@@ -22,17 +25,54 @@ export interface BuildContextOptions {
   timeoutMs?: number; env?: NodeJS.ProcessEnv; platform?: NodeJS.Platform; knownChecks?: readonly string[];
   /** `--stall-timeout`; default the config's `stall_timeout_s`, else 300 s. */
   stallTimeoutMs?: number; progress?: (line: string) => void; cores?: number; testBackend?: string; remote?: { spendCapUsd: number } | null;
+  /** How gstack's own bash bins launch (gstack-wtree, gstack-config); tests inject a Windows probe. */
+  invocation?: InvocationOptions;
 }
 
 export const DEFAULT_STALL_TIMEOUT_S = 300;
 const GSTACK_CONFIG = path.resolve(import.meta.dir, '..', '..', 'bin', 'gstack-config');
 
 /** `gstack-config get test_backend` (local | ubicloud); `local` when unreadable. */
-export function readTestBackend(env: NodeJS.ProcessEnv): string {
-  const r = spawnSync(GSTACK_CONFIG, ['get', 'test_backend'], { encoding: 'utf8', timeout: 15_000, env, stdio: ['ignore', 'pipe', 'ignore'] });
+export function readTestBackend(env: NodeJS.ProcessEnv, invocation?: InvocationOptions): string {
+  const r = runScriptSync(GSTACK_CONFIG, ['get', 'test_backend'], { encoding: 'utf8', timeout: 15_000, env, stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true }, invocation);
   return (r.status === 0 && (r.stdout ?? '').trim()) || 'local';
 }
-export type ContextLoad = { ctx: PregateContext } | { refused: { code: 'POLICY_SOURCE_UNAVAILABLE' | 'PREGATE_CONFIG_INVALID' | 'REGEN_REGISTRY_INVALID'; message: string; errors?: Array<ConfigError | RegistryError> } };
+export interface ContextRefusal {
+  code: 'POLICY_SOURCE_UNAVAILABLE' | 'PREGATE_CONFIG_INVALID' | 'REGEN_REGISTRY_INVALID' | 'WTREE_UNAVAILABLE';
+  message: string;
+  /** A cause-specific fix that replaces the code's own (a gstack-wtree exit names its repair). */
+  fix?: string;
+  errors?: Array<ConfigError | RegistryError>;
+}
+export type ContextLoad = { ctx: PregateContext } | { refused: ContextRefusal };
+
+/**
+ * A failed fingerprint as a refusal. A launch failure lists each Windows bash
+ * candidate tried with its rejection reason and keeps WTREE_UNAVAILABLE's fix
+ * (GSTACK_GIT_BASH); a helper exit keeps the repair gstack-wtree printed after
+ * its last `; ` (for example `set TMPDIR to a writable directory`).
+ */
+export function wtreeRefusal(fp: Extract<WtreeResult, { error: string }>): ContextRefusal {
+  if (fp.kind === 'launch') {
+    const message = fp.tried?.length ? `gstack-wtree could not start: no Git Bash found; tried ${fp.tried.map(c => `${c.source} ${c.path}: ${c.rejected}`).join('; ')}` : fp.error;
+    return { code: 'WTREE_UNAVAILABLE', message, fix: RESULT_CODES.WTREE_UNAVAILABLE.fix };
+  }
+  const cut = fp.error.lastIndexOf('; ');
+  if (cut > 0) return { code: 'WTREE_UNAVAILABLE', message: fp.error.slice(0, cut), fix: fp.error.slice(cut + 2) };
+  return { code: 'WTREE_UNAVAILABLE', message: fp.error, fix: 'run bin/gstack-wtree in the repository to see why it fails (it exits 1 outside a git repository, in one with no commits, or when a write fails), repair that, then rerun gstack-pregate' };
+}
+
+export interface RefusalReport { code: ContextRefusal['code']; detail: string; fix: string; docs: string; line: string }
+
+/** One context refusal as its stderr line and as the fields of the `--json` envelope. */
+export function describeRefusal(refused: ContextRefusal, base: string, context = 'gstack-pregate'): RefusalReport {
+  const { code, message } = refused;
+  const row = RESULT_CODES[code];
+  const docs = `${TROUBLESHOOTING_DOC}#${row.anchor}`;
+  if (code === 'POLICY_SOURCE_UNAVAILABLE') return { code, detail: message, fix: row.fix.replace('<base>', base), docs, line: policyUnavailableLine(context, base, message).replace('.gstack/ship-policy.json', 'pin files') };
+  if (!refused.fix) return { code, detail: message, fix: row.fix, docs, line: resultLine(context, code, message) };
+  return { code, detail: message, fix: refused.fix, docs, line: `${context}: ${row.summary} (${message}); fix: ${refused.fix} (${code})` };
+}
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): { ok: boolean; out: string; err: string } {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024, env });
@@ -76,10 +116,11 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   const registryLoad = o.policyFrom === 'head' ? loadRegistryFromHead(o.repoRoot) : loadRegistryFromBase(o.repoRoot, base);
   if (isRegistryUnavailable(registryLoad)) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: registryLoad.detail } };
   if (registryLoad.errors.length) return { refused: { code: 'REGEN_REGISTRY_INVALID', message: `${registryLoad.source.label}: ${registryLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: registryLoad.errors } };
-  const wtree = wtreeFingerprint(o.repoRoot);
-  if (!wtree) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: 'cannot fingerprint the working tree (gstack-wtree failed)' } };
-  const platform = o.platform ?? process.platform;
   const env = o.env ?? process.env;
+  const fp = wtreeFingerprint({ cwd: o.repoRoot, env, invocation: o.invocation });
+  if ('error' in fp) return { refused: wtreeRefusal(fp) };
+  const wtree = fp.tree;
+  const platform = o.platform ?? process.platform;
   const config = configLoad.config as PregateConfig;
   return {
     ctx: {
@@ -88,7 +129,7 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
       lanes: discoverLanes(o.repoRoot, platform), platform, allowRepoCommands: o.allowRepoCommands, timeoutMs: o.timeoutMs ?? 600_000,
       stallTimeoutMs: o.stallTimeoutMs ?? (config.stall_timeout_s ?? DEFAULT_STALL_TIMEOUT_S) * 1000,
       progress: o.progress ?? (line => process.stderr.write(`${line}\n`)),
-      cores: o.cores ?? os.availableParallelism(), testBackend: o.testBackend ?? readTestBackend(env), policyFrom: o.policyFrom, remote: o.remote ?? null,
+      cores: o.cores ?? os.availableParallelism(), testBackend: o.testBackend ?? readTestBackend(env, o.invocation), policyFrom: o.policyFrom, remote: o.remote ?? null,
       env, explain: [],
     },
   };
@@ -114,9 +155,11 @@ export async function withFingerprint(ctx: PregateContext, id: string, stage: Ch
   catch (e: any) {
     result = { id, stage, status: 'incomplete', detail: `threw: ${e?.message ?? e}`, code: 'PREGATE_INCOMPLETE', fix: 'read the error and rerun the check', inputs: baseInputs(ctx) };
   }
-  const after = wtreeFingerprint(ctx.repoRoot);
-  if (after !== ctx.wtree) {
-    result = { ...result, status: 'incomplete', detail: `working tree changed during the check (${ctx.wtree.slice(0, 12)} → ${(after ?? 'unknown').slice(0, 12)}); result not certified`, code: 'PREGATE_INCOMPLETE', fix: 'keep the tree still during the run, then rerun gstack-pregate' };
+  const after = wtreeFingerprint({ cwd: ctx.repoRoot, env: ctx.env });
+  if ('error' in after) {
+    result = { ...result, status: 'incomplete', detail: `cannot fingerprint the working tree after the check (${after.error}); result not certified`, code: 'PREGATE_INCOMPLETE', fix: wtreeRefusal(after).fix! };
+  } else if (after.tree !== ctx.wtree) {
+    result = { ...result, status: 'incomplete', detail: `working tree changed during the check (${ctx.wtree.slice(0, 12)} → ${after.tree.slice(0, 12)}); result not certified`, code: 'PREGATE_INCOMPLETE', fix: 'keep the tree still during the run, then rerun gstack-pregate' };
   }
   return { ...result, ms: Date.now() - started };
 }
