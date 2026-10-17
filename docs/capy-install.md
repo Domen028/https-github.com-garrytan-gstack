@@ -145,6 +145,26 @@ session holds no lease) and a reclaim keeps the lease. `bin/gstack-lease list` s
    constraints ([RUNTIME_PIN_CONFLICT](troubleshooting.md#capy-install-runtime-conflict),
    exit 3) before `./setup`. With no Bun at or above the security floor, the
    default is installed first so the pins can be read.
+
+   Node follows the same rule (`bin/gstack-node-runtime.sh`): `engines.node`,
+   `.nvmrc`, `.tool-versions` and CI `node-version:` lanes, non-CI exact pins
+   required and CI exact pins in different jobs alternatives. The first node
+   that satisfies them wins: the node first on PATH (rule `PATH`), then for
+   each wanted version gstack's store copy
+   `<state root>/runtimes/node/<version>/bin/node` (`store`) and nvm's
+   `${NVM_DIR:-~/.nvm}/versions/node/v<version>/bin/node` (`nvm`), then every
+   other `node` on PATH. When nothing qualifies and the project names an exact
+   version, install mode downloads `node-v<version>-<target>.tar.gz` and
+   `SHASUMS256.txt` from `https://nodejs.org/dist/v<version>/`
+   (`GSTACK_NODE_DIST_URL` overrides the base), checks the archive's SHA-256
+   against that list and publishes the tree in the store by rename. A CI-only
+   pin set installs its highest version. `/usr/local/bin` and nvm are never
+   written. Two different non-CI exact Node pins stop with
+   [RUNTIME_PIN_CONFLICT](troubleshooting.md#capy-install-runtime-conflict).
+   `--check` keeps the recorded Node while it still reports its version and
+   satisfies the pins, and never installs one; the doctor's `pins` row reads
+   whatever node the launch PATH gives, and a Node mismatch names the node it
+   read and the installer command that fixes it.
 3. `./setup --host claude --no-prefix`, then `./setup --host codex --model
    gpt-6-astra`, both with `--no-browser`. Skipped when this exact HEAD was set
    up with the same hosts, model and browser flag (recorded in the git dir
@@ -159,7 +179,8 @@ session holds no lease) and a reclaim keeps the lease. `bin/gstack-lease list` s
    checkout, project, HEAD, the workflow and required components it
    certified, whether pins were skipped as planning-only, the pin it
    honoured, the resolved Bun (`bun_path`, `bun_version`, `bun_rule`, and
-   `bun_install` when this run downloaded it), the trailer, the remote
+   `bun_install` when this run downloaded it), the resolved Node when the
+   project pins one (`node_path`, `node_version`, `node_rule`), the trailer, the remote
    minimum, the launch PATH and the time. Admission refuses a workflow whose
    running Bun is not the one the verdict recorded
    ([BUN_RESOLUTION_DRIFT](troubleshooting.md#bun-resolution-drift)), and so
@@ -281,9 +302,16 @@ GSTACK_LAUNCH: PATH=<dir>:$PATH GSTACK_SESSION_KIND=unattended GSTACK_STATE_ROOT
 GSTACK_LAUNCH_PATH: <dir>
 ```
 
-`PATH=<dir>:$PATH` and `GSTACK_LAUNCH_PATH` appear only when the certified Bun
-is not first on PATH (the Capy image's `/usr/local/bin/bun` is 1.3.14; 57 gstack
-commands start with `#!/usr/bin/env bun`). A child shell's `export` cannot
+`PATH=<dir>:$PATH` and `GSTACK_LAUNCH_PATH` appear only when the certified Bun,
+or the project's resolved Node, is not first on PATH (older Capy images ship
+`/usr/local/bin/bun` 1.3.14; 57 gstack commands start with `#!/usr/bin/env bun`).
+`<dir>` is never a shared bin directory: a Bun from gstack's store launches
+from its own version directory, and any other Bun, or a Node the launch
+needs, launches through `<verdict file without .json>.launch`, a gstack-owned
+directory holding only `bun`, `bunx` and, when needed, `node`, `npm`, `npx` and
+`corepack` symlinks. So a Bun found in `/usr/local/bin` or `$BUN_INSTALL/bin`
+never puts that directory's other tools (the image's node) in front of PATH.
+The pregate's lanes launch through the same directory. A child shell's `export` cannot
 configure the parent's later commands, so the parent supplies these
 assignments to every gstack command it launches (prefix the command, or
 export them once in the shell that runs it). A fresh shell without them keeps

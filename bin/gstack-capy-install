@@ -99,6 +99,7 @@ else
 fi
 . "$ROOT/bin/gstack-bun-version.sh" || stop INSTALL_PREFLIGHT_FAILED "$ROOT/bin/gstack-bun-version.sh is missing" "re-clone gstack"
 . "$ROOT/bin/gstack-install-verdict.sh" || stop INSTALL_PREFLIGHT_FAILED "$ROOT/bin/gstack-install-verdict.sh is missing" "re-clone gstack"
+. "$ROOT/bin/gstack-node-runtime.sh" || stop INSTALL_PREFLIGHT_FAILED "$ROOT/bin/gstack-node-runtime.sh is missing" "re-clone gstack"
 
 # 2. Preflight: tools, then Bun through the one resolution contract
 # (gstack_bun_resolve: the project's exact pin and gstack's install default in
@@ -291,9 +292,64 @@ if [ "$CHECK_ONLY" -eq 1 ] && [ -n "$REC_BUN" ]; then
     export GSTACK_DOCTOR_RUNTIME_DRIFT_FIX="$_fix"
   fi
 fi
-if [ -n "$RES_BIN" ] && [ "$(gstack_realpath "$(command -v bun 2>/dev/null || echo /nonexistent)" 2>/dev/null)" != "$RES_BIN" ]; then
-  LAUNCH_DIR=$(dirname "$RES_BIN")
-  export PATH="$LAUNCH_DIR:$PATH"
+# Node: the project's exact Node pins resolve, and install into the runtime
+# store, like Bun's (bin/gstack-node-runtime.sh): non-CI exact pins are
+# required, CI exact pins in different jobs are alternatives. Parser mode
+# only. --check keeps the recorded Node while it still reports its version and
+# satisfies the pins, and never installs.
+NODE_STORE=$(gstack_node_store "$GSTACK_STATE_ROOT")
+NODE_BIN="" NODE_VER="" NODE_RULE="" NODE_WANT=""
+node_accept() { ! "$RUNNER" "$ROOT/bin/gstack-runtime-pins.ts" --project "$PROJECT" --node "$1" 2>/dev/null | grep -q '^PIN_FAIL: node '; }
+node_pins_text() { printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN_SUMMARY: //p' | grep '^node' | tr '\n' ';' | sed 's/;$//; s/;/; /g'; }
+if [ "$PINS_MODE" = parser ] && printf '%s\n' "$PINS_OUT" | grep -q '^PIN: node '; then
+  _nreq=$(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN_EXACT_REQUIRED: node \([^ ]*\) \([^ ]*\)$/\1 \2/p')
+  [ "$(printf '%s\n' "$_nreq" | grep -c .)" -gt 1 ] \
+    && stop RUNTIME_PIN_CONFLICT "Node conflict: $PROJECT pins more than one exact Node ($(printf '%s\n' "$_nreq" | sed 's/^\([^ ]*\) \(.*\)$/\2 pins \1/' | tr '\n' ';' | sed 's/;$//; s/;/; /g'))" "make the project's exact Node pins agree"
+  if [ -n "$_nreq" ]; then NODE_WANT=${_nreq%% *}
+  else NODE_WANT=$(printf '%s\n' "$PINS_OUT" | sed -n 's/^PIN_CI_ALTERNATIVES: node //p' | tr ' ' '\n' | grep . | sort -t. -k1,1nr -k2,2nr -k3,3nr | tr '\n' ' ' | sed 's/ $//')
+  fi
+  REC_NODE="" REC_NODE_VER=""
+  [ -f "$VERDICT" ] && REC_NODE=$(gstack_install_verdict_field "$VERDICT" node_path) REC_NODE_VER=$(gstack_install_verdict_field "$VERDICT" node_version)
+  if [ "$CHECK_ONLY" -eq 1 ] && [ -n "$REC_NODE" ] && [ "$(gstack_node_version "$REC_NODE")" = "$REC_NODE_VER" ] && node_accept "$REC_NODE_VER"; then
+    NODE_BIN="$REC_NODE" NODE_VER="$REC_NODE_VER" NODE_RULE=$(gstack_install_verdict_field "$VERDICT" node_rule)
+  elif gstack_node_resolve "$NODE_STORE" "$NODE_WANT" node_accept; then
+    NODE_BIN="$_gn_bin" NODE_VER="$_gn_ver" NODE_RULE="$_gn_rule"
+  elif [ "$CHECK_ONLY" -eq 0 ] && [ -n "$NODE_WANT" ]; then
+    _nv=${NODE_WANT%% *}
+    say "no installed Node satisfies the project's Node pins $(node_pins_text) (node on PATH: $(gstack_node_version "$(command -v node 2>/dev/null || echo /nonexistent)" || echo none)); installing node $_nv from its release archive (SHA-256 checked against SHASUMS256.txt) into $NODE_STORE/$_nv"
+    exec 8>"$HOME/.gstack-runtime.lock"
+    if command -v flock >/dev/null 2>&1; then flock -w 300 8 || stop INSTALL_PREFLIGHT_FAILED "another install holds $HOME/.gstack-runtime.lock" "wait for it to finish"; fi
+    _nerr=$(gstack_node_install "$NODE_STORE" "$_nv") || stop INSTALL_PREFLIGHT_FAILED "node $_nv: $_nerr" "check network access to nodejs.org, then re-run; or install node $_nv yourself (nvm install $_nv) and re-run"
+    exec 8>&-
+    gstack_node_resolve "$NODE_STORE" "$_nv" node_accept \
+      || stop RUNTIME_PIN_CONFLICT "Node conflict: node $_nv in $NODE_STORE does not satisfy $PROJECT's Node pins $(node_pins_text)" "make the project's Node pins agree"
+    NODE_BIN="$_gn_bin" NODE_VER="$_gn_ver" NODE_RULE="$_gn_rule"
+  else
+    say "note: no installed Node satisfies the project's Node pins $(node_pins_text); gstack-doctor's pins row names the fix"
+  fi
+  [ -n "$NODE_BIN" ] && say "node $NODE_VER at $NODE_BIN ($NODE_RULE; satisfies the project's Node pins $(node_pins_text))"
+fi
+
+# The launch PATH. gstack's store holds one Bun per directory, so a store Bun
+# launches from its own directory. Any other resolved Bun, and a resolved Node
+# that PATH does not already give, launch through a gstack-owned directory of
+# symlinks beside the verdict, so a shared bin directory (/usr/local/bin with
+# the image's node, $BUN_INSTALL/bin) never lands in front of PATH.
+if [ -n "$RES_BIN" ]; then
+  _launch_node=""
+  [ -n "$NODE_BIN" ] && [ "$(gstack_realpath "$(command -v node 2>/dev/null || echo /nonexistent)" 2>/dev/null)" != "$NODE_BIN" ] && _launch_node="$NODE_BIN"
+  if [ -n "$_launch_node" ] || [ "$(gstack_realpath "$(command -v bun 2>/dev/null || echo /nonexistent)" 2>/dev/null)" != "$RES_BIN" ]; then
+    _store_real=$(cd -P "$STORE" 2>/dev/null && pwd -P)
+    case "$RES_BIN" in
+      "${_store_real:-/nonexistent}"/*/bun) [ -z "$_launch_node" ] && LAUNCH_DIR=$(dirname "$RES_BIN") ;;
+    esac
+    if [ -z "$LAUNCH_DIR" ]; then
+      LAUNCH_DIR="${VERDICT%.json}.launch"
+      gstack_launch_dir "$LAUNCH_DIR" "$RES_BIN" "$_launch_node" \
+        || stop INSTALL_PREFLIGHT_FAILED "could not publish the launch directory $LAUNCH_DIR" "make $(dirname "$LAUNCH_DIR") writable, then re-run"
+    fi
+    export PATH="$LAUNCH_DIR:$PATH"
+  fi
 fi
 
 # 3. Install both host profiles; Chromium lazy unless --with-browser. Skipped
@@ -314,7 +370,7 @@ record_verdict() { # TRAILER OK — --check keeps the recorded resolution (drift
   else set -- "$1" "$2" "$RES_BIN" "$RES_VER" "$RES_RULE" "${BUN_INSTALL:-}"; fi
   gstack_install_verdict_write "$VERDICT" "$ROOT_REAL" "$HEAD_SHA" "${FOR:-}" "$(printf '%s\n' "${OUT:-}" | sed -n 's/^required: //p' | head -1)" \
     "$(printf '%s\n' "${OUT:-}" | grep -q '^SKIP pins (planning-only' && echo 1 || echo 0)" "$2" "$1" "${MIN_REVISION:-}" "$LAUNCH_DIR" \
-    "$PROJECT_REAL" "$PIN_EXACT" "$3" "$4" "$5" "$6" \
+    "$PROJECT_REAL" "$PIN_EXACT" "$3" "$4" "$5" "$6" "$NODE_BIN" "$NODE_VER" "$NODE_RULE" \
     || say "could not write the install verdict $VERDICT"
 }
 setup_failed() { # MESSAGE

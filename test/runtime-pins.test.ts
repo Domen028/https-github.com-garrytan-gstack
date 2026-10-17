@@ -182,6 +182,18 @@ describe('CI exact pins are alternatives', () => {
     expect(lines).toContain('PIN_CI_ALTERNATIVES: bun 1.4.3');
     expect(evaluatePins(collectPins(dir), { bun: '1.4.4' }, 'linux').verdict).toBe('fail');
   });
+
+  test('Node pins render the same plan lines as Bun: .nvmrc required, CI node-version pins in different jobs alternatives', () => {
+    const dir = project({
+      '.nvmrc': '24.18.0\n',
+      '.github/workflows/ci.yml': 'jobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - with:\n          node-version: 24.18.0\n  b:\n    runs-on: ubuntu-latest\n    steps:\n      - with:\n          node-version: 22.20.0\n',
+    });
+    const lines = renderPinLines(evaluatePins(collectPins(dir), { node: '24.18.0' }, 'linux'), 'linux');
+    expect(lines).toContain('PIN_EXACT_REQUIRED: node 24.18.0 .nvmrc:1');
+    expect(lines).toContain('PIN_CI_ALTERNATIVES: node 24.18.0 22.20.0');
+    expect(lines.at(-1)).toBe('PINS_VERDICT: pass');
+    expect(evaluatePins(collectPins(dir), { node: '24.21.0' }, 'linux').failures).toEqual([expect.stringMatching(/^node 24\.21\.0 outside \.nvmrc 24\.18\.0/)]);
+  });
 });
 
 describe('bin/gstack-runtime-pins.ts', () => {
