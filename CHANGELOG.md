@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.91.114.0] - 2026-10-17
+
+**The DevEx reviews now score every error message for the reader that usually meets it first: an AI agent running unattended.** `/plan-devex-review`, the `/autoplan` DX phase and `/devex-review` used to ask for "problem + cause + fix". Now they score each error path against an eight-item agent-ready contract: what, fix, recovery, code, context, trace, redaction and channel. Two kinds of failure cap the Error Messages score. A leaked secret, a failure reported as success, an unsafe fix or a block on a terminal caps it at 4/10. A missing fix, recovery, context or trace caps it at 6/10.
+
+### What this means for you
+
+- **Plan reviews catch agent-hostile errors before you build them.** Pass 3 of `/plan-devex-review`, and both autoplan DX voices (native and outside), report `CAP4:<path>:<item>` findings as Critical and `CAP6:<path>:<item>` findings as High, and output a path-by-item matrix. Usage errors rejected before any work need only what, fix, code, redaction and channel. Remote APIs are never penalized for keeping their stack traces server-side. `docs/agent-ready-errors.md` is the public reference.
+- **`/devex-review` exercises CLI errors under containment.** The new `gstack-error-capture` runs the target with no terminal, stdin closed, a temporary cwd and HOME, a scrubbed environment and a deadline. It prints one redacted JSON record: exit code, deadline kill, terminal verdict (`blocking`, `refused_with_alternative`, `refused_no_alternative`) and secret findings. Forwarding credentials, config files or a real directory needs `--approved`, and every capture stays read-only.
+- **Old and new DX scores are not compared.** Review-log rows now carry `dx_rubric` and per-dimension scores. Trend Check and Boomerang print "rubric changed, not comparable" across rubric versions instead of a misleading delta.
+- **"AI coding agent" is a persona option** for CLI tools and Claude Code skills, and "Agents are users too" joins the DX principles.
+
+### For contributors
+
+- `lib/dx-error-contract.ts` is the single source; the snapshot literal, the outside prompt and the public doc are tested against it. The `DX_CAPTURE_*` codes live in `RESULT_CODES`, each with a troubleshooting anchor.
+- `lib/qa-deadline.ts` accepts an optional `spawn: {cwd, env}`. Existing callers are unchanged.
+- New paid behavior case `dx-error-contract-review` (periodic, 3 trials). The native DX reviewer must cap a hostile CLI path and an unspecified path, and must not cap three decoys. Its grader is replayed free in `test/dx-error-contract-grader.test.ts`.
+- Known limit: containment lasts only while the helper runs. A SIGKILLed helper, or a descendant that leaves the process group, outlives it, which is why captures are limited to read-only invocations. The helper's Windows and macOS paths are covered only by CI's free shards.
+
 ## [1.91.112.0] - 2026-10-17
 
 **`/cso --paths` audits part of a repository and says exactly what it skipped.** A repository over /cso's 64 MiB source cap used to get one piece of advice, "run /cso on a smaller checkout". The trimmed copy then read as the whole repository, and the verdict never said what was left out. `gstack-cso start --paths src/core,src/mcp` now audits only those prefixes and reports every other path as skipped, with snapshot and history coverage marked partial.
