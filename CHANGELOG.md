@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.126.0] - 2026-10-17
 
 **Artifacts sync stops saying "ok" when two project folders differ only by letter case.** When the artifacts repo tracks two spellings of one project, such as `projects/MyApp/` and `projects/myapp/`, a Mac or Windows disk stores them as one file. Git there staged each write under the other spelling and the sync reported `ok`. One spelling then stayed modified forever, and other machines read the wrong bucket (#3220). This lands the detector from Kkkkkuro's #3223 and #3245, with credit, and holds those files instead of halting the whole sync.
 
