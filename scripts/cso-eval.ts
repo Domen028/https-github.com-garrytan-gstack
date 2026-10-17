@@ -530,7 +530,7 @@ export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEv
       estimatedCost: { measured: costs.length, denominator: expected.length, totalUSD: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null, source: 'pricing-table-estimate' },
     });
   }
-  const indexes: ProducerReceiptIndex[] = bound.map(({ output: _output, error, ...receipt }) => ({ ...receipt, ...(error ? { error: { code: error.code } } : {}) }));
+  const indexes: ProducerReceiptIndex[] = bound.map(({ output: _output, toolTimeline: _toolTimeline, error, ...receipt }) => ({ ...receipt, ...(error ? { error: { code: error.code } } : {}) }));
   const base = { schemaVersion: 1 as const, matrixHash: matrixHash(matrix), scheduleHash: digest(JSON.stringify(schedule)), receipts: indexes.sort((left, right) => left.cell.id.localeCompare(right.cell.id)), summary: {
     scheduled: matrix.cells.length, prepared: schedule.preparedCells, submitted: bound.length, missing: matrix.cells.length - bound.length,
     matchedPairsExpected: expectedMatchedPairs(matrix), matchedPairsSubmitted: completePairs.length, modelMismatches, groups,

@@ -58,6 +58,8 @@ export interface RunResult {
   durationMs: number;
   /** Count of tool/function calls made during the run (0 if unsupported). */
   toolCalls: number;
+  /** Tool-call starts in order: name, offset from run start, and thread; no inputs or outputs. Unset if unsupported. */
+  toolTimeline?: Array<{ atMs: number; tool: string; agent: 'main' | 'subagent' }>;
   /** Actual model ID the provider reports using (may be a variant of the family). */
   modelUsed: string;
   /** If the run failed, error code + human reason. output/tokens may be partial. */

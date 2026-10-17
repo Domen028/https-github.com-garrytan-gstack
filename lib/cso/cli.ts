@@ -2802,6 +2802,7 @@ export async function dispatchCsoCommand(
   dependencies: CsoCliDependencies,
 ): Promise<unknown> {
   args = [...args];
+  const runId = args[0];
   if (!['start', 'recheck', 'replay', 'doctor', 'provision-images'].includes(command)) {
     const started = Date.now();
     retention(started, { deadlineMs: started + RETENTION_MAINTENANCE_MS, maxEntries: RETENTION_MAX_ENTRIES });
@@ -2876,8 +2877,27 @@ export async function dispatchCsoCommand(
     default:
       throw new CsoError('INVALID_ARGUMENT', `Unknown command: ${command}`);
   }
+  if (RUN_CLOCK_COMMANDS.has(command) && result && typeof result === 'object' && !Array.isArray(result)) {
+    const deadline = (result as { deadline?: unknown }).deadline;
+    const ends = Date.parse(
+      typeof deadline === 'string' ? deadline : loadReport(runDirectory(runId)).deadline,
+    );
+    result = { ...result, remainingSeconds: Math.max(0, Math.floor((ends - Date.now()) / 1000)) };
+  }
   return result;
 }
+const RUN_CLOCK_COMMANDS = new Set([
+  'start',
+  'resume',
+  'submit',
+  'scan',
+  'scanner-outcome',
+  'import-sarif',
+  'record-review',
+  'test-plan',
+  'runtime-plan',
+  'verify',
+]);
 const PRODUCTION_CLI_DEPENDENCIES: CsoCliDependencies = Object.freeze({
   runtimeCatalog: RUNTIME_CATALOG,
   scannerCatalog: SCANNER_CATALOG,

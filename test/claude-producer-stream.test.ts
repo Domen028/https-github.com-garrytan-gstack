@@ -33,7 +33,7 @@ describe('Claude producer stream accounting', () => {
   test('takes usage and turns from the final result and keeps the paid result contract', () => {
     const state = claudeStreamState();
     for (const line of lines(start('a', 1000), delta(100), stop, result({}))) consumeClaudeStreamLine(state, line);
-    expect(resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5 })).toEqual({ output: 'REPORT', tokens: { input: 2001, output: 201, cached: 14 }, durationMs: 5, toolCalls: 2, modelUsed: 'claude-test' });
+    expect(resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5 })).toEqual({ output: 'REPORT', tokens: { input: 2001, output: 201, cached: 14 }, durationMs: 5, toolCalls: 2, toolTimeline: [], modelUsed: 'claude-test' });
     for (const ending of [[], [result({ result: '  ' })], [result({ result: 7 })], [result({ is_error: true })], [result({ subtype: 'error_max_turns' })]]) {
       const partial = claudeStreamState();
       for (const line of lines(start('a', 10), delta(3), stop, ...ending)) consumeClaudeStreamLine(partial, line);
@@ -52,7 +52,19 @@ describe('Claude producer stream accounting', () => {
     for (const line of lines(start('a', 1000), delta(100), stop, subagent('s1', 50000), subagent('s1', 50000), subagent('s2', 50001),
       result({ result: 'MAIN ENDED TURN', modelUsage: sessionUsage }), start('b', 1002), delta(102), stop,
       result({ num_turns: 1, result: 'REPORT', usage: { input_tokens: 1002, output_tokens: 102, cache_read_input_tokens: 7 }, modelUsage: sessionUsage }))) consumeClaudeStreamLine(state, line);
-    expect(resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5 })).toEqual({ output: 'REPORT', tokens: { input: 153009, output: 15308, cached: 49 }, durationMs: 5, toolCalls: 3, modelUsed: 'claude-test' });
+    expect(resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5 })).toEqual({ output: 'REPORT', tokens: { input: 153009, output: 15308, cached: 49 }, durationMs: 5, toolCalls: 3, toolTimeline: [], modelUsed: 'claude-test' });
+  });
+
+  test('records a content-free tool timeline: main and subagent calls once each, never their inputs', () => {
+    const toolStart = (id: string, name: string) => ({ type: 'stream_event', parent_tool_use_id: null, event: { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id, name, input: {} } } });
+    const mainCall = { type: 'assistant', message: { id: 'a', content: [{ type: 'tool_use', id: 'toolu_bash', name: 'Bash', input: { command: 'gstack-cso inspect SECRET_PATH' } }] } };
+    const subCall = { type: 'assistant', parent_tool_use_id: 'toolu_agent', message: { id: 's1', content: [{ type: 'tool_use', id: 'toolu_sub', name: 'Bash', input: { command: 'cat SECRET_PATH' } }], usage: { input_tokens: 1, output_tokens: 1 } } };
+    const state = claudeStreamState();
+    for (const line of lines(start('a', 10), toolStart('toolu_bash', 'Bash'), toolStart('toolu_agent', 'Agent'), mainCall, subCall, subCall, toolStart('toolu_odd', 'mcp__x/../y'))) consumeClaudeStreamLine(state, line);
+    const timeline = resultFromClaudeStream(state, { model: 'claude-test', durationMs: 5, error: { code: 'timeout', reason: 'exceeded 5ms' } }).toolTimeline!;
+    expect(timeline.map(({ tool, agent }) => [tool, agent])).toEqual([['Bash', 'main'], ['Agent', 'main'], ['Bash', 'subagent'], ['other', 'main']]);
+    expect(timeline.every(entry => Number.isSafeInteger(entry.atMs) && entry.atMs >= 0 && Object.keys(entry).length === 3)).toBe(true);
+    expect(JSON.stringify(timeline)).not.toContain('SECRET_PATH');
   });
 
   test('a killed run counts each subagent message once and never reports subagent text as the producer output', () => {

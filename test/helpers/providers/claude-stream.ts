@@ -14,13 +14,32 @@ export interface ClaudeStreamState {
   lastText: string;
   result?: Record<string, unknown>;
   invalidLines: number;
+  startedAt: number;
+  /** Content-free: each tool call's name, start offset and thread, never its input or output. */
+  toolTimeline: NonNullable<RunResult['toolTimeline']>;
+  toolUseIds: Set<string>;
 }
 
 export function claudeStreamState(): ClaudeStreamState {
-  return { totals: { input: 0, output: 0, cached: 0 }, open: new Map(), subagents: new Map(), turns: 0, resultTurns: 0, lastText: '', invalidLines: 0 };
+  return { totals: { input: 0, output: 0, cached: 0 }, open: new Map(), subagents: new Map(), turns: 0, resultTurns: 0, lastText: '', invalidLines: 0, startedAt: Date.now(), toolTimeline: [], toolUseIds: new Set() };
 }
 
+const TOOL_TIMELINE_LIMIT = 4096;
+
 const count = (value: unknown): number => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+
+function recordToolUse(state: ClaudeStreamState, block: { id?: unknown; name?: unknown }, agent: 'main' | 'subagent'): void {
+  if (typeof block.id === 'string') {
+    if (state.toolUseIds.has(block.id)) return;
+    state.toolUseIds.add(block.id);
+  }
+  if (state.toolTimeline.length >= TOOL_TIMELINE_LIMIT) return;
+  state.toolTimeline.push({
+    atMs: Date.now() - state.startedAt,
+    tool: typeof block.name === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(block.name) ? block.name : 'other',
+    agent,
+  });
+}
 
 function close(state: ClaudeStreamState, key: string): void {
   const message = state.open.get(key);
@@ -39,6 +58,9 @@ export function consumeClaudeStreamLine(state: ClaudeStreamState, line: string):
     if (Number.isSafeInteger(event.num_turns) && event.num_turns >= 0) state.resultTurns += event.num_turns;
     return;
   }
+  if (event.type === 'assistant' && Array.isArray(event.message?.content)) {
+    for (const block of event.message.content) if (block?.type === 'tool_use') recordToolUse(state, block, typeof event.parent_tool_use_id === 'string' ? 'subagent' : 'main');
+  }
   if (event.type === 'assistant' && typeof event.parent_tool_use_id === 'string') {
     const usage = event.message?.usage;
     if (typeof event.message?.id === 'string' && usage) state.subagents.set(event.message.id, { input: count(usage.input_tokens), output: count(usage.output_tokens), cached: count(usage.cache_read_input_tokens) });
@@ -56,6 +78,8 @@ export function consumeClaudeStreamLine(state: ClaudeStreamState, line: string):
     const usage = stream.message?.usage ?? {};
     state.open.set(key, { input: count(usage.input_tokens), output: count(usage.output_tokens), cached: count(usage.cache_read_input_tokens) });
     if (key === 'main') state.turns++;
+  } else if (stream.type === 'content_block_start' && stream.content_block?.type === 'tool_use') {
+    recordToolUse(state, stream.content_block, key === 'main' ? 'main' : 'subagent');
   } else if (stream.type === 'message_delta' && stream.usage) {
     const message = state.open.get(key);
     if (!message) return;
@@ -99,7 +123,7 @@ export function resultFromClaudeStream(state: ClaudeStreamState, opts: { model: 
   const tokens = (result && resultTokens(result)) ?? claudeStreamUsage(state);
   const toolCalls = result ? state.resultTurns : state.turns;
   const modelUsed = typeof result?.model === 'string' && result.model ? result.model : opts.model;
-  const base = { tokens, durationMs: opts.durationMs, toolCalls, modelUsed };
+  const base = { tokens, durationMs: opts.durationMs, toolCalls, toolTimeline: state.toolTimeline, modelUsed };
   if (opts.error) return { ...base, output: typeof result?.result === 'string' ? result.result : state.lastText, error: opts.error };
   const explicitError = result?.is_error === true || (typeof result?.subtype === 'string' && result.subtype !== 'success');
   if (!result || explicitError || typeof result.result !== 'string' || !result.result.trim()) {
