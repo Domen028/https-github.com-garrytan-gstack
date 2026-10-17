@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.113.0] - 2026-10-17
 
 **A Capy install that has fallen behind now says so in the one line lanes relay, a skipped upgrade is never reported ok, and a reused pid no longer blocks every upgrade.** Lanes pass along only the `gstack:` trailer, so a session that was 12 commits behind origin looked current. Two field reports (GBRA-105, GBRA-106) showed session-start upgrades wedged behind a lease whose pid now belonged to dbus-daemon or systemd-logind, while the trailer still said ok.
 
