@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.121.0] - 2026-10-17
+## [1.91.122.0] - 2026-10-17
 
 **Main no longer goes red on 2026-11-16.** All seven `.osv-scanner.toml` suppressions expired on 2026-11-30, and `test/osv-ignore-expiry.test.ts` fails 14 days early. Six are gone and the seventh is re-dated with an upstream link. Dependabot's grouped dev bump (#3228) is replaced by hand, and Version Gate stops failing every dependabot package.json PR.
 
