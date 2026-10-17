@@ -127,7 +127,8 @@ describe('close --deferred', () => {
     expect(reply.status, reply.stderr).toBe(0);
     expect(reply.stdout).toMatch(/^ROUND_GRANTED: ceo cap=4 \(uc\d+b by human\)$/m);
     expect(reply.stdout).toMatch(/^REOPENED: ceo,eng/m);
-    expect(readRunJson(s.out).round_grants).toEqual({ ceo: 1 });
+    expect(reply.stdout).toMatch(/^ROUND_GRANTED: eng cap=4 \(reruns after ceo; uc\d+b by human\)$/m);
+    expect(readRunJson(s.out).round_grants).toEqual({ ceo: 1, eng: 1 });
   });
 });
 
@@ -174,6 +175,45 @@ describe('the round cap', () => {
     const v = r.validate(s.out);
     expect(v.status, v.stdout + v.stderr).toBe(0);
     expect(r.ap(['resume', '--out', s.out]).stdout).toContain('status=gate_pending');
+  });
+});
+
+describe('deferred close keeps earlier open findings; a reopened phase reruns Eng', () => {
+  test('a deferred confirm round with a new finding still carries the earlier undecided Critical to the gate and tasks', () => {
+    const s = start();
+    phaseVia(r, s.out, 'ceo', { native: [{ severity: 'Critical', title: 'Retries can double-charge', fix: 'Add a durable idempotency key' }], outside: [] });
+    phaseVia(r, s.out, 'eng', NONE);
+    expect(answer(s.out, readRunJson(s.out).gate_rev, 'p1d').status).toBe(0);
+    expect(r.ap(['next', '--out', s.out]).status).toBe(0);
+    const rr = readRunJson(s.out);
+    const review = r.review(path.join(s.out, 'ceo-native-prompt.md'), { FIXTURE_FINDINGS: JSON.stringify([{ severity: 'Medium', title: 'Jitter source is unspecified' }]) });
+    expect(review.status, review.stderr).toBe(0);
+    const sub = r.ap(['submit', '--out', s.out, '--phase', 'ceo', '--voice', 'native', '--result', rr.phases.ceo.native.attempts.at(-1).result, '--model', 'anthropic/claude-opus-5-5', '--attempt', rr.phases.ceo.native.attempt]);
+    expect(sub.status, sub.stderr).toBe(0);
+    const closed = r.ap(['close', '--out', s.out, '--phase', 'ceo', '--deferred', 'owner pauses remaining reviews', '--by', 'human']);
+    expect(closed.status, closed.stderr).toBe(0);
+    expect(closed.stdout).toMatch(/^PHASE_DEFERRED: ceo round=2\/\S+ by=human open=2 \(Critical=1 Medium=1\) blockers=\S+-ceo-native-1 /m);
+    phaseVia(r, s.out, 'eng', NONE);
+    expect(gate(s.out).items.filter((i: any) => i.cap?.kind === 'blocker').map((i: any) => i.title)).toEqual([expect.stringContaining('Retries can double-charge')]);
+    expect(readJsonl(path.join(s.out, 'tasks.jsonl')).map((t: any) => t.priority).sort()).toEqual(['Critical', 'Medium']);
+  });
+
+  test('reopening a capped CEO round also grants Eng its round, so Eng reruns last instead of deferring', () => {
+    const s = start(['--max-rounds', '1']);
+    phaseVia(r, s.out, 'ceo', NONE);
+    phaseVia(r, s.out, 'eng', NONE);
+    expect(r.ap(['revise', '--out', s.out, '--plan', v2File(s.dir)]).status).toBe(0);
+    const items = gate(s.out).items;
+    const ceo = items.find((i: any) => i.cap?.kind === 'delta' && i.phase === 'ceo');
+    const eng = items.find((i: any) => i.cap?.kind === 'delta' && i.phase === 'eng');
+    const replied = answer(s.out, readRunJson(s.out).gate_rev, `${ceo.id}b ${eng.id}a p1a`);
+    expect(replied.status, replied.stderr).toBe(0);
+    expect(replied.stdout).toMatch(/^ROUND_GRANTED: eng cap=2 \(reruns after ceo; /m);
+    phaseVia(r, s.out, 'ceo', NONE);
+    const next = r.ap(['next', '--out', s.out]);
+    expect(next.status, next.stderr).toBe(0);
+    expect(next.stdout).toMatch(/^PHASE: eng /m);
+    expect(next.stdout).not.toContain('PHASE_DEFERRED: eng');
   });
 });
 

@@ -134,7 +134,8 @@ export const pendingDeltas = (state: RunState) => (state.capped_deltas ?? []).fi
 
 /**
  * The owner's answers to cap items (deferred closes, deferred blockers, capped deltas) once the plan proceeds:
- * `b` grants that phase one more round, journaled as a budget change, and adds it (and Eng) to the reopen set;
+ * `b` grants that phase one more round, journaled as a budget change, and adds it to the reopen set; Eng, which
+ * reruns last, gets its own grant unless it already has one;
  * `a` accepts. Capped deltas record which.
  */
 export function applyCapChoices(state: RunState, choices: Array<{ item: GateItem; chosen: string }>, reopen: Set<string>, by: string | undefined): string[] {
@@ -150,8 +151,13 @@ export function applyCapChoices(state: RunState, choices: Array<{ item: GateItem
     (state.round_grants ??= {})[cap.phase] = (state.round_grants[cap.phase] ?? 0) + 1;
     journal(state.out, { event: 'budget_changed', by: by ?? 'gate', round_grant: { phase: cap.phase, cap: roundCap(state, cap.phase) }, item: item.id });
     reopen.add(cap.phase);
-    if (state.phase_order.includes('eng')) reopen.add('eng');
     lines.push(`ROUND_GRANTED: ${cap.phase} cap=${roundCap(state, cap.phase)} (${item.id}b by ${by ?? 'gate'})`);
+    if (cap.phase === 'eng' || !state.phase_order.includes('eng') || granted.has('eng')) continue;
+    granted.add('eng');
+    state.round_grants.eng = (state.round_grants.eng ?? 0) + 1;
+    journal(state.out, { event: 'budget_changed', by: by ?? 'gate', round_grant: { phase: 'eng', cap: roundCap(state, 'eng') }, item: item.id, reason: `eng reruns after ${cap.phase}` });
+    reopen.add('eng');
+    lines.push(`ROUND_GRANTED: eng cap=${roundCap(state, 'eng')} (reruns after ${cap.phase}; ${item.id}b by ${by ?? 'gate'})`);
   }
   return lines;
 }

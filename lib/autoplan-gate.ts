@@ -74,7 +74,7 @@ type OpenRow = FindingRow & { urgent?: boolean; user_challenge?: boolean; settle
  * Open voices become skipped. Their dispatched or execution-unknown attempts are settled `unknown` at their
  * reservation (a deferred review may still have run and been billed); only reservations with no journaled dispatch
  * are released. The consensus file is written from the bound voices so export, validate and resume work. Open
- * findings (this round's bound rows, else the rows of the round last reviewed, minus answered ones) carry into
+ * findings (this round's bound rows plus the unanswered rows of the round last reviewed) carry into
  * tasks.jsonl and the gate; Critical, urgent and user-challenge findings become owner approval items.
  */
 export function closeDeferred(state: RunState, phase: Phase, o: { reason: string; by: string; cause: 'cap' | 'owner' }): { lines: string[]; blockers: string[] } {
@@ -95,15 +95,15 @@ export function closeDeferred(state: RunState, phase: Phase, o: { reason: string
   const consensus = consensusRecord(phase, ps.native?.status === 'completed' ? { rows: native, model: ps.native.model } : null,
     ps.outside?.status === 'completed' ? { rows: outside, model: ps.outside.model, provider: ps.outside.provider } : null, reconcile(native, outside, []));
   const answered = settledIds(state);
-  let rows: OpenRow[] = [...native, ...outside];
+  const current: OpenRow[] = [...native, ...outside];
+  const ids = new Set(current.map(r => r.id));
+  const earlier: OpenRow[] = reviewRows(state, previousReview(state, phase)).filter(r => !answered.has(r.id) && !ids.has(r.id));
+  const rows = [...current, ...earlier];
   let carried: string | undefined;
-  if (!rows.length) {
-    rows = reviewRows(state, previousReview(state, phase)).filter(r => !answered.has(r.id));
-    if (rows.length) {
-      carried = `${phase}-deferred.findings.jsonl`;
-      fs.writeFileSync(path.join(state.out, carried), rows.map(r => JSON.stringify({ ...r, disposition: 'deferred' })).join('\n') + '\n');
-      state.artifacts[carried] = { path: carried, sha256: sha256File(path.join(state.out, carried)) };
-    }
+  if (earlier.length) {
+    carried = `${phase}-deferred.findings.jsonl`;
+    fs.writeFileSync(path.join(state.out, carried), earlier.map(r => JSON.stringify({ ...r, disposition: 'deferred' })).join('\n') + '\n');
+    state.artifacts[carried] = { path: carried, sha256: sha256File(path.join(state.out, carried)) };
   }
   const open = rows.filter(r => !r.settled_by && !answered.has(r.id));
   const counts = Object.fromEntries(['Critical', 'High', 'Medium', 'Low', 'Informational'].map(s => [s, open.filter(r => r.severity === s).length]));

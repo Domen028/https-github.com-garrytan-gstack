@@ -107,6 +107,25 @@ describe('export --public', () => {
   });
 });
 
+describe('export --public path containment', () => {
+  test('an artifact path that leaves the run directory refuses before anything is written, outside or inside --public', () => {
+    const { out, dir } = gatedRun();
+    const text = 'synthetic artifact text\n';
+    fs.writeFileSync(path.join(dir, 'sentinel.txt'), text);
+    const victim = path.join(r.host.base, `victim${n}.txt`);
+    fs.writeFileSync(victim, 'unrelated owner file\n');
+    const state = readRunJson(out);
+    state.artifacts['escape.txt'] = { path: `../../${path.basename(victim)}`, sha256: crypto.createHash('sha256').update(text).digest('hex') };
+    fs.writeFileSync(path.join(out, 'run.json'), JSON.stringify(state) + '\n');
+    const pub = path.join(dir, 'public');
+    const x = r.ap(['export', '--out', out, '--public', pub]);
+    expect(x.status, x.stdout + x.stderr).toBe(3);
+    expect(x.stderr).toContain('ARTIFACT_PATH_ESCAPE');
+    expect(fs.readFileSync(victim, 'utf8')).toBe('unrelated owner file\n');
+    expect(fs.existsSync(pub)).toBe(false);
+  });
+});
+
 describe('rewriteRoots', () => {
   test('a worktree path becomes repo-relative; a local root nested in the worktree still reads as local notes', () => {
     const roots = [{ label: 'run', root: '/w/repo/.context/run' }, { label: 'home', root: '/home/u' }, { label: 'worktree', root: '/w/repo' }];

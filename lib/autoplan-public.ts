@@ -147,10 +147,11 @@ export function exportPublic(state: RunState, dir: string, env: NodeJS.ProcessEn
   try {
     const files: Provenance['files'] = {};
     for (const [name, entry] of Object.entries(state.artifacts)) {
-      const src = path.join(out, entry.path);
+      const src = path.resolve(out, entry.path);
+      const dest = path.resolve(staging, entry.path);
+      if (!src.startsWith(out + path.sep) || !dest.startsWith(staging + path.sep)) throw new RunError('ARTIFACT_PATH_ESCAPE', `artifact ${name} path ${JSON.stringify(entry.path)} leaves the run directory; nothing was written`, 3);
       if (!fs.existsSync(src) || sha256File(src) !== entry.sha256) throw new RunError('ARTIFACT_STALE', `${entry.path} does not match run.json; run gstack-autoplan export --out ${out} first`, 3);
       const text = fs.readFileSync(src, 'utf8');
-      const dest = path.join(staging, entry.path);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, name === 'plan.md' ? rewriteProse(text, roots) : entry.path.endsWith('.json') ? JSON.stringify(rewriteJson(JSON.parse(text), roots), null, 2) + '\n' : rewriteRoots(text, roots));
       files[name] = { private_sha256: entry.sha256, public_sha256: sha256File(dest) };
@@ -160,6 +161,8 @@ export function exportPublic(state: RunState, dir: string, env: NodeJS.ProcessEn
     manifest.provenance = { private_run: state.run, private_manifest_sha256: sha256File(privateRun), exported_at: new Date().toISOString(), roots: roots.map(r => r.label), files };
     fs.writeFileSync(path.join(staging, FILES.run), JSON.stringify(manifest, null, 2) + '\n');
     const check = validatePublic(staging, privateRun, env);
+    const escapes = check.errors.filter(e => e.code === 'ARTIFACT_PATH_ESCAPE');
+    if (escapes.length) throw new RunError('ARTIFACT_PATH_ESCAPE', escapes.map(e => `${e.path}: ${e.message}`).join('; '), 3);
     const leaks = check.errors.filter(e => e.code === 'ARTIFACT_MACHINE_PATH');
     if (leaks.length) throw new RunError('ARTIFACT_MACHINE_PATH', leaks.slice(0, 5).map(e => `${e.path}: ${e.message}`).join('; ') + (leaks.length > 5 ? ` (+${leaks.length - 5} more)` : ''), 3);
     fs.rmSync(target, { recursive: true, force: true });
