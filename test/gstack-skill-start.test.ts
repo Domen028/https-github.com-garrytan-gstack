@@ -611,8 +611,9 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
     status: code, held_count: 0, drainable: 0, last_drain_at: NOW(), last_push_at: NOW(), ts: NOW(), held: [], message: 'm', ...extra,
   });
 
-  const FIXTURES: Record<string, { status: () => Record<string, unknown>; queued?: number; n?: number }> = {
+  const FIXTURES: Record<string, { status: () => Record<string, unknown>; queued?: number; n?: number; names?: string }> = {
     held: { status: () => status('held', { held_count: 2 }), n: 2 },
+    'case-collision': { status: () => status('collision', { case_held: 2, case_names: 'MyApp,myapp' }), n: 2, names: 'MyApp,myapp' },
     blocked: { status: () => status('blocked') },
     push_failed: { status: () => status('push_failed') },
     error: { status: () => status('error') },
@@ -640,7 +641,7 @@ describe('ARTIFACTS_SYNC attention lines (sync status table)', () => {
       expect(fx).toBeDefined();
       const gh = syncHome(fx.status(), fx.queued ?? 0);
       try {
-        const expected = row.line.replaceAll('<bin>', SYNC).replaceAll('<N>', String(fx.n ?? 0));
+        const expected = row.line.replaceAll('<bin>', SYNC).replaceAll('<N>', String(fx.n ?? 0)).replaceAll('<names>', fx.names ?? '');
         expect(attention(runStart([], { GSTACK_HOME: gh }))).toEqual([expected]);
       } finally {
         fs.rmSync(gh, { recursive: true, force: true });
