@@ -221,6 +221,23 @@ describe('gstack-pregate (bin)', () => {
     expect(readOut(repo).stage2_ms).toBeUndefined();
   });
 
+  test('missing dependencies: regen is incomplete with REGEN_DEPS_MISSING and the install command, not REGEN_STALE', () => {
+    const repo = fixture({
+      registry: { entries: [{ id: 'digest', command: 'node gen.js', outputs: ['generated/**'], inputs: ['src/version.js', 'gen.js'] }] },
+      baseFiles: {
+        'package.json': JSON.stringify({ name: 'fixture', version: '1.0.0', scripts: { test: 'node --test test/*.test.js' }, devDependencies: { 'fixture-dep': '1.0.0' } }, null, 2) + '\n',
+        'gen.js': "const fs=require('fs');const {VERSION}=require('./src/version.js');let style='plain';try{style=require('fixture-dep').style;}catch{}fs.writeFileSync('generated/digest.md',`# digest v${VERSION} (${style})\\n`);\n",
+        'generated/digest.md': '# digest v1.0.0 (fancy)\n',
+      },
+    });
+    commit(repo, { 'src/version.js': "module.exports = { VERSION: '1.0.0' };\n// touched\n" });
+    const r = pregate(repo, ['--stage', 'preflight', '--only', 'regen']);
+    expect(r.status).not.toBe(EXIT.ok);
+    expect(r.out).toMatch(/^preflight {2}regen {5}incomplete .*dependencies missing; run bun install, then rerun the check \(1 entry unverified: digest\) \(REGEN_DEPS_MISSING\)/m);
+    expect(r.err).toContain('(REGEN_DEPS_MISSING)');
+    expect(r.out + r.err).not.toContain('REGEN_STALE');
+  });
+
   test('p0-4-scratch-script: zz-probe.sh at the root fails strays (downgraded to warn only when the base config says so); a conventional root file passes', () => {
     const strict = fixture({ pregate: { ...BASE_PREGATE, warn: [] } });
     commit(strict, { 'zz-probe.sh': '#!/bin/sh\necho hi\n', 'CONTRIBUTING.md': '# c\n', 'notes.txt': 'x\n', 'newtop/thing.js': 'module.exports = 1;\n' });
