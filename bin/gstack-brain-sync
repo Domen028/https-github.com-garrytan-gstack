@@ -783,27 +783,23 @@ stage_paths() {
 # spellings, and a retained local commit can be pushed with an empty queue.
 # Also records the tree's case-colliding names for skill start. Without
 # python3 no drain can stage anything, so there is no new tree to check. A
-# passing verdict is cached by the commit ids of HEAD and every ref (origin's
-# included, the comparison baseline), so the empty-queue drain at every skill
-# boundary skips the tree walk until one of them moves.
+# passing verdict is cached by HEAD's target and the commit ids of every ref
+# (origin's included, the comparison baseline), so the empty-queue drain at
+# every skill boundary skips the tree walk until one of them moves.
 validate_outgoing_paths() {
-  local out err key cached cache="$GSTACK_HOME/.brain-case-check"
+  local out key cached cache="$GSTACK_HOME/.brain-case-check"
   command -v python3 >/dev/null 2>&1 || return 0
-  key=$(git -C "$GSTACK_HOME" show-ref --head 2>/dev/null | cksum)
+  key=$({ head -1 "$GSTACK_HOME/.git/HEAD"; git -C "$GSTACK_HOME" show-ref --head; } 2>/dev/null | cksum)
   cached=$(head -1 "$cache" 2>/dev/null || true)
   if [ "${cached%%	*}" = "$key" ]; then
     [ -n "$ST_CASE_NAMES" ] || ST_CASE_NAMES=${cached#*	}
     return 0
   fi
-  err=$(mktemp "${TMPDIR:-/tmp}/brain-sync-outgoing.XXXXXX") || return 0
-  if ! out=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --outgoing "$GSTACK_HOME" 2>"$err"); then
+  if ! out=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --outgoing "$GSTACK_HOME"); then
     ST_CASE_NAMES=${out%$'\r'}
     write_status "error" "outgoing artifact path validation refused: a local commit adds a path that differs only by letter case from a path on the remote; local commits and queue preserved. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision"
-    cat "$err" >&2
-    rm -f "$err"
     return 1
   fi
-  rm -f "$err"
   out=${out%$'\r'}
   printf '%s\t%s\n' "$key" "$out" > "$cache" 2>/dev/null || true
   [ -n "$ST_CASE_NAMES" ] || ST_CASE_NAMES=$out

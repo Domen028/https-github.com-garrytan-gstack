@@ -658,19 +658,21 @@ unaffected; only the sync holds files.
 2. Fold the other spelling's tracked files into the kept one. Read both
    spellings from git, because a Mac's working tree shows only one of them,
    and the working files too, because they hold the held, unsynced writes.
-   This loop folds JSONL logs (concatenated, duplicate lines dropped) and
-   prints every other file for you to decide:
+   This loop covers the dropped spelling's tracked files and its untracked
+   ones (held writes that never synced). It folds JSONL logs (concatenated,
+   duplicate lines dropped) and prints every other file for you to decide:
 
    ```bash
    cd ~/.gstack
    keep=projects/MyApp; drop=projects/myapp
-   git -c core.ignorecase=false ls-files -- "$drop" | while IFS= read -r f; do
+   { git -c core.ignorecase=false ls-files -- "$drop"; git -c core.ignorecase=false ls-files --others -- "$drop"; } | sort -u | while IFS= read -r f; do
      rel=${f#"$drop"/}
      case "$rel" in *.jsonl) ;; *) echo "decide by hand: $f"; continue ;; esac
      { git show ":$keep/$rel"; git show ":$f"; cat "$keep/$rel" "$f"; } 2>/dev/null | awk '!seen[$0]++' > "$HOME/.gstack-fold.tmp"
      mkdir -p "$keep/$(dirname "$rel")" && mv "$HOME/.gstack-fold.tmp" "$keep/$rel"
      git -c core.ignorecase=false add -f -- "$keep/$rel"
-     git -c core.ignorecase=false rm -q --cached -- "$f"
+     git -c core.ignorecase=false rm -q --cached --ignore-unmatch -- "$f"
+     echo "folded: $keep/$rel"
    done
    ```
 
@@ -678,7 +680,7 @@ unaffected; only the sync holds files.
    `decisions.active.json`), compare `git show ":$keep/<file>"` with
    `git show ":$drop/<file>"`, write the content to keep to `"$keep/<file>"`,
    then run the same `git -c core.ignorecase=false add -f -- "$keep/<file>"`
-   and `git -c core.ignorecase=false rm -q --cached -- "$drop/<file>"`. Never
+   and `git -c core.ignorecase=false rm -q --cached --ignore-unmatch -- "$drop/<file>"`. Never
    concatenate a JSON snapshot. Then commit and push:
 
    ```bash
@@ -686,12 +688,15 @@ unaffected; only the sync holds files.
    git push origin HEAD
    ```
 
-   On Linux the two folders are separate on disk: remove the dropped folder
-   after the commit (`rm -r "$drop"`). On a Mac or Windows they are the same
-   folder, so do not remove anything.
+   On Linux the two folders are separate on disk: after the commit, check
+   that `git -c core.ignorecase=false ls-files --others -- "$drop"` lists
+   nothing you have not folded or moved, then remove the dropped folder
+   (`rm -r "$drop"`). On a Mac or Windows they are the same folder, so do
+   not remove anything.
 3. Clear the held records of the dropped spelling and queue the kept files:
    `gstack-brain-sync --skip-file <dropped path>` for each held path that
-   `--status` lists, then `gstack-brain-enqueue <kept path>` and
+   `--status` lists, then `gstack-brain-enqueue <kept path>` for each
+   `folded:` line and each file you moved by hand, and
    `gstack-brain-sync --once`.
 4. On every other machine, let the next skill start pull the repair (or run
    `git -C ~/.gstack pull`). The line disappears once no tracked path
