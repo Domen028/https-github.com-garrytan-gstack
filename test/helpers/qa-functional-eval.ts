@@ -24,6 +24,9 @@ export const QA_FUNCTIONAL_CASES = [
 /** Webhook fix runs: after the final source edit, every scenario of the repaired one-effect invariant, then happy, cancel and dependency. Feeds the capture nudge; the verdict keeps QA_WEBHOOK_REQUIRED_SCENARIOS. */
 export const QA_WEBHOOK_POST_REPAIR_SCENARIOS = ['duplicate', 'partial', 'concurrent-ab', 'concurrent-ba', 'happy', 'cancel', 'dependency'] as const;
 
+/** Webhook fix capture ceiling, unchanged at 12: post-repair reruns are reserved first and pre-repair exploration gets the rest. */
+export const QA_WEBHOOK_FIX_CAPTURE_LIMIT = 12;
+
 /** Native probe commands the capture helper reports as not yet run (GSTACK_QA_REQUIRED_PROBES); informational, never a verdict. */
 export function qaFunctionalRequiredProbes(entry: { family: QAFamily; mode: QAMode }): string[] | undefined {
   if (entry.family !== 'webhook') return;
@@ -37,7 +40,7 @@ The fixture README and AGENTS define intended contracts, native tests and owned 
 
 ${qaFixtureActor(entry.mode)}${entry.mode === 'qa' ? `
 
-This is a fix run, not an optional report-only handoff: a reproduced in-tier defect requires the authorized native regression, repair and verification.${entry.family === 'webhook' ? ` Capture budget: at most 5 captures before the repair, then, after the final source edit, the ${QA_WEBHOOK_POST_REPAIR_SCENARIOS.length} scenarios of stage 2; ${5 + QA_WEBHOOK_POST_REPAIR_SCENARIOS.length} in total. If 5 pre-repair captures cannot establish and replay the defect, report incomplete.` : ''} Complete these stages in order:
+This is a fix run, not an optional report-only handoff: a reproduced in-tier defect requires the authorized native regression, repair and verification.${entry.family === 'webhook' ? ` Capture budget: ${QA_WEBHOOK_FIX_CAPTURE_LIMIT} captures in total. Reserve the post-repair reruns first: the ${QA_WEBHOOK_POST_REPAIR_SCENARIOS.length} scenarios of stage 2 plus each distinct pre-repair command your verdict relies on that they do not repeat (for example a reject probe); pre-repair exploration gets only what remains. If those reruns cannot all fit, report the rest as open. If the remaining pre-repair captures cannot establish and replay the defect, report incomplete.` : ''} Complete these stages in order:
 1. Prove the regression red with a new native test under test/; existing tests remain read-only. Freeze all test files after red, repair only src/${entry.family === 'cli' ? 'cli' : 'worker'}.ts, and prove the unchanged regression green.
 2. On the repaired source, run ${entry.family === 'webhook' ? `the original failing probe and every other scenario of the repaired invariant (${QA_WEBHOOK_POST_REPAIR_SCENARIOS.slice(0, 4).join(', ')}), then the adjacent happy-path probe, cancellation and the unavailable-dependency probe` : 'the original failing probe, an adjacent happy-path probe, cancellation and the unavailable-dependency probe'}. After your final repair, rerun every pre-repair capture your verdict relies on; a superseded row stays open until its command reran on the repaired source. Preserve their actual JSON and checkpoints. A green test suite does not substitute for these native probes. Expected dependency blockage stays blocked, never pass.
 3. Save the evidence and Markdown artifacts, then return their paths and the actual completion status.

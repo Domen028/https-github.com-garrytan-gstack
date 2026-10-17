@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { qaFunctionalPrompt, qaFunctionalRequiredProbes, QA_FUNCTIONAL_CASES, QA_WEBHOOK_POST_REPAIR_SCENARIOS } from './helpers/qa-functional-eval';
+import { qaFunctionalPrompt, qaFunctionalRequiredProbes, QA_FUNCTIONAL_CASES, QA_WEBHOOK_FIX_CAPTURE_LIMIT, QA_WEBHOOK_POST_REPAIR_SCENARIOS } from './helpers/qa-functional-eval';
 import { qaCommandAllowed } from './helpers/qa-functional-observer';
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
@@ -263,7 +263,7 @@ test('webhook fix stage asks for the fix-loop probes; the R29 scenario omissions
 test('webhook fix budget names the post-repair scenarios up front, and they feed only the capture nudge', () => {
   const fix = qaFunctionalPrompt({ family: 'webhook', mode: 'qa' });
   const budget = fix.slice(fix.indexOf('Capture budget:'), fix.indexOf('Complete these stages in order'));
-  expect(budget).toBe('Capture budget: at most 5 captures before the repair, then, after the final source edit, the 7 scenarios of stage 2; 12 in total. If 5 pre-repair captures cannot establish and replay the defect, report incomplete. ');
+  expect(budget).toBe('Capture budget: 12 captures in total. Reserve the post-repair reruns first: the 7 scenarios of stage 2 plus each distinct pre-repair command your verdict relies on that they do not repeat (for example a reject probe); pre-repair exploration gets only what remains. If those reruns cannot all fit, report the rest as open. If the remaining pre-repair captures cannot establish and replay the defect, report incomplete. ');
   expect(fix.indexOf('Capture budget:')).toBeLessThan(fix.indexOf('1. Prove the regression red'));
   for (const entry of QA_FUNCTIONAL_CASES.filter(entry => entry.id !== 'qa-functional-webhook-fix')) expect(qaFunctionalPrompt(entry)).not.toContain('Capture budget:');
   expect([...QA_WEBHOOK_POST_REPAIR_SCENARIOS]).toEqual(['duplicate', 'partial', 'concurrent-ab', 'concurrent-ba', 'happy', 'cancel', 'dependency']);
@@ -273,6 +273,22 @@ test('webhook fix budget names the post-repair scenarios up front, and they feed
   expect(QA_WEBHOOK_REQUIRED_SCENARIOS.qa).toEqual(['happy', 'cancel', 'dependency']);
   const source = readFileSync(join(import.meta.dir, 'helpers/qa-functional-eval.ts'), 'utf8');
   expect(source).toContain('GSTACK_QA_REQUIRED_PROBES: JSON.stringify(qaFunctionalRequiredProbes(entry))');
+});
+
+test('webhook fix budget fits a pre-repair reject plus the reproduced defect inside the unchanged 12-capture ceiling', () => {
+  expect(QA_WEBHOOK_FIX_CAPTURE_LIMIT).toBe(12);
+  const probe = (scenario: string) => `bun run probe -- ${scenario}`;
+  const preRepair = ['reject', 'duplicate', 'duplicate'].map(probe);
+  const reliedOn = [...new Set(preRepair)];
+  const postRepair = [...new Set([...QA_WEBHOOK_POST_REPAIR_SCENARIOS.map(probe), ...reliedOn])];
+  expect(postRepair).toEqual([...QA_WEBHOOK_POST_REPAIR_SCENARIOS.map(probe), probe('reject')]);
+  expect(preRepair.length + postRepair.length).toBe(11);
+  expect(preRepair.length + postRepair.length).toBeLessThanOrEqual(QA_WEBHOOK_FIX_CAPTURE_LIMIT);
+  expect(QA_WEBHOOK_FIX_CAPTURE_LIMIT - postRepair.length).toBeGreaterThanOrEqual(preRepair.length);
+  const fix = qaFunctionalPrompt({ family: 'webhook', mode: 'qa' });
+  const budget = fix.slice(fix.indexOf('Capture budget:'), fix.indexOf('Complete these stages in order'));
+  expect(budget.indexOf('Reserve the post-repair reruns first')).toBeLessThan(budget.indexOf('pre-repair exploration gets only what remains'));
+  expect(budget).toContain('report the rest as open');
 });
 
 test('fix runs rerun every pre-repair capture their verdict relies on; superseded rows stay open until rerun', () => {
