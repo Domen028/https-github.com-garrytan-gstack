@@ -344,9 +344,9 @@ describe("THIRD_PARTY_ACTIONS contract pins", () => {
   // Paid run 39011101113 (tpa-absent-linux): the contract lettered only the detected case, and the
   // agent numbered the absent-Aside question 1/2/3, which asideDriveOptions cannot inspect.
   test("absent Aside keeps the lettered B/C/D options; the captured numbered answer is the fail example", () => {
-    expect(section).toContain("When Aside is not detected, offer only these options, keeping their letters: B) I drive it in gstack's own visible browser, C) manual instructions, D) defer (omit A).");
+    expect(section).toContain("When Aside is not detected, offer only the gstack drive / manual / defer options, lettered B), C), D).");
     const absent = section.slice(section.indexOf("When Aside is not detected"));
-    expect(absent.slice(0, absent.indexOf("(omit A)"))).not.toMatch(/\bA\)/);
+    expect(absent.slice(0, absent.indexOf("D)."))).not.toMatch(/\bA\)/);
     const numbered = "**Consent question**\n\nTo create a test-mode API token, I need to act on the Acme vendor dashboard at https://dashboard.acme.test. How would you like to proceed?\n\n1. I drive it in gstack's own visible browser. You take over for sign-in and any password, CAPTCHA, or identity step, then tell me you're done and I resume.\n2. I give you manual step-by-step instructions and you do it yourself.\n3. Defer this step for now. I mark it blocked on you.";
     expect(numbered).not.toMatch(/\b[A-D]\)/);
     const lettered = numbered.replace('1. ', 'B) ').replace('2. ', 'C) ').replace('3. ', 'D) ');
