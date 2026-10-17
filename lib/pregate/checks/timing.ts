@@ -183,13 +183,14 @@ export function scanTiming(file: string, text: string, added: ReadonlySet<number
 }
 
 /** Added line numbers per test file, merge-base to the working tree; an untracked test file counts whole. */
-export function addedTestLines(ctx: PregateContext): Map<string, Set<number> | 'all'> {
+export function addedTestLines(ctx: PregateContext): Map<string, Set<number> | 'all'> | { error: string } {
   const out = new Map<string, Set<number> | 'all'>();
   const files = ctx.touched.filter(t => t.status !== 'D' && scansTiming(t.path));
   if (!files.length) return out;
-  const diff = spawnSync('git', ['diff', '--no-color', '--unified=0', '--diff-filter=ACMR', '-M', ctx.mergeBase, '--', ...files.map(t => t.path)], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 256 * 1024 * 1024, env: ctx.env });
+  const diff = spawnSync('git', ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--src-prefix=a/', '--dst-prefix=b/', '--unified=0', '--diff-filter=ACMR', '-M', ctx.mergeBase, '--', ...files.map(t => t.path)], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 256 * 1024 * 1024, env: ctx.env });
+  if (diff.error || diff.status !== 0) return { error: 'git diff ' + (diff.error ? 'did not finish (' + diff.error.message + ')' : 'exited ' + diff.status + ': ' + (diff.stderr ?? '').trim().split('\n').pop()) };
   let current: Set<number> | null = null;
-  for (const line of (diff.stdout ?? '').split('\n')) {
+  for (const line of diff.stdout.split('\n')) {
     const header = /^\+\+\+ b\/(.+)$/.exec(line);
     if (header) { current = new Set(); out.set(header[1]!, current); continue; }
     const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
@@ -201,6 +202,7 @@ export function addedTestLines(ctx: PregateContext): Map<string, Set<number> | '
 
 function run(ctx: PregateContext): CheckResult {
   const added = addedTestLines(ctx);
+  if (!(added instanceof Map)) return { id: 'timing', stage: 'preflight', status: 'incomplete', inputs: baseInputs(ctx), code: 'PREGATE_INCOMPLETE', detail: added.error + '; the added test lines were not read', fix: 'fix the git error and rerun gstack-pregate; an unread diff never passes' };
   const hits: TimingHit[] = [];
   for (const [file, lines] of added) {
     let text: string;
