@@ -3,11 +3,11 @@
  * gstack-ship-queue — the shared merge queue, one subcommand per protocol
  * step (field list 2, W1; docs/ship-policy.md#run-a-shared-merge-queue).
  *
- *   gstack-ship-queue ready --pr <n> [--pregate <pregate.json>]
+ *   gstack-ship-queue ready --pr <n> [--pregate <pregate.json>] [--gate-exit <rc> --gate-log <file>]
  *   gstack-ship-queue stamp --pr <n> --version <X> --expect-gated <sha> --expect-base <sha>
  *                           [--expect-order <pr,...>] [--allow-repo-commands] [--gate-exit <rc> --gate-log <file>]
  *   gstack-ship-queue verify --pr <n> (--gated <sha> | --record <gate-ahead.json>) [--receipt <sha256>]
- *                           [--expect-head <sha>] [--ref <ref>] [--no-fetch]
+ *                           [--expect-head <sha>] [--ref <ref>] [--no-fetch] [--gate-exit <rc> --gate-log <file>]
  *   gstack-ship-queue gate-ahead --after <pr> --pr <n> [--predecessor-ref <ref>] [--allow-repo-commands]
  *   gstack-ship-queue gate-ahead --record --pr <n> --attempt <id> --exit <rc> --log <file>
  *   gstack-ship-queue gate-ahead --list --pr <n>
@@ -28,11 +28,13 @@ import { attemptFile, listAttempts, prepareGateAhead, recordGateAhead, type Queu
 
 const HELP = `gstack-ship-queue — the shared merge queue's protocol steps (docs/ship-policy.md#run-a-shared-merge-queue)
 
-  ready --pr <n> [--pregate <file>]        READY #<n> <head> STAMP_VERSION=<X|unstamped>, CI at that head, PREGATE, gate state
+  ready --pr <n> [--pregate <file>] [--gate-exit <rc> --gate-log <file>]
+                                           READY #<n> <head> STAMP_VERSION=<X|unstamped>, CI at that head, PREGATE, gate state
   stamp --pr <n> --version <X> --expect-gated <sha> --expect-base <sha> [--expect-order <pr,...>] [--allow-repo-commands]
         [--gate-exit <rc> --gate-log <file>]
                                            restamp, commit and prove: QUEUE_STAMP: <pr> <X> head= gated= tree= receipt=
   verify --pr <n> --gated <sha> | --record <file> [--receipt <sha256>] [--expect-head <sha>] [--ref <ref>] [--no-fetch]
+        [--gate-exit <rc> --gate-log <file>]   (full_e2e: --gated needs the lane's passing gate run on that head)
                                            the coordinator's check from the PR's pushed head: VERIFY: ... and MERGE_CONDITION
   gate-ahead --after <pr> --pr <n> [--predecessor-ref <ref>] [--allow-repo-commands]
                                            prepare an attempt: merged, stamped worktree, gated sha and the gate command
@@ -58,6 +60,8 @@ function finish(cmd: string, out: StepOutput): number {
   if (out.ok) return EXIT.ok;
   return out.failure && ['QUEUE_VERIFY_MISMATCH', 'QUEUE_STAMP_NOT_STAMP_ONLY'].includes(out.failure.code) ? EXIT.fail : EXIT.refused;
 }
+
+const shq = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 function usage(message: string): number {
   process.stderr.write(`gstack-ship-queue: ${message}\n${HELP}\n`);
@@ -113,7 +117,7 @@ function gateAhead(ctx: QueueContext, args: string[]): number {
       `record: ${r.file}`,
       `GATE_COMMAND: ${rec.gate_command ?? 'none (the policy sets no gate_command; run the repo gate you would run on a PR head)'}`,
       ...(superseded.length ? [`note: this attempt is now current; earlier unrecorded attempts (${superseded.join(', ')}) keep their worktrees until recorded`] : []),
-      `next: (cd ${rec.worktree} && ${cmd}) > ${log} 2>&1; gstack-ship-queue gate-ahead --record --pr ${pr} --attempt ${rec.attempt} --exit $? --log ${log}`,
+      `next: (cd ${shq(rec.worktree)} && ${cmd}) > ${shq(log)} 2>&1; gstack-ship-queue gate-ahead --record --pr ${pr} --attempt ${rec.attempt} --exit $? --log ${shq(log)}`,
     ],
   });
 }
@@ -129,17 +133,18 @@ function main(argv: string[]): number {
   const pr = flag(args, '--pr');
   if (cmd === 'gate-ahead') return gateAhead(ctx, args);
   if (!pr || !/^\d+$/.test(pr)) return usage(`${cmd} needs --pr <number>`);
-  if (cmd === 'ready') return finish('ready', ready(ctx, { pr, pregate: flag(args, '--pregate') }));
+  const gateExit = flag(args, '--gate-exit');
+  if (gateExit !== undefined && !/^-?\d+$/.test(gateExit)) return usage('--gate-exit needs an exit code');
+  const gate = { gateExit: gateExit === undefined ? undefined : Number(gateExit), gateLog: flag(args, '--gate-log') };
+  if (cmd === 'ready') return finish('ready', ready(ctx, { pr, pregate: flag(args, '--pregate'), ...gate }));
   if (cmd === 'stamp') {
     const version = flag(args, '--version');
     const expectGated = flag(args, '--expect-gated');
     const expectBase = flag(args, '--expect-base');
     if (!version || !expectGated || !expectBase) return usage('stamp needs --version <X> --expect-gated <sha> --expect-base <sha>');
-    const gateExit = flag(args, '--gate-exit');
-    if (gateExit !== undefined && !/^-?\d+$/.test(gateExit)) return usage('--gate-exit needs an exit code');
     return finish('stamp', stamp(ctx, {
       pr, version, expectGated, expectBase, expectOrder: flag(args, '--expect-order')?.split(',').map(s => s.trim()).filter(Boolean),
-      allowRepoCommands: args.includes('--allow-repo-commands'), gateExit: gateExit === undefined ? undefined : Number(gateExit), gateLog: flag(args, '--gate-log'),
+      allowRepoCommands: args.includes('--allow-repo-commands'), ...gate,
       failAfter: process.env.GSTACK_SHIP_QUEUE_FAIL_AFTER,
     }));
   }
@@ -147,7 +152,7 @@ function main(argv: string[]): number {
     const record = flag(args, '--record');
     return finish('verify', verify(ctx, {
       pr, gated: flag(args, '--gated'), record: record ? path.resolve(record) : undefined, receipt: flag(args, '--receipt'),
-      expectHead: flag(args, '--expect-head'), ref: flag(args, '--ref'), noFetch: args.includes('--no-fetch'),
+      expectHead: flag(args, '--expect-head'), ref: flag(args, '--ref'), noFetch: args.includes('--no-fetch'), ...gate,
     }));
   }
   return usage(`unknown subcommand ${cmd}`);

@@ -56,7 +56,7 @@ refuses the file (`POLICY_GSTACK_TOO_OLD`). `validate` ends with
 | `restamp_command` | command or `null` | `null` | The repo's own restamp, run first in the staging worktree; see [restamp_command](#restamp-command). |
 | `migrations` | `{ dir, id }` or `null` | `null` | The migration directory and a regex with exactly one capture group for the number in a file name (`"^v(\\d+)-"`); `gstack-pregate regate` reports `MIGRATION_COLLISION`. |
 | `gate_command` | command or `null` | `null` | The repo's full pre-merge gate. `gstack-ship-queue gate-ahead` and `ready` print it for the caller to run (in the background or in CI); gstack never executes it. Needs `min_gstack_version`. |
-| `full_e2e` | `true` \| `false` | `false` | `true`: every merge needs a passing full-gate result bound to a tree equal to the merging one modulo stamps; `gstack-ship-queue stamp` and `verify` refuse without one (`QUEUE_GATE_MISSING`). Needs `min_gstack_version`. |
+| `full_e2e` | `true` \| `false` | `false` | `true`: every merge needs a passing full-gate result bound to a tree equal to the merging one modulo stamps; `gstack-ship-queue ready`, `stamp` and `verify` refuse without one (`QUEUE_GATE_MISSING`): a gate-ahead record, or the lane's `--gate-exit 0 --gate-log <file>` from its run on the gated head. Needs `min_gstack_version`. |
 | `min_gstack_version` | version or `null` | `null` | The oldest gstack that may read the file; see the compatibility rule above. |
 
 Containment, checked by `validate` and again at write time: paths and globs are
@@ -230,13 +230,15 @@ stamp commit, wait for CI on it, run `ready` again
 **5. Coordinator: verify, then merge.** From the coordinator's own clone:
 
 ```bash
-gstack-ship-queue verify --pr 42 --gated <gated> --receipt <sha256> --expect-head <head>
+gstack-ship-queue verify --pr 42 --gated <gated> --receipt <sha256> --expect-head <head> [--gate-exit 0 --gate-log <file>]
 gstack-ship-queue verify --pr 42 --record <gate-ahead record> --receipt <sha256> --expect-head <head>
 ```
 
 It fetches `refs/pull/42/head` and reruns the tree receipt there, so
 `QUEUE_STAMP` is never a pasted claim: `VERIFY: 42 1.2.7.0 head=<sha>
-gated=<sha> tree=same-modulo-stamps receipt=<same sha256>`. With a gate-ahead
+gated=<sha> tree=same-modulo-stamps receipt=<same sha256>`. Under `full_e2e`,
+`--gated` also needs the lane's passing gate log from its run on that head
+(`--gate-exit 0 --gate-log <file>`), else `QUEUE_GATE_MISSING`. With a gate-ahead
 record, whose gated commit never left the lane's machine, it first recomputes
 the merge with `git merge-tree --write-tree <branch head> <predecessor head>`
 and compares it with the recorded merge tree, rebuilds the gated tree from

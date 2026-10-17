@@ -59,18 +59,51 @@ function treeReceipt(ctx: QueueContext, policy: LoadedPolicy, gated: string, cur
   return 'error' in r ? { code: 'QUEUE_PROOF_MISSING', message: r.error } : r;
 }
 
+const CI_PAGE = 100;
+const CI_MAX_PAGES = 10;
+
+/** Every page of one GitHub list for a commit; anything short of exactly total_count is an error, never a partial answer. */
+function readAllPages(ctx: QueueContext, endpoint: string, key: 'check_runs' | 'statuses'): { items: Array<Record<string, unknown>> } | { error: string } {
+  const items: Array<Record<string, unknown>> = [];
+  for (let page = 1; page <= CI_MAX_PAGES; page++) {
+    const r = ctx.gh(['api', `${endpoint}?per_page=${CI_PAGE}&page=${page}`]);
+    let body: { total_count?: unknown; [k: string]: unknown } | null = null;
+    try { body = r.ok ? JSON.parse(r.out) : null; } catch {}
+    const list = body?.[key];
+    const total = body?.total_count;
+    if (!Array.isArray(list) || typeof total !== 'number') return { error: `${key} page ${page} unreadable (gh: ${(r.err ?? r.out).trim().slice(0, 120) || 'no total_count'})` };
+    items.push(...list);
+    if (items.length >= total || list.length < CI_PAGE) {
+      return items.length === total ? { items } : { error: `${key}: read ${items.length} of total_count=${total}` };
+    }
+  }
+  return { error: `${key}: more than ${CI_PAGE * CI_MAX_PAGES} entries, not all read` };
+}
+
+/** CI at one exact SHA: every check run and every commit-status context; unreadable or incomplete is unknown, never green. */
 function ciAtHead(ctx: QueueContext, sha: string): { line: string; green: boolean } {
-  const r = ctx.gh(['api', `repos/{owner}/{repo}/commits/${sha}/check-runs?per_page=100`]);
-  let runs: Array<{ status?: string; conclusion?: string | null }> | null = null;
-  try { runs = r.ok ? JSON.parse(r.out).check_runs : null; } catch {}
-  if (!Array.isArray(runs)) return { line: `unknown at ${sha.slice(0, 12)} (gh: ${(r.err ?? r.out).trim().slice(0, 120) || 'no check runs readable'})`, green: false };
-  const count = (pred: (c: { status?: string; conclusion?: string | null }) => boolean) => runs!.filter(pred).length;
-  const pending = count(c => c.status !== 'completed');
-  const passed = count(c => c.status === 'completed' && c.conclusion === 'success');
-  const skipped = count(c => c.status === 'completed' && (c.conclusion === 'skipped' || c.conclusion === 'neutral'));
-  const failed = runs.length - pending - passed - skipped;
-  const green = runs.length > 0 && pending === 0 && failed === 0;
-  return { line: `${green ? 'green' : pending ? 'pending' : runs.length ? 'red' : 'none'} at ${sha.slice(0, 12)} (passed=${passed} failed=${failed} pending=${pending} skipped=${skipped})`, green };
+  const at = sha.slice(0, 12);
+  const runs = readAllPages(ctx, `repos/{owner}/{repo}/commits/${sha}/check-runs`, 'check_runs');
+  if ('error' in runs) return { line: `unknown at ${at} (${runs.error})`, green: false };
+  const statuses = readAllPages(ctx, `repos/{owner}/{repo}/commits/${sha}/status`, 'statuses');
+  if ('error' in statuses) return { line: `unknown at ${at} (${statuses.error})`, green: false };
+  const verdicts = [
+    ...runs.items.map(c => c.status !== 'completed' ? 'pending' : c.conclusion === 'success' ? 'passed' : c.conclusion === 'skipped' || c.conclusion === 'neutral' ? 'skipped' : 'failed'),
+    ...statuses.items.map(s => s.state === 'success' ? 'passed' : s.state === 'pending' ? 'pending' : 'failed'),
+  ];
+  const count = (v: string) => verdicts.filter(x => x === v).length;
+  const [passed, failed, pending, skipped] = [count('passed'), count('failed'), count('pending'), count('skipped')];
+  const green = verdicts.length > 0 && pending === 0 && failed === 0;
+  return { line: `${green ? 'green' : pending ? 'pending' : verdicts.length ? 'red' : 'none'} at ${at} (passed=${passed} failed=${failed} pending=${pending} skipped=${skipped})`, green };
+}
+
+/** Under full_e2e: a passing gate bound to this head (the stamp journal, a gate-ahead attempt on it) or the lane's own run on it. */
+function gateEvidence(ctx: QueueContext, pr: string, head: string, attempt: AttemptRecord | null, gateExit?: number, gateLog?: string): { ok: boolean; line: string } {
+  const j = readJournal(path.join(ctx.repoRoot, stampJournalRel(pr)));
+  if (j?.outcome?.head === head && j.gate) return { ok: j.gate.exit === 0, line: `gate-evidence: exit ${j.gate.exit} (${j.gate.source}, stamped onto ${head.slice(0, 12)})` };
+  if (attempt?.result && attempt.branch_head === head) return { ok: attempt.result.exit === 0, line: `gate-evidence: exit ${attempt.result.exit} (gate-ahead attempt ${attempt.attempt})` };
+  if (gateExit !== undefined && gateLog && fs.existsSync(gateLog)) return { ok: gateExit === 0, line: `gate-evidence: exit ${gateExit} log_sha256=${sha256(fs.readFileSync(gateLog))} (lane run on ${head.slice(0, 12)})` };
+  return { ok: false, line: `gate-evidence: missing for ${head.slice(0, 12)} (gate-ahead --record, or --gate-exit 0 --gate-log <file>)` };
 }
 
 function gateLine(policy: LoadedPolicy, attempt: AttemptRecord | null): string {
@@ -80,7 +113,7 @@ function gateLine(policy: LoadedPolicy, attempt: AttemptRecord | null): string {
 }
 
 /** READY: one block, identifiers first, about the exact pushed PR head. */
-export function ready(ctx: QueueContext, o: { pr: string; pregate?: string }): StepOutput {
+export function ready(ctx: QueueContext, o: { pr: string; pregate?: string; gateExit?: number; gateLog?: string }): StepOutput {
   const run = PREGATE_OUT_REL;
   const policy = loadBasePolicy(ctx);
   if ('message' in policy) return fail(policy, [], run);
@@ -121,11 +154,11 @@ export function ready(ctx: QueueContext, o: { pr: string; pregate?: string }): S
     gateLine(policy, attempt),
     receipt.found && receipt.receipt && !receipt.errors.length ? receiptSummaryLine(receipt.receipt) : `SHIP_RECEIPT: ${receipt.found ? 'invalid' : 'none'} in the PR body`,
   ];
+  const gate = policy.policy.full_e2e ? gateEvidence(ctx, o.pr, head, attempt, o.gateExit, o.gateLog) : null;
+  if (gate) lines.push(gate.line);
   if (!ci.green) return fail({ code: 'QUEUE_NOT_READY', message: `CI is not green at ${head.slice(0, 12)}: ${ci.line}` }, lines, run);
   if (!pregateOk) return fail({ code: 'QUEUE_NOT_READY', message: `the pregate result is not a current pass: ${pregateLine}` }, lines, run);
-  if (policy.policy.full_e2e && version === 'unstamped' && !(attempt?.result?.exit === 0)) {
-    lines.push('note: full_e2e is set; the stamp needs a passing gate record (gate-ahead --record) or --gate-exit 0 --gate-log on the gated head');
-  }
+  if (gate && !gate.ok) return fail({ code: 'QUEUE_GATE_MISSING', message: `full_e2e is set and no passing gate is bound to ${head.slice(0, 12)}: ${gate.line}` }, lines, run);
   return { ok: true, lines, run };
 }
 
@@ -268,7 +301,7 @@ export function stamp(ctx: QueueContext, o: StampOptions): StepOutput {
   };
 }
 
-export interface VerifyOptions { pr: string; gated?: string; record?: string; receipt?: string; expectHead?: string; ref?: string; noFetch?: boolean }
+export interface VerifyOptions { pr: string; gated?: string; record?: string; receipt?: string; expectHead?: string; ref?: string; noFetch?: boolean; gateExit?: number; gateLog?: string }
 
 /** Rebuild a gate-ahead record's gated tree from the PR's own commits: merge-tree, then the recorded stamp patch. */
 function reproduceGateAhead(ctx: QueueContext, policy: LoadedPolicy, rec: AttemptRecord, head: string): QueueFailure | { gatedCommit: string; lines: string[] } {
@@ -341,7 +374,14 @@ export function verify(ctx: QueueContext, o: VerifyOptions): StepOutput {
     if (!sha) return fail({ code: 'QUEUE_PROOF_MISSING', message: `gated head ${o.gated} is not reachable from ${remote}; a gate-ahead claim needs --record` }, [], run);
     gatedCommit = sha;
     gatedLabel = sha;
-    lines.push(`gate: ${policy.policy.full_e2e ? 'lane-reported (a plain stamp carries no gate record to check)' : 'not required by the policy'}`);
+    if (o.gateExit === undefined) {
+      if (policy.policy.full_e2e) return fail({ code: 'QUEUE_GATE_MISSING', message: `full_e2e is set and no gate result is bound to the gated head ${sha.slice(0, 12)}; pass the lane's --gate-exit 0 --gate-log <file> from its gate run there, or verify a gate-ahead --record` }, [], run);
+      lines.push('gate: not required by the policy');
+    } else {
+      if (!o.gateLog || !fs.existsSync(o.gateLog) || !fs.statSync(o.gateLog).size) return fail({ code: 'QUEUE_GATE_MISSING', message: `--gate-exit needs --gate-log <file>, the non-empty log of the gate run on ${sha.slice(0, 12)}` }, [], run);
+      if (o.gateExit !== 0) return fail({ code: 'QUEUE_GATE_MISSING', message: `the gate on ${sha.slice(0, 12)} exited ${o.gateExit}` }, [], run);
+      lines.push(`gate: exit 0 log_sha256=${sha256(fs.readFileSync(o.gateLog))} (lane run on gated ${sha.slice(0, 12)})`);
+    }
   }
   const rcpt = treeReceipt(ctx, policy, gatedCommit, head);
   if ('message' in rcpt) return fail(rcpt, lines, run);

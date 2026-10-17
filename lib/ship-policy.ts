@@ -111,7 +111,7 @@ export const POLICY_EXPLANATIONS: Record<PolicyKey, string> = {
   restamp_command: 'The repo’s own restamp, run first in gstack-restamp’s staging worktree (a clean checkout of HEAD) with the target version as its argument and in GSTACK_RESTAMP_VERSION; gstack’s version writer is skipped, output confinement still applies. Needs a clean caller tree and --allow-repo-commands.',
   migrations: '{ dir, id }: the migration directory and a regex with one capture group for the number in a file name; `gstack-pregate regate` reports MIGRATION_COLLISION against the base branch and every open PR.',
   gate_command: 'The repo’s full pre-merge gate command. gstack-ship-queue gate-ahead and ready print it for the caller to run (in the background or in CI); gstack never executes it. null when the repo has none.',
-  full_e2e: 'true: every merge needs a passing full-gate record (gstack-ship-queue gate-ahead --record) bound to a tree equal to the merging one modulo stamps; ready and verify refuse without one (QUEUE_GATE_MISSING).',
+  full_e2e: 'true: every merge needs a passing full-gate result (gstack-ship-queue gate-ahead --record, or the lane\'s --gate-exit 0 --gate-log on the gated head) bound to a tree equal to the merging one modulo stamps; ready, stamp and verify refuse without one (QUEUE_GATE_MISSING).',
   min_gstack_version: 'The oldest gstack that may read this file. Any key newer than 1.91.98.0 set to a non-default value requires it at that key’s introducing version (validate prints each); a gstack older than it refuses the file (POLICY_GSTACK_TOO_OLD).',
 };
 
