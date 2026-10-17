@@ -1,5 +1,41 @@
 # Changelog
 
+## [1.91.113.0] - 2026-10-17
+
+**A Capy install that has fallen behind now says so in the one line lanes relay, a skipped upgrade is never reported ok, and a reused pid no longer blocks every upgrade.** Lanes pass along only the `gstack:` trailer, so a session that was 12 commits behind origin looked current. Two field reports (GBRA-105, GBRA-106) showed session-start upgrades wedged behind a lease whose pid now belonged to dbus-daemon or systemd-logind, while the trailer still said ok.
+
+### What this means for you
+
+- **The ok trailer carries the gap and the fix:** `gstack: ok <v> for=<skill> (behind=<n> (latest: <v>); fix: <command>)`. The fix is the command that actually closes the gap: a rerun, `gstack-upgrade` for a dirty, detached or diverged checkout, or `unset <VAR>` when upgrades are switched off. Run it.
+- **A skipped session-start upgrade fails.** When the upgrade is busy, refused or missing, install mode ends `gstack: fail behind — … (UPGRADE_BUSY|UPGRADE_REFUSED)` with exit 1, and workflows refuse until the fix runs. An explicit opt-out stays ok with the `behind=` note.
+- **A lease records who holds it.** `gstack-lease` stores the holder's start identity (boot id plus start time, or `ps` lstart). A lease whose pid now belongs to another process is reclaimed, with a `gstack-lease: reclaimed stale lease …` line. `live`, UPGRADE_BUSY and `fail behind` name each holder as `pid <p> (<age>m <command>)`.
+- **The supported minimum rises to this release**, so older Capy checkouts are fast-forwarded at install-mode session start.
+
+### For contributors
+
+- The lease directory has a lock: a symlink naming its holder, broken only when that holder is dead or its pid was reused. Breakers serialize on `.lock.break` and reread before removing. While a live process holds the lock, `touch` exits 3, and `gstack-skill-start` reports that the session holds no workflow lease. Known limit: two gstack-lease processes killed in a row can still let a reclaim delete a renewal.
+- The paid-gate Aside drive-offer detector (`test/helpers/third-party-actions.ts`) now matches the product name only. The English "set this aside" was a false positive in paid run 38988927989.
+
+## [1.91.112.0] - 2026-10-17
+
+**`/cso --paths` audits part of a repository and says exactly what it skipped.** A repository over /cso's 64 MiB source cap used to get one piece of advice, "run /cso on a smaller checkout". The trimmed copy then read as the whole repository, and the verdict never said what was left out. `gstack-cso start --paths src/core,src/mcp` now audits only those prefixes and reports every other path as skipped, with snapshot and history coverage marked partial.
+
+### What this means for you
+
+- **`--paths` narrows an audit without hiding what it left out.** Files outside the prefixes are never copied, read or counted toward the cap. The run's snapshot manifest lists each one, the report counts them, and snapshot-inputs and history-inputs coverage read partial, so the verdict can't look complete. Git history is limited to the same prefixes.
+- **`--diff --paths` fails closed.** A changed, added or deleted file outside the prefixes refuses the run and is named, including `.npmrc`, `bunfig.toml`, `.claude/` and other credential or agent configuration. Only dependency trees such as `node_modules`, which /cso never reads, are exempt.
+- **Findings stay in scope.** A finding, recheck evidence or `history` query on a skipped path is refused, and rechecks and replays keep the original `--paths`.
+- **The source-cap message points to `--paths`** and warns against hand-trimmed copies. The manifest cap and the 100,000-entry limit still count every file, so their advice is unchanged (#2993).
+
+### If you…
+
+- **…audited a hand-trimmed copy to get under the cap:** rerun /cso on the full checkout with `--paths` set to the directories you want audited, so the report says what was skipped.
+
+### For contributors
+
+- New `test/cso-audit-paths.test.ts` covers the cap advice, the withheld entries and gaps, the `--diff` refusal in both directions, bounded 1 MiB hashing of out-of-scope files when a comparison base is set, recheck and replay scope, and out-of-scope history and findings.
+- Known limits: under `--paths` the original-source hash ignores content changes outside the scope, out-of-scope hashing has no byte cap beyond the time budget, `--paths` with `--comprehensive` runs on a trimmed tree, and a recheck refuses when the audited directory was renamed.
+
 ## [1.91.111.0] - 2026-10-16
 
 **Four background reds in the paid PR gate were caused by a detector, a fixture interface, a gstack helper and a Review Army workflow block, not by the PRs that hit them.** Each is fixed where it starts, and each fix has a free regression built from the red run's captured events. Over the last 99 gate runs, 10 of 28 full-selection PR runs had a red. Replayed under these fixes, that drops to 8, and red verdicts drop from 13 to 10. No threshold, budget, trial count or quarantine changed.

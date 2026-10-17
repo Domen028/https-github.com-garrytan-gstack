@@ -42,14 +42,20 @@ git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.lo
    refusal of `gstack-upgrade` applies), prints `SELF_UPGRADE: done <old> ->
    <new>` and re-execs the new checkout's wrapper, which installs from the
    new revision (`GSTACK_CAPY_UPGRADED_FROM` set, so setup is never skipped).
-   A refusal prints `SELF_UPGRADE: skipped (<reason>)` and the session
-   continues on the installed revision; the trailer stays the doctor's.
+   A refusal prints `SELF_UPGRADE: skipped (<reason>)`, and the session is
+   never certified ok: the trailer is `gstack: fail behind — installed <rev> is
+   <n> commits behind origin (latest <ver>) and the session-start upgrade was
+   skipped: <reason>; fix: <command> (UPGRADE_BUSY|UPGRADE_REFUSED)`, exit 1.
    `SELF_UPGRADE: none (current)` when nothing is ahead;
    `GSTACK_CAPY_SELF_UPGRADE=off` (or `GSTACK_CAPY_AUTO_UPGRADE=0`) prints
    `SELF_UPGRADE: disabled (<variable>)`. `--check` never moves the checkout;
    behind origin it prints `gstack-capy-session: behind origin/<branch>:
    <installed> -> <remote> (<n> commits); fix: bash <skill>/scripts/install.sh
-   [--for <skill>] (fast-forwards)` and the agent runs that fix.
+   [--for <skill>] (fast-forwards)` and the agent runs that fix. Whenever the
+   session ends behind origin (`--check`, or a self-upgrade that was skipped or
+   disabled), the ok trailer also says so, because lanes relay only the
+   trailer: `behind=<n> (latest: <ver>); fix: <command>` (see the trailer
+   grammar below).
 4. When the fetch fails (offline), the bootstrapper says `remote minimum
    unknown (fetch failed)` and checks the local install only; it never claims
    the minimum, and nothing is fast-forwarded.
@@ -72,10 +78,28 @@ resets.
 Several agents sharing one checkout (eight Capy subagents on a machine) hold
 workflow leases on it: every `bin/gstack-skill-start` touches
 `<git dir>/gstack-leases/<harness pid>` (`bin/gstack-lease touch`; pruned after
-120 minutes). `bin/gstack-upgrade`, and so the session-start self-upgrade,
-refuses with [UPGRADE_BUSY](troubleshooting.md#upgrade-busy) while a lease
-whose pid is alive and outside its own process chain exists;
-`bin/gstack-lease list` shows them and `GSTACK_UPGRADE_FORCE=1` overrides.
+120 minutes). Each lease records its process's start identity (Linux: boot id
+and `/proc` start time; elsewhere `ps -o lstart`), because a pid is reused after
+a reboot or a machine wake. `bin/gstack-upgrade`, and so the session-start
+self-upgrade, refuses with [UPGRADE_BUSY](troubleshooting.md#upgrade-busy)
+while a lease held by a live process outside its own chain exists, naming each
+holder as `pid <p> (<age>m <command>)`. A lease whose pid now belongs to another
+process, or an identity-less lease from an older gstack past 120 minutes, is
+stale: `bin/gstack-lease live` reclaims it (`gstack-lease: reclaimed stale
+lease …`). Stale needs proof: two well-formed identities from the same backend
+that differ (`ps` is read under `LC_ALL=C TZ=UTC0`). An identity that cannot be
+read, a malformed record or a backend change keeps the lease. `touch` (publish
+by rename, prune) and reclaim (reread, then delete only the record judged
+stale) run under one lock in the lease directory, a symlink naming its holder's
+pid and start identity, so a renewal is never deleted and a live lease never
+disappears from a concurrent scan. The lock is broken only when its holder is
+dead or its pid was reused, never by age, and breakers serialize on a second
+symlink and reread the lock before removing it. One killed gstack-lease process
+is always safe; two killed in a row, one holding the lock and the next while
+breaking it, can still let a reclaim delete a renewal. While a live process holds it,
+`touch` exits 3 without writing (`gstack-skill-start` reports that the
+session holds no lease) and a reclaim keeps the lease. `bin/gstack-lease list` shows `alive|dead|stale`, and
+`GSTACK_UPGRADE_FORCE=1` overrides.
 
 ## What the installer does
 
@@ -213,13 +237,18 @@ The last line is the trailer:
 gstack: ok 1.91.96.0 for=autoplan
 gstack: ok 1.91.96.0 for=review (requested: v1.91.90.0 (run <checkout>/bin/gstack-upgrade to move); latest: 1.91.101.0 available)
 gstack: ok 1.91.96.0 for=autoplan (pins: skipped (planning-only))
+gstack: ok 1.91.101.0 for=autoplan (behind=12 (latest: 1.91.107.0); fix: bash <skill>/scripts/install.sh --for autoplan)
 gstack: fail runtime,pins
 ```
 
 An ok trailer carries at most one parenthesised note group, `; `-separated,
 in this order: `requested: …` (an existing checkout at another revision than
-`--revision`), `pins: skipped (planning-only|no project)`, and `latest: <ver>
-available` (origin's default branch has a newer VERSION; the bootstrapper
+`--revision`), `pins: skipped (planning-only|no project)`, then either
+`behind=<n> (latest: <ver>)` followed by `fix: <command>` (the session ended
+<n> commits behind origin's default branch after a fetch that succeeded in this
+run; `bin/gstack-capy-session` exports `GSTACK_CAPY_BEHIND`, `_BEHIND_TO` and
+`_BEHIND_FIX`, so this works with every bootstrapper revision), or `latest:
+<ver> available` (origin's default branch has a newer VERSION; the bootstrapper
 exports it as `GSTACK_CAPY_REMOTE_VERSION` only after a fetch that succeeded
 in this run). A fail trailer never carries notes. Match `^gstack: ok ` or
 `^gstack: fail `; never parse past the first space after the version.

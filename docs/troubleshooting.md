@@ -1204,8 +1204,18 @@ or too large. Each message names the cap that applied:
   withheld from the audit.
 - **Symlinks.** A tracked symlink anywhere in the repository stops the run.
 
-**Fix.** No setting raises these caps. Run /cso on a smaller checkout that
-holds the code you want audited and no symlinks. Add your file count or size to
+**Fix.** No setting raises these caps. For the 64 MiB source cap, rerun with
+`--paths` set to the comma-separated repo-relative directories you want audited
+(for example `--paths src/core,src/mcp`). Paths outside them are never
+captured or assessed and do not count toward the cap; snapshot and history
+coverage then read **partial**, the report counts every skipped path, and the run's
+snapshot manifest lists each one, so the verdict says what was not audited.
+With `--diff`, every changed path outside dependency directories must be inside
+`--paths`, or the run is refused. Do not audit a hand-trimmed copy: /cso would treat it as the whole
+repository and report nothing as skipped. `--paths` does not lower the
+manifest cap or the 100,000-entry limit, because every skipped path still has a
+manifest entry (about 50,000 files fit). Symlinks must be removed. Add your
+file count or size to
 [#2993](https://github.com/garrytan/gstack/issues/2993).
 
 <a id="cso-scanner-invalid-output"></a>
@@ -1403,15 +1413,20 @@ machine, say). Each session start writes a workflow lease,
 anything because a lease whose pid is alive and not in its own process
 ancestry exists: fast-forwarding would change gstack under a session
 mid-workflow. Leases older than 120 minutes are pruned; a lease whose
-process has exited never blocks. The upgrader's own session (the pid chain it
+process has exited never blocks, and neither does a stale one: each lease
+records its process's start identity, so a pid reused after a reboot or a
+machine wake (GBRA-105's lease named pid 379, which had become dbus-daemon)
+is reclaimed instead of blocking. The upgrader's own session (the pid chain it
 runs under) never counts.
 
 **Fix.** Wait for those sessions to finish (`bin/gstack-lease list` shows
-every lease with its age and `alive|dead`), then re-run `bin/gstack-upgrade`.
+every lease with its age and `alive|dead|stale`; a holder is named as
+`pid <p> (<age>m <command>)`), then re-run `bin/gstack-upgrade`.
 When you know they are idle, `GSTACK_UPGRADE_FORCE=1 bin/gstack-upgrade`
 proceeds. At a Capy session start the same refusal appears as
-`SELF_UPGRADE: skipped (live gstack sessions hold this installation: ...)`
-and the session continues on the installed revision.
+`SELF_UPGRADE: skipped (live gstack sessions hold this installation: ...)`,
+and the trailer is `gstack: fail behind — … (UPGRADE_BUSY)`: a session that
+could not upgrade is never certified ok.
 
 <a id="upgrade-fetch-failed"></a>
 ### `gstack-upgrade: could not reach origin (...) (UPGRADE_FETCH_FAILED)`
