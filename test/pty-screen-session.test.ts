@@ -150,7 +150,8 @@ catch(error){if(!String(error).includes('PTY screen unavailable') || !String(err
   }, 15_000);
 
   // PR gate run 38976253774 (autoplan-guard-pty): after a stall the tail of visibleText() was only spinner redraws,
-  // so the failure dump showed no screen. Diagnostic only: visibleText() and matching are unchanged.
+  // and leftover cursor-visibility escapes, so the failure dump showed no screen. stripAnsi now removes
+  // \x1b[?25h/l; the kept viewport is diagnostic only.
   test('a blank redraw keeps the last non-blank viewport for the failure dump without changing visibleText', () => {
     const f = fixture();
     try {
@@ -172,7 +173,7 @@ try {
   const first = await until(s => s.includes('step 8'));
   session.send('blank');
   await until(s => !s.trim());
-  const report = { kept: session.lastScreen() === first, visible: session.visibleText().includes('step 8') };
+  const report = { kept: session.lastScreen() === first, visible: session.visibleText().includes('step 8'), cursorEscapes: /\\[\\?25/.test(session.visibleText()) };
   let dump = '';
   try { await session.waitFor('never printed', { timeoutMs: 200, pollMs: 20 }); } catch (error) { dump = String(error); }
   report.dump = dump.includes('Last non-blank screen:') && dump.includes('Waiting for next invocation to continue with step 8.');
@@ -181,7 +182,7 @@ try {
 } finally { await session.close(); }
 `);
       expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ kept: true, visible: true, dump: true });
+      expect(JSON.parse(result.stdout)).toEqual({ kept: true, visible: true, cursorEscapes: false, dump: true });
     } finally { fs.rmSync(f.dir, { recursive: true, force: true }); }
   }, 15_000);
 });
