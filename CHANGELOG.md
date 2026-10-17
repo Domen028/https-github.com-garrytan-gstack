@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+**/cso comprehensive repairs run again.** In the first paid runtime qualification, the agent recorded 148 repair reviews across 42 comprehensive runs, but not one verification attempt started. Every runtime scored 0/24 on held-out repairs. Two helper bugs stacked: the patch write failed on the snapshot's read-only files, and `runtime-plan` handed the agent a profile name that `verify` refused.
+
+### Fixed
+- **`verify` can patch read-only snapshot files.** Snapshot copies keep their 0444 modes, so writing the patched file failed with EACCES for any non-root user, which is how real users and the evaluator run. The error surfaced as a generic "unexpected or unsafe input". The helper now makes the file owner-writable for the write and restores its mode afterwards.
+- **`runtime-plan` returns the qualified runtime ID** (for example `node-24.4.0-amd64`) instead of the stack alias, and the skill copies that value into the verification request. `verify` rejects any other profile with an `INVALID_ARGUMENT` that names the expected ID, before an attempt is counted.
+
+### If you…
+- **…build a verification request by hand:** use the `runtimeProfile` that `runtime-plan` printed. The stack alias is refused.
+
 ## [1.91.122.0] - 2026-10-17
 
 **Main no longer goes red on 2026-11-16.** All seven `.osv-scanner.toml` suppressions expired on 2026-11-30, and `test/osv-ignore-expiry.test.ts` fails 14 days early. Six are gone and the seventh is re-dated with an upstream link. Dependabot's grouped dev bump (#3228) is replaced by hand, and Version Gate stops failing every dependabot package.json PR.
