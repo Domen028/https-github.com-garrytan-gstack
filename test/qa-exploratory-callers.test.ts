@@ -187,6 +187,10 @@ describe('caller native-event observer controls', () => {
           `PROBE_DIR = ${fixture.cwd}/reports`, `DEADLINE_FILE = ${fixture.cwd}/reports/deadline.json`, 'so --public is approved', '--timeout-ms 10000']) {
           expect(prompt).toContain(binding);
         }
+        // PR gate 39077524802 (0f71a55) ship-exploratory-late-input: after the late input change the actor reran captures
+        // 001 and 002 with --timeout-ms 10000, reading revalidation as 'outside the smoke budget'.
+        expect(prompt).toContain('Only an explicit plan check this phase requires may use --timeout-ms 10000 in place of the deadline; every other capture, including a rerun or revalidation of an earlier probe, uses the deadline.');
+        expect(prompt).not.toContain('Explicit plan probes outside the smoke budget may use');
       } finally { await fixture.close(); fs.rmSync(fixture.root, { recursive: true, force: true }); }
     }
     const section = fs.readFileSync(path.join(import.meta.dir, '../qa/sections/exploratory.md'), 'utf8');
