@@ -253,7 +253,6 @@ gstack_result_anchor() {
     DX_CAPTURE_INTERRUPTED) printf '%s' 'dx-capture-interrupted' ;;
     DX_CAPTURE_REDACTION_FAILED) printf '%s' 'dx-capture-redaction-failed' ;;
     DX_CAPTURE_INTERNAL) printf '%s' 'dx-capture-internal' ;;
-    WTREE_UNAVAILABLE) printf '%s' 'wtree-unavailable' ;;
     POLICY_GSTACK_TOO_OLD) printf '%s' 'policy-gstack-too-old' ;;
     QUEUE_NOT_READY) printf '%s' 'queue-not-ready' ;;
     QUEUE_PROOF_MISSING) printf '%s' 'queue-proof-missing' ;;
@@ -267,6 +266,7 @@ gstack_result_anchor() {
     APPROVAL_CITATION_MISSING) printf '%s' 'approval-citation-missing' ;;
     APPROVAL_SOURCE_UNAVAILABLE) printf '%s' 'approval-source-unavailable' ;;
     STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
+    WTREE_UNAVAILABLE) printf '%s' 'wtree-unavailable' ;;
     *) return 1 ;;
   esac
 }

@@ -767,12 +767,6 @@ export const RESULT_CODES = {
     summary: 'unexpected helper failure; the line names the error class and its first stack frame',
     fix: 'rerun once; if it repeats, report the printed frame to the gstack maintainers',
   },
-  // Fix wave 2026-10-15, PR 5 (item 10b, #3197).
-  WTREE_UNAVAILABLE: {
-    anchor: 'wtree-unavailable',
-    summary: 'cannot fingerprint the working tree: bin/gstack-wtree could not start (on Windows, no Git Bash was found) or it ran and failed',
-    fix: 'on Windows point GSTACK_GIT_BASH at Git Bash\'s bash.exe (Git Bash: export GSTACK_GIT_BASH=\'C:/Program Files/Git/bin/bash.exe\'; PowerShell: $env:GSTACK_GIT_BASH = \'C:\\Program Files\\Git\\bin\\bash.exe\'), or install Git for Windows (winget install --id Git.Git -e); elsewhere rerun ./setup so bin/gstack-wtree is present; then rerun gstack-pregate',
-  },
   ...RELEASE_RESULT_CODES,
 } as const satisfies Record<string, ResultCode>;
 
