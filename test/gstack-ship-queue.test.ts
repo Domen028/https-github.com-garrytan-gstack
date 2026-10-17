@@ -10,7 +10,7 @@
  * (pushed-head, CI-at-head and pregate refusals) with an offline gh.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
@@ -22,7 +22,8 @@ import { BASE_POLICY, BIN, cleanup, makeFixtureRepo, makePr, mergeMain, mergeToM
 import { coordinatorClone, ghQueueShim } from './helpers/ship-queue-fixture';
 
 const repos: FixtureRepo[] = [];
-const fixture = (policy?: Record<string, unknown>) => { const r = makeFixtureRepo(policy ? { policy } : {}); repos.push(r); return r; };
+const fixture = (policy?: Record<string, unknown>, prefix?: string) => { const r = makeFixtureRepo({ ...(policy ? { policy } : {}), ...(prefix ? { prefix } : {}) }); repos.push(r); return r; };
+const FULL_E2E = { ...BASE_POLICY, full_e2e: true, gate_command: 'bun run full-gate', min_gstack_version: SHIP_QUEUE_KEYS_VERSION };
 afterEach(() => { while (repos.length) cleanup(repos.pop()!); });
 
 const queue = (repo: FixtureRepo, args: string[], extraEnv: Record<string, string> = {}, cwd = repo.work) => runBin(repo, 'gstack-ship-queue', [...args, '--base', 'main'], extraEnv, cwd);
@@ -122,8 +123,8 @@ describe('stamp journal, resume and refusals', () => {
 });
 
 /** #1 stamped and published; #2 branched with its own [Unreleased] entry. */
-function twoLanes(policy?: Record<string, unknown>) {
-  const repo = fixture(policy);
+function twoLanes(policy?: Record<string, unknown>, prefix?: string) {
+  const repo = fixture(policy, prefix);
   makePr(repo, 'pr-a', { expects: '1.2.4.0' });
   expect(restamp(repo, ['--next', '--pr', '1']).status).toBe(EXIT.ok);
   repo.git('commit', '-qam', 'stamp a');
@@ -298,4 +299,92 @@ describe('receipt digest', () => {
     expect(receiptDigest(receipt(files, { current_tree: 'c'.repeat(40) }))).not.toBe(d);
     expect(receiptDigest(receipt(files, { new_version: '1.2.5.0' }))).not.toBe(d);
   });
+});
+
+describe('full_e2e gate evidence (review #3235 P1-1)', () => {
+  test('verify --gated refuses without a passing gate bound to the gated head; the lane run passes, a failing one refuses', () => {
+    const repo = fixture(FULL_E2E);
+    const head = makePr(repo, 'feature');
+    publish(repo, '1');
+    const coord = coordinatorClone(repo);
+    const bare = queue(repo, ['verify', '--pr', '1', '--gated', head, '--expect-head', head], {}, coord);
+    expect(bare.status).toBe(EXIT.refused);
+    expect(bare.err).toMatch(/full_e2e is set and no gate result is bound to the gated head .*\(QUEUE_GATE_MISSING\)/);
+    expect(bare.out).not.toContain('MERGE_CONDITION');
+    const log = path.join(repo.root, 'gate.log');
+    fs.writeFileSync(log, 'FAIL 1\n');
+    const red = queue(repo, ['verify', '--pr', '1', '--gated', head, '--gate-exit', '1', '--gate-log', log], {}, coord);
+    expect(red.status).toBe(EXIT.refused);
+    expect(red.err).toMatch(/the gate on [0-9a-f]{12} exited 1; .*\(QUEUE_GATE_MISSING\)/);
+    expect(queue(repo, ['verify', '--pr', '1', '--gated', head, '--gate-exit', '0'], {}, coord).err).toContain('(QUEUE_GATE_MISSING)');
+    fs.writeFileSync(log, 'all passed\n');
+    const ok = queue(repo, ['verify', '--pr', '1', '--gated', head, '--expect-head', head, '--gate-exit', '0', '--gate-log', log], {}, coord);
+    expect(ok.status).toBe(EXIT.ok);
+    expect(ok.out).toMatch(/^gate: exit 0 log_sha256=[0-9a-f]{64} \(lane run on gated [0-9a-f]{12}\)$/m);
+    expect(line(ok.out, 'MERGE_CONDITION:')).toBe(`MERGE_CONDITION: sha=${head}`);
+  }, 180_000);
+
+  test('ready refuses with QUEUE_GATE_MISSING and a gate-evidence: missing line; the lane run on that head clears it', () => {
+    const repo = fixture(FULL_E2E);
+    const head = makePr(repo, 'feature');
+    const tree = runBin(repo, 'gstack-wtree', []).out.trim();
+    const pregate = path.join(repo.root, 'pregate.json');
+    fs.writeFileSync(pregate, JSON.stringify({ schema_version: 1, tree, head, verdict: 'pass', checks: [{ id: 'unit', status: 'pass' }] }));
+    const gh = ghQueueShim(repo, { prs: { '1': { headRefOid: head, body: '' } }, checks: { [head]: { check_runs: [{ status: 'completed', conclusion: 'success' }] } } });
+    const missing = queue(repo, ['ready', '--pr', '1', '--pregate', pregate], gh);
+    expect(missing.status).toBe(EXIT.refused);
+    expect(missing.out).toContain(`gate-evidence: missing for ${head.slice(0, 12)}`);
+    expect(missing.err).toContain('(QUEUE_GATE_MISSING)');
+    const log = path.join(repo.root, 'gate.log');
+    fs.writeFileSync(log, 'all passed\n');
+    const ok = queue(repo, ['ready', '--pr', '1', '--pregate', pregate, '--gate-exit', '0', '--gate-log', log], gh);
+    expect(ok.status).toBe(EXIT.ok);
+    expect(ok.out).toMatch(new RegExp(`^gate-evidence: exit 0 log_sha256=[0-9a-f]{64} \\(lane run on ${head.slice(0, 12)}\\)$`, 'm'));
+  }, 180_000);
+});
+
+describe('ready reads all of CI at the head (review #3235 P1-5)', () => {
+  const pass = { status: 'completed', conclusion: 'success' };
+  const hundred = Array.from({ length: 100 }, () => pass);
+  function readyWith(checks: unknown, statuses?: unknown) {
+    const repo = fixture();
+    const head = makePr(repo, 'pr-a');
+    const tree = runBin(repo, 'gstack-wtree', []).out.trim();
+    const pregate = path.join(repo.root, 'pregate.json');
+    fs.writeFileSync(pregate, JSON.stringify({ schema_version: 1, tree, head, verdict: 'pass', checks: [{ id: 'unit', status: 'pass' }] }));
+    const gh = ghQueueShim(repo, { prs: { '1': { headRefOid: head, body: '' } }, checks: { [head]: checks }, ...(statuses ? { statuses: { [head]: statuses } } : {}) });
+    return { r: queue(repo, ['ready', '--pr', '1', '--pregate', pregate], gh), at: head.slice(0, 12) };
+  }
+
+  test('a failed check run on page two is red', () => {
+    const { r, at } = readyWith({ pages: [{ total_count: 101, check_runs: hundred }, { total_count: 101, check_runs: [{ status: 'completed', conclusion: 'failure' }] }] });
+    expect(r.status).toBe(EXIT.refused);
+    expect(line(r.out, 'ci: ')).toBe(`ci: red at ${at} (passed=100 failed=1 pending=0 skipped=0)`);
+  }, 120_000);
+
+  test('a failed or pending commit-status context is not green even when every check run passed', () => {
+    const red = readyWith({ check_runs: [pass] }, { state: 'failure', statuses: [{ context: 'required-deploy', state: 'failure' }] });
+    expect(red.r.status).toBe(EXIT.refused);
+    expect(line(red.r.out, 'ci: ')).toBe(`ci: red at ${red.at} (passed=1 failed=1 pending=0 skipped=0)`);
+    const pending = readyWith({ check_runs: [pass] }, { state: 'pending', statuses: [{ context: 'legacy', state: 'pending' }] });
+    expect(line(pending.r.out, 'ci: ')).toBe(`ci: pending at ${pending.at} (passed=1 failed=0 pending=1 skipped=0)`);
+  }, 120_000);
+
+  test('incomplete pagination is unknown, never green', () => {
+    const { r, at } = readyWith({ total_count: 101, check_runs: hundred });
+    expect(r.status).toBe(EXIT.refused);
+    expect(line(r.out, 'ci: ')).toBe(`ci: unknown at ${at} (check_runs: read 100 of total_count=101)`);
+  }, 120_000);
+});
+
+describe('printed gate-ahead command (review #3235 P2-1)', () => {
+  test("next: runs as printed from a checkout whose path holds a space and an apostrophe", () => {
+    const { repo } = twoLanes({ ...BASE_POLICY, gate_command: 'node -e "process.exit(0)"', min_gstack_version: SHIP_QUEUE_KEYS_VERSION }, "gstack sq o'fx-");
+    const p = prepare(repo);
+    expect(p.status).toBe(EXIT.ok);
+    const next = line(p.out, 'next: ').slice(6);
+    const r = spawnSync('bash', ['-c', next], { cwd: repo.work, encoding: 'utf8', timeout: 120_000, env: { ...process.env, ...repo.env, PATH: `${path.dirname(BIN('gstack-ship-queue'))}:${process.env.PATH ?? ''}` } });
+    expect(r.stderr).toBe('');
+    expect(line(r.stdout, 'GATE_RECORD:')).toMatch(new RegExp(`^GATE_RECORD: pr=2 attempt=${p.attempt} exit=0 `));
+  }, 180_000);
 });

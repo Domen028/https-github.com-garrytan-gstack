@@ -76,14 +76,21 @@ export function gbrainPairRepo(): { repo: FixtureRepo; pair: GbrainPair; gated: 
 }
 
 /** A `gh` on PATH answering `gh pr view <n> --json …` and `gh api …/commits/<sha>/check-runs…` from fixed data, so ready runs offline. */
-export function ghQueueShim(repo: FixtureRepo, data: { prs: Record<string, unknown>; checks: Record<string, unknown> }): { PATH: string } {
+/**
+ * gh for the queue: pr view, and paged check-runs and combined commit status
+ * per SHA. A checks or statuses entry is one page (total_count defaults to its
+ * length; later pages are empty) or { pages: [...] }. A SHA with no statuses
+ * entry has no commit-status contexts, as on GitHub.
+ */
+export function ghQueueShim(repo: FixtureRepo, data: { prs: Record<string, unknown>; checks: Record<string, unknown>; statuses?: Record<string, unknown> }): { PATH: string } {
   const dir = path.join(repo.root, 'gh-queue-shim');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify(data));
   const js = [
     "const d = require(process.argv[2]); const a = process.argv.slice(3);",
     "if (a[0] === 'pr' && a[1] === 'view') { const p = d.prs[a[2]]; if (!p) { console.error('no pull request found'); process.exit(1); } console.log(JSON.stringify(p)); process.exit(0); }",
-    "if (a[0] === 'api') { const m = /commits\\/([0-9a-f]+)\\/check-runs/.exec(a[1] || ''); const c = m && d.checks[m[1]]; if (!c) { console.error('HTTP 404'); process.exit(1); } console.log(JSON.stringify(c)); process.exit(0); }",
+    "const paged = (c, key, page) => { if (c.pages) return c.pages[page - 1] || { total_count: c.pages.reduce((n, p) => n + p[key].length, 0), [key]: [] }; const total = c.total_count ?? c[key].length; return page === 1 ? { total_count: total, ...c } : { total_count: total, [key]: [] }; };",
+    "if (a[0] === 'api') { const m = /commits\\/([0-9a-f]+)\\/(check-runs|status)\\?.*page=(\\d+)/.exec(a[1] || ''); if (!m) { console.error('gh shim: unsupported ' + a.join(' ')); process.exit(1); } const runs = m[2] === 'check-runs'; const c = runs ? d.checks[m[1]] : ((d.statuses || {})[m[1]] || { state: 'pending', statuses: [] }); if (!c) { console.error('HTTP 404'); process.exit(1); } console.log(JSON.stringify(paged(c, runs ? 'check_runs' : 'statuses', Number(m[3])))); process.exit(0); }",
     "console.error('gh shim: unsupported ' + a.join(' ')); process.exit(1);",
   ].join('\n');
   fs.writeFileSync(path.join(dir, 'shim.js'), js);
