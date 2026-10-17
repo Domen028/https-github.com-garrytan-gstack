@@ -89,6 +89,15 @@ describe('Aside driver contract ({{ASIDE_SETUP}})', () => {
     expect(section).toContain('AskUserQuestion ONCE per run');
   });
 
+  test('consent boundary covers the writes a label hides: wizard steps and saves after a silent no-op set (#3216)', () => {
+    const rule3 = setup.match(/\n3\. \*\*Invocation is consent[^\n]*/)![0];
+    expect(rule3).toContain('before the first one. There, a wizard or dialog step');
+    expectMentions(rule3, [['wizard', 'step', 'mutating', 'until its handler', 'cancel proves nothing']], 'rule 3');
+    expectMentions(rule3, [['before any save', 'read back', '`setvalue`', 'stop on a mismatch', '`throw`']], 'rule 3');
+    expect(fallback).toContain('Rule 3 (mutating actions on a NON-LOCAL target need one AskUserQuestion per run) applies unchanged');
+    expectMentions(cookbook, [['skip path'], ['probe', 'precondition']], 'cookbook');
+  });
+
   test('credential boundary: the user signs in, the agent never handles secrets', () => {
     expect(section).toContain('Credentials never pass through you');
     expectMentions(section, [['never', 'passwords', 'one-time']], 'section');
