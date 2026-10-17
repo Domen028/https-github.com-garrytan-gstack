@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.91.118.0] - 2026-10-17
+
+**Free Tests is green on pushes to main again.** Since v1.91.106.0, every push to main failed `test/held-install-recovery.test.ts`, while pull request runs passed.
+
+### Fixed
+- **The held-install recovery fixture no longer assumes the checkout has no `main` branch.** On a push, `actions/checkout` leaves the checkout on a local `main`, so the fixture's clone already had `main` and `git checkout --orphan main` failed with `a branch named 'main' already exists`. Pull request runs check out a detached merge ref and never hit it. The fixture now builds on its own orphan branch and pushes `HEAD:refs/heads/main`, and a new test builds it from a source on `main` and from a detached source with no branch.
+
+### If you…
+- **…write a test fixture that clones this repository:** don't create a branch with a fixed name such as `main` in the clone. Push runs and pull request runs leave different local branches behind.
+
 ## [1.91.117.0] - 2026-10-17
 
 **Pregate understands bats repositories and says why a fingerprint failed, `gstack-doctor` lists rescued edits and pasted skill lists, oversized SKILL.md files can no longer grow, and hosts without plan mode drop the plan-mode preamble.** The last PR of the 2026-10-15 fix wave (`docs/designs/FIX_WAVE_2026_10_15.md`, PR 5), built after #3190.
