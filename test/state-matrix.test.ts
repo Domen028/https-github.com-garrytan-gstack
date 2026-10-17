@@ -8,8 +8,8 @@
  * tests only for add, remove and a new-claim replace. `gstack-state-matrix
  * check` must pass it against the fixture's ground truth, and fail each
  * negative control derived from it. The paid behavior case that reruns the
- * specialist live is `review-army-state-matrix`; it belongs in
- * test/skill-e2e-review-army.test.ts and is not added here.
+ * specialist live is `review-army-state-matrix` in
+ * test/skill-e2e-review-army.test.ts.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';

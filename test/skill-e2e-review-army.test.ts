@@ -8,6 +8,7 @@ import {
   logCost, recordE2E, createEvalCollector, finalizeEvalCollector,
 } from './helpers/e2e-helpers';
 import { extractSkillSections, REVIEW_ARMY_E2E_SECTIONS, sliceBetween } from './helpers/skill-fixture';
+import { makeStateMatrixRepo, STATE_MACHINES_CHECKLIST, STATE_MATRIX_FIXTURE, type StateMatrixRepo } from './helpers/state-matrix-fixture';
 import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -582,6 +583,56 @@ Write ONLY JSON findings (no preamble) to ${dir}/findings.json`,
       }
     }
   }, JUDGE_MS);
+});
+
+// --- Review Army: State-machine round-trip matrix (field list 2, W3) ---
+// Contract: on the #6792-shaped diff (two new proposal kinds that fall through
+// to the remove path, tests only for add, remove and a new-claim replace), the
+// live State Machines specialist, given Step 4.5's dispatch instructions
+// extracted from review-army.md, returns a matrix that gstack-state-matrix
+// check passes against the fixture's ground truth: every kind x owner action
+// cell, each untested cell reported as a finding. The free regression on a
+// captured run is test/state-matrix.test.ts.
+
+describeIfSelected('Review Army: State-machine matrix', ['review-army-state-matrix'], () => {
+  let repo: StateMatrixRepo;
+
+  beforeAll(() => {
+    repo = makeStateMatrixRepo('skill-e2e-army-state-matrix-');
+    const specDir = path.join(repo.work, 'review-specialists');
+    fs.mkdirSync(specDir, { recursive: true });
+    fs.copyFileSync(STATE_MACHINES_CHECKLIST, path.join(specDir, 'state-machines.md'));
+  });
+
+  afterAll(() => { try { fs.rmSync(repo.root, { recursive: true, force: true }); } catch {} });
+
+  testConcurrentIfSelected('review-army-state-matrix', async () => {
+    const dispatch = sliceBetween(readReviewSection('review-army.md'), '"You are a specialist code reviewer.', '**Subagent configuration:**')
+      .trim().replace(/^"|"$/g, '').replace(/\\"/g, '"')
+      .replace('{checklist path}', 'review-specialists/state-machines.md').replace('origin/<base>', 'origin/main')
+      .replace('{TEST_FW}', 'unknown').replace('{STACK}', 'node').replace("{learnings or 'none'}", 'none');
+    const out = path.join(repo.work, 'review-output.jsonl');
+    const result = await runSkillTest({
+      prompt: `You are the State Machines specialist that /review's Step 4.5 dispatched for branch trust-guard (gstack-state-matrix detect printed SCOPE_STATE_MACHINE=true). These are your dispatch instructions:
+
+${dispatch}
+
+Write your raw output, exactly as those instructions define it, to ${out} and nothing else. After saving it, finish with a brief acknowledgement.`,
+      workingDirectory: repo.work,
+      maxTurns: 20,
+      timeout: 180_000,
+      testName: 'review-army-state-matrix',
+      runId,
+    });
+
+    logCost('/review army state matrix', result);
+    recordE2E(evalCollector, '/review army state-machine matrix', 'Review Army', result);
+    expect(result.exitReason).toBe('success');
+    expect(fs.existsSync(out)).toBe(true);
+    const check = spawnSync(path.join(ROOT, 'bin', 'gstack-state-matrix'), ['check', out, '--repo', repo.work, '--expect', path.join(STATE_MATRIX_FIXTURE, 'expect.json')], { cwd: repo.work, encoding: 'utf-8', timeout: 60_000 });
+    expect(check.stdout, check.stdout + check.stderr).toMatch(/^STATE_MATRIX_CHECK: ok/m);
+    expect(check.status).toBe(0);
+  }, 240_000);
 });
 
 // --- Review Army: Red Team (periodic) ---
