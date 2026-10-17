@@ -845,6 +845,7 @@ the existing path is worse.
 
 **Reality rows (required):** run `~/.claude/skills/gstack/bin/gstack-plan-reality rows --phase ceo` and work each
 row it prints (tier 1 always: premise-table, already-done, surface-check, binding-decisions, numbers, deferred-asks, pr-count; tier 2 by detected scope, `--scope <csv>`).
+Tier 1 rows are never `n/a`: with no linked issue, deferred-asks is `pass` with a receipt showing none.
 Every row cites a file:line receipt; the premise table counts `unverified=<n>`. End with
 one line per row, `REALITY: <row> pass|finding|n/a <summary> <file:line>`, then run
 `~/.claude/skills/gstack/bin/gstack-plan-reality check --phase ceo <review-file|->` (it prints the `PLAN_REALITY:` line): a missing row is `incomplete`

@@ -58,6 +58,7 @@ in an unattended run, never a warning; interactive runs follow the repair rule a
   const phase = phaseFor(ctx, mode);
   return `**Reality rows (required):** run \`${BIN} rows --phase ${phase}\` and work each
 row it prints (tier 1 always: ${TIER1_ROW_IDS.join(', ')}; tier 2 by detected scope, \`--scope <csv>\`).
+Tier 1 rows are never \`n/a\`: with no linked issue, deferred-asks is \`pass\` with a receipt showing none.
 Every row cites a file:line receipt; the premise table counts \`unverified=<n>\`. End with
 one line per row, \`${REALITY_LINE_SHAPE}\`, then run
 \`${BIN} check --phase ${phase} <review-file|->\` (it prints the \`PLAN_REALITY:\` line): a missing row is \`incomplete\`
