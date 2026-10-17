@@ -15,6 +15,7 @@ export function qaDeadlineShellPolicy(directory: string, guard: string, browse: 
   const allowed = [readiness, 'uname -s', 'date -u +%Y-%m-%dT%H:%M:%SZ',
     `[ -x ${quote(browse)} ] && echo READY || echo NEEDS_SETUP`,
     `ls -la ${quote(path.join(directory, 'qa-reports'))}`,
+    `ls -la ${quote(path.join(directory, 'qa-reports/screenshots'))}`,
     `git -C ${quote(directory)} status --short`,
     `git -C ${quote(directory)} rev-parse HEAD`,
     `git -C ${quote(directory)} rev-parse --short HEAD`,

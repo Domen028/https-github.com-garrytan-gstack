@@ -4,12 +4,13 @@
 # freshness test is test/doctor-components.test.ts. Sourced by
 # bin/gstack-doctor-check.sh; Bash 3.2 builtins only.
 
-GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso runtime pins state-root privacy cores revision wrapper"
+GSTACK_DOCTOR_COMPONENTS="claude codex patch codex-cli browse-bundle browser cso helpers runtime pins state-root privacy cores revision wrapper"
 GSTACK_DOCTOR_CORE="runtime pins state-root privacy cores revision wrapper"
 GSTACK_DOCTOR_HOSTS="claude codex"
 GSTACK_DOCTOR_OPTIONAL="codex-cli cso"
-GSTACK_DOCTOR_SKILLS="autoplan plan-ceo-review plan-eng-review plan-design-review plan-devex-review plan-tune office-hours spec review ship investigate codex cso browse qa qa-only design-review design-consultation design-html devex-review scrape skillify canary benchmark make-pdf diagram pair-agent open-gstack-browser setup-browser-cookies connect-chrome land-and-deploy benchmark-models careful claude-code context-restore context-save design-shotgun deslop-shared-libs document-generate document-release eval-plan freeze gstack-upgrade guard health ios-clean ios-design-review ios-fix ios-qa ios-sync landing-report learn retro setup-deploy setup-gbrain sync-gbrain test-audit unfreeze"
+GSTACK_DOCTOR_SKILLS="autoplan plan-ceo-review plan-eng-review plan-design-review plan-devex-review plan-tune office-hours spec review ship investigate codex cso browse qa qa-only design-review design-consultation design-html devex-review scrape skillify canary benchmark make-pdf diagram pair-agent open-gstack-browser setup-browser-cookies connect-chrome land-and-deploy benchmark-models careful claude-code context-restore context-save design-shotgun deslop-shared-libs document-generate document-release eval-plan freeze gstack-upgrade guard health ios-clean ios-design-review ios-fix ios-qa ios-sync landing-report learn retro setup-deploy setup-gbrain sync-gbrain test-audit unfreeze review-voice"
 GSTACK_BROWSER_LAZY_REASON="lazy; gstack-browser-ensure installs on first use"
+GSTACK_DOCTOR_HELPERS="gstack-pregate gstack-plan-reality gstack-artifact gstack-autoplan"
 
 # gstack_doctor_component_title ID — the human title; returns 1 for an unknown id.
 gstack_doctor_component_title() {
@@ -21,6 +22,7 @@ gstack_doctor_component_title() {
     browse-bundle) printf '%s' 'browse bundle' ;;
     browser) printf '%s' 'Chromium launch and render' ;;
     cso) printf '%s' 'CSO native helper' ;;
+    helpers) printf '%s' 'read-only helpers (gstack-pregate sealed, gstack-plan-reality, gstack-artifact, gstack-autoplan reads)' ;;
     runtime) printf '%s' 'gstack runtime (Bun)' ;;
     pins) printf '%s' 'project pins' ;;
     state-root) printf '%s' 'state root' ;;
@@ -42,6 +44,7 @@ gstack_doctor_component_kind() {
     browse-bundle) printf '%s' 'component' ;;
     browser) printf '%s' 'component' ;;
     cso) printf '%s' 'optional' ;;
+    helpers) printf '%s' 'component' ;;
     runtime) printf '%s' 'core' ;;
     pins) printf '%s' 'core' ;;
     state-root) printf '%s' 'core' ;;
@@ -61,6 +64,7 @@ gstack_doctor_skill_requires() {
     cso) printf '%s' 'claude cso' ;;
     browse|qa|qa-only|design-review|design-consultation|design-html|devex-review|scrape|skillify|canary|benchmark|make-pdf|diagram|pair-agent|open-gstack-browser|setup-browser-cookies|connect-chrome|land-and-deploy) printf '%s' 'claude codex patch browse-bundle browser' ;;
     benchmark-models|careful|claude-code|context-restore|context-save|design-shotgun|deslop-shared-libs|document-generate|document-release|eval-plan|freeze|gstack-upgrade|guard|health|ios-clean|ios-design-review|ios-fix|ios-qa|ios-sync|landing-report|learn|retro|setup-deploy|setup-gbrain|sync-gbrain|test-audit|unfreeze) printf '%s' 'claude' ;;
+    review-voice) printf '%s' 'helpers' ;;
     *) return 1 ;;
   esac
 }
@@ -73,6 +77,7 @@ gstack_doctor_skill_optional() {
     cso) printf '%s' '' ;;
     browse|qa|qa-only|design-review|design-consultation|design-html|devex-review|scrape|skillify|canary|benchmark|make-pdf|diagram|pair-agent|open-gstack-browser|setup-browser-cookies|connect-chrome|land-and-deploy) printf '%s' 'codex-cli' ;;
     benchmark-models|careful|claude-code|context-restore|context-save|design-shotgun|deslop-shared-libs|document-generate|document-release|eval-plan|freeze|gstack-upgrade|guard|health|ios-clean|ios-design-review|ios-fix|ios-qa|ios-sync|landing-report|learn|retro|setup-deploy|setup-gbrain|sync-gbrain|test-audit|unfreeze) printf '%s' '' ;;
+    review-voice) printf '%s' '' ;;
     *) return 1 ;;
   esac
 }
@@ -83,6 +88,20 @@ gstack_doctor_skill_pins_advisory() {
     autoplan|plan-ceo-review|plan-eng-review|plan-design-review|plan-devex-review|office-hours) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+# gstack_doctor_install_profile NAME — true for an install profile (helper runtime: no ./setup, no host profiles, project pins not applied).
+gstack_doctor_install_profile() {
+  case "$1" in
+    review-voice) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# gstack_capy_bootstrap_cmd ROOT [SKILL] — the install command for a machine without the Drive skill (capyBootstrapCommand).
+gstack_capy_bootstrap_cmd() {
+  printf 'test -f "%s/setup" || git clone --quiet --single-branch --depth 1 %s "%s" && GSTACK_CAPY_ROOT="%s" bash "%s/capy/skill/gstack/scripts/install.sh"' "$1" 'https://github.com/garrytan/gstack.git' "$1" "$1" "$1"
+  [ -z "${2:-}" ] || printf ' --for %s' "$2"
 }
 
 # gstack_result_anchor CODE — the docs/troubleshooting.md anchor for a lib/result-codes.ts code; returns 1 for an unknown code.
@@ -213,6 +232,40 @@ gstack_result_anchor() {
     BASH_UNAVAILABLE) printf '%s' 'bash-unavailable' ;;
     IOS_LAUNCH_ENV_INVALID) printf '%s' 'ios-launch-env-invalid' ;;
     OUTSIDE_VOICE_UNAVAILABLE) printf '%s' 'outside-voice-unavailable' ;;
+    ARTIFACT_MACHINE_PATH) printf '%s' 'artifact-machine-path' ;;
+    ARTIFACT_PUBLIC_TARGET_EXISTS) printf '%s' 'artifact-public-target-exists' ;;
+    PREREG_DIAGNOSTIC_UNTESTED) printf '%s' 'prereg-diagnostic-untested' ;;
+    EVAL_MODELS_INVALID) printf '%s' 'eval-models-invalid' ;;
+    EVAL_MODEL_DENIED) printf '%s' 'eval-model-denied' ;;
+    EVAL_MODEL_OLD_GENERATION) printf '%s' 'eval-model-old-generation' ;;
+    EVAL_MODEL_GENERATION_UNRESOLVED) printf '%s' 'eval-model-generation-unresolved' ;;
+    DX_CAPTURE_USAGE) printf '%s' 'dx-capture-usage' ;;
+    DX_CAPTURE_BAD_DEADLINE) printf '%s' 'dx-capture-bad-deadline' ;;
+    DX_CAPTURE_BAD_MAX_BYTES) printf '%s' 'dx-capture-bad-max-bytes' ;;
+    DX_CAPTURE_BAD_PASS_ENV) printf '%s' 'dx-capture-bad-pass-env' ;;
+    DX_CAPTURE_BAD_CWD) printf '%s' 'dx-capture-bad-cwd' ;;
+    DX_CAPTURE_APPROVAL_REQUIRED) printf '%s' 'dx-capture-approval-required' ;;
+    DX_CAPTURE_CONFIG_REFUSED) printf '%s' 'dx-capture-config-refused' ;;
+    DX_CAPTURE_NOT_FOUND) printf '%s' 'dx-capture-not-found' ;;
+    DX_CAPTURE_TEMP_DIR) printf '%s' 'dx-capture-temp-dir' ;;
+    DX_CAPTURE_CONTAINMENT_UNAVAILABLE) printf '%s' 'dx-capture-containment-unavailable' ;;
+    DX_CAPTURE_SUPERVISOR_FAILED) printf '%s' 'dx-capture-supervisor-failed' ;;
+    DX_CAPTURE_INTERRUPTED) printf '%s' 'dx-capture-interrupted' ;;
+    DX_CAPTURE_REDACTION_FAILED) printf '%s' 'dx-capture-redaction-failed' ;;
+    DX_CAPTURE_INTERNAL) printf '%s' 'dx-capture-internal' ;;
+    POLICY_GSTACK_TOO_OLD) printf '%s' 'policy-gstack-too-old' ;;
+    QUEUE_NOT_READY) printf '%s' 'queue-not-ready' ;;
+    QUEUE_PROOF_MISSING) printf '%s' 'queue-proof-missing' ;;
+    QUEUE_STAMP_NOT_STAMP_ONLY) printf '%s' 'queue-stamp-not-stamp-only' ;;
+    QUEUE_VERIFY_MISMATCH) printf '%s' 'queue-verify-mismatch' ;;
+    QUEUE_GATE_MISSING) printf '%s' 'queue-gate-missing' ;;
+    GATE_AHEAD_ATTEMPT_INVALID) printf '%s' 'gate-ahead-attempt-invalid' ;;
+    PREGATE_TIMING_ASSERTION) printf '%s' 'pregate-timing-assertion' ;;
+    APPROVAL_CLASSES_INVALID) printf '%s' 'approval-classes-invalid' ;;
+    APPROVAL_CLASS_FOUND) printf '%s' 'approval-class-found' ;;
+    APPROVAL_CITATION_MISSING) printf '%s' 'approval-citation-missing' ;;
+    APPROVAL_SOURCE_UNAVAILABLE) printf '%s' 'approval-source-unavailable' ;;
+    STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
     *) return 1 ;;
   esac
 }

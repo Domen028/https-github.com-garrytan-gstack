@@ -1204,8 +1204,18 @@ or too large. Each message names the cap that applied:
   withheld from the audit.
 - **Symlinks.** A tracked symlink anywhere in the repository stops the run.
 
-**Fix.** No setting raises these caps. Run /cso on a smaller checkout that
-holds the code you want audited and no symlinks. Add your file count or size to
+**Fix.** No setting raises these caps. For the 64 MiB source cap, rerun with
+`--paths` set to the comma-separated repo-relative directories you want audited
+(for example `--paths src/core,src/mcp`). Paths outside them are never
+captured or assessed and do not count toward the cap; snapshot and history
+coverage then read **partial**, the report counts every skipped path, and the run's
+snapshot manifest lists each one, so the verdict says what was not audited.
+With `--diff`, every changed path outside dependency directories must be inside
+`--paths`, or the run is refused. Do not audit a hand-trimmed copy: /cso would treat it as the whole
+repository and report nothing as skipped. `--paths` does not lower the
+manifest cap or the 100,000-entry limit, because every skipped path still has a
+manifest entry (about 50,000 files fit). Symlinks must be removed. Add your
+file count or size to
 [#2993](https://github.com/garrytan/gstack/issues/2993).
 
 <a id="cso-scanner-invalid-output"></a>
@@ -1403,15 +1413,20 @@ machine, say). Each session start writes a workflow lease,
 anything because a lease whose pid is alive and not in its own process
 ancestry exists: fast-forwarding would change gstack under a session
 mid-workflow. Leases older than 120 minutes are pruned; a lease whose
-process has exited never blocks. The upgrader's own session (the pid chain it
+process has exited never blocks, and neither does a stale one: each lease
+records its process's start identity, so a pid reused after a reboot or a
+machine wake (GBRA-105's lease named pid 379, which had become dbus-daemon)
+is reclaimed instead of blocking. The upgrader's own session (the pid chain it
 runs under) never counts.
 
 **Fix.** Wait for those sessions to finish (`bin/gstack-lease list` shows
-every lease with its age and `alive|dead`), then re-run `bin/gstack-upgrade`.
+every lease with its age and `alive|dead|stale`; a holder is named as
+`pid <p> (<age>m <command>)`), then re-run `bin/gstack-upgrade`.
 When you know they are idle, `GSTACK_UPGRADE_FORCE=1 bin/gstack-upgrade`
 proceeds. At a Capy session start the same refusal appears as
-`SELF_UPGRADE: skipped (live gstack sessions hold this installation: ...)`
-and the session continues on the installed revision.
+`SELF_UPGRADE: skipped (live gstack sessions hold this installation: ...)`,
+and the trailer is `gstack: fail behind — … (UPGRADE_BUSY)`: a session that
+could not upgrade is never certified ok.
 
 <a id="upgrade-fetch-failed"></a>
 ### `gstack-upgrade: could not reach origin (...) (UPGRADE_FETCH_FAILED)`
@@ -2741,13 +2756,19 @@ and Heavy-only files included.
 <a id="pregate-no-lane"></a>
 ### `PREGATE_NO_LANE`
 
-**Meaning.** A touched file maps to no test through static imports, repo-path
-string literals, the `bin/<name>` → `test/<name>*.test.ts` convention or a
-`dependencies` declaration. That is a failure, not a pass.
+**Meaning.** A touched source file maps to no test through static imports,
+repo-path string literals, the `bin/<name>` → `test/<name>*.test.ts` convention
+or a `dependencies` declaration. That is a failure, not a pass. Markdown no
+test depends on is a docs/no-tests empty lane and is not this error, whether
+or not the name says plan, evidence or redproof. A test that reads one of
+those files (a quoted path or a `join()` of path segments) still selects that
+test. An unmapped source or code file still fails. A file under a test
+directory is not this empty lane.
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
-for files with no behaviour, such as docs) in `.gstack/pregate.json`. `--explain`
-prints every mapping and why. For a file with no lane it also prints the import
+for files with no behaviour) under `dependencies` in `.gstack/pregate.json`.
+Other non-Markdown documentation goes in `empty_lanes` on the base branch.
+`--explain` prints every mapping and why. For a file with no lane it also prints the import
 specifiers in test files that resolved to no repo file (for example a
 `tsconfig.json` `paths` alias such as `@/lib/x` whose target is missing) and any
 `extends` hop that was not followed (only relative `extends`, at most 4 hops). If
@@ -3334,3 +3355,377 @@ unset, not in bare mode). Then re-run the review.
 
 **Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
 review — outside voice)` when the provider runs.
+
+<a id="artifact-machine-path"></a>
+### `ARTIFACT_MACHINE_PATH`
+
+**Meaning.** A public copy of an autoplan run still contains a path the run
+recorded on this machine: its run directory, the home directory, the plan's
+directory, the checkpoint directory or the worktree root. `gstack-artifact
+validate --public <dir> --private <run>/run.json` reports each hit with
+file:line; `gstack-autoplan export --public` runs that check on a staging copy
+and writes nothing when it fails.
+
+**Fix.** Export with `gstack-autoplan export --out <run> --public <dir>`, which
+rewrites recorded roots to repo-relative paths or `<local notes (not
+committed)>`. Export never rewrites inline code or fenced blocks in plan.md, so
+a hit there needs a plan edit: change the path, `revise`, and export again.
+Generic home-directory paths that are not recorded roots are WARN lines, not
+errors.
+
+<a id="artifact-public-target-exists"></a>
+### `ARTIFACT_PUBLIC_TARGET_EXISTS`
+
+**Meaning.** `gstack-autoplan export --public <dir>` found files in `<dir>`
+that are not an earlier public copy of the same run, and refused to overwrite
+them.
+
+**Fix.** Pass an empty or new directory, or the directory that already holds
+this run's public copy (it is replaced as a whole).
+
+<a id="prereg-diagnostic-untested"></a>
+### `PREREG_DIAGNOSTIC_UNTESTED`
+
+**Meaning.** `gstack-eval-plan prereg --check <file> --allow-repo-commands` ran
+the preregistration's declared summarizer (`## Diagnostics`: `summarizer:`,
+`fixture:` and one `| diagnostic | expected |` row each) on its synthetic
+fixture. Its result did not match the preregistered definitions: a count
+differed (`mismatch`), a declared diagnostic was absent (`missing`), it
+reported one nobody preregistered (`undeclared`), or the summarizer failed,
+timed out, or did not end its stdout with one JSON object of counts. Each
+`PREREG_DIAGNOSTIC:` line names one diagnostic. This is the gbrain-evals #162
+(D7) shape, where two diagnostic counts needed a post-paid amendment.
+
+**Fix.** Fix the summarizer, or correct the definition (the expected count or
+the fixture), until every line says `ok`. Then commit the freeze. The
+`PREREG_DIAGNOSTICS:` line's `sha256` binds the fixture you tested. Without
+`--allow-repo-commands`, the command lists the summarizer
+(`PREREG_COMMAND:`) and exits 3 (`REPO_COMMANDS_NOT_ALLOWED`), because the
+summarizer is a repository command.
+
+<a id="eval-models-invalid"></a>
+### `EVAL_MODELS_INVALID`
+
+**Meaning.** `.gstack/eval-models.json` could not be read or failed
+validation. Causes include JSON errors, `schema_version` other than 1, a
+missing or empty `allow`, an unknown key or scope, a glob in `families`, an id
+in two families, or a family that lists gstack's current catalog model after an
+older id. It also fires when `origin/<base>` cannot be resolved while a
+working-tree copy exists. While the rules are invalid, no arm passes.
+
+**Fix.** Correct the file as the line says (`docs/eval-models.md`) in a
+reviewed PR, or fetch the base branch. To test an unmerged edit, use
+`--models-from head`.
+
+<a id="eval-model-denied"></a>
+### `EVAL_MODEL_DENIED`
+
+**Meaning.** An arm's model matched `deny` or its scope's `deny`, matched no
+`allow` entry (unknown ids fail closed), or matched no entry of its scope's
+`allow` list. The `EVAL_MODEL:` line names the rule.
+
+**Fix.** Pick a model the rules allow for that scope. For a smoke run, pass
+`--scope smoke` (`price-gate` uses each call row's scope). To change the rule,
+edit `.gstack/eval-models.json` in a reviewed PR.
+
+<a id="eval-model-old-generation"></a>
+### `EVAL_MODEL_OLD_GENERATION`
+
+**Meaning.** The rules declare `families` (newest first), and an arm uses an id
+that is not the first one in its family.
+
+**Fix.** Use the family's newest id, which the `EVAL_MODEL:` line names. If the
+order is wrong, fix `families` in a reviewed PR.
+
+<a id="eval-model-generation-unresolved"></a>
+### `EVAL_MODEL_GENERATION_UNRESOLVED`
+
+**Meaning.** The rules declare `families`, so every arm must be its family's
+newest generation. This arm's model is in no family, so its generation cannot be
+checked, and the arm fails instead of passing unchecked.
+
+**Fix.** Add the model to its family (newest first) in
+`.gstack/eval-models.json` in a reviewed PR, or use a model a family lists.
+
+<a id="policy-gstack-too-old"></a>
+### `POLICY_GSTACK_TOO_OLD`
+
+**Meaning.** `.gstack/ship-policy.json` on the base branch sets
+`min_gstack_version` above the gstack reading it. The policy uses keys this
+gstack would read differently or not at all, so every ship-policy reader
+(`gstack-restamp`, `gstack-tree-receipt`, `gstack-ship-queue`,
+`gstack-ship-policy`) refuses it instead of guessing. A gstack older than
+`min_gstack_version` itself sees that key as unknown and fails with
+`POLICY_INVALID`, which names the key.
+
+**Fix.** Upgrade gstack to the version the message names
+(`bin/gstack-upgrade`, or rerun the session install), then rerun. A crew lead
+raising `min_gstack_version` raises the crew's install floor at the same
+time; `gstack-ship-policy validate` prints `MIN_READER:` for exactly that.
+
+<a id="queue-not-ready"></a>
+### `QUEUE_NOT_READY`
+
+**Meaning.** `gstack-ship-queue ready` will not print a READY block the
+coordinator could misread: the working tree has uncommitted tracked changes,
+HEAD is not the PR's pushed head (read through `gh pr view`), CI at that
+exact head is not green (failed, pending or unreadable), or the pregate result
+is missing, failed or recorded on another tree (`PREGATE_STALE`).
+
+**Fix.** Commit and push, wait for CI on that head, rerun
+`gstack-pregate run --allow-repo-commands` when the tree changed, then rerun
+`gstack-ship-queue ready --pr <n>`. The block it prints before refusing shows
+which line is not yet true.
+
+<a id="queue-proof-missing"></a>
+### `QUEUE_PROOF_MISSING`
+
+**Meaning.** A queue step lacks an input it needs to prove its claim, or an
+input does not match: the gated head is not a commit here, HEAD differs from
+the gated head beyond stamps (the gate never covered this tree), an earlier
+stamp with other inputs is unfinished, the stamp journal's head moved, or a
+gate-ahead merge could not be recomputed with `git merge-tree`. Nothing was
+written unless the `QUEUE_STAMP_REFUSED:` line says `committed=yes`.
+
+**Fix.** Supply the named input (fetch the gated head, pass the current base
+sha), or regate the tree you mean to stamp. For an unfinished stamp, rerun the
+identical command to resume, or revert its files and delete
+`.gstack/tmp/ship-queue/stamp-<pr>.json`.
+
+<a id="queue-stamp-not-stamp-only"></a>
+### `QUEUE_STAMP_NOT_STAMP_ONLY`
+
+**Meaning.** `gstack-ship-queue stamp` committed the stamp, and the tree
+receipt between the gated head and the stamped head found a difference
+outside the stamp rules (the residual paths are printed). The gate's result
+does not cover that head. The refusal line says `committed=yes <sha>`.
+
+**Fix.** Inspect the residual paths: drop the stray edit and stamp again, or
+run the gate on the stamped head.
+
+<a id="queue-verify-mismatch"></a>
+### `QUEUE_VERIFY_MISMATCH`
+
+**Meaning.** The coordinator's `gstack-ship-queue verify` could not
+reproduce the lane's claim from the PR's pushed commits: the head moved, the
+head differs from the gated tree beyond stamps, the receipt digest differs
+from the one in `QUEUE_STAMP`, or, for a gate-ahead record, `git merge-tree
+--write-tree` gives another merge tree, the recorded stamp patch does not
+rebuild the recorded gated tree or changes more than stamps, or the
+predecessor PR moved after the gate.
+
+**Fix.** Do not merge. Ask the lane to rerun `gstack-ship-queue stamp` (or
+`gate-ahead`) on the current queue and report again.
+
+<a id="queue-gate-missing"></a>
+### `QUEUE_GATE_MISSING`
+
+**Meaning.** The ship policy sets `full_e2e: true`, and no passing full-gate
+result is bound to the tree being stamped or verified: no recorded gate-ahead
+attempt for that gated head, no `--gate-exit 0 --gate-log <file>` from a run
+on it, or the recorded run exited non-zero.
+
+**Fix.** Run the gate the policy's `gate_command` names in the gate-ahead
+worktree and bind it with `gstack-ship-queue gate-ahead --record`, or pass the
+exit code and log of a passing run on the gated head to `stamp`.
+
+<a id="gate-ahead-attempt-invalid"></a>
+### `GATE_AHEAD_ATTEMPT_INVALID`
+
+**Meaning.** `gstack-ship-queue gate-ahead --record` could not bind the gate
+result: the attempt id is unknown for that PR, the attempt already holds a
+different result, the log file is missing, or the attempt's worktree no longer
+holds the gated commit (its HEAD moved or a tracked file changed), so the
+result would not describe the gated tree.
+
+**Fix.** `gstack-ship-queue gate-ahead --list --pr <n>` shows every attempt
+and the current one. Record the live attempt, or prepare a new one with
+`gate-ahead --after <pr>` and run the gate there without editing tracked
+files.
+
+<a id="pregate-timing-assertion"></a>
+### `PREGATE_TIMING_ASSERTION`
+
+**Meaning.** A test line the branch added or changed compares an elapsed
+wall-clock or CPU time against a bound, or sleeps for a fixed time and then
+asserts. Under machine load such a test fails without a code change. The
+`timing` check warns; it does not block (the measurement is in
+[docs/pregate.md#timing](pregate.md#timing)).
+
+**Fix.** Assert on the outcome instead: an injected clock, a forced deadline,
+an event or a poll with a deadline. When the bound is the contract, add
+`gstack-timing-ok: <reason>` in a comment on the line or the line above. Never
+raise a bound to make a flake pass; /investigate's flake playbook covers the
+diagnosis.
+
+<a id="approval-classes-invalid"></a>
+### `APPROVAL_CLASSES_INVALID`
+
+**Meaning.** The `.gstack/approval-classes.json` committed on the base branch
+(or, for `gstack-approval-classes validate`, the working-tree copy) is not
+valid JSON, has an unknown key, a class without a name or anything to match,
+or a glob that escapes the repository. `gstack-ship-receipt write` refuses
+rather than ship with the classes unchecked.
+
+**Fix.** Run `gstack-approval-classes validate`, correct the file, and merge
+it. See [Approval classes](ship-policy.md#approval-classes).
+
+<a id="approval-class-found"></a>
+### `APPROVAL_CLASS_FOUND`
+
+**Meaning.** `gstack-approval-classes check` found changes a declared class
+covers. Each `APPROVAL_CLASS:` line names the class and file:line, and each
+`APPROVAL_SCOPE: <class>@<digest12>` line is the token an approval binds to.
+Report-only lines from built-in detectors do not set this code.
+
+**Fix.** Ask the owner, then add
+`Approved by <owner> <YYYY-MM-DD> via <ref> for <class>@<digest12>` to the PR
+body. The token changes whenever an effect is added, removed or edited, so a
+later change needs a new approval.
+
+<a id="approval-citation-missing"></a>
+### `APPROVAL_CITATION_MISSING`
+
+**Meaning.** `gstack-ship-receipt write` found a declared approval class with
+no citation that both resolves and binds to the current effects, and wrote no
+receipt. The line lists every candidate citation and why it did not count:
+the plan's autoplan gate is not APPROVED, the comment is not by a ship-policy
+maintainer or not by the cited owner, the evidence names neither the scope
+token nor the class with every effect path (an approval of other work, or one
+given before an effect was added), or an unresolvable reference lacks a
+matching `for <class>@<digest12>` attestation.
+
+**Fix.** Cite the approval: a plan sha with `--approval-run <run dir>`, or the
+URL of a maintainer's comment or review that names the token. For evidence
+gstack cannot read (a thread code, a chat message), attest which scope it
+covers with `for <class>@<digest12>`; the receipt records it as
+`citation: unverified` for the coordinator.
+
+<a id="approval-source-unavailable"></a>
+### `APPROVAL_SOURCE_UNAVAILABLE`
+
+**Meaning.** `origin/<base>` does not resolve, so the committed approval
+classes cannot be read. `check` exits 3; `gstack-ship-receipt write`
+records `approval.status: unavailable` and prints `approval=unchecked`.
+
+**Fix.** `git fetch origin <base>` and rerun. The working-tree copy is never
+used.
+
+<a id="state-matrix-incomplete"></a>
+### `STATE_MATRIX_INCOMPLETE`
+
+**Meaning.** `gstack-state-matrix check` read the state-machines specialist's
+output and found a gap: a kind × owner action pair with no row, a row with no
+resulting row, a test reference that does not exist in the checkout, or an
+untested cell without a CRITICAL finding. A review whose matrix is incomplete
+has incomplete coverage, never a clean result.
+
+**Fix.** Rerun the state-machines specialist on the same diff and check its
+output again.
+
+## gstack-error-capture
+
+`gstack-error-capture` runs one target CLI for `/devex-review` Step 3 with no
+terminal, a scrubbed environment and a private temporary HOME, and prints one
+redacted JSON record. Its own failures print one stderr line,
+`gstack-error-capture: <what>; fix: <fix> (<CODE>)`, and no record. Exit 2 is a
+usage error, 3 a refusal, 1 a helper failure. `gstack-error-capture --help` lists
+every flag and code.
+
+<a id="dx-capture-usage"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_USAGE)`
+
+**Meaning.** Gstack-error-capture arguments are malformed: an unknown flag, a flag missing its value, no `--`, or no command after it. Exit 2.
+
+**Fix.** Rerun as `gstack-error-capture [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]`: flags before `--`, the command and its arguments after it.
+
+<a id="dx-capture-bad-deadline"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_DEADLINE)`
+
+**Meaning.** --deadline is not a positive number of seconds (at most 3600, up to 3 decimals). Exit 2.
+
+**Fix.** Rerun with `--deadline 20`.
+
+<a id="dx-capture-bad-max-bytes"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_MAX_BYTES)`
+
+**Meaning.** --max-bytes is not an integer from 1 to 1048576. Exit 2.
+
+**Fix.** Rerun with `--max-bytes 65536`.
+
+<a id="dx-capture-bad-pass-env"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_PASS_ENV)`
+
+**Meaning.** --pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE). Exit 2.
+
+**Fix.** Rerun with `--pass-env NAME with NAME set in the calling environment`.
+
+<a id="dx-capture-bad-cwd"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_CWD)`
+
+**Meaning.** --cwd is not an existing directory. Exit 2.
+
+**Fix.** Rerun with `--cwd <existing directory> --approved`.
+
+<a id="dx-capture-approval-required"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_APPROVAL_REQUIRED)`
+
+**Meaning.** --pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files. Exit 3.
+
+**Fix.** Ask the user to approve the named variables, files or directory, then add --approved.
+
+<a id="dx-capture-config-refused"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_CONFIG_REFUSED)`
+
+**Meaning.** --copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB. Exit 3.
+
+**Fix.** Rerun with `--copy-config <regular file under $HOME, no symlinks>`.
+
+<a id="dx-capture-not-found"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_NOT_FOUND)`
+
+**Meaning.** The command does not resolve to an executable file; the record carries launch "not_found" and nothing ran. Exit 1.
+
+**Fix.** Install the command or pass its absolute path after --.
+
+<a id="dx-capture-temp-dir"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_TEMP_DIR)`
+
+**Meaning.** The private 0700 containment directory under the gstack state root could not be created. Exit 1.
+
+**Fix.** Make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun.
+
+<a id="dx-capture-containment-unavailable"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_CONTAINMENT_UNAVAILABLE)`
+
+**Meaning.** Process-group or Windows job containment is unavailable on this platform; nothing ran. Exit 1.
+
+**Fix.** Run the capture on Linux, macOS or Windows with job objects available.
+
+<a id="dx-capture-supervisor-failed"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_SUPERVISOR_FAILED)`
+
+**Meaning.** The deadline supervisor failed before reporting a result. Exit 1.
+
+**Fix.** Rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor.
+
+<a id="dx-capture-interrupted"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_INTERRUPTED)`
+
+**Meaning.** The helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed. Exit 1.
+
+**Fix.** Rerun the same command without interrupting it.
+
+<a id="dx-capture-redaction-failed"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_REDACTION_FAILED)`
+
+**Meaning.** The finished record still matched a secret check, so nothing was printed. Exit 1.
+
+**Fix.** Do not rerun with more --pass-env; report the command name to the gstack maintainers.
+
+<a id="dx-capture-internal"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_INTERNAL)`
+
+**Meaning.** Unexpected helper failure; the line names the error class and its first stack frame. Exit 1.
+
+**Fix.** Rerun once; if it repeats, report the printed frame to the gstack maintainers.

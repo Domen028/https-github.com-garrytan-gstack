@@ -118,15 +118,25 @@ export function normalizeChangelog(text: string): string {
 /**
  * Gate-ahead merge of two CHANGELOGs that conflict textually but not
  * semantically: the predecessor's header and sections, with the branch's own
- * sections (those the predecessor lacks, by heading) placed first. Both sides
- * carrying `[Unreleased]` is a real conflict and returns null.
+ * sections (those the predecessor lacks, by heading) placed first. When the
+ * branch's top section carries the same version heading as a predecessor
+ * section with a different body (both took the same tentative stamp), the
+ * branch's entry is kept under `[Unreleased]` so the restamp re-heads it.
+ * Both sides carrying `[Unreleased]` is a real conflict and returns null.
  */
 export function mergeChangelogs(ours: string, theirs: string): string | null {
   const a = parseChangelog(ours);
   const b = parseChangelog(theirs);
   const key = (s: ChangelogSection) => (s.unreleased ? 'Unreleased' : s.version!);
+  const entryText = (s: ChangelogSection) => s.lines.slice(1).join('\n').replace(/\n+$/, '');
+  const top = a.sections[0];
+  if (top && !top.unreleased && b.sections.some(s => key(s) === key(top) && entryText(s) !== entryText(top))) {
+    const heading = /^##\s+\[/.test(top.heading) ? '## [Unreleased]' : '## Unreleased';
+    a.sections[0] = { ...top, unreleased: true, version: null, heading, lines: [heading, ...top.lines.slice(1)] };
+  }
   const theirKeys = new Set(b.sections.map(key));
   const ownOnly = a.sections.filter(s => !theirKeys.has(key(s)));
+  if (a.sections.filter(s => s.unreleased).length > 1) return null;
   if (a.sections.some(s => s.unreleased) && b.sections.some(s => s.unreleased)) return null;
   const header = [...b.header];
   while (header.length && header[header.length - 1] === '') header.pop();

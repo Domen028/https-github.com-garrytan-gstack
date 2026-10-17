@@ -17,6 +17,7 @@ import { EXIT } from '../lib/headless-artifacts';
 import { changedLiterals, constantsIn } from '../lib/pregate/checks/literals';
 import { parseSummary } from '../lib/pregate/checks/lanes';
 import { validateConfig } from '../lib/pregate/config';
+import { isDocsEmptyLane } from '../lib/pregate/docs-lane';
 import { buildGraph, isTestFile, testsFor } from '../lib/pregate/import-graph';
 import { CHECK_IDS } from '../lib/pregate/index';
 import { laneFileSet } from '../lib/pregate/lane-selection';
@@ -127,6 +128,23 @@ describe('import graph (static imports ∪ repo-path literals ∪ bin convention
     expect(testsFor(g, 'docs/README.md', BASE_PREGATE.dependencies)).toMatchObject({ tests: [], declaredNone: true });
     expect(testsFor(g, 'test/util.test.js').tests).toEqual(['test/util.test.js']);
   });
+
+  test('markdown a test reads maps through the same literal and join edges; an unreferenced markdown file does not', () => {
+    const repo = fixture();
+    commit(repo, {
+      'prompts/system.md': '# system\n',
+      'notes/scratch.md': '# scratch\n',
+      'test/fixtures/sample.md': '# sample\n',
+      'test/prompt-doc.test.js': "const test = require('node:test');\nconst fs = require('node:fs');\ntest('reads the prompt', () => { fs.readFileSync('prompts/system.md', 'utf8'); });\n",
+      'test/fixture-doc.test.js': "const test = require('node:test');\nconst fs = require('node:fs');\nconst path = require('node:path');\ntest('reads the fixture', () => { fs.readFileSync(path.join('test', 'fixtures', 'sample.md'), 'utf8'); });\n",
+    });
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'prompts/system.md').tests).toEqual(['test/prompt-doc.test.js']);
+    expect(testsFor(g, 'prompts/system.md').provenance[0]).toContain('(literal)');
+    expect(testsFor(g, 'test/fixtures/sample.md').tests).toEqual(['test/fixture-doc.test.js']);
+    expect(testsFor(g, 'test/fixtures/sample.md').provenance[0]).toContain('(literal)');
+    expect(testsFor(g, 'notes/scratch.md')).toMatchObject({ tests: [], declaredNone: false });
+  });
 });
 
 describe('literals (pure)', () => {
@@ -152,8 +170,37 @@ describe('literals (pure)', () => {
     expect(codes({ warn: ['bogus'] })).toEqual(['PREGATE_CONFIG_INVALID:warn']);
     expect(codes({ runner: 'bun test' })).toEqual(['PREGATE_CONFIG_INVALID:runner']);
     expect(codes({ dependencies: { '../x': [] } })).toEqual(['PREGATE_CONFIG_INVALID:dependencies["../x"]']);
+    expect(codes({ empty_lanes: 'docs/**' })).toEqual(['PREGATE_CONFIG_INVALID:empty_lanes']);
+    expect(codes({ empty_lanes: ['../x'] })).toEqual(['PREGATE_CONFIG_INVALID:empty_lanes[0]']);
+    expect(codes({ empty_lanes: ['notes/**/*.md'] })).toEqual([]);
     expect(codes({ selection: { 'ci/job': 'x' } })).toEqual(['PREGATE_CONFIG_INVALID:selection["ci/job"]']);
     expect(codes({ extra: 1 })).toEqual(['PREGATE_CONFIG_INVALID:extra']);
+  });
+});
+
+describe('docs/no-tests empty lane', () => {
+  const docs = [
+    '.work/round-3-plan.md', 'pkg/.work/notes.md', 'notes/redproof.md', 'notes/REDPROOF.md',
+    'notes/round-3.red-proof.md', 'docs/evidence.md', 'docs/guide.md', 'Docs/Guide.MD',
+    'documentation/index.md', 'plans/2026-10-16.md', 'README.md', 'lib/README.md',
+    'CHANGELOG.md', 'LICENSE', 'notes/implementation-plan.md', 'notes/planning.md', 'src/plan.md',
+    'prompts/system.md', 'src/notes.md', 'src/explanation.md', 'planet.md', 'my-docs/guide.md', 'notes/scratch.md',
+  ];
+  const blocked = [
+    'lib/orphan.js', 'src/app.ts', 'bin/tool', 'scripts/gen.sh', 'notes/scratch.txt',
+    'docs/example.ts', 'test/fixtures/plan.md', 'test/plans/plan.md', '__tests__/redproof.md',
+  ];
+  test('markdown qualifies, including unmarked names; source, test trees and non-markdown do not', () => {
+    for (const file of docs) expect(isDocsEmptyLane(file)).toBe(true);
+    for (const file of blocked) expect(isDocsEmptyLane(file)).toBe(false);
+  });
+  test('empty_lanes adds documentation globs and cannot clear source code or a test-tree file', () => {
+    expect(isDocsEmptyLane('notes/scratch.txt')).toBe(false);
+    expect(isDocsEmptyLane('notes/scratch.txt', ['notes/**/*.txt'])).toBe(true);
+    expect(isDocsEmptyLane('lib/orphan.js', ['**', 'lib/**', '**/*.js'])).toBe(false);
+    expect(isDocsEmptyLane('docs/example.ts', ['docs/**'])).toBe(false);
+    expect(isDocsEmptyLane('bin/tool', ['bin/**'])).toBe(false);
+    expect(isDocsEmptyLane('test/fixtures/plan.md', ['**/*.md', 'test/**'])).toBe(false);
   });
 });
 
@@ -162,7 +209,7 @@ describe('gstack-pregate (bin)', () => {
     const repo = fixture();
     const help = runBin(repo, 'gstack-pregate', ['--help']);
     expect(help.out).toContain('Exit codes: 0 ok · 1 fail · 2 usage · 3 refused or needs a flag');
-    expect(help.out).toContain('stage 1 mechanical preflight (regen, secrets, strays, literals, guards)');
+    expect(help.out).toContain('stage 1 mechanical preflight (regen, secrets, strays, literals, timing, guards)');
     expect(help.out).toContain('stage 2 test execution (lanes)');
     expect(runBin(repo, 'gstack-pregate', ['bogus']).status).toBe(EXIT.usage);
     expect(pregate(repo, ['--only', 'hermetic']).status).toBe(EXIT.usage);
@@ -186,7 +233,7 @@ describe('gstack-pregate (bin)', () => {
     const out = readOut(repo);
     expect(out.schema_version).toBe(1);
     expect(out.tree).toMatch(/^[0-9a-f]{40}$/);
-    expect(out.checks.map((c: any) => [c.id, c.status, c.stage])).toEqual([['regen', 'pass', 'preflight'], ['secrets', 'pass', 'preflight'], ['strays', 'pass', 'preflight'], ['literals', 'pass', 'preflight'], ['guards', 'pass', 'preflight'], ['lanes', 'pass', 'tests']]);
+    expect(out.checks.map((c: any) => [c.id, c.status, c.stage])).toEqual([['regen', 'pass', 'preflight'], ['secrets', 'pass', 'preflight'], ['strays', 'pass', 'preflight'], ['literals', 'pass', 'preflight'], ['timing', 'pass', 'preflight'], ['guards', 'pass', 'preflight'], ['lanes', 'pass', 'tests']]);
     for (const c of out.checks) { expect(c.inputs.tree).toBe(out.tree); expect(typeof c.ms).toBe('number'); }
     expect(check(repo, 'lanes').inputs.command).toMatch(/^[0-9a-f]{64}$/);
     expect(out.verdict).toBe('pass');
@@ -249,6 +296,97 @@ describe('gstack-pregate (bin)', () => {
     expect(r.out).toContain('HIGH github.pat [secret]');
     fs.rmSync(path.join(ok.work, 'lib/token.js'));
     expect(pregate(ok, ['--stage', 'preflight', '--only', 'secrets']).status).toBe(EXIT.ok);
+  });
+
+  test('lanes: tracked planning and evidence markdown is docs/no-tests, and an unmapped source file still fails closed', () => {
+    // No .gstack/pregate.json on the base: documentation cannot be declared as [].
+    const docs = fixture({ pregate: null });
+    commit(docs, {
+      '.work/round-3-plan.md': '# plan\n\nImplementation notes, not a test subject.\n',
+      'notes/redproof.md': '# redproof\n\nThe lane failed, then this note recorded the green run.\n',
+      'docs/evidence.md': '# evidence\n',
+    });
+    const ok = pregate(docs, ['--only', 'lanes', '--explain']);
+    expect(ok.status).toBe(EXIT.ok);
+    expect(ok.err).not.toContain('PREGATE_NO_LANE');
+    expect(ok.out).toMatch(/docs\/no-tests: 3 documentation file\(s\)/);
+    expect(ok.out).toContain('.work/round-3-plan.md: docs/no-tests (empty lane)');
+    expect(ok.out).toContain('notes/redproof.md: docs/no-tests (empty lane)');
+    expect(ok.out).toContain('docs/evidence.md: docs/no-tests (empty lane)');
+    expect(ok.out).not.toContain('has no test lane');
+
+    const mixed = fixture({ pregate: null });
+    commit(mixed, {
+      '.work/round-3-plan.md': '# plan\n',
+      'lib/orphan.js': 'exports.lonely = () => 2;\n',
+    });
+    const bad = pregate(mixed, ['--only', 'lanes']);
+    expect(bad.status).toBe(EXIT.fail);
+    expect(bad.err).toContain('(PREGATE_NO_LANE)');
+    expect(bad.out).toContain('lanes: FAIL lanes — lib/orphan.js has no test lane');
+    expect(bad.out).toContain('docs/no-tests (empty lane): .work/round-3-plan.md');
+    expect(bad.out).not.toContain('.work/round-3-plan.md has no test lane');
+
+    const extra = fixture({ pregate: { empty_lanes: ['notes/**/*.txt'], runner: 'node --test {files}' } });
+    commit(extra, { 'notes/sketch.txt': 'a note that is not markdown\n' });
+    const declared = pregate(extra, ['--only', 'lanes']);
+    expect(declared.status).toBe(EXIT.ok);
+    expect(declared.err).not.toContain('PREGATE_NO_LANE');
+    expect(declared.out).toContain('docs/no-tests (empty lane): notes/sketch.txt');
+  });
+
+  test('lanes: unreferenced markdown is docs/no-tests; markdown a test reads selects that test', () => {
+    const unread = fixture({ pregate: null });
+    commit(unread, {
+      'prompts/system.md': '# system\n\nAn unmarked prompt, not a plan or a redproof.\n',
+      'notes/scratch.md': '# scratch\n',
+    });
+    const idle = pregate(unread, ['--only', 'lanes', '--explain']);
+    expect(idle.status).toBe(EXIT.ok);
+    expect(idle.err).not.toContain('PREGATE_NO_LANE');
+    expect(idle.out).toMatch(/docs\/no-tests: 2 documentation file\(s\)/);
+    expect(idle.out).toContain('prompts/system.md: docs/no-tests (empty lane)');
+    expect(idle.out).toContain('notes/scratch.md: docs/no-tests (empty lane)');
+    expect(idle.out).not.toContain('has no test lane');
+
+    const named = fixture({ pregate: null });
+    named.git('checkout', '-q', 'main');
+    write(named.work, 'prompts/system.md', '# system\n');
+    write(named.work, 'test/fixtures/sample.md', '# sample\n');
+    write(named.work, 'test/prompt-doc.test.js', "const test = require('node:test');\nconst fs = require('node:fs');\ntest('reads the prompt', () => { fs.readFileSync('prompts/system.md', 'utf8'); });\n");
+    write(named.work, 'test/fixture-doc.test.js', "const test = require('node:test');\nconst fs = require('node:fs');\nconst path = require('node:path');\ntest('reads the fixture', () => { fs.readFileSync(path.join('test', 'fixtures', 'sample.md'), 'utf8'); });\n");
+    named.git('add', '-A');
+    named.git('commit', '-q', '-m', 'tests read markdown');
+    named.git('push', '-q', 'origin', 'main');
+    named.git('checkout', '-q', 'feature');
+    named.git('reset', '--hard', 'main');
+    commit(named, {
+      'prompts/system.md': '# system\n\nupdated\n',
+      'test/fixtures/sample.md': '# sample\n\nupdated\n',
+    });
+    const r = pregate(named, ['--only', 'lanes', '--explain']);
+    expect(r.status).toBe(EXIT.ok);
+    expect(r.out).toContain('test/prompt-doc.test.js ← prompts/system.md');
+    expect(r.out).toContain('test/fixture-doc.test.js ← test/fixtures/sample.md');
+    expect(r.err).not.toContain('PREGATE_NO_LANE');
+    expect(r.out).not.toContain('docs/no-tests');
+  });
+
+  test('lanes: a test that names a markdown file still runs that test', () => {
+    const repo = fixture({ pregate: null });
+    repo.git('checkout', '-q', 'main');
+    write(repo.work, 'test/readme-doc.test.js', "const test = require('node:test');\nconst fs = require('node:fs');\ntest('reads the readme', () => { fs.readFileSync('docs/README.md', 'utf8'); });\n");
+    repo.git('add', '-A');
+    repo.git('commit', '-q', '-m', 'name the doc');
+    repo.git('push', '-q', 'origin', 'main');
+    repo.git('checkout', '-q', 'feature');
+    repo.git('reset', '--hard', 'main');
+    commit(repo, { 'docs/README.md': '# docs\n\nupdated evidence\n' });
+    const r = pregate(repo, ['--only', 'lanes', '--explain']);
+    expect(r.status).toBe(EXIT.ok);
+    expect(r.out).toContain('test/readme-doc.test.js ← docs/README.md');
+    expect(r.err).not.toContain('PREGATE_NO_LANE');
+    expect(r.out).not.toContain('docs/no-tests');
   });
 
   test('lanes: a touched file with no test lane is FAIL lanes — <file> has no test lane; a declaration or an explicit [] clears it', () => {

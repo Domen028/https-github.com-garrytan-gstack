@@ -12,12 +12,38 @@ The vendored skill (`capy/skill/gstack/SKILL.md`) tells a Capy agent how to use
 them. The Drive folder is a mirror: the owner copies `capy/skill/gstack/` there
 when asked; nothing writes the Drive automatically.
 
-Direct use, without the skill:
+Direct use, without the Drive skill (a subagent or reviewer machine): clone into
+the root the bootstrapper resolves when nothing is there, then run the
+checkout's own bootstrapper by absolute path, from the project directory, so
+the floor check and fast-forward still run and the verdict is keyed by the
+caller's project. The same command serves every later session (an existing
+checkout is fast-forwarded, never re-cloned):
 
 ```bash
-git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.local/share/gstack
-~/.local/share/gstack/bin/gstack-capy-install --for autoplan
+test -f "$HOME/.local/share/gstack/setup" || git clone --quiet --single-branch --depth 1 https://github.com/garrytan/gstack.git "$HOME/.local/share/gstack" && GSTACK_CAPY_ROOT="$HOME/.local/share/gstack" bash "$HOME/.local/share/gstack/capy/skill/gstack/scripts/install.sh" --for autoplan
 ```
+
+The text comes from `capyBootstrapCommand` in `lib/doctor-components.ts`
+(Bash: `gstack_capy_bootstrap_cmd`); the not-installed fix lines print it with
+the root they checked.
+
+## Reviewer machines: `--for review-voice`
+
+A dispatched reviewer (an /autoplan voice, a second opinion) reads a plan and
+reports; it runs no workflow. `--for review-voice` gives its machine a real
+trailer in seconds: clone or fast-forward, Bun at gstack's own supported
+minimum (the project's pins are not applied, since no repo tests run there; the
+trailer says `pins: skipped (helper runtime)`), no `./setup`, no host profiles
+and no bun shim. The doctor certifies only the read-only helpers (`PASS
+helpers`: `gstack-pregate sealed`, `gstack-plan-reality`, `gstack-artifact` and
+the `gstack-autoplan` reads such as `status` and `contract`). Its verdict covers
+no host profile, so a workflow started there is refused (`INSTALL: fail verdict
+— … (review-voice certifies only the read-only helpers); fix: run
+GSTACK_CAPY_ROOT=<root> bash <root>/capy/skill/gstack/scripts/install.sh --for
+<skill> …`). A review-voice check never replaces an ok verdict that a fuller
+install wrote for the same HEAD and project. Every /autoplan reviewer prompt
+ends with this command (`GSTACK TRAILER`); the warm run's budget, under 20 s,
+is measured by `test/capy-review-voice.test.ts`.
 
 ## Session start
 
@@ -42,14 +68,20 @@ git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.lo
    refusal of `gstack-upgrade` applies), prints `SELF_UPGRADE: done <old> ->
    <new>` and re-execs the new checkout's wrapper, which installs from the
    new revision (`GSTACK_CAPY_UPGRADED_FROM` set, so setup is never skipped).
-   A refusal prints `SELF_UPGRADE: skipped (<reason>)` and the session
-   continues on the installed revision; the trailer stays the doctor's.
+   A refusal prints `SELF_UPGRADE: skipped (<reason>)`, and the session is
+   never certified ok: the trailer is `gstack: fail behind — installed <rev> is
+   <n> commits behind origin (latest <ver>) and the session-start upgrade was
+   skipped: <reason>; fix: <command> (UPGRADE_BUSY|UPGRADE_REFUSED)`, exit 1.
    `SELF_UPGRADE: none (current)` when nothing is ahead;
    `GSTACK_CAPY_SELF_UPGRADE=off` (or `GSTACK_CAPY_AUTO_UPGRADE=0`) prints
    `SELF_UPGRADE: disabled (<variable>)`. `--check` never moves the checkout;
    behind origin it prints `gstack-capy-session: behind origin/<branch>:
    <installed> -> <remote> (<n> commits); fix: bash <skill>/scripts/install.sh
-   [--for <skill>] (fast-forwards)` and the agent runs that fix.
+   [--for <skill>] (fast-forwards)` and the agent runs that fix. Whenever the
+   session ends behind origin (`--check`, or a self-upgrade that was skipped or
+   disabled), the ok trailer also says so, because lanes relay only the
+   trailer: `behind=<n> (latest: <ver>); fix: <command>` (see the trailer
+   grammar below).
 4. When the fetch fails (offline), the bootstrapper says `remote minimum
    unknown (fetch failed)` and checks the local install only; it never claims
    the minimum, and nothing is fast-forwarded.
@@ -72,10 +104,28 @@ resets.
 Several agents sharing one checkout (eight Capy subagents on a machine) hold
 workflow leases on it: every `bin/gstack-skill-start` touches
 `<git dir>/gstack-leases/<harness pid>` (`bin/gstack-lease touch`; pruned after
-120 minutes). `bin/gstack-upgrade`, and so the session-start self-upgrade,
-refuses with [UPGRADE_BUSY](troubleshooting.md#upgrade-busy) while a lease
-whose pid is alive and outside its own process chain exists;
-`bin/gstack-lease list` shows them and `GSTACK_UPGRADE_FORCE=1` overrides.
+120 minutes). Each lease records its process's start identity (Linux: boot id
+and `/proc` start time; elsewhere `ps -o lstart`), because a pid is reused after
+a reboot or a machine wake. `bin/gstack-upgrade`, and so the session-start
+self-upgrade, refuses with [UPGRADE_BUSY](troubleshooting.md#upgrade-busy)
+while a lease held by a live process outside its own chain exists, naming each
+holder as `pid <p> (<age>m <command>)`. A lease whose pid now belongs to another
+process, or an identity-less lease from an older gstack past 120 minutes, is
+stale: `bin/gstack-lease live` reclaims it (`gstack-lease: reclaimed stale
+lease …`). Stale needs proof: two well-formed identities from the same backend
+that differ (`ps` is read under `LC_ALL=C TZ=UTC0`). An identity that cannot be
+read, a malformed record or a backend change keeps the lease. `touch` (publish
+by rename, prune) and reclaim (reread, then delete only the record judged
+stale) run under one lock in the lease directory, a symlink naming its holder's
+pid and start identity, so a renewal is never deleted and a live lease never
+disappears from a concurrent scan. The lock is broken only when its holder is
+dead or its pid was reused, never by age, and breakers serialize on a second
+symlink and reread the lock before removing it. One killed gstack-lease process
+is always safe; two killed in a row, one holding the lock and the next while
+breaking it, can still let a reclaim delete a renewal. While a live process holds it,
+`touch` exits 3 without writing (`gstack-skill-start` reports that the
+session holds no lease) and a reclaim keeps the lease. `bin/gstack-lease list` shows `alive|dead|stale`, and
+`GSTACK_UPGRADE_FORCE=1` overrides.
 
 ## What the installer does
 
@@ -121,6 +171,26 @@ whose pid is alive and outside its own process chain exists;
    constraints ([RUNTIME_PIN_CONFLICT](troubleshooting.md#capy-install-runtime-conflict),
    exit 3) before `./setup`. With no Bun at or above the security floor, the
    default is installed first so the pins can be read.
+
+   Node follows the same rule (`bin/gstack-node-runtime.sh`): `engines.node`,
+   `.nvmrc`, `.tool-versions` and CI `node-version:` lanes, non-CI exact pins
+   required and CI exact pins in different jobs alternatives. The first node
+   that satisfies them wins: the node first on PATH (rule `PATH`), then for
+   each wanted version gstack's store copy
+   `<state root>/runtimes/node/<version>/bin/node` (`store`) and nvm's
+   `${NVM_DIR:-~/.nvm}/versions/node/v<version>/bin/node` (`nvm`), then every
+   other `node` on PATH. When nothing qualifies and the project names an exact
+   version, install mode downloads `node-v<version>-<target>.tar.gz` and
+   `SHASUMS256.txt` from `https://nodejs.org/dist/v<version>/`
+   (`GSTACK_NODE_DIST_URL` overrides the base), checks the archive's SHA-256
+   against that list and publishes the tree in the store by rename. A CI-only
+   pin set installs its highest version. `/usr/local/bin` and nvm are never
+   written. Two different non-CI exact Node pins stop with
+   [RUNTIME_PIN_CONFLICT](troubleshooting.md#capy-install-runtime-conflict).
+   `--check` keeps the recorded Node while it still reports its version and
+   satisfies the pins, and never installs one; the doctor's `pins` row reads
+   whatever node the launch PATH gives, and a Node mismatch names the node it
+   read and the installer command that fixes it.
 3. `./setup --host claude --no-prefix`, then `./setup --host codex --model
    gpt-6-astra`, both with `--no-browser`. Skipped when this exact HEAD was set
    up with the same hosts, model and browser flag (recorded in the git dir
@@ -135,7 +205,8 @@ whose pid is alive and outside its own process chain exists;
    checkout, project, HEAD, the workflow and required components it
    certified, whether pins were skipped as planning-only, the pin it
    honoured, the resolved Bun (`bun_path`, `bun_version`, `bun_rule`, and
-   `bun_install` when this run downloaded it), the trailer, the remote
+   `bun_install` when this run downloaded it), the resolved Node when the
+   project pins one (`node_path`, `node_version`, `node_rule`), the trailer, the remote
    minimum, the launch PATH and the time. Admission refuses a workflow whose
    running Bun is not the one the verdict recorded
    ([BUN_RESOLUTION_DRIFT](troubleshooting.md#bun-resolution-drift)), and so
@@ -192,13 +263,18 @@ The last line is the trailer:
 gstack: ok 1.91.96.0 for=autoplan
 gstack: ok 1.91.96.0 for=review (requested: v1.91.90.0 (run <checkout>/bin/gstack-upgrade to move); latest: 1.91.101.0 available)
 gstack: ok 1.91.96.0 for=autoplan (pins: skipped (planning-only))
+gstack: ok 1.91.101.0 for=autoplan (behind=12 (latest: 1.91.107.0); fix: bash <skill>/scripts/install.sh --for autoplan)
 gstack: fail runtime,pins
 ```
 
 An ok trailer carries at most one parenthesised note group, `; `-separated,
 in this order: `requested: …` (an existing checkout at another revision than
-`--revision`), `pins: skipped (planning-only|no project)`, and `latest: <ver>
-available` (origin's default branch has a newer VERSION; the bootstrapper
+`--revision`), `pins: skipped (planning-only|no project|helper runtime)`, then either
+`behind=<n> (latest: <ver>)` followed by `fix: <command>` (the session ended
+<n> commits behind origin's default branch after a fetch that succeeded in this
+run; `bin/gstack-capy-session` exports `GSTACK_CAPY_BEHIND`, `_BEHIND_TO` and
+`_BEHIND_FIX`, so this works with every bootstrapper revision), or `latest:
+<ver> available` (origin's default branch has a newer VERSION; the bootstrapper
 exports it as `GSTACK_CAPY_REMOTE_VERSION` only after a fetch that succeeded
 in this run). A fail trailer never carries notes. Match `^gstack: ok ` or
 `^gstack: fail `; never parse past the first space after the version.
@@ -252,9 +328,16 @@ GSTACK_LAUNCH: PATH=<dir>:$PATH GSTACK_SESSION_KIND=unattended GSTACK_STATE_ROOT
 GSTACK_LAUNCH_PATH: <dir>
 ```
 
-`PATH=<dir>:$PATH` and `GSTACK_LAUNCH_PATH` appear only when the certified Bun
-is not first on PATH (the Capy image's `/usr/local/bin/bun` is 1.3.14; 57 gstack
-commands start with `#!/usr/bin/env bun`). A child shell's `export` cannot
+`PATH=<dir>:$PATH` and `GSTACK_LAUNCH_PATH` appear only when the certified Bun,
+or the project's resolved Node, is not first on PATH (older Capy images ship
+`/usr/local/bin/bun` 1.3.14; 57 gstack commands start with `#!/usr/bin/env bun`).
+`<dir>` is never a shared bin directory: a Bun from gstack's store launches
+from its own version directory, and any other Bun, or a Node the launch
+needs, launches through `<verdict file without .json>.launch`, a gstack-owned
+directory holding only `bun`, `bunx` and, when needed, `node`, `npm`, `npx` and
+`corepack` symlinks. So a Bun found in `/usr/local/bin` or `$BUN_INSTALL/bin`
+never puts that directory's other tools (the image's node) in front of PATH.
+The pregate's lanes launch through the same directory. A child shell's `export` cannot
 configure the parent's later commands, so the parent supplies these
 assignments to every gstack command it launches (prefix the command, or
 export them once in the shell that runs it). A fresh shell without them keeps

@@ -11,6 +11,7 @@ import { GENERATED_PATH } from '../regen';
 import { runBashSync } from '../script-invocation';
 import { matchesAny } from '../ship-policy';
 import { PREGATE_CONFIG_PATH } from './config';
+import { isDocsEmptyLane } from './docs-lane';
 import { buildGraph, isTestFile, listRepoFiles, testsFor, type Graph } from './import-graph';
 import type { PregateContext, RemoteObligation } from './types';
 import type { Lane } from './workflows';
@@ -18,6 +19,8 @@ import type { Lane } from './workflows';
 export interface Selection {
   /** Touched files with no lane and no `[]` declaration. */
   noLane: string[];
+  /** Markdown (and `empty_lanes` paths) with no import-graph test: the docs/no-tests empty lane. */
+  emptyLane: string[];
   /** Every test the touched files select, sorted. */
   tests: string[];
   /** Tests that run on this machine. */
@@ -76,6 +79,7 @@ export function selectLanes(ctx: PregateContext): Selection {
   const provenance: string[] = [];
   const tests = new Set<string>();
   const noLane: string[] = [];
+  const emptyLane: string[] = [];
   const seeds = new Map<string, string>();
   for (const t of touched) { seeds.set(t.path, t.status === 'D' ? 'deleted' : 'touched'); if (t.renamedFrom) seeds.set(t.renamedFrom, `renamed to ${t.path}`); }
   for (const e of ctx.registry.entries) {
@@ -86,7 +90,12 @@ export function selectLanes(ctx: PregateContext): Selection {
     const m = testsFor(graph, file, ctx.config.dependencies);
     for (const t of m.tests) tests.add(t);
     provenance.push(...m.provenance.map(p => `${p} [${why}]`));
-    if (m.tests.length || m.declaredNone || why.startsWith('generated')) continue;
+    if (m.tests.length || why.startsWith('generated')) continue;
+    // An explicit `[]` already cleared the file. Label it docs/no-tests only when it is that class.
+    if (m.declaredNone) {
+      if (isDocsEmptyLane(file, ctx.config.empty_lanes ?? [])) emptyLane.push(file);
+      continue;
+    }
     // A renamed file keeps the lane its old name had: those tests run (and fail loudly if they still import the old path).
     const renamedFrom = touched.find(t => t.path === file && t.renamedFrom)?.renamedFrom;
     if (renamedFrom && testsFor(graph, renamedFrom, ctx.config.dependencies).tests.length) { provenance.push(`${file}: lane via its old name ${renamedFrom}`); continue; }
@@ -95,6 +104,12 @@ export function selectLanes(ctx: PregateContext): Selection {
     if (generator) { provenance.push(`${file}: covered by regen ${generator.id} (registry input)`); continue; }
     // The pin files are validated by pregate itself (validateConfig / validateRegistry) on every run.
     if (file === PREGATE_CONFIG_PATH || file === GENERATED_PATH) { provenance.push(`${file}: pin file validated by pregate`); continue; }
+    // Reached only when testsFor mapped nothing, so a Markdown file a test reads never lands here.
+    if (isDocsEmptyLane(file, ctx.config.empty_lanes ?? [])) {
+      emptyLane.push(file);
+      provenance.push(`${file}: docs/no-tests (empty lane)`);
+      continue;
+    }
     noLane.push(file);
   }
   const laneSets: Record<string, string[] | '?'> = {};
@@ -117,7 +132,7 @@ export function selectLanes(ctx: PregateContext): Selection {
   if (anyLocalAll || ctx.lanes.filter(l => l.runsTests && !l.manual && l.tier !== 'platform').length === 0) for (const t of selected) local.add(t);
   for (const t of selected) if (!local.has(t) && !remote.some(r => r.tests.includes(t))) local.add(t);
   if (local.size && tiers.size === 0) tiers.add('unit');
-  return { noLane: noLane.sort(), tests: selected, localTests: [...local].sort(), remote, tiersRan: [...tiers].sort(), laneSets, provenance };
+  return { noLane: noLane.sort(), emptyLane: emptyLane.sort(), tests: selected, localTests: [...local].sort(), remote, tiersRan: [...tiers].sort(), laneSets, provenance };
 }
 
 export function isTest(file: string): boolean { return isTestFile(file); }

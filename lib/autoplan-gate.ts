@@ -22,11 +22,13 @@ import { exportRun } from './autoplan-export';
 import { driftLine, reviewHash } from './autoplan-plan-text';
 import { consensusRecord, reconcile, remedyKey, renderConsensus, SETTLEABLE_CHANGES, type ConsensusRecord, type ReconciliationOverride, type ReconciliationRow } from './autoplan-reconcile';
 import type { Phase } from './autoplan-prompts';
-import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, writeDecisions, type Amendment, type RunState, type VoiceState } from './autoplan-state';
+import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, voiceTerminal, writeDecisions, type Amendment, type RunState, type VoiceState } from './autoplan-state';
+import { applyCapChoices, pendingDeltas, releaseUndispatched, roundCap, roundOf } from './autoplan-budget';
+import { previousReview, reviewRows, settledIds } from './autoplan-confirm';
 import { phaseClose } from './autoplan-timing';
 import { ANSWERED_BY_RE, applyReply, decisionId, decisionRows, keepDirection, parseReply, pendingHint, recHash, validateGateList, type GateChoice, type GateItem, type GateList, type GateOption, type ParsedReply } from './gate-list';
 import type { FindingRow } from './headless-artifacts';
-import { readJsonl } from './headless-artifacts';
+import { readJsonl, sha256File } from './headless-artifacts';
 import { closeDraftDirectionsFile, loadBriefInputs } from './owner-brief';
 import { vaguePlanTerms } from './plan-reality';
 import { settle } from './spend-ledger';
@@ -62,6 +64,92 @@ export function closePhase(state: RunState, phase: Phase, o: { overridesFile?: s
   const closed = phaseClose(path.join(state.out, 'timing.json'), state.run, phase, { outside_s: seconds(ps.outside), native_s: seconds(ps.native), session_kind: state.session_kind });
   journalRow(state.out, { event: 'phase_closed', phase, consensus: ps.consensus, wall_s: closed.entry.wall_s, analytics: closed.analytics });
   return { consensus };
+}
+
+const severityText = (counts: Record<string, number>) => Object.entries(counts).filter(([, n]) => n).map(([s, n]) => `${s}=${n}`).join(' ') || 'none';
+type OpenRow = FindingRow & { urgent?: boolean; user_challenge?: boolean; settled_by?: string };
+
+/**
+ * Close `phase` accepted-with-findings (field list 2, W5): at the round cap, or by the owner (`close --deferred`).
+ * Open voices become skipped. Their dispatched or execution-unknown attempts are settled `unknown` at their
+ * reservation (a deferred review may still have run and been billed); only reservations with no journaled dispatch
+ * are released. The consensus file is written from the bound voices so export, validate and resume work. Open
+ * findings (this round's bound rows plus the unanswered rows of the round last reviewed) carry into
+ * tasks.jsonl and the gate; Critical, urgent and user-challenge findings become owner approval items.
+ */
+export function closeDeferred(state: RunState, phase: Phase, o: { reason: string; by: string; cause: 'cap' | 'owner' }): { lines: string[]; blockers: string[] } {
+  const ps = (state.phases[phase] ??= {});
+  const at = now();
+  for (const voice of ['native', 'outside'] as const) {
+    const v = (ps[voice] ??= { status: 'pending' });
+    for (const a of v.attempts ?? []) {
+      if (a.state !== 'dispatched' && a.state !== 'execution_unknown') continue;
+      a.state = 'deferred'; a.terminal_at = at;
+      settle(path.join(state.out, FILES.spend), a.attempt, 'unknown');
+      journalRow(state.out, { event: 'attempt_deferred', attempt: a.attempt, phase, voice, reason: o.reason });
+    }
+    if (!voiceTerminal(v)) Object.assign(v, { status: 'skipped', detail: `deferred: ${o.reason}` });
+  }
+  const lines = releaseUndispatched(state);
+  const native = voiceRows(state, phase, 'native'), outside = voiceRows(state, phase, 'outside');
+  const consensus = consensusRecord(phase, ps.native?.status === 'completed' ? { rows: native, model: ps.native.model } : null,
+    ps.outside?.status === 'completed' ? { rows: outside, model: ps.outside.model, provider: ps.outside.provider } : null, reconcile(native, outside, []));
+  const answered = settledIds(state);
+  const current: OpenRow[] = [...native, ...outside];
+  const ids = new Set(current.map(r => r.id));
+  const earlier: OpenRow[] = reviewRows(state, previousReview(state, phase)).filter(r => !answered.has(r.id) && !ids.has(r.id));
+  const rows = [...current, ...earlier];
+  let carried: string | undefined;
+  if (earlier.length) {
+    carried = `${phase}-deferred.findings.jsonl`;
+    fs.writeFileSync(path.join(state.out, carried), earlier.map(r => JSON.stringify({ ...r, disposition: 'deferred' })).join('\n') + '\n');
+    state.artifacts[carried] = { path: carried, sha256: sha256File(path.join(state.out, carried)) };
+  }
+  const open = rows.filter(r => !r.settled_by && !answered.has(r.id));
+  const counts = Object.fromEntries(['Critical', 'High', 'Medium', 'Low', 'Informational'].map(s => [s, open.filter(r => r.severity === s).length]));
+  const blockers = open.filter(r => r.severity === 'Critical' || r.urgent || r.user_challenge).map(r => r.id);
+  const round = roundOf(state, phase);
+  ps.deferred = { reason: o.reason, by: o.by, cause: o.cause, at, round, counts, ...(carried ? { carried_file: carried } : {}), blockers, open: open.length };
+  const head = `DEFERRED: ${phase} closed accepted-with-findings at round ${round} (${o.reason}; by ${o.by}); open findings: ${severityText(counts)}; ${blockers.length ? `owner items: ${blockers.join(', ')}` : 'no Critical, urgent or user-challenge finding, so no owner item'}\n\n`;
+  fs.writeFileSync(path.join(state.out, `${phase}-consensus.json`), JSON.stringify({ ...consensus, deferred: ps.deferred }, null, 2) + '\n');
+  fs.writeFileSync(path.join(state.out, `${phase}-consensus.md`), head + renderConsensus(consensus, [...native, ...outside]));
+  ps.consensus = { confirmed: consensus.confirmed, unverified: consensus.unverified, disagree: consensus.disagree, new: consensus.new, native_only: consensus.native_only, coverage: consensus.coverage, deferred: true };
+  ps.closed_at = at;
+  journalRow(state.out, { event: 'phase_deferred', phase, ...ps.deferred });
+  lines.push(`PHASE_DEFERRED: ${phase} round=${round}/${roundCap(state, phase) ?? 'none'} by=${o.by} open=${open.length} (${severityText(counts)}) blockers=${blockers.join(',') || 'none'} reason=${JSON.stringify(o.reason)}`);
+  return { lines, blockers };
+}
+
+/** The round-cap items: one per deferred phase, one per deferred blocker, one per capped plan delta. */
+function capItems(state: RunState, next: { d: () => string; uc: () => string }): GateItem[] {
+  const items: GateItem[] = [];
+  const push = (item: GateItem, ids: string) => items.push({ ...item, origin: ['cap', ids, optionHash(item.options)].join('|') });
+  const reopen = (phase: string) => ({ key: 'b', text: `reopen ${phase} for one more round (an owner budget raise${phase === 'eng' ? '' : '; Eng reruns last'})`, changes_plan: false });
+  for (const phase of state.phase_order) {
+    const def = state.phases[phase]?.deferred;
+    if (!def) continue;
+    const rows: OpenRow[] = [...voiceRows(state, phase, 'native'), ...voiceRows(state, phase, 'outside'),
+      ...(def.carried_file ? readJsonl(path.join(state.out, def.carried_file)).rows as unknown as OpenRow[] : [])];
+    push({ id: next.d(), title: `${phase} closed accepted-with-findings at round ${def.round} (${def.reason}): ${def.open} open finding(s), ${severityText(def.counts)}, carried into tasks.jsonl`,
+      kind: 'auto', recommended: 'a', phase, cap: { phase, kind: 'deferred' }, why: `closed deferred by ${def.by}`, cost: `b grants ${phase} one more round`,
+      options: [{ key: 'a', text: 'accept with findings, deferred to the build', changes_plan: false }, reopen(phase)] }, `deferred-${phase}`);
+    for (const id of def.blockers) {
+      const f = rows.find(r => r.id === id);
+      if (!f) continue;
+      const risk = f.severity === 'Critical' || f.urgent;
+      push({ id: next.uc(), title: `${f.severity}${f.urgent ? ' urgent' : ''}${f.user_challenge ? ' user challenge' : ''} left open when ${phase} closed deferred: ${f.title} [${id}]`,
+        kind: 'approval', recommended: risk ? 'b' : 'a', recommended_basis: risk ? 'an open Critical or urgent finding' : 'plan direction; a user challenge', phase, cap: { phase, kind: 'blocker', ref: id },
+        why: `${phase} closed deferred (${def.reason}) with this finding open; only you can accept it`,
+        options: [{ key: 'a', text: 'carry it into the build as a blocking task (you accept the risk)', changes_plan: false }, reopen(phase)] }, id);
+    }
+  }
+  for (const delta of pendingDeltas(state)) {
+    push({ id: next.uc(), title: `plan changed after ${delta.phase} cap: unreviewed delta (+${delta.added} -${delta.removed} lines, ${delta.old_plan_sha256.slice(0, 12)} -> ${delta.new_plan_sha256.slice(0, 12)})`,
+      kind: 'approval', recommended: 'a', recommended_basis: 'the run budget; the delta is reviewed during the build', phase: delta.phase, cap: { phase: delta.phase, kind: 'delta', ref: String(delta.k) },
+      why: `revise v${delta.k} changed the plan after ${delta.phase} used round ${delta.round} of ${delta.cap}, so ${delta.phase} never reviewed it`,
+      options: [{ key: 'a', text: 'accept the unreviewed delta into the approved plan', changes_plan: false }, reopen(delta.phase)] }, `delta-${delta.k}`);
+  }
+  return items;
 }
 
 // ---------------------------------------------------------------------------
@@ -108,7 +196,7 @@ export function buildGate(state: RunState, gateRev: number): GateList {
   let d = 0, uc = 0;
   for (const phase of state.phase_order) {
     const ps = state.phases[phase];
-    if (!ps?.closed_at) continue;
+    if (!ps?.closed_at || ps.deferred) continue;
     const consensus = JSON.parse(fs.readFileSync(path.join(state.out, `${phase}-consensus.json`), 'utf8')) as ConsensusRecord;
     const native = voiceRows(state, phase, 'native');
     const outside = voiceRows(state, phase, 'outside');
@@ -118,7 +206,8 @@ export function buildGate(state: RunState, gateRev: number): GateList {
     const push = (item: GateItem, ids: string) => items.push({ ...item, origin: origin(ids, item.options) });
     const challenged = new Set<string>();
     for (const row of consensus.rows) {
-      const o = byId.get(row.outside_id)! as FindingRow & { user_challenge?: boolean; changes?: string };
+      const o = byId.get(row.outside_id)! as FindingRow & { user_challenge?: boolean; changes?: string; settled_by?: string };
+      if (o.settled_by) continue;
       const n = (row.native_id ? byId.get(row.native_id) : undefined) as (FindingRow & { user_challenge?: boolean; changes?: string }) | undefined;
       const ids = `${row.native_id}+${row.outside_id}`;
       if (o.user_challenge && n?.user_challenge && row.disposition !== 'new') {
@@ -137,14 +226,15 @@ export function buildGate(state: RunState, gateRev: number): GateList {
           options: [{ key: 'a', text: `native position (${row.severity.native})`, changes_plan: false }, { key: 'b', text: `outside position (${row.severity.outside})`, changes_plan: true }] }, ids);
       }
     }
-    for (const f of [...native, ...outside] as Array<FindingRow & { user_challenge?: boolean; changes?: string }>) {
-      if (!f.user_challenge || challenged.has(f.id)) continue;
+    for (const f of [...native, ...outside] as Array<FindingRow & { user_challenge?: boolean; changes?: string; settled_by?: string }>) {
+      if (!f.user_challenge || challenged.has(f.id) || f.settled_by) continue;
       const why = `one voice (${f.voice}) recommends changing your stated direction`;
       if (reran && !f.changes) { push(agentDecision(`d${++d}`, `${f.title} [${f.id}]`, phase, why), f.id); continue; }
       push({ id: `d${++d}`, title: `${f.title} [${f.id}]`, kind: 'auto', recommended: 'a', phase, why, ...(f.changes ? { changes: f.changes } : {}),
         cost: `b reopens ${phase}${phase === 'eng' ? '' : ' and eng'}`, options: [KEEP('keep your direction'), { key: 'b', text: 'accept the change', changes_plan: true }] }, f.id);
     }
   }
+  items.push(...capItems(state, { d: () => `d${++d}`, uc: () => `uc${++uc}` }));
   items.push(planApproval(state, items));
   const list: GateList = { schema_version: 1, run: state.run, gate_rev: gateRev, items, title: '/autoplan final approval gate', rec_rev: 0 };
   const problems = validateGateList(list);
@@ -319,6 +409,7 @@ export function answerGate(state: RunState, gateRev: number, reply: string, answ
     lines.push('REJECTED: run.json.status=incomplete');
     return { state, applied: true, pending: [], reopened: [], outcome: 'rejected', lines };
   }
+  lines.push(...applyCapChoices(state, parsed.choices.filter(c => !carried(c)).map(c => ({ item: itemOf(c.id), chosen: c.chosen })), reopenSet as Set<string>, answeredBy));
   const acceptedPlan = changing.length ? reviewHash(fs.readFileSync(state.active_plan, 'utf8')) : '';
   for (const c of changing) {
     const item = itemOf(c.id);

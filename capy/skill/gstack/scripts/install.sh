@@ -43,6 +43,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 fix_cmd="bash $self${skill:+ --for $skill}"
+# The same install for a machine without this skill (gstack_capy_bootstrap_cmd).
+no_drive="test -f \"$root/setup\" || git clone --quiet --single-branch --depth 1 https://github.com/garrytan/gstack.git \"$root\" && GSTACK_CAPY_ROOT=\"$root\" bash \"$root/capy/skill/gstack/scripts/install.sh\"${skill:+ --for $skill}"
 export GIT_TERMINAL_PROMPT=0
 
 bounded() { if command -v timeout >/dev/null 2>&1; then timeout "${GSTACK_CAPY_FETCH_TIMEOUT:-60}" "$@"; else "$@"; fi; }
@@ -68,7 +70,7 @@ fi
 
 if [ ! -f "$root/setup" ]; then
   if [ "$check" -eq 1 ]; then
-    echo "gstack: fail not-installed — no gstack checkout at $root; fix: $fix_cmd (installs)"
+    echo "gstack: fail not-installed — no gstack checkout at $root; fix: $fix_cmd (installs; on a machine without this skill: $no_drive)"
     exit 1
   fi
   if [ -e "$root" ] && [ -n "$(ls -A "$root" 2>/dev/null)" ]; then

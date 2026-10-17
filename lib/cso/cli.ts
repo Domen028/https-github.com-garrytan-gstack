@@ -35,7 +35,15 @@ import {
   validateFinding,
   validateVerificationRequest,
 } from './contracts';
-import { capture, containedFile, assertSnapshot, readSnapshotManifest } from './snapshot';
+import {
+  capture,
+  containedFile,
+  assertSnapshot,
+  inAuditPaths,
+  noReadPath,
+  OUTSIDE_AUDIT_PATHS,
+  readSnapshotManifest,
+} from './snapshot';
 import {
   assertStateOutside,
   boundedList,
@@ -167,7 +175,7 @@ const GENERATION_LOCK_FD = (() => {
 void GENERATION_LOCK_FD;
 const HELP = `gstack-cso ${VERSION} (helper ABI ${ABI})
 Usage:
-  gstack-cso start --repo PATH [--comprehensive] [--diff] [--base REF] [--budget SECONDS] [--offline] [--infra|--code|--skills|--supply-chain|--owasp|--scope DOMAIN]
+  gstack-cso start --repo PATH [--comprehensive] [--diff] [--base REF] [--budget SECONDS] [--offline] [--paths PREFIX[,PREFIX...]] [--infra|--code|--skills|--supply-chain|--owasp|--scope DOMAIN]
   gstack-cso doctor --repo PATH
   gstack-cso provision-images [--setup-summary] [--per-image-seconds 5..300]
   gstack-cso resume RUN
@@ -190,6 +198,7 @@ Usage:
   gstack-cso inspect-v2 IMPORT_ID
   gstack-cso schema
 
+--paths audits only source under the listed repo-relative prefixes; every other path is never captured and is reported as a snapshot-inputs gap.
 Static runs never execute application code. Target and scanner execution is Docker-only and requires a qualified immutable catalog.`;
 
 const SCHEMA = {
@@ -475,16 +484,28 @@ function planned(scope: string): CoverageRecord[] {
 // material gaps keep the largest share; findings and events keep the rest.
 const SNAPSHOT_DISCLOSURE_BUDGET = { gaps: 128 * 1024, transformations: 96 * 1024, exclusions: 32 * 1024 };
 const UNLISTED = "to keep report.json within its 1 MiB bound; the run's snapshot manifest keeps every entry";
-function snapshotCoverage(manifest: Awaited<ReturnType<typeof capture>>, scope: string): CoverageRecord {
+function snapshotCoverage(
+  manifest: Awaited<ReturnType<typeof capture>>,
+  scope: string,
+  auditPaths?: string[],
+): CoverageRecord {
   const omitted = manifest.entries.filter((entry) => !entry.executionHash),
     excluded = omitted.filter((entry) => entry.transformation?.startsWith('excluded:')),
     excludedSet = new Set(excluded);
   // Classify every unexplained omission as a material coverage gap. Coverage
   // must not depend on transformation prose retaining a particular prefix.
-  const unread = omitted.filter((entry) => !excludedSet.has(entry));
-  const deleted = manifest.deletedPaths ?? [],
-    captured = manifest.entries.length - omitted.length,
-    missing = unread.length + deleted.length;
+  // Out-of-scope --paths entries are listed last so they never crowd material
+  // in-scope gaps out of the bounded list.
+  const unread = omitted.filter((entry) => !excludedSet.has(entry)),
+    inScope = unread.filter((entry) => entry.transformation !== OUTSIDE_AUDIT_PATHS),
+    allDeleted = manifest.deletedPaths ?? [],
+    deleted = allDeleted.filter((item) => !auditPaths || inAuditPaths(item.path, auditPaths)),
+    outside = [
+      ...unread.filter((entry) => entry.transformation === OUTSIDE_AUDIT_PATHS),
+      ...allDeleted.filter((item) => !deleted.includes(item)),
+    ];
+  const captured = manifest.entries.length - omitted.length,
+    missing = unread.length + allDeleted.length;
   return {
     domain: 'snapshot-inputs',
     scope,
@@ -493,12 +514,17 @@ function snapshotCoverage(manifest: Awaited<ReturnType<typeof capture>>, scope: 
     gaps: boundedList(
       missing,
       (index) =>
-        index < unread.length
-          ? `${publicSnapshotPath(manifest, unread[index].path, unread[index].pathId).path}: in-scope source payload was unread and withheld from static and runtime assessment`
-          : `${publicSnapshotPath(manifest, deleted[index - unread.length].path, deleted[index - unread.length].pathId).path}: tracked source is deleted from the worktree; only retained history is available for assessment`,
+        index < inScope.length
+          ? `${publicSnapshotPath(manifest, inScope[index].path, inScope[index].pathId).path}: in-scope source payload was unread and withheld from static and runtime assessment`
+          : index < inScope.length + deleted.length
+            ? `${publicSnapshotPath(manifest, deleted[index - inScope.length].path, deleted[index - inScope.length].pathId).path}: tracked source is deleted from the worktree; only retained history is available for assessment`
+            : `${publicSnapshotPath(manifest, outside[index - inScope.length - deleted.length].path, outside[index - inScope.length - deleted.length].pathId).path}: outside the --paths audit scope; payload was not captured or assessed`,
       { bytes: SNAPSHOT_DISCLOSURE_BUDGET.gaps },
       4,
-      (count) => `${count} more unread or deleted in-scope inputs are not listed ${UNLISTED}`,
+      (count) =>
+        outside.length
+          ? `${count} more unread, deleted or out-of-scope inputs are not listed ${UNLISTED}`
+          : `${count} more unread or deleted in-scope inputs are not listed ${UNLISTED}`,
     ),
     exclusions: boundedList(
       excluded.length,
@@ -509,18 +535,22 @@ function snapshotCoverage(manifest: Awaited<ReturnType<typeof capture>>, scope: 
       (count) => `${count} more explicit exclusions are not listed ${UNLISTED}`,
     ),
     evidence: [
-      `${captured} sanitized execution input${captured === 1 ? '' : 's'} captured; ${excluded.length} explicit non-executable exclusion${excluded.length === 1 ? '' : 's'}; ${unread.length} unread in-scope input${unread.length === 1 ? '' : 's'}; ${deleted.length} tracked deletion${deleted.length === 1 ? '' : 's'}`,
+      `${captured} sanitized execution input${captured === 1 ? '' : 's'} captured; ${excluded.length} explicit non-executable exclusion${excluded.length === 1 ? '' : 's'}; ${inScope.length} unread in-scope input${inScope.length === 1 ? '' : 's'}; ${deleted.length} tracked deletion${deleted.length === 1 ? '' : 's'}${auditPaths ? `; audit limited by --paths to ${auditPaths.join(', ')}, so ${outside.length} source file${outside.length === 1 ? ' was' : 's were'} skipped` : ''}`,
     ],
   };
 }
-function historyCoverage(status: any, scope: string): CoverageRecord {
+function historyCoverage(status: any, scope: string, auditPaths?: string[]): CoverageRecord {
   return status?.status === 'captured'
     ? {
         domain: 'history-inputs',
         scope,
-        status: 'assessed',
+        status: auditPaths ? 'partial' : 'assessed',
         method: 'bounded helper-retained Git history',
-        gaps: [],
+        gaps: auditPaths
+          ? [
+              `History outside the --paths audit scope (${auditPaths.join(', ')}) was not retained or assessed`,
+            ]
+          : [],
         exclusions: [],
         evidence: [
           `Captured ${String(status.commits ?? 'bounded commits')} from ${String(status.range ?? 'the pinned source range')}`,
@@ -550,11 +580,36 @@ function helperOwnedCoverage(domain: string): boolean {
     domain.startsWith('execution:')
   );
 }
+function auditPaths(raw: string): string[] {
+  const values = [...new Set(raw.split(',').map((value) => value.replace(/\/+$/, '')))].sort();
+  if (raw.length > 1024 || values.length > 32)
+    throw new CsoError('INVALID_ARGUMENT', '--paths accepts at most 32 prefixes in 1024 characters');
+  for (const value of values)
+    if (
+      !value ||
+      value.length > 256 ||
+      value.startsWith('-') ||
+      value.startsWith('/') ||
+      /[\\\u0000-\u001f\u007f]/.test(value) ||
+      value.split('/').some((part) => !part || part === '.' || part === '..')
+    )
+      throw new CsoError(
+        'INVALID_ARGUMENT',
+        `Invalid --paths entry ${JSON.stringify(value.slice(0, 80))}: use repo-relative path prefixes of at most 256 characters, without empty, '.' or '..' segments, a leading '-' or '/', backslashes, or control characters`,
+      );
+    else if (sanitizeHelperForJson(value) !== value)
+      throw new CsoError(
+        'INVALID_ARGUMENT',
+        '--paths entry would be altered by report redaction; choose a shorter or broader prefix',
+      );
+  return values;
+}
 function parseStart(args: string[]): { repo: string; policy: RunPolicy; comparisonBase?: string } {
   const repo = callerPath(need(args, '--repo')),
     comprehensive = take(args, '--comprehensive'),
     diff = take(args, '--diff'),
-    offline = take(args, '--offline');
+    offline = take(args, '--offline'),
+    paths = args.includes('--paths') ? auditPaths(need(args, '--paths')) : undefined;
   const scopeFlags = ['--infra', '--code', '--skills', '--supply-chain', '--owasp'].filter((f) =>
     args.includes(f),
   );
@@ -586,6 +641,7 @@ function parseStart(args: string[]): { repo: string; policy: RunPolicy; comparis
       budgetSeconds,
       maxWorkers: 3,
       maxRepairs: 3,
+      ...(paths ? { paths } : {}),
     },
     ...(diff || explicitBase ? { comparisonBase: base } : {}),
   };
@@ -611,15 +667,40 @@ async function start(
   const run = newRun(repo);
   let manifest: Awaited<ReturnType<typeof capture>>;
   try {
-    manifest = await capture(repo, run.dir, comparisonBase, requiredAncestor, {
-      deadlineMs: createdAt.getTime() + policy.budgetSeconds * 1000 - 60_000,
-    });
+    manifest = await capture(
+      repo,
+      run.dir,
+      comparisonBase,
+      requiredAncestor,
+      { deadlineMs: createdAt.getTime() + policy.budgetSeconds * 1000 - 60_000 },
+      policy.paths,
+    );
+    if (policy.diff && policy.paths) {
+      const scoped = policy.paths,
+        outside = (manifest.changedPaths ?? []).filter(
+          (path) => !noReadPath(path) && !inAuditPaths(path, scoped),
+        );
+      if (outside.length)
+        throw new CsoError(
+          'INVALID_ARGUMENT',
+          `--diff found ${outside.length} changed path${outside.length === 1 ? '' : 's'} outside --paths (${scoped.join(', ')}): ${outside
+            .slice(0, 20)
+            .map((path) => publicSnapshotPath(manifest, path).path)
+            .join(
+              ', ',
+            )}${outside.length > 20 ? `, and ${outside.length - 20} more` : ''}. ${parent ? 'A recheck keeps the original --diff and --paths policy, so start a new audit with them added to --paths or without --diff' : 'Add them to --paths or run without --diff'}; a changed path is never left silently out of scope.`,
+        );
+    }
   } catch (error) {
     fs.rmSync(run.dir, { recursive: true, force: true });
     throw error;
   }
-  const transformed = manifest.entries.filter((entry) => entry.transformation),
-    deletedPaths = manifest.deletedPaths ?? [];
+  const transformed = manifest.entries.filter(
+      (entry) => entry.transformation && entry.transformation !== OUTSIDE_AUDIT_PATHS,
+    ),
+    deletedPaths = (manifest.deletedPaths ?? []).filter(
+      (item) => !policy.paths || inAuditPaths(item.path, policy.paths),
+    );
   const report: RunReportV3 = {
     schemaVersion: 3,
     runId: run.runId,
@@ -663,8 +744,8 @@ async function start(
       invariants: [],
     },
     coverage: [
-      snapshotCoverage(manifest, policy.scope),
-      historyCoverage(readJson(join(run.dir, 'history-status.json')), policy.scope),
+      snapshotCoverage(manifest, policy.scope, policy.paths),
+      historyCoverage(readJson(join(run.dir, 'history-status.json')), policy.scope, policy.paths),
       ...planned(policy.scope),
     ],
     findings: [],
@@ -1342,6 +1423,11 @@ function submit(args: string[]) {
           'INVALID_SCHEMA',
           `Diff-scope finding root cause is outside the captured changed paths: ${sourceFinding.location.path}`,
         );
+      if (report.policy.paths && !inAuditPaths(sourceLocation.path, report.policy.paths))
+        throw new CsoError(
+          'INVALID_SCHEMA',
+          `Finding root cause is outside the --paths audit scope: ${sourceFinding.location.path}`,
+        );
       const safeRaw = object(sanitizeForJson(raw), 'finding'),
         safeLocation = object(safeRaw.location, 'location');
       safeLocation.path = publicSnapshotPath(manifest, sourceLocation.path).path;
@@ -1543,6 +1629,12 @@ async function history(args: string[]) {
   if (args.length) selected = resolveSnapshotPath(manifest, args.shift(), false, 'History path', true).path;
   if (args.length)
     throw new CsoError('INVALID_ARGUMENT', 'history accepts at most one path or opaque handle');
+  const scoped = loadReport(dir).policy.paths;
+  if (selected !== undefined && scoped && !inAuditPaths(selected, scoped))
+    throw new CsoError(
+      'INVALID_ARGUMENT',
+      `History path is outside the --paths audit scope (${scoped.join(', ')}); its history was not retained`,
+    );
   const status = readJson(join(dir, 'history-status.json'));
   if (status.status !== 'captured' || !fs.existsSync(join(dir, 'history.txt')))
     throw new CsoError('MISSING_INPUT', status.gap || 'Historical evidence was not retained');
@@ -1860,6 +1952,7 @@ async function recheck(args: string[], dependencies: CsoCliDependencies) {
           '--budget',
           String(original.policy.budgetSeconds),
           ...(original.policy.offline ? ['--offline'] : []),
+          ...(original.policy.paths ? ['--paths', original.policy.paths.join(',')] : []),
           ...(original.policy.scope === 'default'
             ? []
             : original.policy.scope.startsWith('domain:')
@@ -2522,7 +2615,15 @@ async function replay(args: string[], dependencies: CsoCliDependencies) {
         const temp = newRun(source);
         temporary = temp.dir;
         workDir = temp.dir;
-        manifest = await capture(source, workDir, undefined, undefined, { deadlineMs: replayDeadline });
+        const scoped = loadReport(stored.dir).policy.paths;
+        manifest = await capture(
+          source,
+          workDir,
+          undefined,
+          undefined,
+          { deadlineMs: replayDeadline },
+          scoped === undefined ? undefined : auditPaths(Array.isArray(scoped) ? scoped.join(',') : ''),
+        );
         if (
           manifest.executionHash !== bundle.requiredInputs.sourceHash ||
           manifest.originalHash !== bundle.requiredInputs.originalHash

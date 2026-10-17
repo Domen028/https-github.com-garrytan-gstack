@@ -51,12 +51,16 @@ const WINDOWS_FRAGILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 // when possible; this list is for environment-/runtime-specific tests where
 // the failure mode is structural rather than detectable via source-file scan.
 export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
+  // Field list 2, W11: the review-voice install is a POSIX launcher contract, exercised end to end on Linux and macOS.
+  { file: 'test/capy-review-voice.test.ts', reason: 'copies the checkout with tar -C into the temp root (GNU tar reads a D: path as a remote host) and launches the bash --for review-voice installer with a colon-joined GSTACK_LAUNCH PATH' },
   // C-pregate: these drive bin/gstack-regen, bin/gstack-pregate, bin/gstack-issue-links and
   // bin/gstack-ship-receipt through test/helpers/pregate-fixture.ts runBin (spawnSync on the
   // shebang file, which CreateProcess cannot exec) and run `node gen.js` / `node --test` fixture
   // commands through the pre-gate's POSIX `bash -o pipefail` runner. The pure parsers and the
   // import graph are covered by test/pregate-selection.test.ts, which the bin/ pattern excludes too.
   { file: 'test/gstack-regen.test.ts', reason: 'spawns bin/gstack-regen through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and POSIX fixture regen commands' },
+  { file: 'test/pregate-docs-lane-review.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess); the docs-lane selection rules it drives are POSIX-run like the other pregate fixtures' },
+  { file: 'test/pregate-remote-gbrain.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and runs the gbrain-shaped ci:ubicloud package script through the POSIX lane runner, like test/pregate-remote.test.ts' },
   { file: 'test/pregate-guards.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and runs node guard and lane fixture commands through the POSIX runner' },
   { file: 'test/pregate-remote.test.ts', reason: 'spawns bin/gstack-pregate through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) and runs POSIX remote-gate fixture commands through the lane runner' },
   { file: 'test/pregate-regate.test.ts', reason: 'spawns bin/gstack-pregate regate through test/helpers/restamp-fixture.ts runBin (shebang via CreateProcess)' },
@@ -264,6 +268,23 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
   {
     file: 'test/gstack-ship-receipt.test.ts',
     reason: 'spawns bin/gstack-ship-receipt and bin/gstack-artifact (shebangs) plus a #!/bin/sh gh shim through test/helpers/restamp-fixture.ts',
+  },
+  // Field list 2, W1 (shared merge queue): same fixture helpers, same shebang spawns.
+  {
+    file: 'test/gstack-ship-queue.test.ts',
+    reason: 'spawns bin/gstack-ship-queue (shebang) and a #!/bin/sh gh shim through test/helpers/restamp-fixture.ts and test/helpers/ship-queue-fixture.ts',
+  },
+  {
+    file: 'test/ship-policy-compat.test.ts',
+    reason: 'spawns bin/gstack-ship-policy, bin/gstack-restamp and bin/gstack-tree-receipt (shebangs) through test/helpers/restamp-fixture.ts',
+  },
+  {
+    file: 'test/tree-receipt-gbrain-pair.test.ts',
+    reason: 'spawns bin/gstack-tree-receipt and bin/gstack-ship-policy (shebangs) through test/helpers/restamp-fixture.ts',
+  },
+  {
+    file: 'test/restamp-gate-ahead-changelog.test.ts',
+    reason: 'spawns bin/gstack-restamp (shebang) and a POSIX release tool through test/helpers/restamp-fixture.ts',
   },
 ];
 

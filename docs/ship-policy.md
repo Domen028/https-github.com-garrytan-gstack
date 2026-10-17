@@ -18,6 +18,7 @@ introduces or changes the policy runs under the reviewed bootstrap path
 
 Tools: `gstack-ship-policy init|validate|show-effective|check-history`,
 `gstack-restamp`, `gstack-tree-receipt`, `gstack-ship-receipt`,
+`gstack-ship-queue` ([shared merge queue](#run-a-shared-merge-queue)),
 `gstack-evidence bundle|ancestor`. They share the exit table (`0` ok, `1`
 fail, `2` usage, `3` refused or needs a flag) and end every error line with a
 code from [troubleshooting.md](troubleshooting.md#queue-aware-ship-policy-restamp-tree-receipt-ship-receipt).
@@ -27,7 +28,14 @@ code from [troubleshooting.md](troubleshooting.md#queue-aware-ship-policy-restam
 
 `gstack-ship-policy init` writes every key at its default; `init --explain`
 prints this table. JSON carries no comments, so examples live in
-`.gstack/ship-policy.example.json`. Unknown keys are errors.
+`.gstack/ship-policy.example.json`. Unknown keys are errors, and there is no
+extension mechanism: a key from a newer gstack, or a misspelled one, fails
+closed (`POLICY_INVALID`) instead of being ignored. Every key has an
+introducing version (`init --explain` and `validate` print it). A key newer
+than 1.91.98.0 set to a non-default value requires `min_gstack_version` at
+least at its introducing version, and a gstack older than `min_gstack_version`
+refuses the file (`POLICY_GSTACK_TOO_OLD`). `validate` ends with
+`MIN_READER: gstack <version>`, the floor every lane reading the policy needs.
 
 | Key | Values | Default | Meaning |
 |---|---|---|---|
@@ -47,6 +55,9 @@ prints this table. JSON carries no comments, so examples live in
 | `stamp_patterns` | literal templates | `[]` | At most 16 templates of at most 128 characters, each with exactly one `{version}` slot (`"version": "{version}"`, `since: '{version}'`, `<!-- x-stamp: {version} -->`); matched literally at a version boundary, never as a regex. The restamp writer and the tree receipt use them beside the built-in forms. |
 | `restamp_command` | command or `null` | `null` | The repo's own restamp, run first in the staging worktree; see [restamp_command](#restamp-command). |
 | `migrations` | `{ dir, id }` or `null` | `null` | The migration directory and a regex with exactly one capture group for the number in a file name (`"^v(\\d+)-"`); `gstack-pregate regate` reports `MIGRATION_COLLISION`. |
+| `gate_command` | command or `null` | `null` | The repo's full pre-merge gate. `gstack-ship-queue gate-ahead` and `ready` print it for the caller to run (in the background or in CI); gstack never executes it. Needs `min_gstack_version`. |
+| `full_e2e` | `true` \| `false` | `false` | `true`: every merge needs a passing full-gate result bound to a tree equal to the merging one modulo stamps; `gstack-ship-queue ready`, `stamp` and `verify` refuse without one (`QUEUE_GATE_MISSING`): a gate-ahead record, or the lane's `--gate-exit 0 --gate-log <file>` from its run on the gated head. Needs `min_gstack_version`. |
+| `min_gstack_version` | version or `null` | `null` | The oldest gstack that may read the file; see the compatibility rule above. |
 
 Containment, checked by `validate` and again at write time: paths and globs are
 repo-relative with no `..` segment, under 256 characters, at most 64 per list,
@@ -125,6 +136,124 @@ Until this policy is on `origin/main`, `gstack-restamp --next` reads the base's
 `bump: ask` and falls back to a MICRO bump; pass `--bump patch` on the first
 PR stamped after the flip if its base predates it.
 
+<a id="run-a-shared-merge-queue"></a>
+## Run a shared merge queue
+
+`gstack-ship-queue` strings `gstack-restamp`, `gstack-tree-receipt` and the
+ship receipt into the coordinator protocol, so nobody proves a stamp diff by
+hand. Lanes own their PRs and never merge; the coordinator owns the order and
+every merge. Each step ends in a line the other side acts on, then
+`GSTACK_RESULT: skill=ship-queue status=complete|refused run=<path>`. Nothing
+here pushes.
+
+**1. Lane: report ready (unstamped).** After the gate and pregate pass on the
+pushed head:
+
+```bash
+gstack-pregate run --allow-repo-commands
+git push
+gstack-ship-queue ready --pr 42
+```
+
+```
+READY #42 <head> STAMP_VERSION=unstamped
+pr: https://github.com/<owner>/<repo>/pull/42
+head: <head>
+version: unstamped
+base: origin/main@<sha>
+ci: green at <head12> (passed=31 failed=0 pending=0 skipped=2)
+PREGATE: pass tree=<tree12> head=<head12> checks=6
+gate: command="<gate_command>" full_e2e=no gate-ahead=none
+SHIP_RECEIPT: pr=42 head=<head12> …
+```
+
+It refuses (`QUEUE_NOT_READY`) when the working tree has tracked edits, HEAD
+is not the PR's pushed head, CI at that exact head is not green, or the pregate
+result is not a current pass. Send the block as printed.
+
+**2. Lane behind another PR: gate ahead.** Gate the tree the queue will have
+once the predecessor lands, while it is still open:
+
+```bash
+git fetch origin pull/41/head
+gstack-ship-queue gate-ahead --after 41 --pr 42 --predecessor-ref FETCH_HEAD --allow-repo-commands
+```
+
+prints `GATE_AHEAD: pr=42 attempt=<id> gated=<sha> tree=<tree> merge_tree=<tree>
+predecessor=#41@<sha12> version=<N+1>`, the attempt's own `worktree:`, its
+`record:` file, `GATE_COMMAND:` (the policy's `gate_command`) and the exact
+`next:` line. Run the gate there, in the background or in CI, then bind it:
+
+```bash
+(cd <worktree> && <gate command>) > gate.log 2>&1
+gstack-ship-queue gate-ahead --record --pr 42 --attempt <id> --exit $? --log gate.log
+```
+
+`GATE_RECORD: pr=42 attempt=<id> exit=0 gated_tree=<tree> log_sha256=<sha256>
+current=yes`. The record keeps the log and removes only that attempt's
+worktree, and refuses (`GATE_AHEAD_ATTEMPT_INVALID`) when the worktree no
+longer holds the gated commit. If the predecessor moves, prepare a new
+attempt; attempts never share a worktree, the newest is current, and
+recording an older one later prints `current=no (superseded by <id>)`.
+`gate-ahead --list --pr 42` shows them all. Send the record file with READY.
+
+**3. Coordinator: call the slot.** Name the version, the base sha and the
+order: "#42 next at 1.2.7.0, base `<sha>`, order 41,42".
+
+**4. Lane: stamp.** A gate-ahead lane first merges `origin/main` (with the
+predecessor in it) into its branch, never a rebase. Then:
+
+```bash
+gstack-ship-queue stamp --pr 42 --version 1.2.7.0 --expect-gated <gated> \
+  --expect-base <sha> --expect-order 41,42 --allow-repo-commands
+```
+
+`<gated>` is the head the gate ran on: the pushed head the lane gated, or the
+record's `gated=` after a gate-ahead. The preflight refuses before anything is
+written unless the tree to stamp equals the gated one modulo stamps, the base
+is `<sha>` and, under `full_e2e`, a passing gate result is bound to the gated
+head. Then it runs the restamp, commits, reruns the tree receipt and prints
+
+```
+QUEUE_STAMP: 42 1.2.7.0 head=<sha> gated=<sha> tree=same-modulo-stamps receipt=<sha256>
+```
+
+Each stage is journaled in `.gstack/tmp/ship-queue/stamp-42.json`; the
+identical command resumes at the first unfinished stage, or returns the stored
+`QUEUE_STAMP` when it already finished. A refusal prints
+`QUEUE_STAMP_REFUSED: 42 head=<sha> committed=no|yes <sha> stage=<stage>`
+and the coded line (`QUEUE_STALE` carries a `recompute:` command). Push the
+stamp commit, wait for CI on it, run `ready` again
+(`READY #42 <head> STAMP_VERSION=1.2.7.0`) and send it with the
+`QUEUE_STAMP` line.
+
+**5. Coordinator: verify, then merge.** From the coordinator's own clone:
+
+```bash
+gstack-ship-queue verify --pr 42 --gated <gated> --receipt <sha256> --expect-head <head> [--gate-exit 0 --gate-log <file>]
+gstack-ship-queue verify --pr 42 --record <gate-ahead record> --receipt <sha256> --expect-head <head>
+```
+
+It fetches `refs/pull/42/head` and reruns the tree receipt there, so
+`QUEUE_STAMP` is never a pasted claim: `VERIFY: 42 1.2.7.0 head=<sha>
+gated=<sha> tree=same-modulo-stamps receipt=<same sha256>`. Under `full_e2e`,
+`--gated` also needs the lane's passing gate log from its run on that head
+(`--gate-exit 0 --gate-log <file>`), else `QUEUE_GATE_MISSING`. With a gate-ahead
+record, whose gated commit never left the lane's machine, it first recomputes
+the merge with `git merge-tree --write-tree <branch head> <predecessor head>`
+and compares it with the recorded merge tree, rebuilds the gated tree from
+the recorded stamp patch and compares it with the recorded `gated_tree`,
+proves that patch is stamps only, checks the predecessor did not move, and
+prints `merge_tree:`, `gated_tree:` and `gate:` lines. The last line is
+`MERGE_CONDITION: sha=<head>`: merge with that expected head. Any
+`QUEUE_VERIFY_MISMATCH` means do not merge.
+
+**Rolling out `gate_command` and `full_e2e`.** Commit them (with
+`min_gstack_version` at their introducing version, which `init --explain`
+prints) only after every lane's gstack is at least that version, the crew's
+install floor (`GSTACK_MIN_REVISION`). A lane on an older gstack refuses the
+policy by name rather than reading it differently.
+
 <a id="ship"></a>
 ## What `/ship` reads from it
 
@@ -135,6 +264,7 @@ which carry the workflow consequences the skill prose would otherwise spell out:
 |---|---|
 | `ship: history merge-only: …` | never rebase, squash or force-push; `check-history --plan <merge\|squash\|rebase>` refuses a rewrite plan (`HISTORY_POLICY_VIOLATION`, exit 3) |
 | `ship: queue_mode stamp-at-merge: …` | Step 12 items 1–4 are replaced by `gstack-restamp --next --base <base> --pr <n> --expect-base <sha>` when the PR is next, `--after <predecessor-pr>` when it is not; the restamp's own `next:` line says what follows (NEW_VERSION, CHANGELOG entry text only, the merge's expected head) |
+| `ship: shared merge queue: …` | in a coordinator-run queue, `gstack-ship-queue ready`, `gate-ahead` and `stamp` replace the restamp calls; see [Run a shared merge queue](#run-a-shared-merge-queue) |
 | `ship: gate-ahead: …` | with `.gstack/tmp/gate-ahead.json` present, Step 16 reuses only the lanes `gstack-tree-receipt … --json > .gstack/tmp/tree-receipt.json` marks reusable; stamp-sensitive and not-eligible lanes run live; `--force-gate <reason>` is the coordinator's call |
 | `ship: bump patch: …` | Step 12 never asks for MINOR or MAJOR; PATCH or MICRO by size |
 | `ship: preregistration: …` | `gstack-evidence ancestor --from-policy --base <base>` must print only `ANCESTOR: ok` before push |
@@ -372,3 +502,77 @@ no list). Exit 0 for ok or none, 1 when found, 3 when the file is invalid
 (`BANNED_TERMS_INVALID`, also from `validate`). `/review` turns each finding into
 a Step 4 finding and `/document-release` into a documentation finding;
 `gstack-banned-terms init` writes a commented example.
+
+<a id="approval-classes"></a>
+## Approval classes
+
+`.gstack/approval-classes.json` names the changes that need the owner's
+approval before they ship: upgrade-time data rewrites, trust or visibility
+changes, existing-user default changes, data repairs, anything the owner wants
+cited. Each entry in `classes` has a `name` (lowercase, dashes) and at least
+one matcher: `paths` (globs of changed files), `patterns` (literal text in an
+added line, case-sensitive) or `migrations: true` (the files the ship policy's
+`migrations` key describes). `allowed_paths` exempts files, such as tests;
+`description` is for people. Globs follow the ship policy's containment rules.
+
+Classes come only from the copy committed on `origin/<base>`, so a branch can
+neither declare nor drop its own; `gstack-approval-classes validate` checks the
+working-tree copy before you commit it, and `init` writes an example.
+`gstack-approval-classes check --base <ref>` scans the branch's changes since
+the merge base and prints one `APPROVAL_CLASS: <class> <file>:<line>` line per
+hit, one `APPROVAL_SCOPE: <class>@<digest12>` line per declared class with hits,
+and `APPROVAL_CLASSES: ok | found=<n> | none` last (exit 0, 1 when found, 3 when
+the base file is invalid or `origin/<base>` does not resolve). Built-in
+detectors only report: the ship policy's migration files, when no class sets
+`migrations: true`, print as `(built-in, report-only)` and need no citation.
+
+The digest covers the class's effects: each matched file with its blob at the
+scanned head, and each matched added line. The scan reads git's native diff
+(`--no-ext-diff --no-textconv`), so a configured external diff driver or text
+conversion cannot hide a line; when the content diff cannot be read, or its
+added lines disagree with git's own count, `check` and the receipt refuse with
+`APPROVAL_SOURCE_UNAVAILABLE` instead of passing. Adding, removing or editing an
+effect changes the token, so an approval given earlier no longer binds.
+
+**Enforcement.** `gstack-ship-receipt write` refuses with
+`APPROVAL_CITATION_MISSING`, writing nothing, unless each declared class with
+hits has a line in the `--body` file (or an `--approval` value) of the form
+
+```
+Approved by <owner> <YYYY-MM-DD> via <ref> [for <class>@<digest12>[,<class>@<digest12>]]
+```
+
+that resolves and binds:
+
+- A plan sha (7 to 64 hex characters) must match the plan of an autoplan run
+  passed with `--approval-run <run dir>` whose gate is APPROVED, and the plan
+  must name the scope token, or the class and every effect path.
+- A GitHub comment or review URL must be written by a `maintainers` login from
+  the base's ship policy that equals the cited owner. A review must be in
+  state `APPROVED`; a comment-only, dismissed or changes-requested review is
+  not an approval. The evidence is the body's first non-blank line only. It
+  must start at column 0 with `Approved` or `Approve` (any case, optionally
+  in `**` bold; no list marker, quote or indent) and name the token, or the
+  class and every effect path. Nothing later in the body counts, so a
+  rejection that quotes or nests an example approval approves nothing. For
+  example, a comment whose first line is
+  `Approved data-repair@0123456789ab: preview-first, never at upgrade.`
+  verifies; one that opens with any other line does not.
+- A token is authoritative. Evidence that names the class with a different
+  digest approved earlier effects: it does not bind, and it never falls back
+  to matching the class and paths.
+- Anything else (a thread code, a chat message, a URL gstack cannot read) is
+  recorded `citation: unverified` for the coordinator, and only when the line
+  attests which scope it covers with `for <class>@<digest12>` matching the
+  current token.
+
+The receipt's `approval` object records the source, `status` (`checked`, or
+`unavailable` when `origin/<base>` does not resolve), one record per class
+(scope token, effects, `citation: verified | unverified`, owner, date, ref,
+`binding: token | paths | attested`, evidence) and any report-only hits; the
+`SHIP_RECEIPT:` line ends with `approval=verified`, `approval=unverified:<classes>`,
+`approval=none` or `approval=unchecked`. A repository without the file gets no
+`approval` object unless a built-in detector reported.
+
+A data repair is a class to declare, and /review checks its shape: explicit,
+preview-first, and never reachable from an upgrade or migration path.

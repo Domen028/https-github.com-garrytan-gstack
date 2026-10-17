@@ -1,5 +1,172 @@
 # Changelog
 
+## [1.91.116.0] - 2026-10-17
+
+**Lanes and the coordinator now share a merge queue whose stamp claims are checked instead of trusted, risky changes need a cited owner approval before they ship, /review checks state machines cell by cell, pregate warns about timing assertions, and the update check notices when main moves without a version bump.** These are the field list 2 wave B items from the gbrain crew (W1-W4, W10, W12).
+
+### What this means for you
+
+- **`gstack-ship-queue` runs a shared merge queue.** `ready` prints one READY block and refuses when the tree differs from the pushed head. `stamp` checks every proof input, restamps through `gstack-restamp`, and resumes on an identical retry. The coordinator's `verify` reruns the tree receipt and recomputes a gate-ahead merge, so a lane's stamp claim is never taken on trust. Ship policy gains `gate_command`, `full_e2e` and `min_gstack_version`; a gstack older than a key it reads refuses with `POLICY_GSTACK_TOO_OLD`. See `docs/ship-policy.md#run-a-shared-merge-queue`.
+- **Approval classes.** `.gstack/approval-classes.json` (read from the base branch) declares what needs an owner's approval. `gstack-ship-receipt write` refuses a branch that touches a class until the PR body cites `Approved by <owner> <date> via <ref> for <class>@<digest12>`, bound to the effects being shipped.
+- **/review's state-machines specialist** builds a kind × owner action matrix for diffs that change a state machine. `gstack-state-matrix check` reports every missing cell, and an untested cell is CRITICAL.
+- **Pregate's `timing` check** warns on added test lines that bound wall or CPU time or sleep and then assert. Mark a deliberate bound with `gstack-timing-ok: <reason>`. /investigate gains a timing-flake playbook.
+- **The update check sees a moved main.** At an equal VERSION it reports `UPGRADE_AVAILABLE <ver> <ver>+<n> <sha>` through the GitHub compare API (never `git fetch`). The cache is bound to HEAD and upstream, and snooze is keyed by SHA. /gstack-upgrade summarizes the commits instead of a CHANGELOG entry.
+- **Pregate's docs lane** comes from #3215 by Cursor Agent: Markdown no test depends on is already a docs/no-tests empty lane.
+
+### For contributors
+
+- The release-path result codes live in `lib/result-codes-release.ts`, spread into `RESULT_CODES`, so `lib/result-codes.ts` stays inside the module-size ratchet.
+- New paid case `review-army-state-matrix` (periodic, behavior). The periodic lane's `max-parallel` is 38 so every planned slice still starts at once.
+- The scope-signal clarity test also accepts a signal printed by the helper its own selection line runs (SCOPE_STATE_MACHINE), and the hermetic update-check fixture writes the identity cache.
+
+## [1.91.115.0] - 2026-10-17
+
+**Autoplan now enforces its round cap and spend budget and can export a public copy of a run, /eval-plan tests its preregistered diagnostics and checks every arm's model against repo rules before money moves, and a reviewer subagent can install gstack's read-only helpers in seconds.** These are the field list 2 wave A items from the gbrain crew (autoplan W5-W7, eval-plan W8/W9, reviewer install W11).
+
+### What this means for you
+
+- **Autoplan stops when it said it would.** A run that reaches its round cap with open findings closes as accepted-with-findings and defers them to the build instead of starting another round. The spend budget is enforced the same way.
+- **`gstack-autoplan export --out <run> --public <dir>` writes a shareable copy.** Recorded machine roots are rewritten in prose. A root that survives (for example inside a code span in the plan) is reported as `ARTIFACT_MACHINE_PATH`, and a target directory holding unrelated files is refused with `ARTIFACT_PUBLIC_TARGET_EXISTS`.
+- **Durable autoplan checkpoints are opt-in.** Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` or `gstack-config set autoplan_checkpoint drive`. `resume --from` never redispatches a voice that already bound.
+- **/eval-plan runs the preregistered diagnostics before the freeze.** `prereg --check` reads an optional `## Diagnostics` section, runs the summarizer on the declared fixture only with `--allow-repo-commands`, and reports any miscount as `PREREG_DIAGNOSTIC_UNTESTED`.
+- **`.gstack/eval-models.json` (read from the base branch) gates every arm.** `arms`, `dry-run`, `pilot start` and `price-gate` refuse unknown, denied or older-generation models before any money is reserved (`EVAL_MODELS_INVALID`, `EVAL_MODEL_DENIED`, `EVAL_MODEL_OLD_GENERATION`, `EVAL_MODEL_GENERATION_UNRESOLVED`). See `docs/eval-models.md`.
+- **`--for review-voice` installs only the read-only helpers.** No `./setup`, no host profiles, Bun at gstack's own minimum. Its trailer says `for=review-voice`, and every full workflow refuses that verdict with a `--for <skill>` fix. Autoplan reviewer prompts now ask each reviewer to run it and relay its `gstack:` line.
+
+### For contributors
+
+- New result codes and troubleshooting anchors are appended to `lib/result-codes.ts`, `docs/troubleshooting.md` and the generated `bin/gstack-doctor-components.sh`. The `capy/skill/gstack` context-budget ceiling is raised to its capture value under the ratchet protocol.
+- The doc-sync observer (`test/helpers/docsync-observer.ts`) accepts `GSTACK_SESSION_KIND=spawned <gstack-skill-start> --help` as the harmless read it is. Paid case ship-docsync-store went red on that command alone.
+- `test/capy-review-voice.test.ts` is curated out of the Windows subset: it is a POSIX launcher contract (tar -C into a drive-letter root, a colon-joined launch PATH).
+
+## [1.91.114.0] - 2026-10-17
+
+**The DevEx reviews now score every error message for the reader that usually meets it first: an AI agent running unattended.** `/plan-devex-review`, the `/autoplan` DX phase and `/devex-review` used to ask for "problem + cause + fix". Now they score each error path against an eight-item agent-ready contract: what, fix, recovery, code, context, trace, redaction and channel. Two kinds of failure cap the Error Messages score. A leaked secret, a failure reported as success, an unsafe fix or a block on a terminal caps it at 4/10. A missing fix, recovery, context or trace caps it at 6/10.
+
+### What this means for you
+
+- **Plan reviews catch agent-hostile errors before you build them.** Pass 3 of `/plan-devex-review`, and both autoplan DX voices (native and outside), report `CAP4:<path>:<item>` findings as Critical and `CAP6:<path>:<item>` findings as High, and output a path-by-item matrix. Usage errors rejected before any work need only what, fix, code, redaction and channel. Remote APIs are never penalized for keeping their stack traces server-side. `docs/agent-ready-errors.md` is the public reference.
+- **`/devex-review` exercises CLI errors under containment.** The new `gstack-error-capture` runs the target with no terminal, stdin closed, a temporary cwd and HOME, a scrubbed environment and a deadline. It prints one redacted JSON record: exit code, deadline kill, terminal verdict (`blocking`, `refused_with_alternative`, `refused_no_alternative`) and secret findings. Forwarding credentials, config files or a real directory needs `--approved`, and every capture stays read-only.
+- **Old and new DX scores are not compared.** Review-log rows now carry `dx_rubric` and per-dimension scores. Trend Check and Boomerang print "rubric changed, not comparable" across rubric versions instead of a misleading delta.
+- **"AI coding agent" is a persona option** for CLI tools and Claude Code skills, and "Agents are users too" joins the DX principles.
+
+### For contributors
+
+- `lib/dx-error-contract.ts` is the single source; the snapshot literal, the outside prompt and the public doc are tested against it. The `DX_CAPTURE_*` codes live in `RESULT_CODES`, each with a troubleshooting anchor.
+- `lib/qa-deadline.ts` accepts an optional `spawn: {cwd, env}`. Existing callers are unchanged.
+- New paid behavior case `dx-error-contract-review` (periodic, 3 trials). The native DX reviewer must cap a hostile CLI path and an unspecified path, and must not cap three decoys. Its grader is replayed free in `test/dx-error-contract-grader.test.ts`.
+- Known limit: containment lasts only while the helper runs. A SIGKILLed helper, or a descendant that leaves the process group, outlives it, which is why captures are limited to read-only invocations. The helper's Windows and macOS paths are covered only by CI's free shards.
+
+## [1.91.113.0] - 2026-10-17
+
+**A Capy install that has fallen behind now says so in the one line lanes relay, a skipped upgrade is never reported ok, and a reused pid no longer blocks every upgrade.** Lanes pass along only the `gstack:` trailer, so a session that was 12 commits behind origin looked current. Two field reports (GBRA-105, GBRA-106) showed session-start upgrades wedged behind a lease whose pid now belonged to dbus-daemon or systemd-logind, while the trailer still said ok.
+
+### What this means for you
+
+- **The ok trailer carries the gap and the fix:** `gstack: ok <v> for=<skill> (behind=<n> (latest: <v>); fix: <command>)`. The fix is the command that actually closes the gap: a rerun, `gstack-upgrade` for a dirty, detached or diverged checkout, or `unset <VAR>` when upgrades are switched off. Run it.
+- **A skipped session-start upgrade fails.** When the upgrade is busy, refused or missing, install mode ends `gstack: fail behind — … (UPGRADE_BUSY|UPGRADE_REFUSED)` with exit 1, and workflows refuse until the fix runs. An explicit opt-out stays ok with the `behind=` note.
+- **A lease records who holds it.** `gstack-lease` stores the holder's start identity (boot id plus start time, or `ps` lstart). A lease whose pid now belongs to another process is reclaimed, with a `gstack-lease: reclaimed stale lease …` line. `live`, UPGRADE_BUSY and `fail behind` name each holder as `pid <p> (<age>m <command>)`.
+- **The supported minimum rises to this release**, so older Capy checkouts are fast-forwarded at install-mode session start.
+
+### For contributors
+
+- The lease directory has a lock: a symlink naming its holder, broken only when that holder is dead or its pid was reused. Breakers serialize on `.lock.break` and reread before removing. While a live process holds the lock, `touch` exits 3, and `gstack-skill-start` reports that the session holds no workflow lease. Known limit: two gstack-lease processes killed in a row can still let a reclaim delete a renewal.
+- The paid-gate Aside drive-offer detector (`test/helpers/third-party-actions.ts`) now matches the product name only. The English "set this aside" was a false positive in paid run 38988927989.
+
+## [1.91.112.0] - 2026-10-17
+
+**`/cso --paths` audits part of a repository and says exactly what it skipped.** A repository over /cso's 64 MiB source cap used to get one piece of advice, "run /cso on a smaller checkout". The trimmed copy then read as the whole repository, and the verdict never said what was left out. `gstack-cso start --paths src/core,src/mcp` now audits only those prefixes and reports every other path as skipped, with snapshot and history coverage marked partial.
+
+### What this means for you
+
+- **`--paths` narrows an audit without hiding what it left out.** Files outside the prefixes are never copied, read or counted toward the cap. The run's snapshot manifest lists each one, the report counts them, and snapshot-inputs and history-inputs coverage read partial, so the verdict can't look complete. Git history is limited to the same prefixes.
+- **`--diff --paths` fails closed.** A changed, added or deleted file outside the prefixes refuses the run and is named, including `.npmrc`, `bunfig.toml`, `.claude/` and other credential or agent configuration. Only dependency trees such as `node_modules`, which /cso never reads, are exempt.
+- **Findings stay in scope.** A finding, recheck evidence or `history` query on a skipped path is refused, and rechecks and replays keep the original `--paths`.
+- **The source-cap message points to `--paths`** and warns against hand-trimmed copies. The manifest cap and the 100,000-entry limit still count every file, so their advice is unchanged (#2993).
+
+### If you…
+
+- **…audited a hand-trimmed copy to get under the cap:** rerun /cso on the full checkout with `--paths` set to the directories you want audited, so the report says what was skipped.
+
+### For contributors
+
+- New `test/cso-audit-paths.test.ts` covers the cap advice, the withheld entries and gaps, the `--diff` refusal in both directions, bounded 1 MiB hashing of out-of-scope files when a comparison base is set, recheck and replay scope, and out-of-scope history and findings.
+- Known limits: under `--paths` the original-source hash ignores content changes outside the scope, out-of-scope hashing has no byte cap beyond the time budget, `--paths` with `--comprehensive` runs on a trimmed tree, and a recheck refuses when the audited directory was renamed.
+
+## [1.91.111.0] - 2026-10-16
+
+**Four background reds in the paid PR gate were caused by a detector, a fixture interface, a gstack helper and a Review Army workflow block, not by the PRs that hit them.** Each is fixed where it starts, and each fix has a free regression built from the red run's captured events. Over the last 99 gate runs, 10 of 28 full-selection PR runs had a red. Replayed under these fixes, that drops to 8, and red verdicts drop from 13 to 10. No threshold, budget, trial count or quarantine changed.
+
+### What this means for you
+
+- **`gstack-skill-start --help` and `gstack-skill-end --help` print usage and touch nothing.** They used to ignore the flag and run a real session: minting a session id, writing a marker into your state root and emitting an instruction. Now `-h`/`--help` exits 0 before any side effect.
+- **/review and /ship's Review Army prints the scope signals it selects specialists from.** The "Detect stack and scope" block sourced `SCOPE_FRONTEND`, `SCOPE_BACKEND` and the rest without showing them, so agents added their own `echo` to the block. It now ends with `set | grep '^SCOPE_'`.
+
+### For contributors
+
+- The `ship-docsync-launch-failure` detector treats "until/unless/once/when/before/if Documentation is current" as a condition, not a claim. A new replay corpus in `test/fixtures/detector-corpora/ship-docsync-launch-failure/` covers it.
+- The docsync observation interface admits the lifecycle helpers' own `--help`. Every Bash command from the `ship-docsync-store` red run (`test/fixtures/docsync-store-38969924945-bash.json`) passes it.
+- The qa-only browser-deadline policy admits `ls -la <root>/qa-reports/screenshots`. Escapes, siblings, `-laR` and appended commands are still refused.
+
+## [1.91.110.0] - 2026-10-16
+
+**A full install now ends ok on gbrain: the installer resolves and installs the project's pinned Node, and the launch PATH no longer puts a shared bin directory first.** On 1.91.107.0 a full install in gbrain still ended `gstack: fail pins`. gbrain pins node 24.18.0 in CI (`.github/workflows/native-locks.yml`), the Capy image ships 24.21.0 in `/usr/local/bin`, and the installer handled only Bun pins (GBRA-117). Changing nvm's default didn't help, because the launch PATH put the resolved Bun's directory first. When that Bun was `/usr/local/bin/bun`, the image's node came with it (GBRA-122).
+
+### What this means for you
+
+- **The project's Node pin is resolved like its Bun pin.** `engines.node`, `.nvmrc`, `.tool-versions` and CI `node-version:` pins are read by the same parser. Non-CI exact pins are required, and CI pins in different jobs are alternatives. The installer takes the first node that satisfies them, in this order: the node first on PATH, gstack's store copy of a wanted version, nvm's copy, then any other node on PATH. With no match, install mode downloads the pinned release from nodejs.org into `<state root>/runtimes/node/<version>`, checked against `SHASUMS256.txt`. `/usr/local/bin` and nvm are never written, and `--check` never installs.
+- **The install verdict records the Node** (`node_path`, `node_version`, `node_rule`), and `--check` keeps using it while it still reports its version and satisfies the pins.
+- **The launch PATH never exposes a shared bin directory.** A Bun from gstack's store still launches from its own version directory. Any other Bun, and a Node the launch needs, launch through a gstack-owned directory beside the verdict that holds only `bun`, `bunx` and, when needed, `node`, `npm`, `npx` and `corepack` symlinks. The pregate's lanes use the same directory.
+- **A Node pin mismatch says what to do.** The doctor's `pins` row names the node it read and gives a fix: on Capy, the installer command that installs the pinned Node; elsewhere, `nvm install <version>` and putting it first on PATH.
+
+### If you…
+
+- **…run gstack on a Capy machine in a repo that pins Node:** run `bash <skill>/scripts/install.sh --for <skill>` once, then launch with the `GSTACK_LAUNCH` line it prints.
+
+### For contributors
+
+- `bin/gstack-node-runtime.sh` holds Node resolution, the verified install and the launch-directory writer. `renderPinLines` now prints `PIN_EXACT_REQUIRED` and `PIN_CI_ALTERNATIVES` lines for node as well as bun.
+- `test/gstack-capy-install.test.ts` covers a Bun resolving into a directory that holds another node, gbrain's CI pin served from nvm and recorded, and a store install with a SHA-256 mismatch control. The doctor, runtime-pins and pregate launch tests cover the fix line, the node plan lines and the recorded launch directory.
+
+## [1.91.109.0] - 2026-10-16
+
+**Pregate's secrets check stops passing real keys it never scanned, Windows Git Bash can run `gstack-upgrade` again, and four user-reported workflow bugs are fixed.** The secrets check could miss a committed AWS key in two ways and flagged ordinary TypeScript as secrets. `gstack-upgrade` refused every Git Bash install. Catalog field names failed a check that can't be downgraded. Browse treated some server-side writes as read-only, and a plan review could delete another review's summary. Each fix has a test that fails on the previous release.
+
+### What this means for you
+
+- **Pregate `secrets` scans what you actually added (#3211).** An added line that begins with `++` used to be dropped as if it were a diff header, and a `diff.external` or `textconv` driver could empty the diff, so a branch carrying a real key passed with "no added lines". Both false negatives are older than this release. The check now reads the diff hunk by hunk with external drivers off. It scans each file with its own type, so `token: credentials.token,` in a `.ts` file is code, not a secret, and each finding names its file. Reported by @brentyates-swx.
+- **`gstack-upgrade` works under Windows Git Bash.** It compared Git's `C:/x` with Git Bash's `/c/x` as plain strings and refused every install as "not a gstack checkout" (`UPGRADE_REFUSED`), the same command the doctor's recovery line tells you to run. It now compares the paths themselves. A gstack tree nested inside another repository is still refused.
+- **A catalog field named like `"input_key": "expected_media_rate_bits"` is no longer a credential (#3208).** env.kv skips a value only when the whole name is one data-model word plus `_key` and the value is lowercase identifier words. `cosmosdb_primary_key`, `api_cache_key`, ALL-CAPS env names and entropic values still fire. Reported by @brentyates-swx.
+- **Browse's "LOOK, not ACT" rule covers two writes it missed (#3216).** On a non-local target, a wizard or dialog step (Next, Step N, a menu item that opens a dialog) counts as a write until its handler or network effect shows otherwise, and its Cancel proves nothing. Before any Save or Submit, every value set with `fill`, `selectOption` or `setValue` is read back, and a mismatch stops the run. Reported by @tomg65.
+- **A second plan review no longer deletes the first one's summary (#3219).** `/plan-design-review` writes its Completion Summary, and `/plan-devex-review` its DX Scorecard, in their own sections above `## GSTACK REVIEW REPORT`. That report section is the part the next review deletes and rewrites. Reported by @virajs13.
+
+### If you…
+
+- **…hit `UPGRADE_REFUSED` "not a gstack checkout" on Windows:** update by hand once (`cd <install> && git pull --ff-only && ./setup`); `gstack-upgrade` works from then on.
+- **…renamed a field or added a workaround to get past pregate `secrets`:** you can drop it. Rerun `gstack-pregate --only secrets`; findings now say which file they're in.
+
+### For contributors
+
+- New `test/pregate-secrets-source-context.test.ts` covers the `++` line, the empty external diff, the TypeScript exemption and a `.env` control. `test/gstack-upgrade-path-spelling.test.ts` emulates MSYS with `uname`, `cygpath` and `git` shims.
+- `test/cso-git-hardening.test.ts` builds its fixture repo once per file. On a cold macOS runner, the per-test git spawns used up the first test's 5 s budget (#3207, by @scottgigante-hubflow).
+
+## [1.91.108.0] - 2026-10-16
+
+**The weekly census's two #3153 findings were in the test fixtures, not in /ship or /review.** The Oct 12 census went red on `ship-exploratory-late-input` and flagged `review-army-simplification` over its session headroom cap. Both are diagnosed from the run's own transcripts (`docs/evals/headroom-diagnosis-2026-10.md`), and each fixture repair lands with a free test that failed first. No skill prose, budget, threshold or detector changed. Reported by the weekly periodic census bot (#3153).
+
+### What this means for you
+
+- **`ship-exploratory-late-input` no longer gets invited to probe before its QA methods are read.** The fixture's scheduling contract told the session to batch "Reads and read-only discovery" together, and the session counted a QA capture as discovery. It went out in the same response as the Step 9 section Read, before any QA section had returned. The contract now says a capture, a deadline guard start or run, or a diagnostic run is a probe, never discovery. The ordering rule itself stays in /ship's own Step 9 STOP, so the case still catches that STOP being lost.
+- **`review-army-simplification` stops spending its budget on a false premise.** Its prompt said the diff was "over 100 lines" when the fixture is 68, so every run reconciled the mismatch, read the whole review skill and checklist, and wrote an unbounded report (142, 91 and 146 s of a 180 s budget on Oct 12; 159 s pooled). It now stages only the Review Army section and the simplification checklist with recorded scope, stats and diff, as the other Review Army cases do. It selects the specialist with the real `/review --simplification` flag and caps the report at 30 lines. The budget and assertions are unchanged.
+
+### If you…
+
+- **…maintain gstack's eval census:** the next census on this revision (or the paid reruns of the two cases) decides both; until then #3153 stays open.
+
+### For contributors
+
+- `test/qa-exploratory-callers.test.ts` replays census 38212265208's native tool order through `callerProbeReadErrors`, with a reordered negative control, and checks the actual runner callback's discovery definition.
+- `test/review-army-budget.test.ts` drives the registered simplification callback with a mocked runner: one pass control and two negative controls. It checks that the premise matches the staged 68-line diff, which files are staged, and the report bound.
+
 ## [1.91.107.0] - 2026-10-16
 
 **The GBRA-40 field list is fixed: install and check agree on one Bun, `rec` approves an autoplan gate in one word, and pregate never sits silent.** Eighteen Capy threads upgraded to v1.91.101.0 and reported 21 problems (`GBRA-40`, October 14). Each gstack item was reproduced with a test that failed first; the plan went through `/autoplan` (two gate revisions, Claude and GPT-6.1 Sol voices per phase) and two independent code reviews. Two items are Capy's (skills not mounted on some crew threads, Drive copies not re-synced) and are handed off, not worked around.

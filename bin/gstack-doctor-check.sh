@@ -235,6 +235,26 @@ _dc_check_cso() {
   _dc_fail_or_skip cso "native helper not built${reason:+ ($reason)}" "cd $SRC && ./setup (it names any missing build prerequisite)" COMPONENT_MISSING "optional; toolchain absent or helper not built${reason:+: $reason}"
 }
 
+# _dc_check_helpers — the read-only helpers `--for review-voice` certifies
+# (GSTACK_DOCTOR_HELPERS): each one's `--help` loads its module graph with the
+# Bun first on PATH, bounded by timeout when present. Checked only when required.
+_dc_check_helpers() {
+  local h failed="" bound=""
+  if ! _dc_has "$_dc_required" helpers; then
+    _dc_row SKIP helpers "not needed; --for review-voice certifies them"
+    return
+  fi
+  command -v timeout >/dev/null 2>&1 && bound="timeout 60"
+  for h in $GSTACK_DOCTOR_HELPERS; do
+    $bound "$BIN/$h" --help </dev/null >/dev/null 2>&1 || failed="${failed:+$failed, }$h"
+  done
+  if [ -z "$failed" ]; then
+    _dc_row PASS helpers "$(printf '%s' "$GSTACK_DOCTOR_HELPERS" | sed 's/ /, /g') launch with bun $(bun --version </dev/null 2>/dev/null | clamp 'A-Za-z0-9.+-' 40)"
+  else
+    _dc_row FAIL helpers "$failed did not launch (--help) with $(command -v bun 2>/dev/null || echo 'no bun on PATH')" "launch with the GSTACK_LAUNCH line; if it persists, $SRC/bin/gstack-upgrade restores a clean checkout at the tip" COMPONENT_MISSING
+  fi
+}
+
 # _dc_launch_note — when a supported Bun sits off PATH (gstack-capy-install
 # keeps verified ones in the runtime store), sets _dc_ln_dir/_dc_ln_ver/_dc_ln_note
 # and _dc_ln_fix so a fresh shell's FAIL says where it is and how to launch with it.
@@ -285,6 +305,10 @@ _dc_check_runtime() {
 
 _dc_check_pins() {
   local project="$CHECK_PROJECT" node="" out rc verdict summary failline
+  if [ -n "$CHECK_FOR" ] && gstack_doctor_install_profile "$CHECK_FOR"; then
+    _dc_row SKIP pins "helper runtime; $CHECK_FOR runs gstack's read-only helpers on gstack's own Bun, never the repo's tests"
+    return
+  fi
   if ! command -v bun >/dev/null 2>&1; then
     _dc_row SKIP pins "no bun to evaluate the project pins${project:+ of $project} (install Bun, then re-run)"
     return
@@ -319,6 +343,19 @@ _dc_check_pins() {
           fi
           local fix="install the pinned version for this platform (bin/gstack-capy-install installs gstack's verified Bun alongside when a pin names it), or change the pin in $project" note=""
           [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ] && fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (installs the project's pinned Bun when it is a verified version: $GSTACK_BUN_VERIFIED; otherwise it names the conflict), or change the pin in $project"
+          if printf '%s\n' "$out" | grep -q '^PIN_FAIL: node '; then
+            local nwant
+            nwant=$(printf '%s\n' "$out" | sed -n 's/^PIN_EXACT_REQUIRED: node \([^ ]*\) .*/\1/p' | head -1)
+            [ -n "$nwant" ] || nwant=$(printf '%s\n' "$out" | sed -n 's/^PIN_CI_ALTERNATIVES: node //p' | tr ' ' '\n' | grep . | sort -t. -k1,1nr -k2,2nr -k3,3nr | head -1)
+            note="; node read from $(command -v node 2>/dev/null || echo 'nowhere (no node on PATH)')"
+            if [ -n "${GSTACK_CAPY_WRAPPER_PATH:-}" ]; then
+              fix="bash $GSTACK_CAPY_WRAPPER_PATH${CHECK_FOR:+ --for $CHECK_FOR} (installs the project's pinned Node${nwant:+ $nwant} into gstack's runtime store and launches it through the GSTACK_LAUNCH PATH), or change the pin in $project"
+            elif [ -n "$nwant" ]; then
+              fix="nvm install $nwant and put its bin directory first on PATH (the Capy skill installer installs it into gstack's runtime store instead), or change the pin in $project"
+            else
+              fix="install a Node that satisfies the project's Node pins and put it first on PATH, or change the pin in $project"
+            fi
+          fi
           if [ -n "$_dc_ln_dir" ] && [ "$_dc_ln_ver" != "$_dc_bun" ] \
              && bun "$BIN/gstack-runtime-pins.ts" --project "$project" --bun "$_dc_ln_ver" ${node:+--node "$node"} </dev/null 2>/dev/null | grep -q '^PINS_VERDICT: pass'; then
             note="; bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH) satisfies them" fix="$_dc_ln_fix"
@@ -517,6 +554,7 @@ gstack_doctor_check() {
       browse-bundle) _dc_check_browse_bundle ;;
       browser) _dc_check_browser ;;
       cso) _dc_check_cso ;;
+      helpers) _dc_check_helpers ;;
       runtime) _dc_check_runtime ;;
       pins) _dc_check_pins ;;
       state-root) _dc_check_state_root ;;

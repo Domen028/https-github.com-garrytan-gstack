@@ -35,7 +35,7 @@ import { generateConfidenceCalibration } from './confidence';
 import { generateGateScanBlock } from './gate-scan';
 import { generateInvokeSkill, generateAutoplanReviewFile, generateAutoplanSnapshotTool, generateAutoplanPublicationHook, generateCeoModeHandoffHook } from './composition';
 import { generateReviewArmy } from './review-army';
-import { generateDxFramework } from './dx';
+import { generateDxFramework, generateDxErrorCompact, generateDxErrorItems } from './dx';
 import { generateGBrainContextLoad, generateGBrainSaveResults, generateBrainPreflight, generateBrainCacheRefresh, generateBrainWriteBack } from './gbrain';
 import { generateTasksSectionEmit, generateTasksSectionAggregate } from './tasks-section';
 import { SECTION, SECTION_INDEX } from './sections';
@@ -157,6 +157,8 @@ export const RESOLVERS: Record<string, ResolverFn> = {
   REVIEW_ARMY: generateReviewArmy,
   CROSS_REVIEW_DEDUP: generateCrossReviewDedup,
   DX_FRAMEWORK: generateDxFramework,
+  DX_ERROR_ITEMS: generateDxErrorItems,
+  DX_ERROR_COMPACT: generateDxErrorCompact,
   TASTE_PROFILE: generateTasteProfile,
   BIN_DIR: (ctx) => ctx.paths.binDir,
   // Quotable runtime root for paths under gstack's install (freeze/bin, bin, lib):
