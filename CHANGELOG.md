@@ -1,5 +1,21 @@
 # Changelog
 
+## [Unreleased]
+
+**A Capy install that has fallen behind now says so in the one line lanes relay, a skipped upgrade is never reported ok, and a reused pid no longer blocks every upgrade.** Lanes pass along only the `gstack:` trailer, so a session that was 12 commits behind origin looked current. Two field reports (GBRA-105, GBRA-106) showed session-start upgrades wedged behind a lease whose pid now belonged to dbus-daemon or systemd-logind, while the trailer still said ok.
+
+### What this means for you
+
+- **The ok trailer carries the gap and the fix:** `gstack: ok <v> for=<skill> (behind=<n> (latest: <v>); fix: <command>)`. The fix is the command that actually closes the gap: a rerun, `gstack-upgrade` for a dirty, detached or diverged checkout, or `unset <VAR>` when upgrades are switched off. Run it.
+- **A skipped session-start upgrade fails.** When the upgrade is busy, refused or missing, install mode ends `gstack: fail behind — … (UPGRADE_BUSY|UPGRADE_REFUSED)` with exit 1, and workflows refuse until the fix runs. An explicit opt-out stays ok with the `behind=` note.
+- **A lease records who holds it.** `gstack-lease` stores the holder's start identity (boot id plus start time, or `ps` lstart). A lease whose pid now belongs to another process is reclaimed, with a `gstack-lease: reclaimed stale lease …` line. `live`, UPGRADE_BUSY and `fail behind` name each holder as `pid <p> (<age>m <command>)`.
+- **The supported minimum rises to this release**, so older Capy checkouts are fast-forwarded at install-mode session start.
+
+### For contributors
+
+- The lease directory has a lock: a symlink naming its holder, broken only when that holder is dead or its pid was reused. Breakers serialize on `.lock.break` and reread before removing. While a live process holds the lock, `touch` exits 3, and `gstack-skill-start` reports that the session holds no workflow lease. Known limit: two gstack-lease processes killed in a row can still let a reclaim delete a renewal.
+- The paid-gate Aside drive-offer detector (`test/helpers/third-party-actions.ts`) now matches the product name only. The English "set this aside" was a false positive in paid run 38988927989.
+
 ## [1.91.112.0] - 2026-10-17
 
 **`/cso --paths` audits part of a repository and says exactly what it skipped.** A repository over /cso's 64 MiB source cap used to get one piece of advice, "run /cso on a smaller checkout". The trimmed copy then read as the whole repository, and the verdict never said what was left out. `gstack-cso start --paths src/core,src/mcp` now audits only those prefixes and reports every other path as skipped, with snapshot and history coverage marked partial.
