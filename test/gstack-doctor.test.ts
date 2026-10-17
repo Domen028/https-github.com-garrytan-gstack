@@ -1027,16 +1027,24 @@ describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash', () =
   const probe = (f: Fixture, inputs: Record<string, unknown>) => { const file = path.join(f.base, 'bash-probe.json'); write(file, JSON.stringify(inputs)); return file; };
   const GIT_BASH = 'C:/Program Files/Git/bin/bash.exe';
 
-  test('windows bash: on Windows the row names the resolved bash and what chose it; a refusal fails with BASH_UNAVAILABLE naming GSTACK_GIT_BASH; off Windows there is no row', () => {
+  test('windows bash: on Windows the row names the resolved bash and what chose it', () => {
     const f = makeFixture();
     const found = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: [GIT_BASH], gitExecPath: 'C:/Program Files/Git/mingw64/libexec/git-core' }) });
     expect(found.row('windows bash'), found.out).toEqual({ state: 'ok', detail: `${GIT_BASH} (chosen by git --exec-path)`, fix: '' });
     const override = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_GIT_BASH: 'D:\\tools\\bash.exe', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: ['D:/tools/bash.exe', GIT_BASH] }) });
     expect(override.row('windows bash').detail).toBe('D:/tools/bash.exe (chosen by GSTACK_GIT_BASH)');
+  });
+
+  test('windows bash: GSTACK_GIT_BASH and a different deprecated GSTACK_BASH warn naming both', () => {
+    const f = makeFixture();
     const differ = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_GIT_BASH: 'D:/a/bash.exe', GSTACK_BASH: 'D:/b/bash.exe', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: ['D:/a/bash.exe', 'D:/b/bash.exe'] }) });
     expect(differ.row('windows bash').state).toBe('warn');
     expect(differ.row('windows bash').detail).toContain('D:/a/bash.exe (chosen by GSTACK_GIT_BASH)');
     expect(differ.row('windows bash').detail).toContain('GSTACK_GIT_BASH (D:/a/bash.exe) and the deprecated GSTACK_BASH (D:/b/bash.exe) differ');
+  });
+
+  test('windows bash: a refusal fails with BASH_UNAVAILABLE naming GSTACK_GIT_BASH; off Windows there is no row', () => {
+    const f = makeFixture();
     const refused = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: [], gitExecPath: null, which: { bash: 'C:/Windows/System32/bash.exe' } }) });
     const row = refused.row('windows bash');
     expect(row.state, refused.out).toBe('fail');

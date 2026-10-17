@@ -41,8 +41,8 @@ The 158 older open issues were re-checked against main 5cb5e1c (v1.91.83.0). Of 
 - **/cso**
   - #2993: tracked under the /cso capacity follow-ups above. **Priority:** P2.
 - **Dependency security ledgers** (not code defects; keep open until the trigger)
-  - #2753: `.osv-scanner.toml` ignores image-size (via html-to-docx) until 2026-11-30. Bump it once a fixed release exists, or re-justify at expiry. **Effort:** S. **Priority:** P3.
-  - #2754: `.osv-scanner.toml` ignores `@anthropic-ai/sdk` 0.81.0 under the pinned claude-agent-sdk until 2026-11-30. Drop it with the next harness bump. **Effort:** S. **Priority:** P3.
+  - `.osv-scanner.toml` ignores katex 0.16.47 in lib/diagram-render (GHSA-238p-pmpm-9mq7, low) until 2027-01-31. The fix (0.18.2) is outside mermaid 11's range; when mermaid-js/mermaid#8388 ships, override katex, rebuild the bundle and drop the ignore. **Effort:** S. **Priority:** P3.
+  - #2753 residual: html-to-docx 1.8.0 bundles its own image-size 1.x, which the package.json override cannot reach. `make-pdf --to docx` never hands it ICNS bytes (make-pdf/src/docx-images.ts), but with `--allow-network` html-to-docx downloads remote images and sizes them itself. Inline remote images before the guard for docx, or replace html-to-docx. Revisit 2026-12-15. **Effort:** M. **Priority:** P2.
 - **Tests and CI**
   - #2756: the periodic lane. Tracked under "Periodic-lane stabilization (#2756)". **Priority:** P2.
   - #2967: `test/redact-prepush-scan-range.test.ts` (and its rebase twin) run fixture pushes with the inherited global config, so a developer's `core.hooksPath` pre-push runs inside the fixture. Set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` in the helper. **Effort:** S. **Priority:** P3.
@@ -965,10 +965,9 @@ wave"). Each was explicitly deferred with rationale, not dropped:
 
 - **mermaid 10→11-class major bumps in lib/diagram-render** — the wave's
   dependency pass cleared 102 of 105 OSV advisories via in-range bumps +
-  overrides; the residual ignores (image-size no-fix, @anthropic-ai/sdk under
-  the harness-pinned agent-sdk) carry `ignoreUntil` expiries (~2026-11-30) and
-  re-justify themselves on expiry. When the agent-sdk pin next moves, drop the
-  GHSA-p7fg ignore. Effort S. **Priority:** P3.
+  overrides; the residual ignores carry `ignoreUntil` expiries and
+  re-justify themselves on expiry. Only the katex ignore remains (see the
+  dependency security ledgers above). Effort S. **Priority:** P3.
 - **#2750 split absorption** — the record-scanning Codex JSONL parser (real
   fix; current Codex streams interleave envelopes so sessions vanish from
   /retro global) should be absorbed once the author splits it from the

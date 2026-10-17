@@ -77,10 +77,24 @@ console.log(`  Queue (${claimed.length} open PRs claiming versions):`);
 if (claimedList) console.log(claimedList);
 console.log("::endgroup::");
 
+// Dependabot never edits VERSION, so hard rule 1 would fail every dependency
+// PR it opens. Exempt it only when the author is dependabot and every changed
+// file is a dependency manifest, a lockfile or the dependabot config. The
+// workflow passes the author and the file list; an empty list (the lookup
+// failed) keeps the rule.
+const DEPENDENCY_FILE = /(?:^|\/)(?:package\.json|bun\.lockb?)$|^\.github\/dependabot\.yml$/;
+const changedFiles = (process.env.PR_CHANGED_FILES ?? "").split("\n").map((f) => f.trim()).filter(Boolean);
+const dependabotManifestOnly =
+  process.env.PR_AUTHOR === "dependabot[bot]" && changedFiles.length > 0 && changedFiles.every((f) => DEPENDENCY_FILE.test(f));
+
 // Hard rule 1: this PR's VERSION must be strictly greater than the base
 // version, otherwise we're not actually bumping.
 const pBase = parseV((parsed.base_version ?? "").trim());
 if (pBase && cmp(pPR, pBase) <= 0) {
+  if (dependabotManifestOnly) {
+    console.log(`::notice::${tag} is a dependabot dependency update (${changedFiles.join(", ")}); VERSION bump not required.`);
+    process.exit(0);
+  }
   console.log(`::error::VERSION not bumped: ${tag} claims v${prVersion} but base is v${parsed.base_version}.`);
   process.exit(1);
 }
