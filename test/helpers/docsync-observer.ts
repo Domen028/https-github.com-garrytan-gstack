@@ -281,6 +281,7 @@ function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixt
   const start = path.join(fixture.skills, 'bin/gstack-skill-start').split(path.sep).join('/');
   const end = path.join(fixture.skills, 'bin/gstack-skill-end').split(path.sep).join('/');
   if ((commandName === start || commandName === end) && rest.length === 1 && rest[0] === '--help') return true;
+  if (commandName === marker && rest.length === 2 && rest[0] === start && rest[1] === '--help') return true;
   return (commandName === marker && rest[0] === start || commandName === start || commandName === end) && args.includes('document-release');
 }
 

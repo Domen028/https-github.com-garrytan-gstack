@@ -1,5 +1,42 @@
 # Changelog
 
+## [1.91.115.0] - 2026-10-17
+
+**Autoplan now enforces its round cap and spend budget and can export a public copy of a run, /eval-plan tests its preregistered diagnostics and checks every arm's model against repo rules before money moves, and a reviewer subagent can install gstack's read-only helpers in seconds.** These are the field list 2 wave A items from the gbrain crew (autoplan W5-W7, eval-plan W8/W9, reviewer install W11).
+
+### What this means for you
+
+- **Autoplan stops when it said it would.** A run that reaches its round cap with open findings closes as accepted-with-findings and defers them to the build instead of starting another round. The spend budget is enforced the same way.
+- **`gstack-autoplan export --out <run> --public <dir>` writes a shareable copy.** Recorded machine roots are rewritten in prose. A root that survives (for example inside a code span in the plan) is reported as `ARTIFACT_MACHINE_PATH`, and a target directory holding unrelated files is refused with `ARTIFACT_PUBLIC_TARGET_EXISTS`.
+- **Durable autoplan checkpoints are opt-in.** Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` or `gstack-config set autoplan_checkpoint drive`. `resume --from` never redispatches a voice that already bound.
+- **/eval-plan runs the preregistered diagnostics before the freeze.** `prereg --check` reads an optional `## Diagnostics` section, runs the summarizer on the declared fixture only with `--allow-repo-commands`, and reports any miscount as `PREREG_DIAGNOSTIC_UNTESTED`.
+- **`.gstack/eval-models.json` (read from the base branch) gates every arm.** `arms`, `dry-run`, `pilot start` and `price-gate` refuse unknown, denied or older-generation models before any money is reserved (`EVAL_MODELS_INVALID`, `EVAL_MODEL_DENIED`, `EVAL_MODEL_OLD_GENERATION`, `EVAL_MODEL_GENERATION_UNRESOLVED`). See `docs/eval-models.md`.
+- **`--for review-voice` installs only the read-only helpers.** No `./setup`, no host profiles, Bun at gstack's own minimum. Its trailer says `for=review-voice`, and every full workflow refuses that verdict with a `--for <skill>` fix. Autoplan reviewer prompts now ask each reviewer to run it and relay its `gstack:` line.
+
+### For contributors
+
+- New result codes and troubleshooting anchors are appended to `lib/result-codes.ts`, `docs/troubleshooting.md` and the generated `bin/gstack-doctor-components.sh`. The `capy/skill/gstack` context-budget ceiling is raised to its capture value under the ratchet protocol.
+- The doc-sync observer (`test/helpers/docsync-observer.ts`) accepts `GSTACK_SESSION_KIND=spawned <gstack-skill-start> --help` as the harmless read it is. Paid case ship-docsync-store went red on that command alone.
+- `test/capy-review-voice.test.ts` is curated out of the Windows subset: it is a POSIX launcher contract (tar -C into a drive-letter root, a colon-joined launch PATH).
+
+## [1.91.114.0] - 2026-10-17
+
+**The DevEx reviews now score every error message for the reader that usually meets it first: an AI agent running unattended.** `/plan-devex-review`, the `/autoplan` DX phase and `/devex-review` used to ask for "problem + cause + fix". Now they score each error path against an eight-item agent-ready contract: what, fix, recovery, code, context, trace, redaction and channel. Two kinds of failure cap the Error Messages score. A leaked secret, a failure reported as success, an unsafe fix or a block on a terminal caps it at 4/10. A missing fix, recovery, context or trace caps it at 6/10.
+
+### What this means for you
+
+- **Plan reviews catch agent-hostile errors before you build them.** Pass 3 of `/plan-devex-review`, and both autoplan DX voices (native and outside), report `CAP4:<path>:<item>` findings as Critical and `CAP6:<path>:<item>` findings as High, and output a path-by-item matrix. Usage errors rejected before any work need only what, fix, code, redaction and channel. Remote APIs are never penalized for keeping their stack traces server-side. `docs/agent-ready-errors.md` is the public reference.
+- **`/devex-review` exercises CLI errors under containment.** The new `gstack-error-capture` runs the target with no terminal, stdin closed, a temporary cwd and HOME, a scrubbed environment and a deadline. It prints one redacted JSON record: exit code, deadline kill, terminal verdict (`blocking`, `refused_with_alternative`, `refused_no_alternative`) and secret findings. Forwarding credentials, config files or a real directory needs `--approved`, and every capture stays read-only.
+- **Old and new DX scores are not compared.** Review-log rows now carry `dx_rubric` and per-dimension scores. Trend Check and Boomerang print "rubric changed, not comparable" across rubric versions instead of a misleading delta.
+- **"AI coding agent" is a persona option** for CLI tools and Claude Code skills, and "Agents are users too" joins the DX principles.
+
+### For contributors
+
+- `lib/dx-error-contract.ts` is the single source; the snapshot literal, the outside prompt and the public doc are tested against it. The `DX_CAPTURE_*` codes live in `RESULT_CODES`, each with a troubleshooting anchor.
+- `lib/qa-deadline.ts` accepts an optional `spawn: {cwd, env}`. Existing callers are unchanged.
+- New paid behavior case `dx-error-contract-review` (periodic, 3 trials). The native DX reviewer must cap a hostile CLI path and an unspecified path, and must not cap three decoys. Its grader is replayed free in `test/dx-error-contract-grader.test.ts`.
+- Known limit: containment lasts only while the helper runs. A SIGKILLed helper, or a descendant that leaves the process group, outlives it, which is why captures are limited to read-only invocations. The helper's Windows and macOS paths are covered only by CI's free shards.
+
 ## [1.91.113.0] - 2026-10-17
 
 **A Capy install that has fallen behind now says so in the one line lanes relay, a skipped upgrade is never reported ok, and a reused pid no longer blocks every upgrade.** Lanes pass along only the `gstack:` trailer, so a session that was 12 commits behind origin looked current. Two field reports (GBRA-105, GBRA-106) showed session-start upgrades wedged behind a lease whose pid now belonged to dbus-daemon or systemd-logind, while the trailer still said ok.

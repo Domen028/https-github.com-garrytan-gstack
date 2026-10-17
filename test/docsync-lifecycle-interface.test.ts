@@ -36,6 +36,15 @@ test.each(['success', 'error', 'abort', 'unknown'])('same-session literal end ac
   expect(docsToolFailures(result, fixture)).toEqual([]);
 });
 
+test('start --help is a read with or without the spawned prefix; anything else after the prefix still names document-release', () => {
+  const start = `${fixture.skills.split(path.sep).join('/')}/bin/gstack-skill-start`;
+  expect(docsCommandAllowed(`GSTACK_SESSION_KIND=spawned ${start} --help`, fixture)).toBe(true);
+  expect(docsCommandAllowed(`${start} --help`, fixture)).toBe(true);
+  expect(docsCommandAllowed(`GSTACK_SESSION_KIND=spawned ${start} --help --skill qa`, fixture)).toBe(false);
+  expect(docsCommandAllowed(`GSTACK_SESSION_KIND=spawned ${start} --skill qa --model claude`, fixture)).toBe(false);
+  expect(docsCommandAllowed(`GSTACK_SESSION_KIND=spawned /tmp/gstack-skill-start --help`, fixture)).toBe(false);
+});
+
 test('historical misplaced spawned prefix remains rejected while corrected preamble stays supported', () => {
   const [original, spawned] = docsPreambleCommands(fixture);
   // The pre-#2763 wrapper put a misplaced prefix on its _SS assignment.
