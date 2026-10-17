@@ -300,13 +300,13 @@ describe('review #3235 regressions: what counts as approval, stale tokens, and n
   test('P1-2: a maintainer comment naming the token without an approval line approves nothing; an approval line does', () => {
     const rejection = judge(after, COMMENT, { body: `Do NOT approve ${after.token}. This deletes customer data.` });
     expect(rejection.records).toEqual([]);
-    expect(rejection.missing[0]!.reasons[0]).toMatch(/names neither data-repair@[0-9a-f]{12} nor data-repair with every effect path \(src\/repair\.ts\) on an approval line/);
+    expect(rejection.missing[0]!.reasons[0]).toMatch(/names neither data-repair@[0-9a-f]{12} nor data-repair with every effect path \(src\/repair\.ts\) on its first non-blank line, which must start at column 0 with "Approved" or "Approve"/);
     expect(judge(after, COMMENT, { body: `Looks fine.\nNot approving ${after.token} yet.` }).records).toEqual([]);
-    expect(judge(after, COMMENT, { body: `Context first.\n**Approved** ${after.token}: preview-first.` }).records.map(r => `${r.citation}/${r.binding}`)).toEqual(['verified/token']);
-    expect(judge(after, COMMENT, { body: `- approve ${after.token}` }).records.map(r => r.citation)).toEqual(['verified']);
+    expect(judge(after, COMMENT, { body: `\n**Approved** ${after.token}: preview-first.` }).records.map(r => `${r.citation}/${r.binding}`)).toEqual(['verified/token']);
+    expect(judge(after, COMMENT, { body: `approve ${after.token}` }).records.map(r => r.citation)).toEqual(['verified']);
   });
 
-  test('P1-2: quoted, fenced, indented-code and commented approvals approve nothing; a top-level line, list marker allowed, still does', () => {
+  test('P1-2: only the first non-blank line counts: quoted, fenced, nested, listed, indented, commented and later-line approvals approve nothing', () => {
     const FENCE = '```';
     const none = (body: string) => expect(judge(after, COMMENT, { body }).records, body).toEqual([]);
     none(`> Approved ${after.token}`);
@@ -317,10 +317,18 @@ describe('review #3235 regressions: what counts as approval, stale tokens, and n
     none(`<!-- Approved ${after.token} -->\nNot yet.`);
     none(`<!--\nApproved ${after.token}\n-->`);
     none(`- > Approved ${after.token}`);
+    none(`Do not approve this change. This list contains an example only:\n\n- ${FENCE}text\n  Approved ${after.token}\n  ${FENCE}`);
+    none(`> Example syntax, not approval:\nApproved ${after.token}\n\nI do not approve this change.`);
+    none(`${FENCE}text\nexample\n${FENCE}\n\nApproved ${after.token}: preview-first.`);
+    none(`Context first.\n**Approved** ${after.token}: preview-first.`);
+    none(`Looks right to me.\n\nApproved ${after.token}`);
+    none(`- approve ${after.token}`);
+    none(`1. Approved ${after.token}`);
+    none(` Approved ${after.token}`);
     const ok = (body: string) => expect(judge(after, COMMENT, { body }).records.map(r => `${r.citation}/${r.binding}`), body).toEqual(['verified/token']);
     ok(`Approved ${after.token}`);
-    ok(`${FENCE}text\nexample\n${FENCE}\n\nApproved ${after.token}: preview-first.`);
-    ok(`1. Approved ${after.token}`);
+    ok(`**Approved** ${after.token}`);
+    ok(`\n\nApproved ${after.token}: preview-first.`);
   });
 
   test('P1-2: only an APPROVED review counts, and it still needs an approval line naming the scope', () => {
