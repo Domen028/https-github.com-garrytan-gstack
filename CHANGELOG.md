@@ -1,5 +1,87 @@
 # Changelog
 
+## [1.91.124.0] - 2026-10-17
+
+**/cso runs finish on time.** In the first paid runtime qualification, one comprehensive run submitted its findings ten minutes in, kept working for another 25 minutes without calling the helper, and was killed before it called `finish`. Its report was never finished, so the cold-start gate scored 63/64. The agent had no clock to follow.
+
+### Added
+- **Helper replies carry `remainingSeconds`.** `start`, `resume`, `submit`, `scan`, `scanner-outcome`, `import-sarif`, `record-review`, `test-plan`, `runtime-plan`, `verify` and `inspect` report the whole seconds of investigation time left. The count stops where `scan`, `verify` and `record-review` start refusing with DEADLINE, so the final reporting minute stays free for `submit` and `finish`. The field is added after the command and only omitted if the deadline can't be read, so it never turns a saved change into an error.
+- **The /cso skill follows the clock.** It now says to start only work that fits and, below 120 seconds, to stop waiting and `finish`.
+- **Producer receipts record a content-free tool timeline.** For each tool call the eval producer records the name, its start and end offsets, and whether a subagent made it. It never records inputs or outputs. The timeline is capped at 4096 entries, validated on read, and left out of the batch index. Scoring is unchanged.
+
+### If you…
+- **…drive `gstack-cso` from your own agent:** read `remainingSeconds` from each reply and stop starting work below two minutes. `inspect` refreshes it without side effects.
+
+## [1.91.123.0] - 2026-10-17
+
+**/cso comprehensive repairs run again.** In the first paid runtime qualification, the agent recorded 148 repair reviews across 42 comprehensive runs, but not one verification attempt started. Every runtime scored 0/24 on held-out repairs. Two helper bugs stacked: the patch write failed on the snapshot's read-only files, and `runtime-plan` handed the agent a profile name that `verify` refused.
+
+### Fixed
+- **`verify` can patch read-only snapshot files.** Snapshot copies keep their 0444 modes, so writing the patched file failed with EACCES for any non-root user, which is how real users and the evaluator run. The error surfaced as a generic "unexpected or unsafe input". The helper now makes the file owner-writable for the write and restores its mode afterwards.
+- **`runtime-plan` returns the qualified runtime ID** (for example `node-24.4.0-amd64`) instead of the stack alias, and the skill copies that value into the verification request. `verify` rejects any other profile with an `INVALID_ARGUMENT` that names the expected ID, before an attempt is counted.
+
+### If you…
+- **…build a verification request by hand:** use the `runtimeProfile` that `runtime-plan` printed. The stack alias is refused.
+
+## [1.91.122.0] - 2026-10-17
+
+**Main no longer goes red on 2026-11-16.** All seven `.osv-scanner.toml` suppressions expired on 2026-11-30, and `test/osv-ignore-expiry.test.ts` fails 14 days early. Six are gone and the seventh is re-dated with an upstream link. Dependabot's grouped dev bump (#3228) is replaced by hand, and Version Gate stops failing every dependabot package.json PR.
+
+### Fixed
+- **Six OSV suppressions removed (#2754, #2753).** The hono, @anthropic-ai/sdk and sprintf-js ignores no longer matched either lockfile. image-size is overridden to 2.0.4. braces leaves `lib/diagram-render` because chokidar is overridden to 4.0.3; that bundle's sha256 is unchanged. katex (low) is re-dated to 2027-01-31: its fix needs a mermaid 11 release that allows katex 0.18 (mermaid-js/mermaid#8388). osv-scanner reports no issues and no unused ignores.
+- **`make-pdf --to docx` no longer hangs on an ICNS image.** html-to-docx 1.8.0 sizes images with its own bundled image-size 1.x, which the override cannot reach and which loops forever on GHSA-w3rx-r6r6-pgpr's input. ICNS images are dropped with a warning before conversion. The result is re-parsed with html-to-docx's own html-to-vdom, so a tag the guard misreads fails the conversion instead of hanging it. Every other image format embeds as before; a golden test pins the Word output.
+- **Version Gate passes dependabot dependency PRs.** Hard rule 1 (VERSION above base) is skipped only when the author is `dependabot[bot]` and every changed file is a `package.json`, a `bun.lock` or `.github/dependabot.yml`. A failed file lookup keeps the rule.
+
+### Changed
+- **@types/bun 1.4.3 and prettier 3.9.10.** The test type baseline drops 18 diagnostics.
+- **Dependabot holds both Anthropic SDKs to patch updates.** Their breaking 0.x releases (agent-sdk 0.2 to 0.3, sdk 0.78 to 0.133) count as minor bumps to dependabot and break `typecheck:test` and `overlay-sdk-cancel-eof`.
+
+### If you…
+- **…delete an OSV ignore after adding an override:** check that the vulnerable code loads from node_modules. A dependency that bundles its own copy keeps the old code even though the lockfile looks fixed.
+- **…convert untrusted markdown with `--to docx --allow-network`:** html-to-docx still downloads remote images and sizes them with its bundled copy (#2753 stays open for this).
+
+## [1.91.121.0] - 2026-10-17
+
+**Windows free-test shards stop running out of time on files the Windows seed didn't know.** The Windows duration seed dated from 2026-10-04 and had no entry for `test/gstack-doctor.test.ts` (about 6.5 minutes on Windows) or `test/hook-scripts.test.ts`. The packer guessed, put `cookie-import-native-job` into a 121-file shard, and that shard hit the 15-minute job limit.
+
+### Fixed
+- **Windows duration seed refreshed from a real `windows-latest` recording.** `scripts/free-test-durations-windows.json` goes from 638 to 738 entries. The six-shard plan now gives `gstack-doctor` a shard of its own and puts the other slow files in separate shards. The shard job's timeout and shard count are unchanged.
+- **`--record-durations` honors `--wall-timeout`.** The recorder used to kill any file at 360 s and record that deadline as its duration. The Windows recording job now passes `--wall-timeout 1200` and uploads its full per-file logs.
+
+### If you…
+- **…refresh the Windows seed:** run `gh workflow run windows-free-tests.yml --ref <branch> -f record_durations=true`, check that the job exited 0, then commit the `free-test-durations-windows` artifact. A file that fails while recording now leaves its log in `windows-record-durations-logs`.
+
+## [1.91.120.0] - 2026-10-17
+
+**The Windows doctor test no longer times out.** The `windows bash` test from v1.91.117.0 ran five full `gstack-doctor` passes in one test. Each pass takes up to about 6 s on a Windows runner, so the test took 20 to 30 s against the 30 s per-test limit, and it timed out on one pull request run.
+
+### Fixed
+- **The `windows bash` doctor test is three tests, one per case,** each with its own fixture and at most two doctor passes. All 13 assertions are unchanged, and no timeout was raised.
+- **The `EBUSY` cleanup error that followed the timeout** came from the timeout itself. On a timeout, Bun kills the bash child the test is waiting on, but the doctor's own `bun` and `git` subprocesses keep running and hold the fixture directory open on Windows. With every test well inside the limit, nothing is killed mid-run.
+
+### If you…
+- **…add cases to a test that shells out to `gstack-doctor`:** give each case its own test. A full doctor pass costs seconds on Windows, and a test killed at its timeout leaves orphaned children that lock its temp directory.
+
+## [1.91.119.0] - 2026-10-17
+
+**The weekly health check's seed check passes again.** 54 free test files had landed since the 2026-10-15 recording, so CEO-10 in `bun run test:health` failed and CI packed those files at the 99th-percentile guess (#3224).
+
+### Fixed
+- **Free-suite duration seed refreshed.** `scripts/free-test-durations.json` was re-recorded on a CI-mirrored Ubicloud VM (`bun run test:ubicloud --record-durations`, no failed files): 1219 to 1273 durations, none removed. `test/setup-codex-scope.test.ts` is back under the 60 s ceiling, so its seed allowlist entry is removed.
+
+### If you…
+- **…see CEO-10 fail in the weekly health issue:** new test files outran the seed again. With `UBICLOUD_API_KEY` set, run `bun run test:ubicloud --record-durations` and commit the seed; otherwise leave it to a maintainer. A standing recorder is planned.
+
+## [1.91.118.0] - 2026-10-17
+
+**Free Tests is green on pushes to main again.** Since v1.91.106.0, every push to main failed `test/held-install-recovery.test.ts`, while pull request runs passed.
+
+### Fixed
+- **The held-install recovery fixture no longer assumes the checkout has no `main` branch.** On a push, `actions/checkout` leaves the checkout on a local `main`, so the fixture's clone already had `main` and `git checkout --orphan main` failed with `a branch named 'main' already exists`. Pull request runs check out a detached merge ref and never hit it. The fixture now builds on its own orphan branch and pushes `HEAD:refs/heads/main`, and a new test builds it from a source on `main` and from a detached source with no branch.
+
+### If you…
+- **…write a test fixture that clones this repository:** don't create a branch with a fixed name such as `main` in the clone. Push runs and pull request runs leave different local branches behind.
+
 ## [1.91.117.0] - 2026-10-17
 
 **Pregate understands bats repositories and says why a fingerprint failed, `gstack-doctor` lists rescued edits and pasted skill lists, oversized SKILL.md files can no longer grow, and hosts without plan mode drop the plan-mode preamble.** The last PR of the 2026-10-15 fix wave (`docs/designs/FIX_WAVE_2026_10_15.md`, PR 5), built after #3190.
