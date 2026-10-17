@@ -11,8 +11,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
-import { scanTiming, scansTiming, type TimingHit } from '../lib/pregate/checks/timing';
-import { CHECK_IDS } from '../lib/pregate/index';
+import { scanTiming, scansTiming, timingCheck, type TimingHit } from '../lib/pregate/checks/timing';
+import { CHECK_IDS, runPregate } from '../lib/pregate/index';
+import { buildContext } from '../lib/pregate/context';
 import { validateConfig } from '../lib/pregate/config';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, write, type FixtureRepo } from './helpers/pregate-fixture';
 
@@ -104,6 +105,32 @@ describe('gstack-pregate --only timing (real subprocess, fixture repo)', () => {
     expect(r.out).toContain('timing: TIMING_ASSERTION: test/new.test.js:3 wall-time-bound (gstack-timing-ok needs a reason)');
     expect(r.out).not.toContain('test/old.test.js:3');
     expect(r.out).toContain('TIMING_ASSERTIONS: found=1 escaped=0 files=2');
+  });
+
+  test('diff configuration cannot hide added lines: an external driver, a textconv or noprefix still gets the hit', () => {
+    const repo = makeFixtureRepo(); repos.push(repo);
+    commit(repo, { 'test/speed.test.js': "const t0 = Date.now();\nexpect(Date.now() - t0).toBeLessThan(400);\n" });
+    fs.writeFileSync(path.join(repo.work, '.git', 'info', 'attributes'), '*.js diff=hide\n');
+    for (const [key, value] of [['diff.external', '/bin/true'], ['diff.hide.textconv', 'true'], ['diff.noprefix', 'true']] as const) {
+      repo.git('config', key, value);
+      const r = pregate(repo, []);
+      expect(r.out).toContain('timing: TIMING_ASSERTION: test/speed.test.js:2 wall-time-bound');
+      expect(r.out).toContain('TIMING_ASSERTIONS: found=1 escaped=0 files=1');
+      repo.git('config', '--unset', key);
+    }
+  });
+
+  test('a diff that cannot be read is incomplete, never a pass, even when timing is downgraded to warn', async () => {
+    const repo = makeFixtureRepo(); repos.push(repo);
+    commit(repo, { 'test/speed.test.js': "const t0 = Date.now();\nexpect(Date.now() - t0).toBeLessThan(400);\n" });
+    const loaded = buildContext({ repoRoot: repo.work, base: 'main', policyFrom: 'base', allowRepoCommands: false, env: { ...process.env, ...repo.env }, progress: () => {} });
+    if (!('ctx' in loaded)) throw new Error('fixture context refused');
+    const ctx = { ...loaded.ctx, mergeBase: '0'.repeat(40), config: { ...loaded.ctx.config, warn: ['timing'] } };
+    const direct = await timingCheck.run(ctx);
+    expect(direct).toMatchObject({ id: 'timing', status: 'incomplete', code: 'PREGATE_INCOMPLETE' });
+    expect(direct.detail).toMatch(/^git diff exited 128: .*; the added test lines were not read$/);
+    const file = await runPregate(ctx, { stage: 'preflight', only: ['timing'] });
+    expect(file.checks.find(c => c.id === 'timing')!.status).toBe('incomplete');
   });
 
   test('a docs-only branch passes and timing is a known, downgradable check id', () => {
