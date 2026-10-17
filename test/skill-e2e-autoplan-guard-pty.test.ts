@@ -20,7 +20,7 @@
 import { expect } from 'bun:test';
 import { describeIfSelected, testIfSelected } from './helpers/e2e-helpers';
 import { launchClaudePty, selectPtyNumberedOption } from './helpers/claude-pty-runner';
-import { prepareGuardSession } from './helpers/autoplan-guard-pty';
+import { closePacketReadAfterNotice, prepareGuardSession } from './helpers/autoplan-guard-pty';
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -63,7 +63,7 @@ describeIfSelected('autoplan publication guard live PTY', ['autoplan-guard-pty']
       // the Phase 2 transition and the Phase 2 reviewer dispatch: four guarded allows, each verified.
       expect(log.map(e => [e.decision, e.disposition])).toEqual(Array(4).fill(['allow', 'allow']));
       // The CEO reviewer's notice started a new turn before the close packet, the Phase 2 entry and the Phase 2 dispatch.
-      expect(evidence.afterNotice.filter(c => /^Read .*close-packet\.md$/.test(c))).not.toEqual([]);
+      expect(closePacketReadAfterNotice(evidence.afterNotice), evidence.afterNotice.join('\n')).toBe(true);
       expect(evidence.afterNotice.filter(c => /^Read .*autoplan\/sections\/design-phase\.md$/.test(c))).not.toEqual([]);
       expect(evidence.afterNotice).toContain('Agent Design review');
       expect(evidence.reviewerReads.filter(f => /\.gstack\/tmp\/autoplan\/autoplan-design-[^/]+\/native-prompt\.md$/.test(f))).not.toEqual([]);
