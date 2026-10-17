@@ -195,7 +195,7 @@ describe('captured tier 1 n/a (plan-mode-no-op, paid run 39004466422)', () => {
     expect(rejected.err).toContain('(REALITY_ROW_MISSING)');
     const repaired = run(['check', '--phase', 'eng', '-'], `${others}\n${captured.replace(' n/a ', ' pass ')}\n`);
     expect(repaired.out).toMatch(/^PLAN_REALITY: phase=eng rows=7\/7 missing=none .*verdict=complete$/m);
-    const rule = 'Tier 1 rows are never `n/a`: with no linked issue, deferred-asks is `pass` with a receipt showing none.';
+    const rule = 'tier 1 always, never `n/a`: premise-table, already-done, surface-check, binding-decisions, numbers, deferred-asks, pr-count; tier 2 by detected scope, `--scope <csv>`). Every row cites a file:line receipt (with no linked issue, deferred-asks is `pass`)';
     for (const phase of ['plan-eng-review', 'plan-ceo-review', 'plan-devex-review']) {
       expect(generatePlanRealityRows({ skillName: phase, host: 'claude', paths: {} } as unknown as TemplateContext).replace(/\s+/g, ' ')).toContain(rule);
     }

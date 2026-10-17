@@ -384,15 +384,15 @@ for (const skillName of ['review', 'ship']) {
 
   test(`${skillName} clarity: the state-machine signal checks the detector's exit status and fails toward dispatch`, () => {
     const block = between(army, '### Detect stack and scope', '### Read specialist hit rates');
-    expect(block).toContain(`if _SM=$(${HOST_PATHS.claude.binDir}/gstack-state-matrix detect --base <base>); then source <(printf '%s\\n' "$_SM"); else echo "$_SM" | grep '^#'; SCOPE_STATE_MACHINE=unknown; fi\n`);
+    expect(block).toContain(`source <(${HOST_PATHS.claude.binDir}/gstack-state-matrix detect --base <base> || echo SCOPE_STATE_MACHINE=unknown)\n`);
     expect(block.indexOf('SCOPE_STATE_MACHINE=unknown')).toBeLessThan(block.indexOf("set | grep '^SCOPE_'"));
     const selection = between(army, '### Select specialists', '### Adaptive gating').replace(/\s+/g, ' ');
     expect(selection).toContain('9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown (printed by the scope block)');
-    expect(selection).toContain("gstack-state-matrix check - <<'STATE_MACHINES_OUTPUT' <the specialist's complete output> STATE_MACHINES_OUTPUT");
+    expect(selection).toContain("gstack-state-matrix check - <<'EOF' <its complete output> EOF");
     expect(selection).not.toContain('pipe output');
   });
 
-  test(`${skillName} clarity: the scope block run against a failing detector prints unknown and keeps its diagnostics`, () => {
+  test(`${skillName} clarity: the scope block run against a failing detector prints unknown and keeps its stderr`, () => {
     const stubs = mkdtempSync(join(realpathSync(tmpdir()), 'scope-block-'));
     try {
       const block = /\`\`\`bash\n([\s\S]*?)\n\`\`\`/.exec(between(generateReviewArmy({ ...ctx, paths: { ...ctx.paths, binDir: stubs } }),
@@ -405,11 +405,13 @@ for (const skillName of ['review', 'ship']) {
       const failed = run("echo SCOPE_STATE_MACHINE=false; echo '# no merge base with origin/main; run: git fetch origin main'; echo 'detector crashed' >&2; exit 2");
       expect(failed.stdout).toMatch(/^SCOPE_STATE_MACHINE=unknown$/m);
       expect(failed.stdout).not.toMatch(/^SCOPE_STATE_MACHINE=false$/m);
-      expect(failed.stdout).toContain('# no merge base with origin/main; run: git fetch origin main');
       expect(failed.stderr).toContain('detector crashed');
+      expect(run('exit 127').stdout).toMatch(/^SCOPE_STATE_MACHINE=unknown$/m);
       const detected = run("echo SCOPE_STATE_MACHINE=true; echo '# state-machine: src/takes.ts:4 proposal,accept'");
       expect(detected.stdout).toMatch(/^SCOPE_STATE_MACHINE=true$/m);
       expect(detected.stdout).toMatch(/^SCOPE_FRONTEND=false$/m);
+      expect(run('echo SCOPE_STATE_MACHINE=false').stdout).toMatch(/^SCOPE_STATE_MACHINE=false$/m);
+      expect(block).toContain("DIFF_LINES=$(git diff \"$DIFF_BASE\" --numstat | awk '{n+=$1+$2} END {print n+0}')");
     } finally { rmSync(stubs, { recursive: true, force: true }); }
   });
 

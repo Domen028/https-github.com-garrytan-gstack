@@ -24,7 +24,7 @@ function generateSpecialistSelection(ctx: TemplateContext): string {
 ### Detect stack and scope
 
 \`\`\`bash
-if _SM=$(${ctx.paths.binDir}/gstack-state-matrix detect --base <base>); then source <(printf '%s\\n' "$_SM"); else echo "$_SM" | grep '^#'; SCOPE_STATE_MACHINE=unknown; fi
+source <(${ctx.paths.binDir}/gstack-state-matrix detect --base <base> || echo SCOPE_STATE_MACHINE=unknown)
 source <(${ctx.paths.binDir}/gstack-diff-scope <base> 2>/dev/null) || true
 set | grep '^SCOPE_'
 # Detect stack for specialist context
@@ -36,9 +36,7 @@ STACK=""
 [ -f Cargo.toml ] && STACK="\${STACK}rust "
 echo "STACK: \${STACK:-unknown}"
 DIFF_BASE=$(git merge-base origin/<base> HEAD)
-DIFF_INS=$(git diff "$DIFF_BASE" --stat | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo "0")
-DIFF_DEL=$(git diff "$DIFF_BASE" --stat | tail -1 | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo "0")
-DIFF_LINES=$((DIFF_INS + DIFF_DEL))
+DIFF_LINES=$(git diff "$DIFF_BASE" --numstat | awk '{n+=$1+$2} END {print n+0}')
 echo "DIFF_LINES: $DIFF_LINES"
 # Detect test framework for specialist test stub generation
 TEST_FW=""
@@ -73,11 +71,11 @@ Based on the scope signals above, select which specialists to dispatch.
 6. **API Contract** — if SCOPE_API=true. Read \`${ctx.paths.skillRoot}/review/specialists/api-contract.md\`
 7. **Design** — if SCOPE_FRONTEND=true. Use the existing design review checklist at \`${ctx.paths.skillRoot}/review/design-checklist.md\` and run the mechanical pass at the top of that checklist (the user-installed design detector, when present) before the LLM items
 8. **Simplification** — if DIFF_LINES > 100. Read \`${ctx.paths.skillRoot}/review/specialists/simplification.md\`. Advisory-only lens: hunts unrequested structure (hand-rolled stdlib, one-implementation abstractions, dependencies duplicating platform features), never coverage.
-9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown (printed by the scope block): read \`${ctx.paths.skillRoot}/review/specialists/state-machines.md\`, then check its complete output:
+9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown (printed by the scope block): read \`${ctx.paths.skillRoot}/review/specialists/state-machines.md\`, then check its output:
 \`\`\`bash
-${ctx.paths.binDir}/gstack-state-matrix check - <<'STATE_MACHINES_OUTPUT'
-<the specialist's complete output>
-STATE_MACHINES_OUTPUT
+${ctx.paths.binDir}/gstack-state-matrix check - <<'EOF'
+<its complete output>
+EOF
 \`\`\`
 
 ### Adaptive gating
