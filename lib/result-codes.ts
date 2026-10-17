@@ -694,6 +694,77 @@ export const RESULT_CODES = {
     summary: 'the eval model rules declare families (newest generation only) and an arm names a model in none of them, so its generation cannot be checked',
     fix: 'add the model to its family in .gstack/eval-models.json (newest first) in a reviewed PR, or pick a model a family lists',
   },
+  // #3226: gstack-error-capture (lib/dx-error-capture.ts) prints these; exit codes and recovery live there.
+  DX_CAPTURE_USAGE: {
+    anchor: 'dx-capture-usage',
+    summary: 'gstack-error-capture arguments are malformed: an unknown flag, a flag missing its value, no `--`, or no command after it',
+    fix: 'gstack-error-capture [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]',
+  },
+  DX_CAPTURE_BAD_DEADLINE: {
+    anchor: 'dx-capture-bad-deadline',
+    summary: '--deadline is not a positive number of seconds (at most 3600, up to 3 decimals)',
+    fix: '--deadline 20',
+  },
+  DX_CAPTURE_BAD_MAX_BYTES: {
+    anchor: 'dx-capture-bad-max-bytes',
+    summary: '--max-bytes is not an integer from 1 to 1048576',
+    fix: '--max-bytes 65536',
+  },
+  DX_CAPTURE_BAD_PASS_ENV: {
+    anchor: 'dx-capture-bad-pass-env',
+    summary: '--pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE)',
+    fix: '--pass-env NAME with NAME set in the calling environment',
+  },
+  DX_CAPTURE_BAD_CWD: {
+    anchor: 'dx-capture-bad-cwd',
+    summary: '--cwd is not an existing directory',
+    fix: '--cwd <existing directory> --approved',
+  },
+  DX_CAPTURE_APPROVAL_REQUIRED: {
+    anchor: 'dx-capture-approval-required',
+    summary: '--pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files',
+    fix: 'ask the user to approve the named variables, files or directory, then add --approved',
+  },
+  DX_CAPTURE_CONFIG_REFUSED: {
+    anchor: 'dx-capture-config-refused',
+    summary: '--copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB',
+    fix: '--copy-config <regular file under $HOME, no symlinks>',
+  },
+  DX_CAPTURE_NOT_FOUND: {
+    anchor: 'dx-capture-not-found',
+    summary: 'the command does not resolve to an executable file; the record carries launch "not_found" and nothing ran',
+    fix: 'install the command or pass its absolute path after --',
+  },
+  DX_CAPTURE_TEMP_DIR: {
+    anchor: 'dx-capture-temp-dir',
+    summary: 'the private 0700 containment directory under the gstack state root could not be created',
+    fix: 'make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun',
+  },
+  DX_CAPTURE_CONTAINMENT_UNAVAILABLE: {
+    anchor: 'dx-capture-containment-unavailable',
+    summary: 'process-group or Windows job containment is unavailable on this platform; nothing ran',
+    fix: 'run the capture on Linux, macOS or Windows with job objects available',
+  },
+  DX_CAPTURE_SUPERVISOR_FAILED: {
+    anchor: 'dx-capture-supervisor-failed',
+    summary: 'the deadline supervisor failed before reporting a result',
+    fix: 'rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor',
+  },
+  DX_CAPTURE_INTERRUPTED: {
+    anchor: 'dx-capture-interrupted',
+    summary: 'the helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed',
+    fix: 'rerun the same command without interrupting it',
+  },
+  DX_CAPTURE_REDACTION_FAILED: {
+    anchor: 'dx-capture-redaction-failed',
+    summary: 'the finished record still matched a secret check, so nothing was printed',
+    fix: 'do not rerun with more --pass-env; report the command name to the gstack maintainers',
+  },
+  DX_CAPTURE_INTERNAL: {
+    anchor: 'dx-capture-internal',
+    summary: 'unexpected helper failure; the line names the error class and its first stack frame',
+    fix: 'rerun once; if it repeats, report the printed frame to the gstack maintainers',
+  },
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

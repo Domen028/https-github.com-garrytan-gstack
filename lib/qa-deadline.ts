@@ -116,6 +116,7 @@ export function qaDeadlineStatus(state: QaDeadline) {
 export interface QaCommandCapture {
   write(stream: 'stdout' | 'stderr', chunk: Buffer): void;
   complete(result: QaCommandResult): void;
+  spawn?: { cwd?: string; env?: Record<string, string> };
 }
 
 export async function runQaDeadlineCommand(file: string, command: string, args: string[], emit: Emit, capture?: QaCommandCapture): Promise<number> {
@@ -142,7 +143,8 @@ export async function runQaDeadlineCommand(file: string, command: string, args: 
     }
     let outcome: number | undefined;
     let settled = false;
-    const child = spawn(command, args, { detached: process.platform !== 'win32', stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', windowsHide: true });
+    const child = spawn(command, args, { detached: process.platform !== 'win32', stdio: capture ? ['ignore', 'pipe', 'pipe'] : 'inherit', windowsHide: true,
+      cwd: capture?.spawn?.cwd, env: capture?.spawn?.env });
     const kill = () => {
       if (!child.pid) return;
       try {

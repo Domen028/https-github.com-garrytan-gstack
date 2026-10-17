@@ -3440,3 +3440,110 @@ checked, and the arm fails instead of passing unchecked.
 
 **Fix.** Add the model to its family (newest first) in
 `.gstack/eval-models.json` in a reviewed PR, or use a model a family lists.
+
+## gstack-error-capture
+
+`gstack-error-capture` runs one target CLI for `/devex-review` Step 3 with no
+terminal, a scrubbed environment and a private temporary HOME, and prints one
+redacted JSON record. Its own failures print one stderr line,
+`gstack-error-capture: <what>; fix: <fix> (<CODE>)`, and no record. Exit 2 is a
+usage error, 3 a refusal, 1 a helper failure. `gstack-error-capture --help` lists
+every flag and code.
+
+<a id="dx-capture-usage"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_USAGE)`
+
+**Meaning.** Gstack-error-capture arguments are malformed: an unknown flag, a flag missing its value, no `--`, or no command after it. Exit 2.
+
+**Fix.** Rerun as `gstack-error-capture [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]`: flags before `--`, the command and its arguments after it.
+
+<a id="dx-capture-bad-deadline"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_DEADLINE)`
+
+**Meaning.** --deadline is not a positive number of seconds (at most 3600, up to 3 decimals). Exit 2.
+
+**Fix.** Rerun with `--deadline 20`.
+
+<a id="dx-capture-bad-max-bytes"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_MAX_BYTES)`
+
+**Meaning.** --max-bytes is not an integer from 1 to 1048576. Exit 2.
+
+**Fix.** Rerun with `--max-bytes 65536`.
+
+<a id="dx-capture-bad-pass-env"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_PASS_ENV)`
+
+**Meaning.** --pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE). Exit 2.
+
+**Fix.** Rerun with `--pass-env NAME with NAME set in the calling environment`.
+
+<a id="dx-capture-bad-cwd"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_CWD)`
+
+**Meaning.** --cwd is not an existing directory. Exit 2.
+
+**Fix.** Rerun with `--cwd <existing directory> --approved`.
+
+<a id="dx-capture-approval-required"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_APPROVAL_REQUIRED)`
+
+**Meaning.** --pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files. Exit 3.
+
+**Fix.** Ask the user to approve the named variables, files or directory, then add --approved.
+
+<a id="dx-capture-config-refused"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_CONFIG_REFUSED)`
+
+**Meaning.** --copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB. Exit 3.
+
+**Fix.** Rerun with `--copy-config <regular file under $HOME, no symlinks>`.
+
+<a id="dx-capture-not-found"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_NOT_FOUND)`
+
+**Meaning.** The command does not resolve to an executable file; the record carries launch "not_found" and nothing ran. Exit 1.
+
+**Fix.** Install the command or pass its absolute path after --.
+
+<a id="dx-capture-temp-dir"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_TEMP_DIR)`
+
+**Meaning.** The private 0700 containment directory under the gstack state root could not be created. Exit 1.
+
+**Fix.** Make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun.
+
+<a id="dx-capture-containment-unavailable"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_CONTAINMENT_UNAVAILABLE)`
+
+**Meaning.** Process-group or Windows job containment is unavailable on this platform; nothing ran. Exit 1.
+
+**Fix.** Run the capture on Linux, macOS or Windows with job objects available.
+
+<a id="dx-capture-supervisor-failed"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_SUPERVISOR_FAILED)`
+
+**Meaning.** The deadline supervisor failed before reporting a result. Exit 1.
+
+**Fix.** Rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor.
+
+<a id="dx-capture-interrupted"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_INTERRUPTED)`
+
+**Meaning.** The helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed. Exit 1.
+
+**Fix.** Rerun the same command without interrupting it.
+
+<a id="dx-capture-redaction-failed"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_REDACTION_FAILED)`
+
+**Meaning.** The finished record still matched a secret check, so nothing was printed. Exit 1.
+
+**Fix.** Do not rerun with more --pass-env; report the command name to the gstack maintainers.
+
+<a id="dx-capture-internal"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_INTERNAL)`
+
+**Meaning.** Unexpected helper failure; the line names the error class and its first stack frame. Exit 1.
+
+**Fix.** Rerun once; if it repeats, report the printed frame to the gstack maintainers.
