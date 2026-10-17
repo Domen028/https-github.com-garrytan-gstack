@@ -9,14 +9,14 @@
  *   decision answered and not reject/interrogate), with plan.md matching its
  *   manifest hash;
  * - a GitHub comment or review URL must be written by a ship-policy
- *   maintainer whose login is the cited owner, and only the approval lines
- *   the maintainer wrote at top level count (`approvalLines`: a line starting
- *   with "Approve" or "Approved", a list marker allowed; never quoted, fenced,
- *   indented-code or HTML-comment text); a review must also be APPROVED;
+ *   maintainer whose login is the cited owner, and the evidence is the body's
+ *   first non-blank line only (`approvalLine`: "Approve" or "Approved" at
+ *   column 0, optionally in `**`, no list marker, quote or indent; nothing
+ *   later in the body counts); a review must also be APPROVED;
  * - anything else, or a ref that cannot be read here, is `unverified`.
  *
  * Resolution alone is not enough: the evidence (the approved plan text or
- * the comment's approval lines) must bind to the class's current effects, by
+ * the comment's approval line) must bind to the class's current effects, by
  * carrying the scope token `<class>@<digest12>` or by naming the class and
  * every effect path. A token is authoritative: evidence naming the class with
  * another digest approved earlier effects and never falls back to paths. An
@@ -35,7 +35,7 @@ import { isUnavailable, loadPolicyFromBase } from './ship-policy';
 
 export interface Citation { raw: string; owner: string; date: string; ref: string; for: Array<{ class: string; digest?: string }> }
 export type Resolution =
-  | { state: 'resolved'; evidence: string; text: string; approvalLines?: true }
+  | { state: 'resolved'; evidence: string; text: string; approvalLine?: true }
   | { state: 'rejected'; why: string }
   | { state: 'unresolved'; why: string };
 export type GhRunner = (args: string[]) => { ok: boolean; out: string; err: string };
@@ -97,26 +97,19 @@ export function resolvePlan(ref: string, runDirs: string[]): Resolution {
   return rejected ?? { state: 'unresolved', why: runDirs.length ? `no --approval-run directory holds a plan with sha ${ref}` : `plan sha ${ref}: pass the autoplan run with --approval-run <dir>` };
 }
 
-/** An affirmative approval line: up to three spaces, an optional list marker and emphasis, then "Approve" or "Approved". */
-const APPROVAL_LINE = /^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?(?:\*\*|__|\*|_)?approved?\b/i;
-const FENCE = /^ {0,3}(`{3,}|~{3,})/;
-
-/** The approval lines a maintainer wrote at top level: text in fenced or indented code, blockquotes and HTML comments never counts. */
-export function approvalLines(body: string): string[] {
-  const out: string[] = [];
-  let fence: string | null = null;
-  for (const line of body.replace(/<!--[\s\S]*?(?:-->|$)/g, '').split(/\r?\n/)) {
-    const marker = FENCE.exec(line)?.[1];
-    if (fence) { if (marker && marker[0] === fence[0] && marker.length >= fence.length && !line.slice(line.indexOf(marker) + marker.length).trim()) fence = null; continue; }
-    if (marker) { fence = marker; continue; }
-    if (APPROVAL_LINE.test(line)) out.push(line);
-  }
-  return out;
+/**
+ * The approval evidence in a comment or review body: its first non-blank line, and only when that line starts at
+ * column 0 with "Approve" or "Approved" (optionally in `**`), with no list marker, quote or indent; '' otherwise.
+ * Nothing later in the body counts, so no quoting or nesting can turn a rejection's example into consent.
+ */
+export function approvalLine(body: string): string {
+  const first = body.split(/\r?\n/).find(l => l.trim()) ?? '';
+  return /^(?:\*\*)?approved?\b/i.test(first) ? first : '';
 }
 
 const GH_URL = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)#(?:issuecomment-(\d+)|pullrequestreview-(\d+)|discussion_r(\d+))$/;
 
-/** A comment or review URL: authored by a ship-policy maintainer whose login is the cited owner; a review must be APPROVED; only approval lines are evidence. */
+/** A comment or review URL: authored by a ship-policy maintainer whose login is the cited owner; a review must be APPROVED; only the body's first-line approval is evidence. */
 export function resolveGithub(c: Citation, ctx: CitationContext): Resolution {
   const m = GH_URL.exec(c.ref)!;
   const [, owner, repo, num, issueComment, review, discussion] = m;
@@ -133,7 +126,7 @@ export function resolveGithub(c: Citation, ctx: CitationContext): Resolution {
   if (login.toLowerCase() !== c.owner.toLowerCase()) return { state: 'rejected', why: `the citation names ${c.owner} but ${c.ref} is by ${login}` };
   if (review && body.state === 'CHANGES_REQUESTED') return { state: 'rejected', why: `${c.ref} requests changes; it is not an approval` };
   if (review && body.state !== 'APPROVED') return { state: 'rejected', why: `${c.ref} is a ${String(body.state ?? 'stateless').toLowerCase()} review; only an APPROVED review counts` };
-  return { state: 'resolved', evidence: `${review ? 'review' : 'comment'} by ${login}`, text: approvalLines(String(body.body ?? '')).join('\n'), approvalLines: true };
+  return { state: 'resolved', evidence: `${review ? 'review' : 'comment'} by ${login}`, text: approvalLine(String(body.body ?? '')), approvalLine: true };
 }
 
 export function resolveCitation(c: Citation, ctx: CitationContext): Resolution {
@@ -170,7 +163,7 @@ function judge(c: Citation, scope: ApprovalScope, res: Resolution): ApprovalReco
     if (how) return { ...base, citation: 'verified', binding: how, evidence: res.evidence };
     const stale = namedDigests(res.text, scope.class)[0];
     if (stale) return `${c.ref}: ${res.evidence} names ${scope.class}@${stale.slice(0, 12)}, not the current ${scope.token}; a token is authoritative, so approval of earlier effects never falls back to paths`;
-    const where = res.approvalLines ? ' on an approval line (one starting with "Approved" or "Approve")' : '';
+    const where = res.approvalLine ? ' on its first non-blank line, which must start at column 0 with "Approved" or "Approve"' : '';
     return `${c.ref}: ${res.evidence} names neither ${scope.token} nor ${scope.class} with every effect path (${scope.files.join(', ')})${where}; an approval of other work, or one given before these effects, does not cover them`;
   }
   const attested = c.for.find(f => f.class === scope.class);
