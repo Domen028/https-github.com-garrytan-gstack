@@ -580,6 +580,21 @@ function carriesSecretLiteral(text: string): boolean {
  * high-entropy literal (`decrypt("<secret>")`) still reports.
  */
 const CALL_SHAPED_VALUE = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*\(/;
+
+/**
+ * #3208: a catalog or schema entry `"input_key": "expected_media_rate_bits"`
+ * names a field, it holds no credential. Exempt only when both sides say so:
+ * the whole name is one lowercase data-model word plus `_key` (no further
+ * prefix, so `cosmosdb_primary_key` and `api_cache_key` still fire), and the
+ * value is two or more lowercase identifier words joined by `_`, `-` or `.`.
+ * A random key is mixed-case or one unbroken run, so it never takes this shape.
+ */
+const SCHEMA_FIELD_NAME =
+  /^[ \t]*["']?(?:input|output|field|column|lookup|cache|sort|partition|range|index|row|group|join|property|metric|catalog|schema|translation|idempotency|dedup)[_.-]key["']?[ \t]*[:=]/;
+const SCHEMA_FIELD_VALUE = /^[a-z][a-z0-9]*(?:[_.-][a-z][a-z0-9]*)+$/;
+function isSchemaFieldIdentifier(span: string, match: RegExpExecArray): boolean {
+  return SCHEMA_FIELD_NAME.test(match[0]) && SCHEMA_FIELD_VALUE.test(span);
+}
 function isCallExpression(span: string, match: RegExpExecArray): boolean {
   if (!CALL_SHAPED_VALUE.test(span)) return false;
   const { start } = spanBounds(match);
@@ -891,6 +906,7 @@ export const PATTERNS: RedactPattern[] = [
     // itself (`process.env.X||"…"`) is not an exact read and still fires.
     // #2899: a function call assigned to the name is code, not a value (see
     // isCallExpression). #3048: so is a TS/JSX type or expression (isSourceExpression).
+    // #3208: so is a schema field identifier (isSchemaFieldIdentifier).
     validate: (span, match, opts) =>
       isCredentialShapedEnvName(match[0]) &&
       !isPlaceholderSpan(span) &&
@@ -898,6 +914,7 @@ export const PATTERNS: RedactPattern[] = [
       !isBareEnvRead(span, match) &&
       !isCallExpression(span, match) &&
       !isSourceExpression(span, match, opts?.sourcePath) &&
+      !isSchemaFieldIdentifier(span, match) &&
       shannonEntropy(span) >= 3.0,
   },
   {
