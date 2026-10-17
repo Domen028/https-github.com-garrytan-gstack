@@ -215,37 +215,41 @@ function readState(): ServerState | null {
 
 // isProcessAlive is imported from ./error-handling
 
-/**
- * HTTP health check — definitive proof the server is alive and responsive.
- * Used in all polling loops instead of isProcessAlive() (which is slow on Windows).
- */
-export async function isServerHealthy(port: number, timeoutMs = 2000): Promise<boolean> {
-  try {
-    const resp = await fetch(`http://127.0.0.1:${port}/health`, {
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!resp.ok) return false;
-    const health = await resp.json() as any;
-    return health.status === 'healthy';
-  } catch {
-    return false;
-  }
-}
+/** Client timeout for one GET /health. Must stay above the daemon's active-tab
+ * probe (TAB_PROBE_TIMEOUT_MS in browser-manager.ts): when the two were equal,
+ * the CLI aborted just before a busy tab's reply arrived and could not tell a
+ * busy tab from a hung daemon (#3247). */
+export const HEALTH_REQUEST_TIMEOUT_MS = 2000;
 
-/** Best-effort tab count via GET /health (no auth, bounded). Returns null
- * when the daemon doesn't answer in time or predates the `tabs` field —
- * callers degrade to a countless phrasing, never block on this. */
-async function fetchDaemonTabCount(port: number, timeoutMs = 2000): Promise<number | null> {
+/** GET /health (no auth, bounded). Null when the daemon doesn't answer in
+ * time or the reply is not a 200. */
+async function fetchDaemonHealth(port: number, timeoutMs = HEALTH_REQUEST_TIMEOUT_MS): Promise<Record<string, unknown> | null> {
   try {
     const resp = await fetch(`http://127.0.0.1:${port}/health`, {
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (!resp.ok) return null;
-    const health = await resp.json() as any;
-    return typeof health.tabs === 'number' ? health.tabs : null;
+    return await resp.json() as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+/**
+ * HTTP health check — definitive proof the server is alive and responsive.
+ * Used in all polling loops instead of isProcessAlive() (which is slow on Windows).
+ * `status` is daemon liveness only; a busy active tab does not fail it (#3247).
+ */
+export async function isServerHealthy(port: number, timeoutMs = HEALTH_REQUEST_TIMEOUT_MS): Promise<boolean> {
+  return (await fetchDaemonHealth(port, timeoutMs))?.status === 'healthy';
+}
+
+/** Best-effort tab count via GET /health. Returns null when the daemon
+ * doesn't answer in time or predates the `tabs` field — callers degrade to a
+ * countless phrasing, never block on this. */
+async function fetchDaemonTabCount(port: number): Promise<number | null> {
+  const tabs = (await fetchDaemonHealth(port))?.tabs;
+  return typeof tabs === 'number' ? tabs : null;
 }
 
 // ─── Process Management ─────────────────────────────────────────
@@ -420,7 +424,7 @@ async function probeHealthWithBackoff(
     await Bun.sleep(intervalMs);
     const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) return false;
-    if (await isServerHealthy(port, Math.min(2000, remainingMs))) return true;
+    if (await isServerHealthy(port, Math.min(HEALTH_REQUEST_TIMEOUT_MS, remainingMs))) return true;
   }
 }
 

@@ -290,6 +290,30 @@ export async function handleChromiumDisconnect(browser: Browser | null): Promise
   process.exit(1);
 }
 
+/**
+ * How long a tab-independent read waits on one tab's renderer (#3247). A page
+ * stuck in a long script never answers page.evaluate() or page.title(); before
+ * this bound, one such tab made /health call the whole daemon unhealthy and
+ * hung `tabs`. Kept well under the CLI's /health request timeout
+ * (HEALTH_REQUEST_TIMEOUT_MS in cli.ts) so the CLI reads the answer instead of
+ * timing out on it.
+ */
+export const TAB_PROBE_TIMEOUT_MS = 1_000;
+
+/**
+ * Resolve with `work`'s value, or with undefined once `ms` passes. The losing
+ * read settles on its own when the renderer frees up, so callers pass a promise
+ * that cannot reject.
+ */
+function withinTabBudget<T>(work: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
+    (timer as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
 export type { RefEntry };
 
 // Re-export TabSession for consumers
@@ -1090,20 +1114,28 @@ export class BrowserManager {
     this.closeOwnedDisplay();
   }
 
-  /** Health check — verifies Chromium is connected AND responsive */
-  async isHealthy(): Promise<boolean> {
-    if (!this.browser || !this.browser.isConnected()) return false;
-    try {
-      const page = this.pages.get(this.activeTabId);
-      if (!page) return true; // connected but no pages — still healthy
-      await Promise.race([
-        page.evaluate('1'),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 2000)),
-      ]);
-      return true;
-    } catch {
-      return false;
-    }
+  /**
+   * Daemon liveness for /health: Chromium is connected. The active tab is NOT
+   * part of it (#3247): a page stuck in a long script is one busy tab, not a
+   * dead daemon, and the CLI gates every command on this answer — including
+   * the tabs, tab, closetab and stop commands that get out of that state.
+   * probeActiveTab() reports the tab on its own.
+   */
+  isHealthy(): boolean {
+    return Boolean(this.browser?.isConnected());
+  }
+
+  /**
+   * Does the active tab's main thread answer within `timeoutMs`? Null when
+   * there is no active page. A rejected evaluate (crashed or closing target)
+   * also counts as not responsive.
+   */
+  async probeActiveTab(timeoutMs = TAB_PROBE_TIMEOUT_MS): Promise<{ id: number; responsive: boolean } | null> {
+    const id = this.activeTabId;
+    const page = this.pages.get(id);
+    if (!page) return null;
+    const answered = await withinTabBudget(page.evaluate('1').then(() => true, () => false), timeoutMs);
+    return { id, responsive: answered === true };
   }
 
   // ─── Tab Management ────────────────────────────────────────
