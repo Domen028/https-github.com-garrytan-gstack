@@ -51,9 +51,19 @@ const WINDOWS_FRAGILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 // when possible; this list is for environment-/runtime-specific tests where
 // the failure mode is structural rather than detectable via source-file scan.
 export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
+  // C-pregate. Since fix wave PR 5 (item 10b) test/helpers/pregate-fixture.ts and restamp-fixture.ts
+  // runBin launch bins through lib/script-invocation.ts, so gstack-pregate runs on windows-latest
+  // (windows-free-tests run 38984824731). These still fail there on Linux-host expectations, not
+  // on launching: the fixture's test lanes are Linux workflow jobs, which a Windows host records as
+  // requires-remote obligations instead of running.
+  { file: 'test/pregate-guards.test.ts', reason: 'expects the Linux-host lanes verdict and POSIX-spelled Bun paths ($HOME/.bun/bin, /gone/bun) and the POSIX fixture runner\'s runs.log; gstack-pregate itself launches through lib/script-invocation.ts' },
+  { file: 'test/pregate-remote.test.ts', reason: 'expects the Linux-host lanes verdict: on Windows the fixture\'s Linux lane is a requires-remote obligation, so the small-machine and --remote cases see no local tier; gstack-pregate itself launches through lib/script-invocation.ts' },
+  { file: 'test/pregate-regate.test.ts', reason: 'its REGATE and MIGRATION_COLLISION verdicts differ on windows-latest (run 38984824731), not diagnosed in fix wave PR 5; gstack-pregate regate itself launches through lib/script-invocation.ts' },
+  { file: 'test/pregate-invalidation.test.ts', reason: 'expects the Linux-host lanes verdict (the windows lane as the requires-remote obligation); on Windows the Linux lane is the obligation instead; gstack-pregate itself launches through lib/script-invocation.ts' },
+  { file: 'test/pregate-selection.test.ts', reason: 'its gstack-pregate (bin) cases expect the Linux-host lanes verdict (a local lane run); on Windows the fixture\'s Linux lane is a requires-remote obligation' },
+  { file: 'test/pregate-bats-nested.test.ts', reason: 'expects the bats lane to run locally, which it does on a Linux host; on Windows the fixture\'s Linux lane is a requires-remote obligation' },
   // C-pregate: these drive bin/gstack-issue-links and bin/gstack-ship-receipt through
-  // test/helpers/pregate-fixture.ts runBin. The pregate tests moved to KNOWN_WINDOWS_SAFE once
-  // runBin launched through lib/script-invocation.ts (fix wave PR 5, item 10b).
+  // test/helpers/pregate-fixture.ts runBin.
   { file: 'test/stamp-templates.test.ts', reason: 'spawns bin/gstack-tree-receipt through test/helpers/restamp-fixture.ts runBin (shebang via CreateProcess)' },
   { file: 'test/ship-issue-intent.test.ts', reason: 'spawns bin/gstack-issue-links and bin/gstack-ship-receipt through test/helpers/pregate-fixture.ts runBin (shebang via CreateProcess) with a `gh` shell shim on PATH' },
   // PR E2: lane ownership and evidence verification run bin/gstack-lane-check and bin/gstack-evidence
@@ -281,15 +291,9 @@ export const KNOWN_WINDOWS_SAFE: Array<{ file: string; reason: string }> = [
   { file: 'test/gstack-config-gbrain-refresh.test.ts', reason: 'E6: runs bin/gstack-config through explicit bash; its gbrain/python3 shims are found by bash PATH lookup, never launched by CreateProcess' },
   { file: 'test/hook-scripts.test.ts', reason: '#3067 PowerShell and NotebookEdit hook coverage: every hook runs through spawnSync("bash", [script]) with the payload on stdin, scratch state lives under os.tmpdir(); its /tmp/ literals are payload strings, never opened; symlink, newline-path and POSIX-PATH cases are skipIf win32' },
   { file: 'test/gstack-doctor.test.ts', reason: 'runs bin/gstack-doctor and setup --status through explicit bash argv in an os.tmpdir fixture; its bun/codex/claude/probe stubs are found by bash PATH lookup, and expected paths use bash spellings' },
-  // Fix wave PR 5 (item 10b, #3197): test/helpers/pregate-fixture.ts and restamp-fixture.ts runBin
-  // launch bins through lib/script-invocation.ts (bun bins as Bun argv, bash bins through Git Bash),
-  // and the pregate runner runs fixture commands through the resolved Git Bash.
+  // Fix wave PR 5 (item 10b, #3197): the fixture runBin launches bins through lib/script-invocation.ts
+  // (bun bins as Bun argv, bash bins through Git Bash); passed on windows-latest in run 38984824731.
   { file: 'test/gstack-regen.test.ts', reason: 'runs bin/gstack-regen through the fixture runBin (lib/script-invocation.ts) and its regen commands through the resolved Git Bash' },
-  { file: 'test/pregate-guards.test.ts', reason: 'runs bin/gstack-pregate through the fixture runBin (lib/script-invocation.ts); guard and lane fixture commands run through the resolved Git Bash' },
-  { file: 'test/pregate-remote.test.ts', reason: 'runs bin/gstack-pregate through the fixture runBin (lib/script-invocation.ts); remote-gate fixture commands run through the resolved Git Bash' },
-  { file: 'test/pregate-regate.test.ts', reason: 'runs bin/gstack-pregate regate through the restamp fixture runBin (lib/script-invocation.ts)' },
-  { file: 'test/pregate-invalidation.test.ts', reason: 'runs bin/gstack-pregate and bin/gstack-ship-receipt through the fixture runBin (lib/script-invocation.ts) and the lane runner through the resolved Git Bash' },
-  { file: 'test/pregate-selection.test.ts', reason: 'its bin/ strings are fixture paths; bin/gstack-pregate runs through the fixture runBin (lib/script-invocation.ts) and lanes through the resolved Git Bash' },
   {
     file: 'test/qa-evidence.test.ts',
     reason: 'invokes the production helper through Bun argv and exercises native Windows job cleanup, private file captures and backpressured receipt output',
