@@ -27,10 +27,12 @@
 # teardown) times the size's price. Without a key it runs the same files
 # locally in parallel shards and reports spent=0.
 #
-# Exit codes: 0 pass; 1 test failures (or a rejected file list); 2 missing
-# input; 3 tree or plan mismatch (or the tree moved during the run); 4
-# infrastructure failure (create, setup, SSH, wall timeout); 5 the spend cap
-# refuses the run. Nothing is uploaded or spent before the local tree check.
+# Exit codes: 0 pass (or a paid-only selection, tests=0); 1 test failures (or
+# a rejected file list); 2 missing input; 3 tree or plan mismatch (or the tree
+# moved during the run); 4 infrastructure failure (create, setup, SSH, wall
+# timeout); 5 the spend cap refuses the run. Every refusal line starts with a
+# PREGATE_REMOTE_* reason code (docs/pregate.md#remote-gate). Nothing is
+# uploaded or spent before the local tree check.
 set -euo pipefail
 # Keep heredoc bodies on temp files, not the pipe window (test/heredoc-pipe-deadlock.test.ts).
 BASH_COMPAT=50
