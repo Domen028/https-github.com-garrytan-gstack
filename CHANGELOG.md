@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.91.120.0] - 2026-10-17
+
+**The Windows doctor test no longer times out.** The `windows bash` test from v1.91.117.0 ran five full `gstack-doctor` passes in one test. Each pass takes up to about 6 s on a Windows runner, so the test took 20 to 30 s against the 30 s per-test limit, and it timed out on one pull request run.
+
+### Fixed
+- **The `windows bash` doctor test is three tests, one per case,** each with its own fixture and at most two doctor passes. All 13 assertions are unchanged, and no timeout was raised.
+- **The `EBUSY` cleanup error that followed the timeout** came from the timeout itself. On a timeout, Bun kills the bash child the test is waiting on, but the doctor's own `bun` and `git` subprocesses keep running and hold the fixture directory open on Windows. With every test well inside the limit, nothing is killed mid-run.
+
+### If you…
+- **…add cases to a test that shells out to `gstack-doctor`:** give each case its own test. A full doctor pass costs seconds on Windows, and a test killed at its timeout leaves orphaned children that lock its temp directory.
+
 ## [1.91.119.0] - 2026-10-17
 
 **The weekly health check's seed check passes again.** 54 free test files had landed since the 2026-10-15 recording, so CEO-10 in `bun run test:health` failed and CI packed those files at the 99th-percentile guess (#3224).
