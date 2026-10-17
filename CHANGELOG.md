@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+**Lanes and the coordinator now share a merge queue whose stamp claims are checked instead of trusted, risky changes need a cited owner approval before they ship, /review checks state machines cell by cell, pregate warns about timing assertions, and the update check notices when main moves without a version bump.** These are the field list 2 wave B items from the gbrain crew (W1-W4, W10, W12).
+
+### What this means for you
+
+- **`gstack-ship-queue` runs a shared merge queue.** `ready` prints one READY block and refuses when the tree differs from the pushed head. `stamp` checks every proof input, restamps through `gstack-restamp`, and resumes on an identical retry. The coordinator's `verify` reruns the tree receipt and recomputes a gate-ahead merge, so a lane's stamp claim is never taken on trust. Ship policy gains `gate_command`, `full_e2e` and `min_gstack_version`; a gstack older than a key it reads refuses with `POLICY_GSTACK_TOO_OLD`. See `docs/ship-policy.md#run-a-shared-merge-queue`.
+- **Approval classes.** `.gstack/approval-classes.json` (read from the base branch) declares what needs an owner's approval. `gstack-ship-receipt write` refuses a branch that touches a class until the PR body cites `Approved by <owner> <date> via <ref> for <class>@<digest12>`, bound to the effects being shipped.
+- **/review's state-machines specialist** builds a kind × owner action matrix for diffs that change a state machine. `gstack-state-matrix check` reports every missing cell, and an untested cell is CRITICAL.
+- **Pregate's `timing` check** warns on added test lines that bound wall or CPU time or sleep and then assert. Mark a deliberate bound with `gstack-timing-ok: <reason>`. /investigate gains a timing-flake playbook.
+- **The update check sees a moved main.** At an equal VERSION it reports `UPGRADE_AVAILABLE <ver> <ver>+<n> <sha>` through the GitHub compare API (never `git fetch`). The cache is bound to HEAD and upstream, and snooze is keyed by SHA. /gstack-upgrade summarizes the commits instead of a CHANGELOG entry.
+- **Pregate's docs lane** comes from #3215 by Cursor Agent: Markdown no test depends on is already a docs/no-tests empty lane.
+
+### For contributors
+
+- The release-path result codes live in `lib/result-codes-release.ts`, spread into `RESULT_CODES`, so `lib/result-codes.ts` stays inside the module-size ratchet.
+- New paid case `review-army-state-matrix` (periodic, behavior). The periodic lane's `max-parallel` is 38 so every planned slice still starts at once.
+- The scope-signal clarity test also accepts a signal printed by the helper its own selection line runs (SCOPE_STATE_MACHINE), and the hermetic update-check fixture writes the identity cache.
+
 ## [1.91.115.0] - 2026-10-17
 
 **Autoplan now enforces its round cap and spend budget and can export a public copy of a run, /eval-plan tests its preregistered diagnostics and checks every arm's model against repo rules before money moves, and a reviewer subagent can install gstack's read-only helpers in seconds.** These are the field list 2 wave A items from the gbrain crew (autoplan W5-W7, eval-plan W8/W9, reviewer install W11).
