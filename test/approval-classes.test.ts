@@ -302,8 +302,25 @@ describe('review #3235 regressions: what counts as approval, stale tokens, and n
     expect(rejection.records).toEqual([]);
     expect(rejection.missing[0]!.reasons[0]).toMatch(/names neither data-repair@[0-9a-f]{12} nor data-repair with every effect path \(src\/repair\.ts\) on an approval line/);
     expect(judge(after, COMMENT, { body: `Looks fine.\nNot approving ${after.token} yet.` }).records).toEqual([]);
-    expect(judge(after, COMMENT, { body: `Context first.\n> Approved ${after.token}: preview-first.` }).records.map(r => `${r.citation}/${r.binding}`)).toEqual(['verified/token']);
+    expect(judge(after, COMMENT, { body: `Context first.\n**Approved** ${after.token}: preview-first.` }).records.map(r => `${r.citation}/${r.binding}`)).toEqual(['verified/token']);
     expect(judge(after, COMMENT, { body: `- approve ${after.token}` }).records.map(r => r.citation)).toEqual(['verified']);
+  });
+
+  test('P1-2: quoted, fenced, indented-code and commented approvals approve nothing; a top-level line, list marker allowed, still does', () => {
+    const FENCE = '```';
+    const none = (body: string) => expect(judge(after, COMMENT, { body }).records, body).toEqual([]);
+    none(`> Approved ${after.token}`);
+    none(`> Approved ${after.token}\n\nI do not approve this change. That quoted approval is only the text you asked me to post.`);
+    none(`Do not approve this change. This is only an example of the requested syntax:\n\n${FENCE}text\nApproved ${after.token}\n${FENCE}`);
+    none(`~~~~\nApproved ${after.token}\n~~~\nstill inside the fence\n~~~~`);
+    none(`Example:\n\n    Approved ${after.token}`);
+    none(`<!-- Approved ${after.token} -->\nNot yet.`);
+    none(`<!--\nApproved ${after.token}\n-->`);
+    none(`- > Approved ${after.token}`);
+    const ok = (body: string) => expect(judge(after, COMMENT, { body }).records.map(r => `${r.citation}/${r.binding}`), body).toEqual(['verified/token']);
+    ok(`Approved ${after.token}`);
+    ok(`${FENCE}text\nexample\n${FENCE}\n\nApproved ${after.token}: preview-first.`);
+    ok(`1. Approved ${after.token}`);
   });
 
   test('P1-2: only an APPROVED review counts, and it still needs an approval line naming the scope', () => {

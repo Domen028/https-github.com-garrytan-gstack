@@ -9,9 +9,10 @@
  *   decision answered and not reject/interrogate), with plan.md matching its
  *   manifest hash;
  * - a GitHub comment or review URL must be written by a ship-policy
- *   maintainer whose login is the cited owner, and only its approval lines
- *   (APPROVAL_LINE: a line starting with "Approve" or "Approved") count; a
- *   review must also be in state APPROVED;
+ *   maintainer whose login is the cited owner, and only the approval lines
+ *   the maintainer wrote at top level count (`approvalLines`: a line starting
+ *   with "Approve" or "Approved", a list marker allowed; never quoted, fenced,
+ *   indented-code or HTML-comment text); a review must also be APPROVED;
  * - anything else, or a ref that cannot be read here, is `unverified`.
  *
  * Resolution alone is not enough: the evidence (the approved plan text or
@@ -96,8 +97,22 @@ export function resolvePlan(ref: string, runDirs: string[]): Resolution {
   return rejected ?? { state: 'unresolved', why: runDirs.length ? `no --approval-run directory holds a plan with sha ${ref}` : `plan sha ${ref}: pass the autoplan run with --approval-run <dir>` };
 }
 
-/** An affirmative approval in a comment or review: the line starts (after list or quote markers) with "Approve" or "Approved". */
-export const APPROVAL_LINE = /^[\s>*_-]*approved?\b/i;
+/** An affirmative approval line: up to three spaces, an optional list marker and emphasis, then "Approve" or "Approved". */
+const APPROVAL_LINE = /^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)?(?:\*\*|__|\*|_)?approved?\b/i;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+
+/** The approval lines a maintainer wrote at top level: text in fenced or indented code, blockquotes and HTML comments never counts. */
+export function approvalLines(body: string): string[] {
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of body.replace(/<!--[\s\S]*?(?:-->|$)/g, '').split(/\r?\n/)) {
+    const marker = FENCE.exec(line)?.[1];
+    if (fence) { if (marker && marker[0] === fence[0] && marker.length >= fence.length && !line.slice(line.indexOf(marker) + marker.length).trim()) fence = null; continue; }
+    if (marker) { fence = marker; continue; }
+    if (APPROVAL_LINE.test(line)) out.push(line);
+  }
+  return out;
+}
 
 const GH_URL = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/(?:pull|issues)\/(\d+)#(?:issuecomment-(\d+)|pullrequestreview-(\d+)|discussion_r(\d+))$/;
 
@@ -118,8 +133,7 @@ export function resolveGithub(c: Citation, ctx: CitationContext): Resolution {
   if (login.toLowerCase() !== c.owner.toLowerCase()) return { state: 'rejected', why: `the citation names ${c.owner} but ${c.ref} is by ${login}` };
   if (review && body.state === 'CHANGES_REQUESTED') return { state: 'rejected', why: `${c.ref} requests changes; it is not an approval` };
   if (review && body.state !== 'APPROVED') return { state: 'rejected', why: `${c.ref} is a ${String(body.state ?? 'stateless').toLowerCase()} review; only an APPROVED review counts` };
-  const approvals = String(body.body ?? '').split(/\r?\n/).filter(l => APPROVAL_LINE.test(l));
-  return { state: 'resolved', evidence: `${review ? 'review' : 'comment'} by ${login}`, text: approvals.join('\n'), approvalLines: true };
+  return { state: 'resolved', evidence: `${review ? 'review' : 'comment'} by ${login}`, text: approvalLines(String(body.body ?? '')).join('\n'), approvalLines: true };
 }
 
 export function resolveCitation(c: Citation, ctx: CitationContext): Resolution {
