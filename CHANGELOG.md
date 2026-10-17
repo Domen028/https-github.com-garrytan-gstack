@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+**/cso release qualification measures precision on the application, not on the evaluator's own test rigging.** In the first paid runtime qualification, the daily precision gate failed on every stack (8/34 to 8/49). 116 of the 132 findings counted as false positives pointed at instrumentation the evaluator plants in each fixture: canary credentials and the egress probe route. Most of the other 16 were real issues the fixtures happen to contain. Garry chose to keep the 0.95 bar and fix what it counts.
+
+### Changed
+- **Daily precision leaves out findings on declared fixture instrumentation.** The trusted evaluator marks them `instrumentation`, and they count in neither term.
+- **A confirmed real issue counts as a true positive.** When a unanimous judge panel confirms a non-seeded finding is a real issue in that source, the evaluator marks it `incidental` with an opaque key. Each distinct key adds one true positive per cell, so restating it never inflates precision. It never counts toward recall.
+- **Recall, the v2 baseline and every threshold are unchanged.** Validation rejects either new judgment on a hypothesis or with a seeded match, and rejects a missing or malformed key.
+
+### If you…
+- **…write an evaluator for `cso-eval.ts`:** `incidental` needs a 64-hex `incidentalKey`, and no other judgment may carry one.
+
 ## [1.91.124.0] - 2026-10-17
 
 **/cso runs finish on time.** In the first paid runtime qualification, one comprehensive run submitted its findings ten minutes in, kept working for another 25 minutes without calling the helper, and was killed before it called `finish`. Its report was never finished, so the cold-start gate scored 63/64. The agent had no clock to follow.
