@@ -123,7 +123,9 @@ describe('gstack-docs-candidate', () => {
 
   test('compare names the record path, each missing or wrong field and the snapshot fix, keeping exit 1', () => {
     const { dir, root } = repo();
-    const fix = 'Fix: run gstack-docs-candidate snapshot --out <path> --audit-id <id> --mode edit --base <rev> and compare the file it writes.';
+    // A post-audit snapshot over the candidate would replace the before-audit baseline, so the ownership
+    // check would compare current files with themselves; the fix line must never send an agent there.
+    const fix = 'Fix: the candidate must be the record the Prepare snapshot wrote. To rebuild it, rerun the Prepare snapshot (gstack-docs-candidate snapshot --out <path> --audit-id <id> --mode edit --base <rev> ...) only before dispatching the child audit. After the audit, never snapshot over it: the post-child snapshot uses a different --out (<audit-id>-post.json).';
     const cases: Array<[string, string, string[]]> = [
       ['legacy.json', JSON.stringify({ audit_id: 'a', base_sha: 'x', content_hashes: {} }),
         ['missing or wrong schema_version (want 1)', 'missing or wrong base (want the base commit SHA string)', 'missing or wrong hashes (want an object of path -> blob id)']],

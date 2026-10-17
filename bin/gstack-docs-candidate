@@ -139,7 +139,10 @@ function main(argv: string[]): void {
     const problems = record === undefined ? ['not valid JSON'] : recordProblems(record);
     if (problems.length) {
       throw new Error(`${file} is not a gstack-docs-candidate record: ${problems.join('; ')}. `
-        + 'Fix: run gstack-docs-candidate snapshot --out <path> --audit-id <id> --mode edit --base <rev> and compare the file it writes.');
+        + 'Fix: the candidate must be the record the Prepare snapshot wrote. To rebuild it, rerun the Prepare snapshot '
+        + '(gstack-docs-candidate snapshot --out <path> --audit-id <id> --mode edit --base <rev> ...) only before dispatching '
+        + 'the child audit. After the audit, never snapshot over it: the post-child snapshot uses a different --out '
+        + '(<audit-id>-post.json).');
     }
     process.chdir(fs.realpathSync(git(['rev-parse', '--show-toplevel']).trim()));
     const now = state(record.base);
