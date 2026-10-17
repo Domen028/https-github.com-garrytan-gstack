@@ -24,6 +24,10 @@ while [ $# -gt 0 ]; do
     --used-browse)   USED_BROWSE="$2"; shift 2 ;;
     --error-message) ERROR_MESSAGE="$2"; shift 2 ;;
     --failed-step)   FAILED_STEP="$2"; shift 2 ;;
+    -h|--help)
+      echo 'Usage: gstack-skill-end --skill NAME --outcome success|error|abort|unknown --session-id ID --tel-start EPOCH [--used-browse yes|no] [--error-message MSG] [--failed-step STEP]'
+      echo 'Records skill completion. --help records nothing.'
+      exit 0 ;;
     *) shift ;;
   esac
 done

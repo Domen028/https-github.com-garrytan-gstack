@@ -25,6 +25,7 @@ function generateSpecialistSelection(ctx: TemplateContext): string {
 
 \`\`\`bash
 source <(${ctx.paths.binDir}/gstack-diff-scope <base> 2>/dev/null) || true
+set | grep '^SCOPE_'
 # Detect stack for specialist context
 STACK=""
 [ -f Gemfile ] && STACK="\${STACK}ruby "

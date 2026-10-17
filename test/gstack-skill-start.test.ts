@@ -874,3 +874,26 @@ describe('gstack-skill-start install admission', () => {
     expect(r.stdout).toContain('INSTALL_VERDICT: ok');
   });
 });
+
+
+// PR gate run 38969924945 (ship-docsync-store): an agent ran `gstack-skill-start --help`
+// to learn the interface, and the script started an interactive session instead.
+describe('lifecycle --help', () => {
+  test.each([['gstack-skill-start', START], ['gstack-skill-end', END]])('%s --help prints usage and writes no state', (name, bin) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-help-home-'));
+    const state = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-help-state-'));
+    try {
+      const out = execFileSync(bin, ['--help'], {
+        timeout: 30_000, encoding: 'utf-8', cwd: home,
+        env: { PATH: process.env.PATH!, HOME: home, GSTACK_HOME: state, GSTACK_STATE_ROOT: state, GSTACK_LEASE_DIR: path.join(state, 'leases') },
+      });
+      expect(out.split('\n')[0]).toStartWith(`Usage: ${name} --skill NAME`);
+      expect(out).not.toMatch(/^(?:SKILL_START_PROTO|SESSION_ID|SESSIONS):/m);
+      expect(fs.readdirSync(home)).toEqual([]);
+      expect(fs.readdirSync(state)).toEqual([]);
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(state, { recursive: true, force: true });
+    }
+  });
+});
