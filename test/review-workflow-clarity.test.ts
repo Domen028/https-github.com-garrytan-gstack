@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { generateReviewArmy } from '../scripts/resolvers/review-army';
 import { generateCrossReviewDedup, generateSharedCodeReuse, generateScopeDrift } from '../scripts/resolvers/review-scope';
@@ -371,11 +373,44 @@ for (const skillName of ['review', 'ship']) {
     const flags = between(readFileSync(join(root, 'bin/gstack-diff-scope'), 'utf8'), '_print_flags() {', '}');
     for (const signal of used) {
       if (flags.includes(`echo "${signal}=`)) continue;
-      // A signal the scope block does not print must come from the helper its own selection line runs.
-      const helper = /bin\/(gstack-[a-z-]+) detect\b/.exec(selection.split('\n').find(line => line.includes(signal))!)?.[1];
+      // PR gate run 39002269281: a signal gstack-diff-scope does not print comes from a detect helper the scope
+      // block itself runs, never from a command named only in selection prose.
+      const helper = /bin\/(gstack-[a-z-]+) detect\b/.exec(block.split('\n').find(line => line.includes(signal))!)?.[1];
       expect(helper, signal).toBeDefined();
       expect(readFileSync(join(root, 'bin', helper!), 'utf8'), signal).toContain(`${signal}=\${`);
+      expect(selection, signal).not.toMatch(/\bdetect\b/);
     }
+  });
+
+  test(`${skillName} clarity: the state-machine signal checks the detector's exit status and fails toward dispatch`, () => {
+    const block = between(army, '### Detect stack and scope', '### Read specialist hit rates');
+    expect(block).toContain(`if _SM=$(${HOST_PATHS.claude.binDir}/gstack-state-matrix detect --base <base>); then source <(printf '%s\\n' "$_SM"); else echo "$_SM" | grep '^#'; SCOPE_STATE_MACHINE=unknown; fi\n`);
+    expect(block.indexOf('SCOPE_STATE_MACHINE=unknown')).toBeLessThan(block.indexOf("set | grep '^SCOPE_'"));
+    const selection = between(army, '### Select specialists', '### Adaptive gating').replace(/\s+/g, ' ');
+    expect(selection).toContain('9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown (printed by the scope block)');
+    expect(selection).toContain("gstack-state-matrix check - <<'STATE_MACHINES_OUTPUT' <the specialist's complete output> STATE_MACHINES_OUTPUT");
+    expect(selection).not.toContain('pipe output');
+  });
+
+  test(`${skillName} clarity: the scope block run against a failing detector prints unknown and keeps its diagnostics`, () => {
+    const stubs = mkdtempSync(join(realpathSync(tmpdir()), 'scope-block-'));
+    try {
+      const block = /\`\`\`bash\n([\s\S]*?)\n\`\`\`/.exec(between(generateReviewArmy({ ...ctx, paths: { ...ctx.paths, binDir: stubs } }),
+        '### Detect stack and scope', '### Read specialist hit rates'))![1].replaceAll('<base>', 'main');
+      writeFileSync(join(stubs, 'gstack-diff-scope'), '#!/bin/sh\necho SCOPE_FRONTEND=false\n', { mode: 0o755 });
+      const run = (detector: string) => {
+        writeFileSync(join(stubs, 'gstack-state-matrix'), `#!/bin/sh\n${detector}\n`, { mode: 0o755 });
+        return spawnSync('bash', ['-c', block], { cwd: stubs, encoding: 'utf8', timeout: 10_000 });
+      };
+      const failed = run("echo SCOPE_STATE_MACHINE=false; echo '# no merge base with origin/main; run: git fetch origin main'; echo 'detector crashed' >&2; exit 2");
+      expect(failed.stdout).toMatch(/^SCOPE_STATE_MACHINE=unknown$/m);
+      expect(failed.stdout).not.toMatch(/^SCOPE_STATE_MACHINE=false$/m);
+      expect(failed.stdout).toContain('# no merge base with origin/main; run: git fetch origin main');
+      expect(failed.stderr).toContain('detector crashed');
+      const detected = run("echo SCOPE_STATE_MACHINE=true; echo '# state-machine: src/takes.ts:4 proposal,accept'");
+      expect(detected.stdout).toMatch(/^SCOPE_STATE_MACHINE=true$/m);
+      expect(detected.stdout).toMatch(/^SCOPE_FRONTEND=false$/m);
+    } finally { rmSync(stubs, { recursive: true, force: true }); }
   });
 
   test(`${skillName} clarity: terminal failure permits independent work but never certifies coverage`, () => {

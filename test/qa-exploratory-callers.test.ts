@@ -196,6 +196,20 @@ describe('caller native-event observer controls', () => {
     }
   });
 
+  test('captured 39002269281 standalone state-machine detect stays outside the caller interface; the generated scope block runs it', async () => {
+    // PR gate run 39002269281 ship-exploratory-plan-checks, native Bash call 17: the selection prose named the detector, so the
+    // actor ran it alone. The detector now runs inside the generated scope block, which is the declared form.
+    const fixture = createQaCallerFixture('ship-exploratory-plan-checks', { installRuntime: false });
+    try {
+      const standalone = `${fixture.runtime}/bin/gstack-state-matrix detect --base main`;
+      expect(qaCallerCommandAllowed(standalone, fixture.workflowCommands)).toBe(false);
+      const block = fixture.workflowCommands.find(command => command.includes('/bin/gstack-state-matrix detect --base main'));
+      expect(block).toBeDefined();
+      expect(block).toContain('/gstack-diff-scope main 2>/dev/null) || true');
+      expect(qaCallerCommandAllowed(block!, fixture.workflowCommands)).toBe(true);
+    } finally { await fixture.close(); fs.rmSync(fixture.root, { recursive: true, force: true }); }
+  });
+
   test.each(['pending-result', 'same-event', 'same-message-id'])('method Read %s cannot authorize a dependent probe', ordering => {
     const observed = evidence();
     const events = observed.result.transcript as any[];
