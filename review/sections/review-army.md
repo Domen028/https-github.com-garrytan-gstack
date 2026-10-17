@@ -5,10 +5,10 @@
 ### Detect stack and scope
 
 ```bash
-source <(~/.claude/skills/gstack/bin/gstack-state-matrix detect --base <base> || echo SCOPE_STATE_MACHINE=unknown)
+_SM=$(~/.claude/skills/gstack/bin/gstack-state-matrix detect --base <base>) || _SM=SCOPE_STATE_MACHINE=unknown; source <(echo "$_SM")
 source <(~/.claude/skills/gstack/bin/gstack-diff-scope <base> 2>/dev/null) || true
 set | grep '^SCOPE_'
-# Detect stack for specialist context
+# Detect stack
 STACK=""
 [ -f Gemfile ] && STACK="${STACK}ruby "
 [ -f package.json ] && STACK="${STACK}node "

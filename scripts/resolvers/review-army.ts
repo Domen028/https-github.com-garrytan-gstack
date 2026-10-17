@@ -24,10 +24,10 @@ function generateSpecialistSelection(ctx: TemplateContext): string {
 ### Detect stack and scope
 
 \`\`\`bash
-source <(${ctx.paths.binDir}/gstack-state-matrix detect --base <base> || echo SCOPE_STATE_MACHINE=unknown)
+_SM=$(${ctx.paths.binDir}/gstack-state-matrix detect --base <base>) || _SM=SCOPE_STATE_MACHINE=unknown; source <(echo "$_SM")
 source <(${ctx.paths.binDir}/gstack-diff-scope <base> 2>/dev/null) || true
 set | grep '^SCOPE_'
-# Detect stack for specialist context
+# Detect stack
 STACK=""
 [ -f Gemfile ] && STACK="\${STACK}ruby "
 [ -f package.json ] && STACK="\${STACK}node "

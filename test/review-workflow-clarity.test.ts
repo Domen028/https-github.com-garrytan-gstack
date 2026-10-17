@@ -384,7 +384,7 @@ for (const skillName of ['review', 'ship']) {
 
   test(`${skillName} clarity: the state-machine signal checks the detector's exit status and fails toward dispatch`, () => {
     const block = between(army, '### Detect stack and scope', '### Read specialist hit rates');
-    expect(block).toContain(`source <(${HOST_PATHS.claude.binDir}/gstack-state-matrix detect --base <base> || echo SCOPE_STATE_MACHINE=unknown)\n`);
+    expect(block).toContain(`_SM=$(${HOST_PATHS.claude.binDir}/gstack-state-matrix detect --base <base>) || _SM=SCOPE_STATE_MACHINE=unknown; source <(echo "$_SM")\n`);
     expect(block.indexOf('SCOPE_STATE_MACHINE=unknown')).toBeLessThan(block.indexOf("set | grep '^SCOPE_'"));
     const selection = between(army, '### Select specialists', '### Adaptive gating').replace(/\s+/g, ' ');
     expect(selection).toContain('9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown (printed by the scope block)');
@@ -407,6 +407,12 @@ for (const skillName of ['review', 'ship']) {
       expect(failed.stdout).not.toMatch(/^SCOPE_STATE_MACHINE=false$/m);
       expect(failed.stderr).toContain('detector crashed');
       expect(run('exit 127').stdout).toMatch(/^SCOPE_STATE_MACHINE=unknown$/m);
+      const silent = run("echo 'detector found no git' >&2; exit 3");
+      expect(silent.stdout).toMatch(/^SCOPE_STATE_MACHINE=unknown$/m);
+      expect(silent.stderr).toContain('detector found no git');
+      const lateFail = run("echo SCOPE_STATE_MACHINE=true; echo SCOPE_LEAK=1; exit 1");
+      expect(lateFail.stdout).toMatch(/^SCOPE_STATE_MACHINE=unknown$/m);
+      expect(lateFail.stdout).not.toContain('SCOPE_LEAK');
       const detected = run("echo SCOPE_STATE_MACHINE=true; echo '# state-machine: src/takes.ts:4 proposal,accept'");
       expect(detected.stdout).toMatch(/^SCOPE_STATE_MACHINE=true$/m);
       expect(detected.stdout).toMatch(/^SCOPE_FRONTEND=false$/m);
