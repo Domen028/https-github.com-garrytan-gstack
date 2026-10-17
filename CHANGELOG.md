@@ -17,6 +17,17 @@
 - **…delete an OSV ignore after adding an override:** check that the vulnerable code loads from node_modules. A dependency that bundles its own copy keeps the old code even though the lockfile looks fixed.
 - **…convert untrusted markdown with `--to docx --allow-network`:** html-to-docx still downloads remote images and sizes them with its bundled copy (#2753 stays open for this).
 
+## [1.91.121.0] - 2026-10-17
+
+**Windows free-test shards stop running out of time on files the Windows seed didn't know.** The Windows duration seed dated from 2026-10-04 and had no entry for `test/gstack-doctor.test.ts` (about 6.5 minutes on Windows) or `test/hook-scripts.test.ts`. The packer guessed, put `cookie-import-native-job` into a 121-file shard, and that shard hit the 15-minute job limit.
+
+### Fixed
+- **Windows duration seed refreshed from a real `windows-latest` recording.** `scripts/free-test-durations-windows.json` goes from 638 to 738 entries. The six-shard plan now gives `gstack-doctor` a shard of its own and puts the other slow files in separate shards. The shard job's timeout and shard count are unchanged.
+- **`--record-durations` honors `--wall-timeout`.** The recorder used to kill any file at 360 s and record that deadline as its duration. The Windows recording job now passes `--wall-timeout 1200` and uploads its full per-file logs.
+
+### If you…
+- **…refresh the Windows seed:** run `gh workflow run windows-free-tests.yml --ref <branch> -f record_durations=true`, check that the job exited 0, then commit the `free-test-durations-windows` artifact. A file that fails while recording now leaves its log in `windows-record-durations-logs`.
+
 ## [1.91.120.0] - 2026-10-17
 
 **The Windows doctor test no longer times out.** The `windows bash` test from v1.91.117.0 ran five full `gstack-doctor` passes in one test. Each pass takes up to about 6 s on a Windows runner, so the test took 20 to 30 s against the 30 s per-test limit, and it timed out on one pull request run.

@@ -235,11 +235,21 @@ jobs:
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
-        run: bun run test:windows --record-durations
+        run: bun run test:windows --record-durations --wall-timeout 1200
       - name: Name the recording as the Windows seed
         if: always()
         shell: bash
         run: cp scripts/free-test-durations.json "$RUNNER_TEMP/free-test-durations-windows.json"
+      - name: Upload full recording logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-record-durations-logs
+          path: |
+            .context/free-test-logs/gstack-free-test-*.log
+            ${{ runner.temp }}/gstack-free-test-*.log
+          include-hidden-files: true
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
