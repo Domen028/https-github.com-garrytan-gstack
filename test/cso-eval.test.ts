@@ -268,6 +268,11 @@ describe('CSO matched evaluation accounting', () => {
     artifactTamper.artifacts.totalBytes = 1;
     expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [rehashReceipt(artifactTamper)])).toThrow('INVALID_PRODUCER_RECEIPT');
 
+    const timed = rehashReceipt({ ...structuredClone(first), toolTimeline: [{ atMs: 5, endMs: 9, tool: 'Bash', agent: 'main' }, { atMs: 7, tool: 'Agent', agent: 'subagent' }] });
+    expect(collectProducerReceipts(matrix, syntheticSchedule(), [timed]).receipts[0]).not.toHaveProperty('toolTimeline');
+    for (const entry of [{ atMs: 9, endMs: 5, tool: 'Bash', agent: 'main' }, { atMs: 1, tool: 'cat /secret', agent: 'main' }, { atMs: 1, tool: 'Bash', agent: 'main', input: 'x' }])
+      expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [rehashReceipt({ ...structuredClone(first), toolTimeline: [entry] } as ProducerReceipt)])).toThrow('INVALID_PRODUCER_RECEIPT');
+
     const mixedInstallation = syntheticReceipt(cells[1]);
     mixedInstallation.installationIdentity = syntheticInstallationIdentity('different-installation');
     expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [first, rehashReceipt(mixedInstallation)])).toThrow('UNMATCHED_PRODUCER_INSTALLATIONS');

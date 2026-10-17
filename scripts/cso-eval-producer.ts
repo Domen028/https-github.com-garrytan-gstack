@@ -686,6 +686,7 @@ export async function runProducerCell(inputPath: string, receiptPath: string, op
     durationMs: run.durationMs,
     firstUsefulResultMs: null,
     toolCalls: run.toolCalls,
+    ...(run.toolTimeline ? { toolTimeline: run.toolTimeline } : {}),
     output,
     outputHash: sha256(output),
     usage: {

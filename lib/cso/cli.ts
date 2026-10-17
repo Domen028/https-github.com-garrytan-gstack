@@ -57,6 +57,7 @@ import {
   readJson,
   reclaimDeadAttemptScratch,
   repoId,
+  executionDeadline,
   requireTime,
   retention,
   runDirectory,
@@ -1609,6 +1610,7 @@ async function inspect(args: string[]) {
       ? readJson(join(dir, 'preparation.json'))
       : undefined,
     recovery: recoveryEvents(dir),
+    remainingSeconds: remainingSeconds(report.deadline),
   });
 }
 async function read(args: string[]) {
@@ -2056,7 +2058,7 @@ function testPlan(args: string[]) {
     ...publicTestPlan(manifest, canonicalTestPlan(join(dir, 'snapshot'), stack)),
   };
 }
-function runtimePlan(args: string[]) {
+function runtimePlan(args: string[], dependencies: CsoCliDependencies) {
   const { dir } = run(args);
   if (!args.length || !['node', 'bun', 'python', 'rails'].includes(args[0]))
     throw new CsoError('INVALID_ARGUMENT', 'runtime-plan requires one supported stack and --port PORT');
@@ -2075,9 +2077,13 @@ function runtimePlan(args: string[]) {
       preparation.prerequisites.map((item) => item.message).join('; ') ||
         `${stack} preparation metadata is incomplete`,
     );
+  let runtimeProfile = preparation.runtimeProfile;
+  try {
+    runtimeProfile = selectRuntime(runtimeProfile, platform(), dependencies.runtimeCatalog).id;
+  } catch {}
   return {
     stack,
-    runtimeProfile: preparation.runtimeProfile,
+    runtimeProfile,
     start: publicStartPlan(manifest, canonicalStartPlan(join(dir, 'snapshot'), stack, port)),
     tests: publicTestPlan(manifest, canonicalTestPlan(join(dir, 'snapshot'), stack)),
   };
@@ -2339,6 +2345,11 @@ async function verify(args: string[], dependencies: CsoCliDependencies) {
     } catch (error: any) {
       throw new CsoError('PREREQUISITE', error?.message || 'Qualified runtime is unavailable');
     }
+    if (request.runtimeProfile !== runtime.id)
+      throw new CsoError(
+        'INVALID_ARGUMENT',
+        `runtimeProfile must be the qualified runtime ID ${runtime.id} returned by runtime-plan`,
+      );
     const verifier = runtime;
     if (!['node', 'bun', 'python', 'rails'].includes(runtime.stack))
       throw new CsoError(
@@ -2787,12 +2798,31 @@ async function replay(args: string[], dependencies: CsoCliDependencies) {
   });
 }
 
+/** In-run replies that report the investigation time left; every one but `start` takes the run ID first. */
+const RUN_CLOCK_COMMANDS = new Set([
+  'start',
+  'resume',
+  'submit',
+  'scan',
+  'scanner-outcome',
+  'import-sarif',
+  'record-review',
+  'test-plan',
+  'runtime-plan',
+  'verify',
+]);
+/** Whole seconds until the investigation deadline (the final reporting minute excluded), or undefined if unknown. */
+function remainingSeconds(deadline: string): number | undefined {
+  const ends = executionDeadline({ deadline });
+  return Number.isFinite(ends) ? Math.max(0, Math.floor((ends - Date.now()) / 1000)) : undefined;
+}
 export async function dispatchCsoCommand(
   command: string,
   args: string[],
   dependencies: CsoCliDependencies,
 ): Promise<unknown> {
   args = [...args];
+  const runId = args[0];
   if (!['start', 'recheck', 'replay', 'doctor', 'provision-images'].includes(command)) {
     const started = Date.now();
     retention(started, { deadlineMs: started + RETENTION_MAINTENANCE_MS, maxEntries: RETENTION_MAX_ENTRIES });
@@ -2848,7 +2878,7 @@ export async function dispatchCsoCommand(
       result = testPlan(args);
       break;
     case 'runtime-plan':
-      result = runtimePlan(args);
+      result = runtimePlan(args, dependencies);
       break;
     case 'recheck':
       result = await recheck(args, dependencies);
@@ -2867,7 +2897,18 @@ export async function dispatchCsoCommand(
     default:
       throw new CsoError('INVALID_ARGUMENT', `Unknown command: ${command}`);
   }
-  return result;
+  if (!RUN_CLOCK_COMMANDS.has(command) || !result || typeof result !== 'object' || Array.isArray(result))
+    return result;
+  const deadline = (result as { deadline?: unknown }).deadline;
+  let seconds: number | undefined;
+  try {
+    seconds = remainingSeconds(
+      typeof deadline === 'string' ? deadline : loadReport(runDirectory(runId)).deadline,
+    );
+  } catch {
+    seconds = undefined;
+  }
+  return seconds === undefined ? result : { ...result, remainingSeconds: seconds };
 }
 const PRODUCTION_CLI_DEPENDENCIES: CsoCliDependencies = Object.freeze({
   runtimeCatalog: RUNTIME_CATALOG,

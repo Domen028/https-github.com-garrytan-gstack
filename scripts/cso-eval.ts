@@ -400,6 +400,8 @@ function validateReceipt(receipt: ProducerReceipt, cell: EvalCell, inputHash: st
   validateInstallationIdentity(receipt.installationIdentity, 'INVALID_PRODUCER_RECEIPT');
   validateProviderIdentity(receipt.providerIdentity, cell.host === 'codex' ? 'gpt' : cell.host, 'INVALID_PRODUCER_RECEIPT');
   validateArtifactInventory(receipt.artifacts, 'INVALID_PRODUCER_RECEIPT');
+  const timeline = receipt.toolTimeline;
+  if (timeline !== undefined && (!Array.isArray(timeline) || timeline.length > 4096 || timeline.some(entry => !entry || !Number.isSafeInteger(entry.atMs) || entry.atMs < 0 || (entry.endMs !== undefined && (!Number.isSafeInteger(entry.endMs) || entry.endMs < entry.atMs)) || typeof entry.tool !== 'string' || !/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(entry.tool) || !['main', 'subagent'].includes(entry.agent) || Object.keys(entry).some(key => !['atMs', 'endMs', 'tool', 'agent'].includes(key))))) throw new Error('INVALID_PRODUCER_RECEIPT');
 }
 
 function validateInstallationIdentity(identity: ProducerInstallationIdentity, error: string): void {
@@ -530,7 +532,7 @@ export function collectProducerReceipts(matrix: EvalMatrix, schedule: PreparedEv
       estimatedCost: { measured: costs.length, denominator: expected.length, totalUSD: costs.length ? costs.reduce((sum, value) => sum + value, 0) : null, source: 'pricing-table-estimate' },
     });
   }
-  const indexes: ProducerReceiptIndex[] = bound.map(({ output: _output, error, ...receipt }) => ({ ...receipt, ...(error ? { error: { code: error.code } } : {}) }));
+  const indexes: ProducerReceiptIndex[] = bound.map(({ output: _output, toolTimeline: _toolTimeline, error, ...receipt }) => ({ ...receipt, ...(error ? { error: { code: error.code } } : {}) }));
   const base = { schemaVersion: 1 as const, matrixHash: matrixHash(matrix), scheduleHash: digest(JSON.stringify(schedule)), receipts: indexes.sort((left, right) => left.cell.id.localeCompare(right.cell.id)), summary: {
     scheduled: matrix.cells.length, prepared: schedule.preparedCells, submitted: bound.length, missing: matrix.cells.length - bound.length,
     matchedPairsExpected: expectedMatchedPairs(matrix), matchedPairsSubmitted: completePairs.length, modelMismatches, groups,

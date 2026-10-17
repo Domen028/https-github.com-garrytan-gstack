@@ -1035,7 +1035,9 @@ export function preparePatchedSource(snapshot: string, target: string, request: 
       );
     const mode = exists ? fs.statSync(file).mode & 0o777 : 0o600;
     secureDirectory(dirname(file));
+    if (exists) fs.chmodSync(file, mode | 0o200);
     fs.writeFileSync(file, change.after, { mode });
+    fs.chmodSync(file, mode);
   }
 }
 export function certify(params: {
