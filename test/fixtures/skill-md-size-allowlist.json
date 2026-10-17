@@ -37,7 +37,7 @@
     "cursor/gstack-plan-design-review": 138935,
     "cursor/gstack-plan-devex-review": 131234,
     "cursor/gstack-plan-eng-review": 151533,
-    "cursor/gstack-review": 140664,
+    "cursor/gstack-review": 140685,
     "factory/gstack-autoplan": 131338,
     "factory/gstack-codex": 100523,
     "factory/gstack-design-consultation": 108523,
@@ -47,7 +47,7 @@
     "factory/gstack-plan-design-review": 141716,
     "factory/gstack-plan-devex-review": 134603,
     "factory/gstack-plan-eng-review": 154647,
-    "factory/gstack-review": 144443,
+    "factory/gstack-review": 144464,
     "gbrain/gstack-autoplan": 129591,
     "gbrain/gstack-design-review": 132733,
     "gbrain/gstack-land-and-deploy": 116059,
@@ -67,7 +67,7 @@
     "kiro/gstack-plan-design-review": 138775,
     "kiro/gstack-plan-devex-review": 131074,
     "kiro/gstack-plan-eng-review": 151383,
-    "kiro/gstack-review": 140476,
+    "kiro/gstack-review": 140497,
     "openclaw/gstack-autoplan": 129296,
     "openclaw/gstack-design-review": 131538,
     "openclaw/gstack-land-and-deploy": 115647,
@@ -82,7 +82,7 @@
     "opencode/gstack-plan-design-review": 140705,
     "opencode/gstack-plan-devex-review": 133455,
     "opencode/gstack-plan-eng-review": 153285,
-    "opencode/gstack-review": 142899,
+    "opencode/gstack-review": 142920,
     "slate/gstack-autoplan": 128935,
     "slate/gstack-design-consultation": 106996,
     "slate/gstack-design-review": 142272,
@@ -90,6 +90,6 @@
     "slate/gstack-plan-design-review": 138855,
     "slate/gstack-plan-devex-review": 131154,
     "slate/gstack-plan-eng-review": 151458,
-    "slate/gstack-review": 140570
+    "slate/gstack-review": 140591
   }
 }
