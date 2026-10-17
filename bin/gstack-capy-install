@@ -465,11 +465,18 @@ EOF_SHIM
 
 # 4. Certify. The trailer is the contract, in one grammar:
 #   gstack: ok <rev> for=<skill>[ (requested: …; pins: skipped (planning-only|no project); latest: <ver> available)]
+#   gstack: ok <rev> for=<skill> ([requested: …; ][pins: …; ]behind=<n> (latest: <ver>); fix: <command>)
 # Notes, in that fixed order, ride only on an ok trailer: `requested` when the
 # existing checkout is not at --revision (it is never moved here), `pins` when
-# the doctor skipped the project pins, `latest` when the bootstrapper read a
-# newer VERSION from origin in this run, exported as GSTACK_CAPY_REMOTE_VERSION. The
-# failure head (`gstack: fail <ids>`) is unchanged.
+# the doctor skipped the project pins, then either `behind=<n> (latest: <ver>)`
+# and `fix: <command>` when the session ends behind origin's default branch
+# (bin/gstack-capy-session exports GSTACK_CAPY_BEHIND, _BEHIND_TO, _BEHIND_FIX), or
+# `latest` when the bootstrapper read a newer VERSION from origin in this run,
+# exported as GSTACK_CAPY_REMOTE_VERSION. The failure head (`gstack: fail <ids>`)
+# is unchanged. An install-mode session whose self-upgrade was skipped
+# (the session exports GSTACK_CAPY_BEHIND_BLOCKED) is never ok: its ok trailer becomes
+#   gstack: fail behind — installed <rev> is <n> commits behind origin (latest <ver>)
+#     and the session-start upgrade was skipped: <reason>; fix: <command> (<CODE>)
 INSTALLED=$(head -1 "$ROOT/VERSION")
 TRAILER="$(printf '%s\n' "$OUT" | grep '^gstack: ' | tail -1)"
 NOTES=""
@@ -482,11 +489,20 @@ if printf '%s\n' "$OUT" | grep -q '^SKIP pins (planning-only'; then note "pins: 
 elif printf '%s\n' "$OUT" | grep -Eq '^SKIP pins \((no project|project directory )'; then note "pins: skipped (no project)"
 fi
 REMOTE_VERSION="${GSTACK_CAPY_REMOTE_VERSION:-}"
-if [ -n "$REMOTE_VERSION" ] && [ "$REMOTE_VERSION" != "$INSTALLED" ] \
+if [ -n "${GSTACK_CAPY_BEHIND:-}" ]; then
+  note "behind=$GSTACK_CAPY_BEHIND (latest: ${GSTACK_CAPY_BEHIND_TO:-${REMOTE_VERSION:-unknown}})"
+  note "fix: ${GSTACK_CAPY_BEHIND_FIX:-bash <skill>/scripts/install.sh}"
+elif [ -n "$REMOTE_VERSION" ] && [ "$REMOTE_VERSION" != "$INSTALLED" ] \
    && [ "$(printf '%s\n%s\n' "$INSTALLED" "$REMOTE_VERSION" | sort -V | head -1)" = "$INSTALLED" ]; then
   note "latest: $REMOTE_VERSION available"
 fi
-case "$TRAILER" in "gstack: ok "*) [ -n "$NOTES" ] && TRAILER="$TRAILER ($NOTES)" ;; esac
+BLOCKED="${GSTACK_CAPY_BEHIND_BLOCKED:-}"
+case "$TRAILER" in "gstack: ok "*) if [ -n "$BLOCKED" ]; then
+  case "$BLOCKED" in *"; fix: "*) ;; *) BLOCKED="$BLOCKED; fix: ${GSTACK_CAPY_BEHIND_FIX:-$ROOT/bin/gstack-upgrade}" ;; esac
+  case "$BLOCKED" in *"("[A-Z]*_[A-Z]*")") ;; *) BLOCKED="$BLOCKED (UPGRADE_REFUSED)" ;; esac
+  TRAILER="gstack: fail behind — installed $INSTALLED is ${GSTACK_CAPY_BEHIND:-?} commits behind origin (latest ${GSTACK_CAPY_BEHIND_TO:-unknown}) and the session-start upgrade was skipped: $BLOCKED"
+  RC=1
+elif [ -n "$NOTES" ]; then TRAILER="$TRAILER ($NOTES)"; fi ;; esac
 record_verdict "$TRAILER" "$([ "$RC" -eq 0 ] && echo 1 || echo 0)"
 [ "$CHECK_ONLY" -eq 1 ] || write_shim
 printf '%s\n' "$OUT" | grep -v '^gstack: '

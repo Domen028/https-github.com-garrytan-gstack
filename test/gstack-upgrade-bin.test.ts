@@ -188,7 +188,7 @@ describe('gstack-upgrade', () => {
     expect(r.status, r.stdout + r.stderr).toBe(3);
     expect(r.stderr).toContain('(UPGRADE_BUSY)');
     expect(r.stderr).toContain('nothing was changed');
-    expect(r.stderr).toMatch(new RegExp(`pid ${live} \\(\\d+m\\)`));
+    expect(r.stderr).toMatch(new RegExp(`pid ${live} \\(\\d+m sleep\\)`));
     expect(r.stderr).not.toContain(`pid ${process.pid} `);
     expect(r.stderr).toContain('wait for those sessions to finish, or re-run with GSTACK_UPGRADE_FORCE=1 when you know they are idle');
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.a);

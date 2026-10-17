@@ -14,7 +14,7 @@
  * depth-1 file:// clone at A, on the simulated Capy host.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { RESULT_CODES } from '../lib/result-codes';
@@ -305,6 +305,87 @@ describe('capy skill bootstrapper: GSTACK_CAPY_REMOTE_VERSION', () => {
     const stale = f.run(['--check', '--for', 'autoplan'], { GSTACK_CAPY_REMOTE_VERSION: 'from-parent' });
     expect(stale.stdout).toContain('remote minimum unknown (fetch failed)');
     expect(stale.last).toBe('gstack: ok 1.0.1 for=autoplan remote=none');
+  });
+});
+
+// Field list 2 item 13: lanes relay only the trailer, so a session that ends
+// behind origin hands the installer the gap and the fix for its trailer note.
+describe('capy skill: the session hands the installer GSTACK_CAPY_BEHIND', () => {
+  const ENV_INSTALLER = '#!/usr/bin/env bash\necho "gstack: ok $(cat "$(dirname "$0")/../VERSION") for=autoplan behind=${GSTACK_CAPY_BEHIND:-none} to=${GSTACK_CAPY_BEHIND_TO:-none} fix=${GSTACK_CAPY_BEHIND_FIX:-none}${GSTACK_CAPY_BEHIND_BLOCKED:+ blocked=$GSTACK_CAPY_BEHIND_BLOCKED}"\n';
+  const rerun = `bash ${BOOT} --for autoplan`;
+
+  test('--check behind origin: the commit count, origin\'s VERSION and the fast-forwarding command; a checkout the rerun would not move points at gstack-upgrade', () => {
+    const f = fixture({ cloneAt: 'B' });
+    write(path.join(f.root, 'bin/gstack-capy-install'), ENV_INSTALLER, 0o755);
+    f.git(['update-index', '--assume-unchanged', 'bin/gstack-capy-install']);
+    const r = f.run(['--check', '--for', 'autoplan']);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(r.last).toBe(`gstack: ok 1.0.1 for=autoplan behind=1 to=1.0.2 fix=${rerun}`);
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+    fs.writeFileSync(path.join(f.root, 'README.md'), 'local edit\n');
+    expect(f.run(['--check', '--for', 'autoplan']).last).toBe(`gstack: ok 1.0.1 for=autoplan behind=1 to=1.0.2 fix=${f.root}/bin/gstack-upgrade`);
+    f.git(['checkout', '-q', '--', 'README.md']);
+    f.git(['checkout', '-q', '--detach']);
+    expect(f.run(['--check', '--for', 'autoplan']).last).toBe(`gstack: ok 1.0.1 for=autoplan behind=1 to=1.0.2 fix=${f.root}/bin/gstack-upgrade`);
+    f.git(['checkout', '-q', '-b', 'topic']);
+    expect(f.run(['--check', '--for', 'autoplan']).last).toBe(`gstack: ok 1.0.1 for=autoplan behind=1 to=1.0.2 fix=${f.root}/bin/gstack-upgrade`);
+    f.git(['checkout', '-q', 'main']);
+    expect(f.run(['--check', '--for', 'autoplan']).stdout).toMatch(/^gstack-capy-session: behind origin\/main: 1\.0\.1 -> 1\.0\.2 \(1 commits\); fix: bash .+ --for autoplan \(fast-forwards\)$/m);
+    expect(f.run(['--check', '--for', 'autoplan'], { GSTACK_CAPY_AUTO_UPGRADE: '0' }).last).toContain('fix=unset GSTACK_CAPY_AUTO_UPGRADE, then ');
+  });
+
+  test('install mode: a skipped self-upgrade points at gstack-upgrade (which names its refusal); a disabled one names the variable to unset; no fix carries the "; " note separator', () => {
+    const f = fixture({ cloneAt: 'B' });
+    write(path.join(f.root, 'bin/gstack-capy-install'), ENV_INSTALLER, 0o755);
+    const skipped = f.run(['--for', 'autoplan']);
+    expect(skipped.stdout).toMatch(/^SELF_UPGRADE: skipped \(tracked files changed: bin\/gstack-capy-install; fix: .+\)$/m);
+    expect(skipped.last).toMatch(new RegExp(`^gstack: ok 1\\.0\\.1 for=autoplan behind=1 to=1\\.0\\.2 fix=${f.root.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}/bin/gstack-upgrade blocked=tracked files changed: bin/gstack-capy-install; fix: .+ \\(UPGRADE_REFUSED\\)$`));
+    const disabled = f.run(['--for', 'autoplan'], { GSTACK_CAPY_SELF_UPGRADE: 'off' });
+    expect(disabled.last).toBe(`gstack: ok 1.0.1 for=autoplan behind=1 to=1.0.2 fix=unset GSTACK_CAPY_SELF_UPGRADE, then ${rerun}`);
+    for (const r of [skipped, disabled]) expect(r.last.split(' fix=')[1].split(' blocked=')[0]).not.toContain('; ');
+    expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+  });
+
+  // GBRA-105 / GBRA-106: a lease naming a pid that a machine wake handed to
+  // another process wedged every upgrade, and the skipped upgrade still ended ok.
+  test('install mode: a lease whose pid was reused is reclaimed and the checkout upgrades; a live holder blocks it and the session hands the installer the busy reason with the holder', () => {
+    const f = fixture({ cloneAt: 'B' });
+    write(path.join(f.root, 'bin/gstack-capy-install'), ENV_INSTALLER, 0o755);
+    f.git(['update-index', '--assume-unchanged', 'bin/gstack-capy-install']);
+    const leaseDir = path.join(f.host.base, 'leases');
+    const holder = spawn('sleep', ['300'], { stdio: 'ignore' });
+    try {
+      const lease = (args: string[]) => spawnSync('bash', [path.join(f.root, 'bin/gstack-lease'), ...args, '--root', f.root], { encoding: 'utf8', env: { ...f.host.env, GSTACK_LEASE_DIR: leaseDir }, timeout: 30_000 });
+      expect(lease(['touch', '--pid', String(holder.pid)]).status).toBe(0);
+      const busy = f.run(['--for', 'autoplan'], { GSTACK_LEASE_DIR: leaseDir });
+      expect(busy.stdout).toMatch(new RegExp(`^SELF_UPGRADE: skipped \\(live gstack sessions hold this installation: pid ${holder.pid} \\(\\d+m sleep\\); fix: .+ \\(UPGRADE_BUSY\\)\\)$`, 'm'));
+      expect(busy.last).toMatch(new RegExp(`behind=1 to=1\\.0\\.2 fix=.+ blocked=live gstack sessions hold this installation: pid ${holder.pid} \\(\\d+m sleep\\); fix: .+GSTACK_UPGRADE_FORCE=1.+ \\(UPGRADE_BUSY\\)$`));
+      expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
+      const file = path.join(leaseDir, String(holder.pid));
+      const recorded = fs.readFileSync(file, 'utf8').trim();
+      fs.writeFileSync(file, (recorded.startsWith('linux ') ? recorded.replace(/\d+$/, (n) => String(Number(n) + 1)) : 'ps Thu Jan  1 00:00:00 1970') + '\n');
+      const reclaimed = f.run(['--for', 'autoplan'], { GSTACK_LEASE_DIR: leaseDir });
+      expect(reclaimed.stdout).toMatch(/^SELF_UPGRADE: done 1\.0\.1 -> 1\.0\.2$/m);
+      expect(f.git(['rev-parse', 'HEAD'])).toBe(f.c);
+      expect(fs.existsSync(file)).toBe(false);
+    } finally {
+      holder.kill('SIGKILL');
+    }
+  });
+
+  test('current, or the fetch failed: nothing is exported, and values inherited from a parent session are dropped', () => {
+    const f = fixture({ cloneAt: 'B' });
+    f.git(['fetch', '-q', 'origin', 'main']);
+    f.git(['merge', '--ff-only', '-q', 'FETCH_HEAD']);
+    write(path.join(f.root, 'bin/gstack-capy-install'), ENV_INSTALLER, 0o755);
+    const inherited = { GSTACK_CAPY_BEHIND: '9', GSTACK_CAPY_BEHIND_TO: '9.9.9', GSTACK_CAPY_BEHIND_FIX: 'stale' };
+    expect(f.run(['--check', '--for', 'autoplan'], inherited).last).toBe('gstack: ok 1.0.2 for=autoplan behind=none to=none fix=none');
+    f.git(['reset', '-q', '--hard', f.b]);
+    write(path.join(f.root, 'bin/gstack-capy-install'), ENV_INSTALLER, 0o755);
+    f.git(['remote', 'set-url', 'origin', `file://${f.host.base}/missing.git`]);
+    const offline = f.run(['--check', '--for', 'autoplan'], inherited);
+    expect(offline.stdout).toContain('remote minimum unknown (fetch failed)');
+    expect(offline.last).toBe('gstack: ok 1.0.1 for=autoplan behind=none to=none fix=none');
   });
 });
 
