@@ -46,7 +46,10 @@ const JOIN = /\bjoin\(([^()]*)\)/g;
 const RESOLVE_EXT = ['', '.ts', '.tsx', '.js', '.mjs', '.cjs', '/index.ts', '/index.js'];
 // One left-to-right pass, so a `#` inside a string and a quote inside a comment both stay inert.
 const PY_STRING_OR_COMMENT = /("""|''')[\s\S]*?\1|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|#[^\n]*/g;
-const PY_IMPORT = /^[ \t]*(?:from[ \t]+(\.*[\w.]*)[ \t]+import[ \t]+(\([^)]*\)|[^\n;]+)|import[ \t]+([^\n;]+))/gm;
+// A statement starts a line or follows `;` or a compound statement's `:`; the module spec never lets two repetitions share a dot.
+const PY_IMPORT = /(?:^|[;:])[ \t\f]*(?:from[ \t]+(\.*(?:\w[\w.]*)?)[ \t]+import[ \t]+(\([^)]*\)|[^\n;]+)|import[ \t]+([^\n;]+))/gm;
+// Deeper dotted names are not module paths; the cap keeps prefix resolution linear in the source size.
+const PY_MAX_DEPTH = 32;
 const PY_DOTTED = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/;
 
 export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel); }
@@ -222,23 +225,24 @@ function pythonImports(rel: string, source: string): string[] {
 }
 
 /**
- * A dotted module → its repo file (`a/b.py` or `a/b/__init__.py`) plus the
- * package `__init__.py` files Python executes on the way; [] for a module
- * outside the repo (stdlib, site-packages).
+ * A dotted module → its repo files (`a/b/__init__.py`, which Python prefers,
+ * and `a/b.py`; both when both exist) plus the package `__init__.py` files
+ * Python executes on the way; [] for a module outside the repo (stdlib,
+ * site-packages) or deeper than PY_MAX_DEPTH.
  */
 function pythonModuleFiles(files: Set<string>, dotted: string): string[] {
   const parts = dotted.split('.');
-  if (parts.some(p => !p)) return [];
+  if (parts.length > PY_MAX_DEPTH || parts.some(p => !p)) return [];
   const p = parts.join('/');
-  const file = [`${p}.py`, `${p}/__init__.py`].find(f => files.has(f));
-  if (!file) return [];
+  const found = [`${p}/__init__.py`, `${p}.py`].filter(f => files.has(f));
+  if (!found.length) return [];
   const inits = parts.slice(0, -1).map((_, i) => `${parts.slice(0, i + 1).join('/')}/__init__.py`).filter(f => files.has(f));
-  return [file, ...inits];
+  return [...found, ...inits];
 }
 
 /** `'pkg.mod.Class.attr'` (a `mock.patch` target) → the longest dotted prefix that is a repo module. */
 function pythonPatchTarget(files: Set<string>, ref: string): string[] {
-  const parts = ref.split('.');
+  const parts = ref.split('.').slice(0, PY_MAX_DEPTH);
   for (let n = parts.length; n >= 1; n--) {
     const hit = pythonModuleFiles(files, parts.slice(0, n).join('.'));
     if (hit.length) return hit;
@@ -280,7 +284,7 @@ export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string,
   for (const m of source.matchAll(QUOTED)) {
     const targets = resolveRefs(files, dirs, rel, m[1]!, true, config);
     for (const target of targets) out.push({ target, via: 'literal' });
-    if (!targets.length && python && PY_DOTTED.test(m[1]!)) for (const f of pythonPatchTarget(files, m[1]!)) out.push({ target: f, via: 'literal' });
+    if (python && PY_DOTTED.test(m[1]!)) for (const f of pythonPatchTarget(files, m[1]!)) out.push({ target: f, via: 'literal' });
   }
   for (const m of source.matchAll(JOIN)) {
     const segments = [...m[1]!.matchAll(/['"`]([^'"`]+)['"`]/g)].map(s => s[1]!);

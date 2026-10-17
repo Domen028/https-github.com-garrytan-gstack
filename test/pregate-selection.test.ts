@@ -113,6 +113,30 @@ describe('import graph (static imports ∪ repo-path literals ∪ bin convention
       'pkg/__init__.py', 'pkg/core.py', 'pkg/multi.py', 'pkg/patched.py', 'pkg/sub/__init__.py', 'pkg/sub/leaf.py', 'pkg/sub/sibling.py', 'pkg/util.py',
     ]);
   });
+
+  test('python: a package and a same-named module both map, statements after ; and : map, a path literal does not hide its patch target, and adversarial dotted input stays linear', () => {
+    const repo = fixture();
+    commit(repo, {
+      'app.py': 'A = 1\n',
+      'app/__init__.py': '',
+      'pkg/__init__.py': '',
+      'pkg/core.py': 'C = 1\n',
+      'pkg/patched.py': 'class Thing:\n    pass\n',
+      'pkg.patched.Thing.run': 'a file whose name is also a patch target\n',
+      'tests/test_app.py': 'import app\n',
+      'tests/test_semicolon.py': 'import os; import pkg.core\n',
+      'tests/test_inline.py': 'def test_core():\n    if True: from pkg.core import C\n',
+      'tests/test_patch.py': "from unittest import mock\n\n@mock.patch('pkg.patched.Thing.run')\ndef test_run(run):\n    pass\n",
+      'tests/test_adversarial.py': `from ${'.'.repeat(100_000)}x\nX = '${Array.from({ length: 20_000 }, () => 'pkg').join('.')}'\n`,
+    });
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'app/__init__.py').tests).toEqual(['tests/test_app.py']);
+    expect(testsFor(g, 'app.py').tests).toEqual(['tests/test_app.py']);
+    expect(testsFor(g, 'pkg/core.py').tests).toEqual(['tests/test_inline.py', 'tests/test_semicolon.py']);
+    expect(testsFor(g, 'pkg/patched.py').tests).toEqual(['tests/test_patch.py']);
+    expect(testsFor(g, 'pkg.patched.Thing.run').tests).toEqual(['tests/test_patch.py']);
+    expect(testsFor(g, 'pkg/__init__.py').tests).toEqual(['tests/test_adversarial.py', 'tests/test_inline.py', 'tests/test_patch.py', 'tests/test_semicolon.py']);
+  });
 });
 
 describe('literals (pure)', () => {
