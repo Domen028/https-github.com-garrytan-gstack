@@ -2056,7 +2056,7 @@ function testPlan(args: string[]) {
     ...publicTestPlan(manifest, canonicalTestPlan(join(dir, 'snapshot'), stack)),
   };
 }
-function runtimePlan(args: string[]) {
+function runtimePlan(args: string[], dependencies: CsoCliDependencies) {
   const { dir } = run(args);
   if (!args.length || !['node', 'bun', 'python', 'rails'].includes(args[0]))
     throw new CsoError('INVALID_ARGUMENT', 'runtime-plan requires one supported stack and --port PORT');
@@ -2075,9 +2075,13 @@ function runtimePlan(args: string[]) {
       preparation.prerequisites.map((item) => item.message).join('; ') ||
         `${stack} preparation metadata is incomplete`,
     );
+  let runtimeProfile = preparation.runtimeProfile;
+  try {
+    runtimeProfile = selectRuntime(runtimeProfile, platform(), dependencies.runtimeCatalog).id;
+  } catch {}
   return {
     stack,
-    runtimeProfile: preparation.runtimeProfile,
+    runtimeProfile,
     start: publicStartPlan(manifest, canonicalStartPlan(join(dir, 'snapshot'), stack, port)),
     tests: publicTestPlan(manifest, canonicalTestPlan(join(dir, 'snapshot'), stack)),
   };
@@ -2339,6 +2343,11 @@ async function verify(args: string[], dependencies: CsoCliDependencies) {
     } catch (error: any) {
       throw new CsoError('PREREQUISITE', error?.message || 'Qualified runtime is unavailable');
     }
+    if (request.runtimeProfile !== runtime.id)
+      throw new CsoError(
+        'INVALID_ARGUMENT',
+        `runtimeProfile must be the qualified runtime ID ${runtime.id} returned by runtime-plan`,
+      );
     const verifier = runtime;
     if (!['node', 'bun', 'python', 'rails'].includes(runtime.stack))
       throw new CsoError(
@@ -2848,7 +2857,7 @@ export async function dispatchCsoCommand(
       result = testPlan(args);
       break;
     case 'runtime-plan':
-      result = runtimePlan(args);
+      result = runtimePlan(args, dependencies);
       break;
     case 'recheck':
       result = await recheck(args, dependencies);
