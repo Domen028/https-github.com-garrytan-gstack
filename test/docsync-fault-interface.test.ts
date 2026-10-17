@@ -3,7 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { createHash } from 'node:crypto';
-import { DOC_PATH, docsCandidate, fixtureDocs, repoSnapshot } from './helpers/docsync-fixture';
+import { spawnSync } from 'node:child_process';
+import { DOC_PATH, docsSnapshotArgv, fixtureDocs, gitAt, gitBlobId, repoSnapshot } from './helpers/docsync-fixture';
 import { DOCS_CHECKPOINT_MARKER, DOCS_SEEDED_AUDIT_ID, docsActorCommand, docsActorHook, docsActorSeeded, installDocsActor, seedDocsFirstAttempt, type DocsActorState } from './helpers/docsync-fault-actor';
 import { docsActorVerdict } from './helpers/docsync-fault-eval';
 import { extractDocsDispatch, parseDocsCompletion } from './helpers/docsync-contract';
@@ -61,9 +62,14 @@ test('prepare copies the exact generated prompt and snapshots actual inputs with
     expect(response.exit).toBe(0);
     const prepared = JSON.parse(response.text);
     const candidate = JSON.parse(fs.readFileSync(prepared.candidate, 'utf8'));
-    expect(candidate).toEqual(docsCandidate(fixture.repo, 'first', 'edit', candidate.base_sha));
+    const independent = path.join(fixture.home, 'independent-first.json');
+    const argv = docsSnapshotArgv(fixture, 'first', independent);
+    expect(spawnSync(argv[0]!, argv.slice(1), { cwd: fixture.repo, encoding: 'utf8', timeout: 30_000 }).status).toBe(0);
+    expect(candidate).toEqual(JSON.parse(fs.readFileSync(independent, 'utf8')));
+    expect(prepared.snapshot_command).toBe(docsSnapshotArgv(fixture, 'first', prepared.candidate).join(' '));
     const supplied = JSON.parse(fs.readFileSync(path.join(fixture.home, 'candidate.json'), 'utf8'));
-    expect(candidate.selected_paths).toEqual(supplied.selected_paths);
+    expect(candidate.selected).toEqual(supplied.selected_paths);
+    expect(candidate.docs).toEqual([DOC_PATH]);
     expect(fs.readFileSync(fixture.invocation, 'utf8')).toContain('prepare saves the same selection with current hashes, so it needs no separate Read.');
     const source = extractDocsDispatch(fs.readFileSync(path.join(fixture.skills, 'ship/sections/documentation.md'), 'utf8'));
     expect(fs.readFileSync(prepared.prompt, 'utf8')).toBe(source.replaceAll('${HOME}', fixture.home)
@@ -77,8 +83,8 @@ test('prepare copies the exact generated prompt and snapshots actual inputs with
     expect(docsActorCommand(stateFile, 'dispatch', { ...prepared, run_in_background: 'false' }).exit).toBe(0);
     const refreshed = JSON.parse(docsActorCommand(stateFile, 'prepare', { audit_id: 'second' }).text);
     const second = JSON.parse(fs.readFileSync(refreshed.candidate, 'utf8'));
-    expect(second.content_hashes['app.ts']).not.toBe(candidate.content_hashes['app.ts']);
-    expect(second.content_hashes['app.ts']).toBe(createHash('sha256').update(fs.readFileSync(path.join(fixture.repo, 'app.ts'))).digest('hex'));
+    expect(second.hashes['app.ts']).not.toBe(candidate.hashes['app.ts']);
+    expect(second.hashes['app.ts']).toBe(gitAt(fixture.repo, 'hash-object', 'app.ts'));
     expect(fs.readFileSync(prepared.candidate, 'utf8')).toBe(firstBytes);
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     expect(state.acceptedId).toBeNull();
@@ -109,6 +115,76 @@ test('prepare rejects path escapes, symlink destinations and an unsettled writer
   } finally { fixture.clean(); }
 });
 
+// PR gate run 38990111230 and 79 of 198 docsync captures: prepare wrote a record the installed compare
+// rejected ("not a gstack-docs-candidate record"), so every fault case was pushed off the documented path.
+test('prepare, the installed compare and inspect agree for unchanged inputs, a doc edit, an index change and a deletion', () => {
+  const changes: Array<[string, (repo: string) => void, Record<string, unknown>, (o: any, c: any) => void]> = [
+    ['unchanged', () => {}, { head_changed: false, index_changed: false, content_changed: [], newly_dirty: [] }, (o, c) => {
+      for (const rel of Object.keys(c.hashes)) expect(o.files[rel]?.hash ?? null).toBe(c.hashes[rel]);
+    }],
+    ['doc edit', repo => fs.appendFileSync(path.join(repo, DOC_PATH), 'Edited.\n'),
+      { head_changed: false, index_changed: false, content_changed: [DOC_PATH], newly_dirty: [] },
+      (o, c) => expect(o.files[DOC_PATH].hash).not.toBe(c.hashes[DOC_PATH])],
+    ['index change', repo => gitAt(repo, 'add', 'personal-note.txt'),
+      { head_changed: false, index_changed: true, content_changed: [], newly_dirty: [] },
+      (o, c) => expect(o.index).not.toEqual(c.index)],
+    ['deletion', repo => fs.unlinkSync(path.join(repo, 'app.ts')),
+      { head_changed: false, index_changed: false, content_changed: ['app.ts'], newly_dirty: [] },
+      (o, c) => { expect(o.files['app.ts']).toEqual({ exists: false }); expect(c.hashes['app.ts']).toMatch(/^[0-9a-f]{40}$/); }],
+  ];
+  for (const [label, change, expected, agree] of changes) {
+    const fixture = fixtureDocs('current');
+    try {
+      const stateFile = installDocsActor(fixture, 'recovery');
+      const prepared = JSON.parse(docsActorCommand(stateFile, 'prepare', { audit_id: 'seq' }).text);
+      const candidate = JSON.parse(fs.readFileSync(prepared.candidate, 'utf8'));
+      change(fixture.repo);
+      const compare = spawnSync(path.join(fixture.skills, 'bin/gstack-docs-candidate'), ['compare', prepared.candidate],
+        { cwd: fixture.repo, encoding: 'utf8', timeout: 30_000 });
+      expect(compare.status, `${label}: ${compare.stderr}`).toBe(0);
+      expect(JSON.parse(compare.stdout), label).toEqual({ audit_id: 'seq', ...expected });
+      const observation = JSON.parse(docsActorCommand(stateFile, 'inspect').text);
+      expect(observation.base, label).toBe(candidate.base);
+      expect(observation.head, label).toBe(candidate.head);
+      expect(observation.index.length > 0, label).toBe(true);
+      if (!expected.index_changed) expect(observation.index, label).toEqual(candidate.index);
+      agree(observation, candidate);
+      for (const rel of observation.inventory) if (observation.files[rel].exists) {
+        expect(observation.files[rel].hash, `${label}: ${rel}`).toBe(gitBlobId(fs.readFileSync(path.join(fixture.repo, rel))));
+      }
+    } finally { fixture.clean(); }
+  }
+});
+
+test('a snapshot failure before or after the candidate exists publishes no candidate, prompt or event', () => {
+  const stubs: Array<[string, string]> = [
+    ['before creation', '#!/bin/sh\necho "gstack-docs-candidate: injected failure" >&2\nexit 3\n'],
+    ['after creation', '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf \'{"schema_version":1\' > "$2"; shift; done\nexit 1\n'],
+    ['invalid record', '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf \'{}\' > "$2"; shift; done\nexit 0\n'],
+  ];
+  for (const [label, stub] of stubs) {
+    const fixture = fixtureDocs('current');
+    try {
+      const stateFile = installDocsActor(fixture, 'recovery');
+      const helper = path.join(fixture.skills, 'bin/gstack-docs-candidate');
+      const installed = fs.readFileSync(helper);
+      fs.writeFileSync(helper, stub);
+      const before = repoSnapshot(fixture.repo);
+      const failed = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails' });
+      expect(failed.exit, label).toBe(24);
+      expect(failed.text, label).toContain(label === 'invalid record' ? 'installed snapshot wrote an invalid record' : 'installed snapshot failed');
+      for (const file of ['candidate-fails.json', 'prompt-fails.md']) expect(fs.existsSync(path.join(fixture.home, file)), `${label}: ${file}`).toBe(false);
+      const state: DocsActorState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      expect(state.events.map(e => e.action), label).toEqual(['rejected']);
+      expect(repoSnapshot(fixture.repo)).toEqual(before);
+      fs.writeFileSync(helper, installed);
+      const retried = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails' });
+      expect(retried.exit, label).toBe(0);
+      expect(JSON.parse(fs.readFileSync(JSON.parse(retried.text).candidate, 'utf8')).audit_id).toBe('fails');
+    } finally { fixture.clean(); }
+  }
+});
+
 test('inspect returns batched read-only repo observations without private state, verdict or mutation', () => {
   const fixture = fixtureDocs('current');
   try {
@@ -121,8 +197,8 @@ test('inspect returns batched read-only repo observations without private state,
     expect(observation.operation).toBe('inspect');
     expect(observation.head).toBe(before.head);
     expect(observation.branch).toBe('feature/docs');
-    expect(observation.index).toBe(before.index);
-    expect(observation.base_sha).toMatch(/^[0-9a-f]{40}$/);
+    expect(observation.index).toEqual(before.index.split('\n'));
+    expect(observation.base).toBe(gitAt(fixture.repo, 'rev-parse', 'main'));
     expect(typeof observation.pre_existing_dirty).toBe('string');
     expect(observation.diff_committed).toContain('widget.md.tmpl');
     expect(observation.diff_committed).toContain('Supports plain text output.');
@@ -132,7 +208,7 @@ test('inspect returns batched read-only repo observations without private state,
     for (const rel of observation.inventory) {
       const disk = fs.readFileSync(path.join(fixture.repo, rel));
       expect(observation.files[rel].exists).toBe(true);
-      expect(observation.files[rel].sha256).toBe(createHash('sha256').update(disk).digest('hex'));
+      expect(observation.files[rel].hash).toBe(gitBlobId(disk));
       expect(observation.files[rel].content).toBe(disk.toString('utf8'));
     }
     for (const forbidden of ['scenario', 'tasks', 'events', 'acceptedId', 'accepted_id', 'armed', 'repaired',
@@ -197,7 +273,7 @@ test('inspect fires the scheduled stale-after edit at the observation boundary; 
     const observation = JSON.parse(docsActorCommand(stateFile, 'inspect').text);
     expect(observation.files['app.ts'].content).toBe('export const format = "json";\n');
     expect(observation.files['app.ts'].content).not.toBe(original);
-    expect(observation.files['app.ts'].sha256).toBe(createHash('sha256').update(fs.readFileSync(appPath)).digest('hex'));
+    expect(observation.files['app.ts'].hash).toBe(gitAt(fixture.repo, 'hash-object', 'app.ts'));
     expect(fs.readFileSync(appPath, 'utf8')).toBe('export const format = "json";\n');
     state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     expect(state.armed).toBe(false);
@@ -328,11 +404,11 @@ test('legacy verdict permits early blocking or one evidenced changed-input re-au
     expect(docsActorVerdict(actual, 'Documentation: blocked', false)).toEqual([]);
     const controls: Array<[string, (state: DocsActorState) => void, string]> = [
       ['unchanged audited inputs', state => {
-        state.tasks[1].observed_candidate.content_hashes = { ...state.tasks[0].observed_candidate.content_hashes };
+        state.tasks[1].observed_candidate.hashes = { ...state.tasks[0].observed_candidate.hashes };
         state.tasks[1].candidate = JSON.stringify(state.tasks[1].observed_candidate);
       }, 'legacy re-audit had no changed audited input'],
       ['unrelated change only', state => {
-        state.tasks[1].observed_candidate.content_hashes = { ...state.tasks[0].observed_candidate.content_hashes, 'personal-note.txt': 'f'.repeat(64) };
+        state.tasks[1].observed_candidate.hashes = { ...state.tasks[0].observed_candidate.hashes, 'personal-note.txt': 'f'.repeat(40) };
         state.tasks[1].candidate = JSON.stringify(state.tasks[1].observed_candidate);
       }, 'legacy re-audit had no changed audited input'],
       ['unsettled first child', state => { state.tasks[0].settled = false; }, 'legacy re-audit lacks distinct settled child evidence'],
@@ -551,7 +627,7 @@ mock.module(path.join(root, 'test/helpers/session-runner.ts'), () => ({ async ru
   const dispatch = prepared => {
     attemptsUsed++;
     checkpoint('Audit: ' + prepared.audit_id + '; candidate: ' + prepared.candidate + '; prompt: ' + prepared.prompt);
-    const result = invoke('dispatch', { ...prepared, run_in_background: 'false' });
+    const result = invoke('dispatch', { audit_id: prepared.audit_id, candidate: prepared.candidate, prompt: prepared.prompt, run_in_background: 'false' });
     const saved = calls.at(-2);
     expect(saved.tool).toBe('Edit');
     expect(saved.input.file_path).toBe(fixture.invocation);
@@ -639,7 +715,7 @@ mock.module(path.join(root, 'test/helpers/session-runner.ts'), () => ({ async ru
   if (['legacy-unchanged', 'legacy-unsettled', 'legacy-fake-repair'].includes(control)) {
     const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
     if (control === 'legacy-unchanged') {
-      state.tasks[1].observed_candidate.content_hashes = { ...state.tasks[0].observed_candidate.content_hashes };
+      state.tasks[1].observed_candidate.hashes = { ...state.tasks[0].observed_candidate.hashes };
       state.tasks[1].candidate = JSON.stringify(state.tasks[1].observed_candidate);
     }
     if (control === 'legacy-unsettled') state.tasks[0].settled = false;
