@@ -6,6 +6,7 @@ import { spawnSync } from 'node:child_process';
 import { DOC_PATH, docsSnapshotArgv, gitAt, gitBlobId, fixtureDocs, repoSnapshot, type DocsCandidateRecord } from './docsync-fixture';
 import { extractDocsDispatch } from './docsync-contract';
 import { docsNativeInterface } from './docsync-observer';
+import { redactFindingSpans } from '../../lib/redact-engine';
 
 export const DOCS_CHECKPOINT_MARKER = '<!-- DOCSYNC_CHECKPOINT -->';
 
@@ -57,21 +58,40 @@ function locked<T>(file: string, body: () => T): T {
 const SNAPSHOT_TIMEOUT_MS = 30_000;
 const shellWord = (arg: string) => /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`;
 
+export const SNAPSHOT_STDERR_LIMIT = 800;
+export type SnapshotFailureReason = 'snapshot_timeout' | 'snapshot_spawn_error' | 'snapshot_exit' | 'snapshot_invalid_record';
+
+class SnapshotFailure extends Error {
+  constructor(readonly reason: SnapshotFailureReason, readonly status: string, readonly stderr: string) { super(reason); }
+}
+
+/** The tail of the helper's stderr with secrets redacted and the fixture root replaced by <HOME>, at most SNAPSHOT_STDERR_LIMIT characters. */
+function stderrExcerpt(root: string, stderr: string): string {
+  const redacted = redactFindingSpans(stderr.replaceAll(root, '<HOME>').trim());
+  if (redacted === null) return '[stderr omitted: unredactable secret]';
+  return redacted.length > SNAPSHOT_STDERR_LIMIT ? '…' + redacted.slice(-(SNAPSHOT_STDERR_LIMIT - 1)) : redacted;
+}
+
 /**
  * Runs the installed `gstack-docs-candidate snapshot` (the section's Prepare helper) for the fixture selection
- * and returns the record it wrote, or throws with the helper's own error. `out` must not exist yet.
+ * and returns the record it wrote, or throws a SnapshotFailure with a stable reason. `out` must not exist yet.
  */
 function installedSnapshot(s: DocsActorState, auditId: string, out: string): { record: DocsCandidateRecord; command: string } {
   const repo = path.join(s.root, 'repo');
   const argv = docsSnapshotArgv({ repo, skills: path.join(s.root, '.claude/skills/gstack') }, auditId, out);
   const run = spawnSync(argv[0]!, argv.slice(1), { cwd: repo, encoding: 'utf8', timeout: SNAPSHOT_TIMEOUT_MS,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
-  if (run.error || run.status !== 0) {
-    throw Error(`installed snapshot failed (${run.error?.message ?? `exit ${run.status ?? run.signal}`}): ${(run.stderr || '').trim()}`);
+  const stderr = run.stderr || '';
+  if (run.error) {
+    const timedOut = (run.error as NodeJS.ErrnoException).code === 'ETIMEDOUT';
+    throw new SnapshotFailure(timedOut ? 'snapshot_timeout' : 'snapshot_spawn_error', run.error.message, stderr);
   }
-  const record = JSON.parse(fs.readFileSync(out, 'utf8')) as DocsCandidateRecord;
+  if (run.status !== 0) throw new SnapshotFailure('snapshot_exit', `exit ${run.status ?? run.signal}`, stderr);
+  let record: DocsCandidateRecord;
+  try { record = JSON.parse(fs.readFileSync(out, 'utf8')) as DocsCandidateRecord; }
+  catch (error) { throw new SnapshotFailure('snapshot_invalid_record', `exit 0, unreadable record: ${(error as Error).message}`, stderr); }
   if (record.schema_version !== 1 || record.audit_id !== auditId || record.mode !== 'edit' || record.base !== gitAt(repo, 'rev-parse', 'main')
-      || !Array.isArray(record.index) || !record.hashes || typeof record.hashes !== 'object') throw Error('installed snapshot wrote an invalid record');
+      || !Array.isArray(record.index) || !record.hashes || typeof record.hashes !== 'object') throw new SnapshotFailure('snapshot_invalid_record', 'exit 0, invalid record', stderr);
   return { record, command: argv.map(shellWord).join(' ') };
 }
 
@@ -111,6 +131,9 @@ export function docsActorCommand(file: string, action: string, args: Record<stri
       if (action === 'prepare') {
         if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,79}$/.test(args.audit_id ?? '')) throw Error('prepare requires a fresh literal audit id');
         if (s.tasks.some(t => !t.settled)) throw Error('attempted snapshot with unsettled writer');
+        const failedPrepares = s.events.filter(e => e.action === 'prepare-failed');
+        if (failedPrepares.some(e => e.audit_id === args.audit_id)) throw Error(`reason=snapshot_retry_needs_fresh_id: prepare ${args.audit_id} failed; retry once with a fresh audit_id`);
+        if (failedPrepares.length >= 2) throw Error('reason=snapshot_retry_exhausted: prepare already failed and was retried once; report the documentation phase blocked');
         const repo = path.join(s.root, 'repo');
         const skills = path.join(s.root, '.claude/skills/gstack');
         const candidateFile = owned(s.root, path.join(s.root, `candidate-${args.audit_id}.json`));
@@ -121,8 +144,16 @@ export function docsActorCommand(file: string, action: string, args: Record<stri
         let snapshot: ReturnType<typeof installedSnapshot>;
         try { snapshot = installedSnapshot(s, args.audit_id, candidateFile); }
         catch (error) {
-          if (fs.lstatSync(candidateFile, { throwIfNoEntry: false })?.isFile()) fs.unlinkSync(candidateFile);
-          throw error;
+          if (!(error instanceof SnapshotFailure)) throw error;
+          const failureFile = owned(s.root, path.join(s.root, `prepare-${args.audit_id}-failure.json`));
+          const kept = [...(saved(candidateFile) ? [candidateFile] : []), failureFile];
+          const failure = { reason: error.reason, audit_id: args.audit_id, status: error.status,
+            stderr_excerpt: stderrExcerpt(s.root, error.stderr), kept,
+            retry: failedPrepares.length ? 'none left' : 'at most once, with a fresh audit_id' };
+          fs.writeFileSync(failureFile, JSON.stringify(failure, null, 2), { flag: 'wx', mode: 0o600 });
+          s.events.push({ action: 'prepare-failed', audit_id: args.audit_id, detail: JSON.stringify(failure) });
+          save(file, s);
+          return { text: `prepare failed: reason=${failure.reason} (${failure.status}); retry ${failure.retry}; kept for inspection: ${kept.join(', ')}\nstderr (redacted, last ${SNAPSHOT_STDERR_LIMIT} chars):\n${failure.stderr_excerpt}`, exit: 25 };
         }
         const candidate = snapshot.record;
         const prompt = source.replaceAll('${HOME}', s.root).replaceAll('<branch>', candidate.branch)
@@ -136,6 +167,7 @@ export function docsActorCommand(file: string, action: string, args: Record<stri
         if (!args.audit_id || args.run_in_background !== 'false') throw Error('dispatch requires identity and explicit foreground flag');
         if (s.tasks.some(t => !t.settled)) throw Error('attempted writer overlap');
         if (s.events.some(e => e.action === 'dispatch' && e.audit_id === args.audit_id)) throw Error('reused audit identity');
+        if (s.events.some(e => e.action === 'prepare-failed' && e.audit_id === args.audit_id)) throw Error('dispatch of a failed prepare');
         const prompt = fs.readFileSync(owned(s.root, args.prompt), 'utf8');
         const candidate = fs.readFileSync(owned(s.root, args.candidate));
         if (!prompt.includes('document-release') || !prompt.includes('files_updated') || !prompt.includes(args.audit_id)) throw Error('dispatch did not carry the actual workflow prompt');

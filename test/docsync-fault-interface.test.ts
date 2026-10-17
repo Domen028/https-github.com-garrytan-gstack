@@ -154,15 +154,20 @@ test('prepare, the installed compare and inspect agree for unchanged inputs, a d
       }
     } finally { fixture.clean(); }
   }
-});
+}, 30_000);
 
-test('a snapshot failure before or after the candidate exists publishes no candidate, prompt or event', () => {
-  const stubs: Array<[string, string]> = [
-    ['before creation', '#!/bin/sh\necho "gstack-docs-candidate: injected failure" >&2\nexit 3\n'],
-    ['after creation', '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf \'{"schema_version":1\' > "$2"; shift; done\nexit 1\n'],
-    ['invalid record', '#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf \'{}\' > "$2"; shift; done\nexit 0\n'],
+// DX confirm round 2: a failed Prepare snapshot must be diagnosable from its own output and files, and a transient
+// failure gets exactly one retry under a fresh audit id; the failed id can never be dispatched or reused.
+test('a snapshot failure before or after candidate creation reports a bounded redacted reason, keeps its files and allows one retry under a fresh id', () => {
+  const secret = 'ghp' + '_' + 'A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8';
+  const noisy = (exit: number) => `#!/bin/sh\nyes 'gstack-docs-candidate: noise line' | head -n 200 >&2\necho "token ${secret} at $PWD" >&2\nexit ${exit}\n`;
+  const writes = (body: string, exit: number) => `#!/bin/sh\nwhile [ $# -gt 0 ]; do [ "$1" = --out ] && printf '%s' '${body}' > "$2"; shift; done\necho "token ${secret} at $PWD" >&2\nexit ${exit}\n`;
+  const stubs: Array<[string, string, string, boolean]> = [
+    ['before creation', noisy(3), 'snapshot_exit', false],
+    ['after creation', writes('{"schema_version":1', 1), 'snapshot_exit', true],
+    ['invalid record', writes('{}', 0), 'snapshot_invalid_record', true],
   ];
-  for (const [label, stub] of stubs) {
+  for (const [label, stub, reason, candidateKept] of stubs) {
     const fixture = fixtureDocs('current');
     try {
       const stateFile = installDocsActor(fixture, 'recovery');
@@ -171,19 +176,46 @@ test('a snapshot failure before or after the candidate exists publishes no candi
       fs.writeFileSync(helper, stub);
       const before = repoSnapshot(fixture.repo);
       const failed = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails' });
-      expect(failed.exit, label).toBe(24);
-      expect(failed.text, label).toContain(label === 'invalid record' ? 'installed snapshot wrote an invalid record' : 'installed snapshot failed');
-      for (const file of ['candidate-fails.json', 'prompt-fails.md']) expect(fs.existsSync(path.join(fixture.home, file)), `${label}: ${file}`).toBe(false);
-      const state: DocsActorState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
-      expect(state.events.map(e => e.action), label).toEqual(['rejected']);
+      expect(failed.exit, label).toBe(25);
+      expect(failed.text, label).toContain(`prepare failed: reason=${reason} `);
+      expect(failed.text, label).toContain('retry at most once, with a fresh audit_id');
+      expect(failed.text, label).toContain('<REDACTED-github.pat> at <HOME>/repo');
+      expect(failed.text, label).not.toContain(secret);
+      const failureFile = path.join(fixture.home, 'prepare-fails-failure.json');
+      const failure = JSON.parse(fs.readFileSync(failureFile, 'utf8'));
+      expect(failure.reason, label).toBe(reason);
+      expect(failure.stderr_excerpt.length, label).toBeLessThanOrEqual(800);
+      expect(failure.stderr_excerpt, label).not.toContain(fixture.home);
+      expect(failed.text, label).toContain(failure.stderr_excerpt);
+      expect(failure.stderr_excerpt.startsWith('…'), label).toBe(label === 'before creation');
+      const candidate = path.join(fixture.home, 'candidate-fails.json');
+      expect(failure.kept, label).toEqual(candidateKept ? [candidate, failureFile] : [failureFile]);
+      expect(fs.existsSync(candidate), label).toBe(candidateKept);
+      expect(fs.existsSync(path.join(fixture.home, 'prompt-fails.md')), label).toBe(false);
       expect(repoSnapshot(fixture.repo)).toEqual(before);
-      fs.writeFileSync(helper, installed);
-      const retried = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails' });
-      expect(retried.exit, label).toBe(0);
-      expect(JSON.parse(fs.readFileSync(JSON.parse(retried.text).candidate, 'utf8')).audit_id).toBe('fails');
+      const reused = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails' });
+      expect([reused.exit, reused.text.includes('reason=snapshot_retry_needs_fresh_id')], label).toEqual([24, true]);
+      if (label === 'before creation') {
+        const second = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails-again' });
+        expect([second.exit, second.text.includes('retry none left')], label).toEqual([25, true]);
+        fs.writeFileSync(helper, installed);
+        const third = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails-third' });
+        expect([third.exit, third.text.includes('reason=snapshot_retry_exhausted')], label).toEqual([24, true]);
+        expect(fs.existsSync(path.join(fixture.home, 'candidate-fails-third.json'))).toBe(false);
+      } else {
+        const dispatched = docsActorCommand(stateFile, 'dispatch', { audit_id: 'fails', candidate, prompt: path.join(fixture.home, 'prompt-fails.md'), run_in_background: 'false' });
+        expect([dispatched.exit, dispatched.text.includes('dispatch of a failed prepare')], label).toEqual([24, true]);
+        fs.writeFileSync(helper, installed);
+        const retried = docsActorCommand(stateFile, 'prepare', { audit_id: 'fails-retry' });
+        expect(retried.exit, label).toBe(0);
+        expect(JSON.parse(fs.readFileSync(JSON.parse(retried.text).candidate, 'utf8')).audit_id).toBe('fails-retry');
+      }
+      const state: DocsActorState = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+      expect(state.events.map(e => e.action), label)
+        .toEqual(label === 'before creation' ? ['prepare-failed', 'rejected', 'prepare-failed', 'rejected'] : ['prepare-failed', 'rejected', 'rejected', 'prepare']);
     } finally { fixture.clean(); }
   }
-});
+}, 30_000);
 
 test('inspect returns batched read-only repo observations without private state, verdict or mutation', () => {
   const fixture = fixtureDocs('current');
