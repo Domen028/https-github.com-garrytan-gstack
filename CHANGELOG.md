@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+**`/cso --paths` audits part of a repository and says exactly what it skipped.** A repository over /cso's 64 MiB source cap used to get one piece of advice, "run /cso on a smaller checkout". The trimmed copy then read as the whole repository, and the verdict never said what was left out. `gstack-cso start --paths src/core,src/mcp` now audits only those prefixes and reports every other path as skipped, with snapshot and history coverage marked partial.
+
+### What this means for you
+
+- **`--paths` narrows an audit without hiding what it left out.** Files outside the prefixes are never copied, read or counted toward the cap. The run's snapshot manifest lists each one, the report counts them, and snapshot-inputs and history-inputs coverage read partial, so the verdict can't look complete. Git history is limited to the same prefixes.
+- **`--diff --paths` fails closed.** A changed, added or deleted file outside the prefixes refuses the run and is named, including `.npmrc`, `bunfig.toml`, `.claude/` and other credential or agent configuration. Only dependency trees such as `node_modules`, which /cso never reads, are exempt.
+- **Findings stay in scope.** A finding, recheck evidence or `history` query on a skipped path is refused, and rechecks and replays keep the original `--paths`.
+- **The source-cap message points to `--paths`** and warns against hand-trimmed copies. The manifest cap and the 100,000-entry limit still count every file, so their advice is unchanged (#2993).
+
+### If you…
+
+- **…audited a hand-trimmed copy to get under the cap:** rerun /cso on the full checkout with `--paths` set to the directories you want audited, so the report says what was skipped.
+
+### For contributors
+
+- New `test/cso-audit-paths.test.ts` covers the cap advice, the withheld entries and gaps, the `--diff` refusal in both directions, bounded 1 MiB hashing of out-of-scope files when a comparison base is set, recheck and replay scope, and out-of-scope history and findings.
+- Known limits: under `--paths` the original-source hash ignores content changes outside the scope, out-of-scope hashing has no byte cap beyond the time budget, `--paths` with `--comprehensive` runs on a trimmed tree, and a recheck refuses when the audited directory was renamed.
+
 ## [1.91.109.0] - 2026-10-16
 
 **Pregate's secrets check stops passing real keys it never scanned, Windows Git Bash can run `gstack-upgrade` again, and four user-reported workflow bugs are fixed.** The secrets check could miss a committed AWS key in two ways and flagged ordinary TypeScript as secrets. `gstack-upgrade` refused every Git Bash install. Catalog field names failed a check that can't be downgraded. Browse treated some server-side writes as read-only, and a plan review could delete another review's summary. Each fix has a test that fails on the previous release.
