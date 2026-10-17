@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.126.0] - 2026-10-17
+## [Unreleased]
 
 **`gstack-pregate` finds the tests for Python files, and a missing `node_modules` no longer reads as "stale generated files".** In a Python repo, the `lanes` check failed almost every touched `.py` file with `PREGATE_NO_LANE`, because the import graph only parsed JavaScript and TypeScript. In a FastAPI service with about 1,500 non-test modules, Scott Gigante's change (#3201) cut the unmapped count from 1,473 to 780, and most of the rest are migrations and scripts no import reaches. Separately, a fresh checkout without `node_modules` made the pre-gate report `REGEN_STALE` and suggest rerunning the generator, which sent people the wrong way.
 
