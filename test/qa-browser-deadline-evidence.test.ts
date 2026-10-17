@@ -137,6 +137,25 @@ test('native literal argv, status, scripts, readiness and artifact bookkeeping a
   expect(f.check()).toEqual({ launchedRuns: 2, completedRuns: 2, refusedRuns: 0, timedOutRuns: 0 });
 });
 
+// PR gate run 38969924945 (qa-only-no-fix): after saving fallback screenshots into the owned
+// directory the prompt names, the agent listed it with this exact spelling.
+test.each(['captured-screenshots-listing', 'parent-escape', 'other-subdirectory', 'operator', 'extra-option'])
+  ('listing the owned screenshots directory is bookkeeping; nothing wider is: %s', scenario => {
+    const f = fixture();
+    f.run();
+    const screenshots = path.join(f.directory, 'qa-reports/screenshots');
+    const commands = {
+      'captured-screenshots-listing': `ls -la ${quote(screenshots)}`,
+      'parent-escape': `ls -la ${quote(screenshots + '/../..')}`,
+      'other-subdirectory': `ls -la ${quote(path.join(f.directory, 'qa/sections'))}`,
+      operator: `ls -la ${quote(screenshots)}; ${quote(browse)} --version`,
+      'extra-option': `ls -laR ${quote(screenshots)}`,
+    };
+    f.calls.push({ tool: 'Bash', input: { command: commands[scenario as keyof typeof commands] }, output: 'total 0' });
+    if (scenario === 'captured-screenshots-listing') expect(f.check()).toEqual({ launchedRuns: 1, completedRuns: 1, refusedRuns: 0, timedOutRuns: 0 });
+    else expect(() => f.check()).toThrow(scenario === 'operator' ? 'QA deadline: unsupported outer shell composition' : 'QA deadline: untrusted runtime or unguarded command');
+  });
+
 test.each(['extra-option', 'suffix-option', 'operator', 'newline', 'foreign-cwd', 'missing-cwd'])
   ('metadata exception stays exact, fixture-bound and unbatched: %s', scenario => {
     const f = fixture();
