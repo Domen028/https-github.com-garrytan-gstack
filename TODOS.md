@@ -5391,6 +5391,19 @@ skills were told is fenced.
 
 **Priority:** P3. **Depends on:** none.
 
+### P3: fix wave 3 follow-ups (filed 2026-10-17)
+
+- **`qa-quick` has little headroom under its 300 s capture** — paid gate run
+  38980005793 timed out at 300 s (12 turns) while passing runs in the same
+  window took 164–272 s (median about 210 s). Before its first guarded probe the
+  agent loaded qa/SKILL.md (50.4 KB, read with `cat` and paged with `sed`) and
+  read scope, browser-setup, exploratory, qa-patterns and test-bootstrap. One
+  occurrence, kept visible rather than repaired: the cause-level option is to
+  trim what the Quick tier must load (test-bootstrap is not needed for a Quick
+  read-only run), which is a product call. Raising the capture budget is out of
+  scope (EVAL_POLICY). Owner Garry; revisit with the next qa-quick red.
+  **Effort:** S. **Priority:** P3.
+
 ### P1–P2: fix wave 2 follow-ups (filed 2026-10-15)
 
 From the free-suite health wave (flaky-pass fixes, #3154 seed refresh). Owner
