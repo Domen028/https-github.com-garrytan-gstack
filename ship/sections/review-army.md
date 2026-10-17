@@ -268,6 +268,7 @@ distinct defects stay separate and neither pass substitutes for the other.
 
 ```bash
 source <(~/.claude/skills/gstack/bin/gstack-diff-scope <base> 2>/dev/null) || true
+set | grep '^SCOPE_'
 # Detect stack for specialist context
 STACK=""
 [ -f Gemfile ] && STACK="${STACK}ruby "
