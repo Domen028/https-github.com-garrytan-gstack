@@ -387,8 +387,10 @@ for (const skillName of ['review', 'ship']) {
     expect(block).toContain(`_SM=$(${HOST_PATHS.claude.binDir}/gstack-state-matrix detect --base <base>) || _SM=SCOPE_STATE_MACHINE=unknown; source <(echo "$_SM")\n`);
     expect(block.indexOf('SCOPE_STATE_MACHINE=unknown')).toBeLessThan(block.indexOf("set | grep '^SCOPE_'"));
     const selection = between(army, '### Select specialists', '### Adaptive gating').replace(/\s+/g, ' ');
-    expect(selection).toContain('9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown (printed by the scope block)');
-    expect(selection).toContain("gstack-state-matrix check - <<'EOF' <its complete output> EOF");
+    expect(selection).toContain('9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown: read');
+    expect(selection).toContain('then write its full output to `.gstack/tmp/state-machines.md` and check it:');
+    expect(selection).toContain('gstack-state-matrix check .gstack/tmp/state-machines.md ');
+    expect(selection).not.toContain('<<');
     expect(selection).not.toContain('pipe output');
   });
 
