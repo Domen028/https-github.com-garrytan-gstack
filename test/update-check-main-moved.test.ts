@@ -181,7 +181,7 @@ describe('equal VERSION, main moved past the checkout', () => {
     const skill = fs.readFileSync(path.join(ROOT, 'gstack-upgrade', 'SKILL.md'), 'utf8');
     const block = /```bash\n(GSTACK_STATE_ROOT=\$\(~\/\.claude\/skills\/gstack\/bin\/gstack-paths[^\n]*\n_SNOOZE_FILE=[\s\S]*?)```/.exec(skill)![1]!;
     expect(block).toContain('_REMOTE_VER="{new}"');
-    expect(skill).toContain('On the four-field line, substitute the fourth field (the main SHA) for `{new}` in this block');
+    expect(skill).toContain('On a four-field line use the SHA (fourth field) as `{new}`');
     const bin = path.join(fx.root, '.claude', 'skills', 'gstack', 'bin');
     fs.mkdirSync(bin, { recursive: true });
     fs.mkdirSync(path.join(path.dirname(bin), 'lib'), { recursive: true });
