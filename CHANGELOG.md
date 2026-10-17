@@ -20,6 +20,28 @@
 - `bin/gstack-node-runtime.sh` holds Node resolution, the verified install and the launch-directory writer. `renderPinLines` now prints `PIN_EXACT_REQUIRED` and `PIN_CI_ALTERNATIVES` lines for node as well as bun.
 - `test/gstack-capy-install.test.ts` covers a Bun resolving into a directory that holds another node, gbrain's CI pin served from nvm and recorded, and a store install with a SHA-256 mismatch control. The doctor, runtime-pins and pregate launch tests cover the fix line, the node plan lines and the recorded launch directory.
 
+## [1.91.109.0] - 2026-10-16
+
+**Pregate's secrets check stops passing real keys it never scanned, Windows Git Bash can run `gstack-upgrade` again, and four user-reported workflow bugs are fixed.** The secrets check could miss a committed AWS key in two ways and flagged ordinary TypeScript as secrets. `gstack-upgrade` refused every Git Bash install. Catalog field names failed a check that can't be downgraded. Browse treated some server-side writes as read-only, and a plan review could delete another review's summary. Each fix has a test that fails on the previous release.
+
+### What this means for you
+
+- **Pregate `secrets` scans what you actually added (#3211).** An added line that begins with `++` used to be dropped as if it were a diff header, and a `diff.external` or `textconv` driver could empty the diff, so a branch carrying a real key passed with "no added lines". Both false negatives are older than this release. The check now reads the diff hunk by hunk with external drivers off. It scans each file with its own type, so `token: credentials.token,` in a `.ts` file is code, not a secret, and each finding names its file. Reported by @brentyates-swx.
+- **`gstack-upgrade` works under Windows Git Bash.** It compared Git's `C:/x` with Git Bash's `/c/x` as plain strings and refused every install as "not a gstack checkout" (`UPGRADE_REFUSED`), the same command the doctor's recovery line tells you to run. It now compares the paths themselves. A gstack tree nested inside another repository is still refused.
+- **A catalog field named like `"input_key": "expected_media_rate_bits"` is no longer a credential (#3208).** env.kv skips a value only when the whole name is one data-model word plus `_key` and the value is lowercase identifier words. `cosmosdb_primary_key`, `api_cache_key`, ALL-CAPS env names and entropic values still fire. Reported by @brentyates-swx.
+- **Browse's "LOOK, not ACT" rule covers two writes it missed (#3216).** On a non-local target, a wizard or dialog step (Next, Step N, a menu item that opens a dialog) counts as a write until its handler or network effect shows otherwise, and its Cancel proves nothing. Before any Save or Submit, every value set with `fill`, `selectOption` or `setValue` is read back, and a mismatch stops the run. Reported by @tomg65.
+- **A second plan review no longer deletes the first one's summary (#3219).** `/plan-design-review` writes its Completion Summary, and `/plan-devex-review` its DX Scorecard, in their own sections above `## GSTACK REVIEW REPORT`. That report section is the part the next review deletes and rewrites. Reported by @virajs13.
+
+### If you…
+
+- **…hit `UPGRADE_REFUSED` "not a gstack checkout" on Windows:** update by hand once (`cd <install> && git pull --ff-only && ./setup`); `gstack-upgrade` works from then on.
+- **…renamed a field or added a workaround to get past pregate `secrets`:** you can drop it. Rerun `gstack-pregate --only secrets`; findings now say which file they're in.
+
+### For contributors
+
+- New `test/pregate-secrets-source-context.test.ts` covers the `++` line, the empty external diff, the TypeScript exemption and a `.env` control. `test/gstack-upgrade-path-spelling.test.ts` emulates MSYS with `uname`, `cygpath` and `git` shims.
+- `test/cso-git-hardening.test.ts` builds its fixture repo once per file. On a cold macOS runner, the per-test git spawns used up the first test's 5 s budget (#3207, by @scottgigante-hubflow).
+
 ## [1.91.108.0] - 2026-10-16
 
 **The weekly census's two #3153 findings were in the test fixtures, not in /ship or /review.** The Oct 12 census went red on `ship-exploratory-late-input` and flagged `review-army-simplification` over its session headroom cap. Both are diagnosed from the run's own transcripts (`docs/evals/headroom-diagnosis-2026-10.md`), and each fixture repair lands with a free test that failed first. No skill prose, budget, threshold or detector changed. Reported by the weekly periodic census bot (#3153).

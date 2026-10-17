@@ -595,6 +595,11 @@ Options: **A)** Add to TODOS.md **B)** Skip **C)** Build it now
 
 ### DX Scorecard
 
+In the plan file, write it as its own `## DX Review Scorecard` section
+(the scorecard, its verdict lines and the Unresolved Decisions below) above the terminal
+`## GSTACK REVIEW REPORT`, replacing this review's earlier one. Never write it inside
+the report: the next plan review deletes and regenerates everything under that heading.
+
 ```
 +====================================================================+
 |              DX PLAN REVIEW — SCORECARD                             |
