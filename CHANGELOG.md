@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.115.0] - 2026-10-17
 
 **Autoplan now enforces its round cap and spend budget and can export a public copy of a run, /eval-plan tests its preregistered diagnostics and checks every arm's model against repo rules before money moves, and a reviewer subagent can install gstack's read-only helpers in seconds.** These are the field list 2 wave A items from the gbrain crew (autoplan W5-W7, eval-plan W8/W9, reviewer install W11).
 
