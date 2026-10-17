@@ -3,6 +3,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import stat
 import subprocess
 import sys
@@ -10,7 +11,9 @@ import unicodedata
 
 
 class Refusal(Exception):
-    pass
+    def __init__(self, message, spellings=()):
+        super().__init__(message)
+        self.spellings = spellings
 
 
 def git(root, *args, data=None, allow_missing=False):
@@ -38,15 +41,57 @@ def prefixes(paths):
     return groups
 
 
+def names(spellings):
+    # Only the colliding component names, clamped to a slug's charset: skill
+    # start prints them, and the artifacts repo's paths are not trusted text.
+    leaves = sorted({re.sub(r'[^A-Za-z0-9._-]', '?', s.rsplit('/', 1)[-1])[:64] for s in spellings})
+    return ','.join(leaves[:4])
+
+
+def first_collision(groups):
+    found = sorted((key.count('/'), key) for key, spellings in groups.items() if len(spellings) > 1)
+    return groups[found[0][1]] if found else ()
+
+
+def tree_paths(root, *args):
+    return {p.decode('utf-8') for p in git(root, *args).split(b'\0') if p}
+
+
 def refuse_new_collisions(root, paths, baseline='HEAD'):
     # Compare complete component prefixes: Foo/a and foo/b collide too.
     # Existing aliases are historical data; this check does not migrate them
     # or block unrelated writes, but it refuses any additional spelling.
     head = git(root, 'ls-tree', '-rz', '--name-only', baseline) if baseline else b''
     previous = prefixes(p.decode('utf-8') for p in head.split(b'\0') if p)
-    for key, spellings in prefixes(paths).items():
+    groups = prefixes(paths)
+    for key, spellings in sorted(groups.items(), key=lambda item: (item[0].count('/'), item[0])):
         if len(spellings) > 1 and not spellings <= previous.get(key, set()):
-            raise Refusal('new casefold path collision; inspect path spellings before retrying')
+            raise Refusal('new casefold path collision; inspect path spellings before retrying', spellings)
+    return first_collision(groups)
+
+
+def hold(root, requested_file, held_file):
+    # A requested path is held when one of its prefixes has another spelling
+    # in the index or in this batch, unless its own spelling is the only one
+    # the index already tracks (an established project keeps syncing; the new
+    # alias waits). Held paths are never staged, so git cannot record them
+    # under the other spelling, and their queue records stay.
+    requested = {p for p in Path(requested_file).read_text(encoding='utf-8').replace('\r', '').split('\n') if p}
+    tracked_paths = tree_paths(root, 'ls-files', '-z')
+    tracked = prefixes(tracked_paths)
+    groups = prefixes(tracked_paths | requested)
+    held, colliding = set(), []
+    for path in requested:
+        parts = path.split('/')
+        for i in range(1, len(parts) + 1):
+            spelling = '/'.join(parts[:i])
+            key = unicodedata.normalize('NFC', spelling).casefold()
+            if len(groups[key]) > 1 and tracked.get(key) != {spelling}:
+                held.add(path)
+                colliding.append((key.count('/'), key))
+                break
+    Path(held_file).write_text(''.join(p + '\n' for p in sorted(held)), encoding='utf-8')
+    return groups[min(colliding)[1]] if colliding else ()
 
 
 def verify(root, requested_file, names_file):
@@ -90,19 +135,23 @@ def verify(root, requested_file, names_file):
 
 
 def outgoing(root):
+    if not git(root, 'rev-parse', '--verify', '--quiet', 'HEAD', allow_missing=True):
+        return ()
     branch = git(root, 'rev-parse', '--abbrev-ref', 'HEAD').decode('utf-8').strip()
     remote = 'refs/remotes/origin/' + branch
     baseline = remote if git(root, 'rev-parse', '--verify', '--quiet', remote, allow_missing=True) else None
-    head = git(root, 'ls-tree', '-rz', '--name-only', 'HEAD')
-    refuse_new_collisions(root, (p.decode('utf-8') for p in head.split(b'\0') if p), baseline)
+    return refuse_new_collisions(root, tree_paths(root, 'ls-tree', '-rz', '--name-only', 'HEAD'), baseline)
 
 
 if __name__ == '__main__':
     try:
         if sys.argv[1] == '--outgoing':
-            outgoing(Path(sys.argv[2]))
+            print(names(outgoing(Path(sys.argv[2]))))
+        elif sys.argv[1] == '--hold':
+            print(names(hold(Path(sys.argv[2]), sys.argv[3], sys.argv[4])))
         else:
             verify(Path(sys.argv[1]), sys.argv[2], sys.argv[3])
     except (Refusal, OSError, UnicodeError, ValueError, IndexError) as error:
+        print(names(getattr(error, 'spellings', ())))
         print('BRAIN_SYNC: staged artifact validation refused: ' + str(error), file=sys.stderr)
         sys.exit(1)

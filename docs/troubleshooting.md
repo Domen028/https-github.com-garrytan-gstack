@@ -630,6 +630,64 @@ has nothing to calibrate from. It no longer says "calibrated".
 
 **Fix.** Answer more registered questions, then `gstack-developer-profile --derive`.
 
+<a id="artifact-case-collision"></a>
+### `ARTIFACTS_SYNC: attention: case-collision held=<N> names=<names>. Artifact paths differ only by letter case, ...`
+
+**Meaning.** The artifacts repo holds paths that differ only by letter case,
+such as `projects/MyApp/` and `projects/myapp/`. A Mac or Windows disk stores
+them as one file, so git there would stage a write under the other spelling,
+and sync would report success while one spelling stays modified and the other
+machines read stale data (#3220). Sync now holds every queued file under such a
+path instead of staging it: the file stays queued, everything else keeps
+syncing, and the status is `collision` rather than `ok`. When only one
+spelling is tracked, that spelling keeps syncing and only the new alias is
+held. `<names>` are the colliding folder or file names; `gstack-brain-sync
+--status` lists the held paths in `message`. A local commit that would push a
+new alias to the remote (two machines created both spellings at once) is
+refused with status `error` and kept locally.
+
+Nothing is repaired automatically. Slug resolution and skill start are
+unaffected; only the sync holds files.
+
+**Fix.** Keep one spelling, by hand, on one machine:
+
+1. Choose the spelling to keep: the one `gstack-slug` prints in that project
+   today. If the project resolves to different spellings (a remote URL typed
+   two ways, a folder reached as `~/code/MyApp` and `~/code/myapp`), make it
+   stable first: fix the remote URL's case, or set `GSTACK_PROJECT_SLUG`.
+2. Fold the other spelling's tracked files into the kept one. Read both
+   spellings from git, because a Mac's working tree shows only one of them,
+   and the working files too, because they hold the held, unsynced writes.
+   For JSONL logs, concatenate and drop duplicate lines:
+
+   ```bash
+   cd ~/.gstack
+   keep=projects/MyApp; drop=projects/myapp
+   git -c core.ignorecase=false ls-files -- "$drop" | while IFS= read -r f; do
+     rel=${f#"$drop"/}
+     { git show ":$keep/$rel"; git show ":$f"; cat "$keep/$rel" "$f"; } 2>/dev/null | awk '!seen[$0]++' > "$HOME/.gstack-fold.tmp"
+     mkdir -p "$keep/$(dirname "$rel")" && mv "$HOME/.gstack-fold.tmp" "$keep/$rel"
+     git -c core.ignorecase=false add -f -- "$keep/$rel"
+     git -c core.ignorecase=false rm -q --cached -- "$f"
+   done
+   git -c core.ignorecase=false commit -m "repair: fold $drop into $keep"
+   git push origin HEAD
+   ```
+
+   For Markdown and other non-log files that exist under both spellings,
+   compare `git show ":$keep/<file>"` with `git show ":$drop/<file>"` and keep
+   the right content instead of concatenating. On Linux the two folders are
+   separate on disk: remove the dropped folder after the commit
+   (`rm -r "$drop"`). On a Mac or Windows they are the same folder, so do not
+   remove anything.
+3. Clear the held records of the dropped spelling and queue the kept files:
+   `gstack-brain-sync --skip-file <dropped path>` for each held path that
+   `--status` lists, then `gstack-brain-enqueue <kept path>` and
+   `gstack-brain-sync --once`.
+4. On every other machine, let the next skill start pull the repair (or run
+   `git -C ~/.gstack pull`). The line disappears once no tracked path
+   differs only by case.
+
 <a id="skill-start-former-bucket"></a>
 ### `gstack: earlier data for this project is in projects/<slug> (a worktree's old bucket). Merge it: ...`
 

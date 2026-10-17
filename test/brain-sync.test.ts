@@ -678,7 +678,7 @@ describe('gstack-brain-sync per-file hold', () => {
     ['projects/p/ceo-plans/Foo/old.md', 'projects/p/ceo-plans/foo/new.md'],
     ['projects/Straße/ceo-plans/old.md', 'projects/STRASSE/ceo-plans/new.md'],
   ]) {
-    test(`new casefold prefix collision is refused: ${oldPath}`, () => {
+    test(`a new casefold prefix alias is held, never staged: ${oldPath}`, () => {
       init();
       // Create the historical tree directly so this works on either a case-
       // sensitive or insensitive host, without materializing conflicting dirs.
@@ -687,11 +687,13 @@ describe('gstack-brain-sync per-file hold', () => {
       write(newPath, '# queued plan\n');
       const before = git(['rev-parse', 'HEAD']).stdout;
       expect(drain().status).toBe(0);
-      expect(statusJson().status).toBe('error');
+      const s = statusJson();
+      expect(s.status).toBe('collision');
+      expect(s.case_held).toBe(1);
       expect(spoolText()).toContain(newPath);
       expect(git(['rev-parse', 'HEAD']).stdout).toBe(before);
       expect(remoteFiles()).not.toContain(newPath);
-      expect(staged()).toContain(newPath);
+      expect(staged()).toBe('');
     });
   }
 
@@ -701,8 +703,70 @@ describe('gstack-brain-sync per-file hold', () => {
     write(CLEAN, '# independent plan\n');
     expect(drain().status).toBe(0);
     expect(statusJson().status).toBe('ok');
+    expect(statusJson().case_held).toBe(0);
+    expect(statusJson().case_names).toBe('OLD,old');
     expect(remoteFiles()).toContain(CLEAN);
     expect(spoolFiles()).toHaveLength(0);
+  });
+
+  // #3220: two spellings of one project are both tracked (a case-sensitive
+  // producer committed both). A write to either is held instead of staged, so
+  // a case-insensitive checkout cannot record it under the other spelling and
+  // report ok; every other file still syncs.
+  const WS_UPPER = 'projects/Example_Workspace/learnings.jsonl';
+  const WS_LOWER = 'projects/Example_workspace/learnings.jsonl';
+  test('#3220: a write into a tracked case-colliding project is held; the rest syncs and nothing reports success', () => {
+    init();
+    seedIndexedPaths([WS_UPPER, WS_LOWER]);
+    write(WS_LOWER, '{"key":"c","insight":"new on mac"}\n');
+    write(CLEAN, '# independent plan\n');
+    const result = drain();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('differs only by letter case (Example_Workspace,Example_workspace)');
+    expect(remoteFiles()).toContain(CLEAN);
+    expect(remoteShow(WS_LOWER).stdout).toBe('# historical artifact\n');
+    expect(staged()).toBe('');
+    expect(spoolText()).toContain(WS_LOWER);
+    expect(spoolText()).not.toContain(CLEAN);
+    const s = statusJson();
+    expect(s.status).toBe('collision');
+    expect(s.case_held).toBe(1);
+    expect(s.case_names).toBe('Example_Workspace,Example_workspace');
+    expect(s.message).toContain(WS_LOWER);
+    expect(s.message).toContain('docs/troubleshooting.md#artifact-case-collision');
+    expect(run(['gstack-brain-sync', '--attention']).stdout.trim()).toBe(
+      `ARTIFACTS_SYNC: attention: case-collision held=1 names=Example_Workspace,Example_workspace. Artifact paths differ only by letter case, which a Mac or Windows disk stores as one file; sync holds 1 queued file(s) under them and syncs everything else. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision. See the paths: ${SELF} --status`,
+    );
+    // Held, not dropped: the next drain holds it again and still never says ok.
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('collision');
+    expect(spoolText()).toContain(WS_LOWER);
+  });
+
+  test('a tracked spelling keeps syncing while only the new case alias is held', () => {
+    init();
+    seedIndexedPaths(['projects/MyApp/ceo-plans/a.md']);
+    write('projects/MyApp/ceo-plans/a.md', '# updated\n');
+    write('projects/myapp/ceo-plans/b.md', '# other project\n');
+    expect(drain().status).toBe(0);
+    expect(remoteShow('projects/MyApp/ceo-plans/a.md').stdout).toBe('# updated\n');
+    expect(remoteFiles()).not.toContain('projects/myapp/ceo-plans/b.md');
+    const s = statusJson();
+    expect(s.status).toBe('collision');
+    expect(s.case_held).toBe(1);
+    expect(s.case_names).toBe('MyApp,myapp');
+    expect(spoolText()).toContain('projects/myapp/ceo-plans/b.md');
+  });
+
+  test('without a case collision the status carries no case fields and skill start no case line', () => {
+    init();
+    write(CLEAN, '# a plan\n');
+    expect(drain().status).toBe(0);
+    const s = statusJson();
+    expect(s.status).toBe('ok');
+    expect(s.case_held).toBe(0);
+    expect(s.case_names).toBe('');
+    expect(run(['gstack-brain-sync', '--attention']).stdout).toBe('');
   });
 
   test('a retry merge introducing casefold aliases stays local and keeps the queue', () => {
@@ -719,6 +783,7 @@ describe('gstack-brain-sync per-file hold', () => {
     write(CLEAN, '# local plan\n');
     expect(drain().status).toBe(0);
     expect(statusJson().status).toBe('error');
+    expect(statusJson().case_names).toBe('P,p');
     expect(spoolText()).toContain(CLEAN);
     expect(remoteFiles()).toContain(peerPath);
     expect(remoteFiles()).not.toContain(CLEAN);
