@@ -130,17 +130,18 @@ export const E2E_TOUCHFILES: Record<string, string[]> = {
   ],
 
   // Review Army (specialist dispatch)
-  'review-army-migration-safety': [ 'review/**', 'test/fixtures/review-army-migration.sql', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope', 'test/skill-e2e-review-army.test.ts', 'test/helpers/office-hours-attempt.ts'],
-  'review-army-perf-n-plus-one':  [ 'review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope', 'test/skill-e2e-review-army.test.ts',   'test/fixtures/review-n-plus-one-dispatch.json', 'test/fixtures/review-army-n-plus-one.rb', 'test/helpers/office-hours-attempt.ts'],
-  'review-army-delivery-audit':   [ 'review/**', 'scripts/resolvers/review-dashboard.ts', 'scripts/resolvers/plan-gates.ts', 'scripts/resolvers/spec-review.ts', 'scripts/resolvers/outside-voice-steps.ts', 'scripts/resolvers/review-scope.ts', 'scripts/resolvers/outside-voice.ts', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/office-hours-attempt.ts'],
-  'review-army-quality-score':    [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts',  'test/helpers/office-hours-attempt.ts'],
-  'review-army-json-findings':    [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/office-hours-attempt.ts'],
-  'review-army-red-team':         [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts',
+  'review-army-migration-safety': [ 'review/**', 'test/fixtures/review-army-migration.sql', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-perf-n-plus-one':  [ 'review/**', 'scripts/resolvers/review-army.ts', 'bin/gstack-diff-scope', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**',   'test/fixtures/review-n-plus-one-dispatch.json', 'test/fixtures/review-army-n-plus-one.rb', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-delivery-audit':   [ 'review/**', 'scripts/resolvers/review-dashboard.ts', 'scripts/resolvers/plan-gates.ts', 'scripts/resolvers/spec-review.ts', 'scripts/resolvers/outside-voice-steps.ts', 'scripts/resolvers/review-scope.ts', 'scripts/resolvers/outside-voice.ts', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-quality-score':    [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**',  'test/helpers/office-hours-attempt.ts'],
+  'review-army-json-findings':    [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-red-team':         [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**',
     'test/helpers/office-hours-attempt.ts'  
   ],
-  'review-army-simplification':   [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/fixtures/review-army-overbuild.js', 'test/fixtures/review-army-lean-complete.js', 'test/skill-e2e-review-army.test.ts', 'test/helpers/office-hours-attempt.ts'],
-  'review-army-simplification-precision': [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/fixtures/review-army-overbuild.js', 'test/fixtures/review-army-lean-complete.js', 'test/skill-e2e-review-army.test.ts', 'test/helpers/office-hours-attempt.ts'],
-  'review-army-consensus':        [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 
+  'review-army-simplification':   [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/fixtures/review-army-overbuild.js', 'test/fixtures/review-army-lean-complete.js', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-simplification-precision': [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/fixtures/review-army-overbuild.js', 'test/fixtures/review-army-lean-complete.js', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-state-matrix':     [ 'review/**', 'scripts/resolvers/review-army.ts', 'lib/state-matrix.ts', 'bin/gstack-state-matrix', 'test/fixtures/state-matrix-6792/**', 'test/helpers/state-matrix-fixture.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/office-hours-attempt.ts'],
+  'review-army-consensus':        [ 'review/**', 'scripts/resolvers/review-army.ts', 'test/skill-e2e-review-army.test.ts', 'test/helpers/state-matrix-fixture.ts', 'test/fixtures/state-matrix-6792/**', 
      'test/helpers/office-hours-attempt.ts'],
 
   // Office Hours
@@ -1213,6 +1214,7 @@ export const E2E_TIERS: Record<string, 'gate' | 'periodic' | 'marathon'> = {
   'review-army-consensus': 'periodic',      // Multi-specialist agreement
   'review-army-simplification': 'periodic', // Advisory lens quality benchmark
   'review-army-simplification-precision': 'periodic', // False-flag noise benchmark
+  'review-army-state-matrix': 'periodic',   // State-machine round-trip matrix (field list 2, W3)
 
   // Office Hours
   // Brain-writeback E2E — periodic per cost (claude -p) + non-deterministic
@@ -1704,6 +1706,7 @@ export const E2E_KINDS: Record<string, 'rule' | 'behavior' | 'judge'> = {
   'review-army-consensus': 'behavior',
   'review-army-simplification': 'behavior',
   'review-army-simplification-precision': 'behavior',
+  'review-army-state-matrix': 'behavior',
   'office-hours-brain-writeback': 'behavior',
   'gbrain-roundtrip-local': 'rule',
   'sync-gbrain-read-ready': 'rule',
@@ -1935,6 +1938,8 @@ export const BEHAVIOR_WHY: Record<string, string> = {
     "Flagging the planted unnecessary structure is an advisory-lens quality judgment.",
   'review-army-simplification-precision':
     "Staying silent on a lean diff is a false-flag noise benchmark; an occasional advisory is acceptable noise.",
+  'review-army-state-matrix':
+    "How the live specialist words each finding and which line it cites varies run to run; a complete kind x owner action matrix with every untested cell reported, checked by gstack-state-matrix against the fixture's ground truth, stays the contract.",
   'office-hours-forcing-energy':
     "The Q3 posture is scored by a live judge on generated prose; a single flat phrasing is tolerable.",
   'office-hours-builder-wildness':

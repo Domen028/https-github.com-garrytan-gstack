@@ -148,6 +148,8 @@ const SCANNER_EXEMPT: Record<string, string> = {
     'fetches the user\'s own repo\'s base branch for version-claim freshness — a user-repo dev-workflow op, not gstack-state egress',
   'bin/gstack-version-bump':
     'git fetch appears only in an error-message string',
+  'bin/gstack-state-matrix':
+    'git fetch appears only in an error-message string (the fix the user runs when origin/<base> has no merge base)',
   'bin/gstack-redact-prepush':
     'git push mentions are hook documentation strings (bypass instructions)',
   'browse/src/security-classifier.ts':

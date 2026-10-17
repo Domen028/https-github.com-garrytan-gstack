@@ -21,11 +21,12 @@ import { literalsCheck } from './checks/literals';
 import { regenCheck } from './checks/regen';
 import { secretsCheck } from './checks/secrets';
 import { straysCheck } from './checks/strays';
+import { timingCheck } from './checks/timing';
 import { NON_DOWNGRADABLE } from './config';
 import { withFingerprint } from './context';
 import type { CheckDef, CheckResult, PregateContext, Stage } from './types';
 
-export const CHECKS: readonly CheckDef[] = [regenCheck, secretsCheck, straysCheck, literalsCheck, guardsCheck, lanesCheck];
+export const CHECKS: readonly CheckDef[] = [regenCheck, secretsCheck, straysCheck, literalsCheck, timingCheck, guardsCheck, lanesCheck];
 export const CHECK_IDS = CHECKS.map(c => c.id);
 export const PREGATE_OUT_REL = '.gstack/tmp/pregate.json';
 export const PREGATE_TIER2 = ['ratchets', 'lint', 'links', 'hermetic', 'patches', 'integrator'] as const;

@@ -365,10 +365,17 @@ for (const skillName of ['review', 'ship']) {
   test(`${skillName} clarity: the scope block prints every signal specialist selection reads`, () => {
     const block = between(army, '### Detect stack and scope', '### Read specialist hit rates');
     expect(block).toContain("/gstack-diff-scope <base> 2>/dev/null) || true\nset | grep '^SCOPE_'\n");
-    const used = [...new Set(between(army, '### Select specialists', '### Adaptive gating').match(/SCOPE_[A-Z]+/g))];
+    const selection = between(army, '### Select specialists', '### Adaptive gating');
+    const used = [...new Set(selection.match(/SCOPE_[A-Z_]+/g))];
     expect(used.length).toBeGreaterThan(0);
     const flags = between(readFileSync(join(root, 'bin/gstack-diff-scope'), 'utf8'), '_print_flags() {', '}');
-    for (const signal of used) expect(flags, signal).toContain(`echo "${signal}=`);
+    for (const signal of used) {
+      if (flags.includes(`echo "${signal}=`)) continue;
+      // A signal the scope block does not print must come from the helper its own selection line runs.
+      const helper = /bin\/(gstack-[a-z-]+) detect\b/.exec(selection.split('\n').find(line => line.includes(signal))!)?.[1];
+      expect(helper, signal).toBeDefined();
+      expect(readFileSync(join(root, 'bin', helper!), 'utf8'), signal).toContain(`${signal}=\${`);
+    }
   });
 
   test(`${skillName} clarity: terminal failure permits independent work but never certifies coverage`, () => {

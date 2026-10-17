@@ -32,6 +32,7 @@ on:
       - 'lib/gate-diff/**'
       - 'lib/pregate/**'
       - 'lib/result-codes.ts'
+      - 'lib/result-codes-release.ts'
       - 'bin/gstack-wtree'
       - 'bin/gstack-slug'
       - 'bin/gstack-path-spelling.sh'

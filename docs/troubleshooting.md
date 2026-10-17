@@ -2756,13 +2756,19 @@ and Heavy-only files included.
 <a id="pregate-no-lane"></a>
 ### `PREGATE_NO_LANE`
 
-**Meaning.** A touched file maps to no test through static imports, repo-path
-string literals, the `bin/<name>` → `test/<name>*.test.ts` convention or a
-`dependencies` declaration. That is a failure, not a pass.
+**Meaning.** A touched source file maps to no test through static imports,
+repo-path string literals, the `bin/<name>` → `test/<name>*.test.ts` convention
+or a `dependencies` declaration. That is a failure, not a pass. Markdown no
+test depends on is a docs/no-tests empty lane and is not this error, whether
+or not the name says plan, evidence or redproof. A test that reads one of
+those files (a quoted path or a `join()` of path segments) still selects that
+test. An unmapped source or code file still fails. A file under a test
+directory is not this empty lane.
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
-for files with no behaviour, such as docs) in `.gstack/pregate.json`. `--explain`
-prints every mapping and why. For a file with no lane it also prints the import
+for files with no behaviour) under `dependencies` in `.gstack/pregate.json`.
+Other non-Markdown documentation goes in `empty_lanes` on the base branch.
+`--explain` prints every mapping and why. For a file with no lane it also prints the import
 specifiers in test files that resolved to no repo file (for example a
 `tsconfig.json` `paths` alias such as `@/lib/x` whose target is missing) and any
 `extends` hop that was not followed (only relative `extends`, at most 4 hops). If
@@ -3498,6 +3504,181 @@ Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__*
 
 **Expected result.** The next `gstack-doctor` run shows
 `ok CLAUDE.md no gstack section lists skills (...)`.
+<a id="policy-gstack-too-old"></a>
+### `POLICY_GSTACK_TOO_OLD`
+
+**Meaning.** `.gstack/ship-policy.json` on the base branch sets
+`min_gstack_version` above the gstack reading it. The policy uses keys this
+gstack would read differently or not at all, so every ship-policy reader
+(`gstack-restamp`, `gstack-tree-receipt`, `gstack-ship-queue`,
+`gstack-ship-policy`) refuses it instead of guessing. A gstack older than
+`min_gstack_version` itself sees that key as unknown and fails with
+`POLICY_INVALID`, which names the key.
+
+**Fix.** Upgrade gstack to the version the message names
+(`bin/gstack-upgrade`, or rerun the session install), then rerun. A crew lead
+raising `min_gstack_version` raises the crew's install floor at the same
+time; `gstack-ship-policy validate` prints `MIN_READER:` for exactly that.
+
+<a id="queue-not-ready"></a>
+### `QUEUE_NOT_READY`
+
+**Meaning.** `gstack-ship-queue ready` will not print a READY block the
+coordinator could misread: the working tree has uncommitted tracked changes,
+HEAD is not the PR's pushed head (read through `gh pr view`), CI at that
+exact head is not green (failed, pending or unreadable), or the pregate result
+is missing, failed or recorded on another tree (`PREGATE_STALE`).
+
+**Fix.** Commit and push, wait for CI on that head, rerun
+`gstack-pregate run --allow-repo-commands` when the tree changed, then rerun
+`gstack-ship-queue ready --pr <n>`. The block it prints before refusing shows
+which line is not yet true.
+
+<a id="queue-proof-missing"></a>
+### `QUEUE_PROOF_MISSING`
+
+**Meaning.** A queue step lacks an input it needs to prove its claim, or an
+input does not match: the gated head is not a commit here, HEAD differs from
+the gated head beyond stamps (the gate never covered this tree), an earlier
+stamp with other inputs is unfinished, the stamp journal's head moved, or a
+gate-ahead merge could not be recomputed with `git merge-tree`. Nothing was
+written unless the `QUEUE_STAMP_REFUSED:` line says `committed=yes`.
+
+**Fix.** Supply the named input (fetch the gated head, pass the current base
+sha), or regate the tree you mean to stamp. For an unfinished stamp, rerun the
+identical command to resume, or revert its files and delete
+`.gstack/tmp/ship-queue/stamp-<pr>.json`.
+
+<a id="queue-stamp-not-stamp-only"></a>
+### `QUEUE_STAMP_NOT_STAMP_ONLY`
+
+**Meaning.** `gstack-ship-queue stamp` committed the stamp, and the tree
+receipt between the gated head and the stamped head found a difference
+outside the stamp rules (the residual paths are printed). The gate's result
+does not cover that head. The refusal line says `committed=yes <sha>`.
+
+**Fix.** Inspect the residual paths: drop the stray edit and stamp again, or
+run the gate on the stamped head.
+
+<a id="queue-verify-mismatch"></a>
+### `QUEUE_VERIFY_MISMATCH`
+
+**Meaning.** The coordinator's `gstack-ship-queue verify` could not
+reproduce the lane's claim from the PR's pushed commits: the head moved, the
+head differs from the gated tree beyond stamps, the receipt digest differs
+from the one in `QUEUE_STAMP`, or, for a gate-ahead record, `git merge-tree
+--write-tree` gives another merge tree, the recorded stamp patch does not
+rebuild the recorded gated tree or changes more than stamps, or the
+predecessor PR moved after the gate.
+
+**Fix.** Do not merge. Ask the lane to rerun `gstack-ship-queue stamp` (or
+`gate-ahead`) on the current queue and report again.
+
+<a id="queue-gate-missing"></a>
+### `QUEUE_GATE_MISSING`
+
+**Meaning.** The ship policy sets `full_e2e: true`, and no passing full-gate
+result is bound to the tree being stamped or verified: no recorded gate-ahead
+attempt for that gated head, no `--gate-exit 0 --gate-log <file>` from a run
+on it, or the recorded run exited non-zero.
+
+**Fix.** Run the gate the policy's `gate_command` names in the gate-ahead
+worktree and bind it with `gstack-ship-queue gate-ahead --record`, or pass the
+exit code and log of a passing run on the gated head to `stamp`.
+
+<a id="gate-ahead-attempt-invalid"></a>
+### `GATE_AHEAD_ATTEMPT_INVALID`
+
+**Meaning.** `gstack-ship-queue gate-ahead --record` could not bind the gate
+result: the attempt id is unknown for that PR, the attempt already holds a
+different result, the log file is missing, or the attempt's worktree no longer
+holds the gated commit (its HEAD moved or a tracked file changed), so the
+result would not describe the gated tree.
+
+**Fix.** `gstack-ship-queue gate-ahead --list --pr <n>` shows every attempt
+and the current one. Record the live attempt, or prepare a new one with
+`gate-ahead --after <pr>` and run the gate there without editing tracked
+files.
+
+<a id="pregate-timing-assertion"></a>
+### `PREGATE_TIMING_ASSERTION`
+
+**Meaning.** A test line the branch added or changed compares an elapsed
+wall-clock or CPU time against a bound, or sleeps for a fixed time and then
+asserts. Under machine load such a test fails without a code change. The
+`timing` check warns; it does not block (the measurement is in
+[docs/pregate.md#timing](pregate.md#timing)).
+
+**Fix.** Assert on the outcome instead: an injected clock, a forced deadline,
+an event or a poll with a deadline. When the bound is the contract, add
+`gstack-timing-ok: <reason>` in a comment on the line or the line above. Never
+raise a bound to make a flake pass; /investigate's flake playbook covers the
+diagnosis.
+
+<a id="approval-classes-invalid"></a>
+### `APPROVAL_CLASSES_INVALID`
+
+**Meaning.** The `.gstack/approval-classes.json` committed on the base branch
+(or, for `gstack-approval-classes validate`, the working-tree copy) is not
+valid JSON, has an unknown key, a class without a name or anything to match,
+or a glob that escapes the repository. `gstack-ship-receipt write` refuses
+rather than ship with the classes unchecked.
+
+**Fix.** Run `gstack-approval-classes validate`, correct the file, and merge
+it. See [Approval classes](ship-policy.md#approval-classes).
+
+<a id="approval-class-found"></a>
+### `APPROVAL_CLASS_FOUND`
+
+**Meaning.** `gstack-approval-classes check` found changes a declared class
+covers. Each `APPROVAL_CLASS:` line names the class and file:line, and each
+`APPROVAL_SCOPE: <class>@<digest12>` line is the token an approval binds to.
+Report-only lines from built-in detectors do not set this code.
+
+**Fix.** Ask the owner, then add
+`Approved by <owner> <YYYY-MM-DD> via <ref> for <class>@<digest12>` to the PR
+body. The token changes whenever an effect is added, removed or edited, so a
+later change needs a new approval.
+
+<a id="approval-citation-missing"></a>
+### `APPROVAL_CITATION_MISSING`
+
+**Meaning.** `gstack-ship-receipt write` found a declared approval class with
+no citation that both resolves and binds to the current effects, and wrote no
+receipt. The line lists every candidate citation and why it did not count:
+the plan's autoplan gate is not APPROVED, the comment is not by a ship-policy
+maintainer or not by the cited owner, the evidence names neither the scope
+token nor the class with every effect path (an approval of other work, or one
+given before an effect was added), or an unresolvable reference lacks a
+matching `for <class>@<digest12>` attestation.
+
+**Fix.** Cite the approval: a plan sha with `--approval-run <run dir>`, or the
+URL of a maintainer's comment or review that names the token. For evidence
+gstack cannot read (a thread code, a chat message), attest which scope it
+covers with `for <class>@<digest12>`; the receipt records it as
+`citation: unverified` for the coordinator.
+
+<a id="approval-source-unavailable"></a>
+### `APPROVAL_SOURCE_UNAVAILABLE`
+
+**Meaning.** `origin/<base>` does not resolve, so the committed approval
+classes cannot be read. `check` exits 3; `gstack-ship-receipt write`
+records `approval.status: unavailable` and prints `approval=unchecked`.
+
+**Fix.** `git fetch origin <base>` and rerun. The working-tree copy is never
+used.
+
+<a id="state-matrix-incomplete"></a>
+### `STATE_MATRIX_INCOMPLETE`
+
+**Meaning.** `gstack-state-matrix check` read the state-machines specialist's
+output and found a gap: a kind × owner action pair with no row, a row with no
+resulting row, a test reference that does not exist in the checkout, or an
+untested cell without a CRITICAL finding. A review whose matrix is incomplete
+has incomplete coverage, never a clean result.
+
+**Fix.** Rerun the state-machines specialist on the same diff and check its
+output again.
 
 ## gstack-error-capture
 

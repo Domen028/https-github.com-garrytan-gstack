@@ -7,13 +7,14 @@
  * thread id against an owner-maintained thread cohort).
  */
 import { ARTIFACT_SCHEMAS, checkSchema, type ShipReceipt, type ValidationError } from './headless-artifacts';
+import { approvalSummary } from './approval-citations';
 import { renderIssueLines } from './issue-links';
 
 export const RECEIPT_FENCE = 'gstack-ship-receipt';
 const KEY_ORDER: Array<keyof ShipReceipt> = [
   'schema_version', 'pr', 'head', 'version', 'base', 'gated_tree', 'predecessor', 'tree', 'gate_reuse', 'gate', 'ci', 'spend_usd',
   'session_kind', 'artifacts_consumed', 'run', 'thread', 'policy', 'queue_mode', 'preregistration', 'history',
-  'pregate', 'requires_remote', 'issues',
+  'pregate', 'requires_remote', 'issues', 'approval',
 ];
 
 /** Keys in the fixed order so identifiers lead; undefined values are dropped. */
@@ -78,6 +79,7 @@ export function receiptSummaryLine(r: ShipReceipt): string {
   if (r.predecessor) parts.push(`predecessor=${r.predecessor.slice(0, 12)}`);
   if (r.session_kind) parts.push(`session_kind=${r.session_kind}`);
   if (r.artifacts_consumed) parts.push(`artifacts_consumed=${r.artifacts_consumed}`);
+  if (r.approval) parts.push(`approval=${approvalSummary(r.approval)}`);
   return `SHIP_RECEIPT: ${parts.join(' ')}`;
 }
 

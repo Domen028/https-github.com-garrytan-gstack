@@ -30,7 +30,8 @@ it, so `headless` keeps its BLOCK semantics.
   sync skipped (unattended session)` on stderr), and `gstack-skill-end` drains
   nothing. Inherited enabled settings and pending queue work are left for the
   next human session. The upgrade offer becomes one line at skill end, read from
-  the local cache: `UPGRADE_AVAILABLE: <version>; run /gstack-upgrade`.
+  the local cache: `UPGRADE_AVAILABLE: <version>; run /gstack-upgrade` (`<version>+<n> (main at <sha>)` when
+  main moved <n> commits past the checkout without a new version).
 - **Questions decide themselves, gates do not.** A question with a
   `(recommended)` option takes it and appends the choice to `decisions.jsonl`
   with `kind: "auto"`. A question with no recommendation, any consent, any

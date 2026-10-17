@@ -41,3 +41,27 @@ skip until the cause is named and probed.
    `gh run list` comparison with the first-moved `headSha`, and a routing note
    for the owner: `fix in this PR` | `rerun; cause outside the PR: <what>` |
    `owner decision needed: <the relaxation and its P(fail | regression) before/after>`.
+
+### Timing flakes (`TIMING_ASSERTION`)
+
+When the failing line compares an elapsed time with a bound or sleeps and then
+asserts (`gstack-pregate`'s `timing` check prints it as
+`TIMING_ASSERTION: <file>:<line> <pattern>`):
+
+1. **Same-load distributions.** Log the asserted value on every run and run the
+   file N ≥ 20 times on `origin/<base>` and on the PR head under the same load
+   (same machine, same concurrency, beside the same shard). Report min, p50,
+   p95, max and failures against the bound for both. A distribution that moved
+   on the PR head is a regression in the PR; the same distribution on both is a
+   test that depends on machine load.
+2. **Forced probe.** Inject the delay the load causes (a sleep inside the
+   measured span behind a test-only hook, or a starved CPU) and show the
+   assertion failing every time.
+3. **Fix the measurement, never the bound.** Assert on the outcome, an injected
+   clock, a forced deadline or a poll with a deadline instead of a fixed sleep;
+   a complexity bound measures thread CPU time against a same-run baseline.
+   When a bound stays the contract, the line carries
+   `gstack-timing-ok: <reason>`. Raising the bound is not a fix.
+4. **Rerun only with outside-cause evidence:** the same-load distributions show
+   no PR regression and the failed run's load is on record (CI log, runner
+   metrics). Put both in `## Flake evidence`.
