@@ -43,7 +43,7 @@ function detect(rest: string[]): number {
   const repoRoot = root.out.trim();
   const base = resolveBaseBranch(repoRoot, flag(rest, '--base'));
   const mb = flag(rest, '--diff-base') ?? git(['merge-base', `origin/${base}`, 'HEAD'], repoRoot).out.trim();
-  const diff = mb ? git(['diff', '--unified=0', '--no-color', mb], repoRoot) : { ok: false, out: '' };
+  const diff = mb ? git(['-c', 'core.quotePath=false', 'diff', '--no-ext-diff', '--no-textconv', '--unified=0', '--no-color', mb], repoRoot) : { ok: false, out: '' };
   if (!diff.ok) { process.stdout.write(`SCOPE_STATE_MACHINE=false\n# no merge base with origin/${base}; run: git fetch origin ${base}\n`); return EXIT.usage; }
   const { detected, hits } = detectStateMachine(addedLines(diff.out));
   const lines = [`SCOPE_STATE_MACHINE=${detected}`, ...hits.slice(0, 12).map(h => `# state-machine: ${h.file}:${h.line} ${[...h.subject, ...h.action].join(',')}`)];
