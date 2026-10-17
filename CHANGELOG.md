@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.91.119.0] - 2026-10-17
+
+**The weekly health check's seed check passes again.** 54 free test files had landed since the 2026-10-15 recording, so CEO-10 in `bun run test:health` failed and CI packed those files at the 99th-percentile guess (#3224).
+
+### Fixed
+- **Free-suite duration seed refreshed.** `scripts/free-test-durations.json` was re-recorded on a CI-mirrored Ubicloud VM (`bun run test:ubicloud --record-durations`, no failed files): 1219 to 1273 durations, none removed. `test/setup-codex-scope.test.ts` is back under the 60 s ceiling, so its seed allowlist entry is removed.
+
+### If you…
+- **…see CEO-10 fail in the weekly health issue:** new test files outran the seed again. With `UBICLOUD_API_KEY` set, run `bun run test:ubicloud --record-durations` and commit the seed; otherwise leave it to a maintainer. A standing recorder is planned.
+
 ## [1.91.118.0] - 2026-10-17
 
 **Free Tests is green on pushes to main again.** Since v1.91.106.0, every push to main failed `test/held-install-recovery.test.ts`, while pull request runs passed.
