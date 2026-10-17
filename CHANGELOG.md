@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.116.0] - 2026-10-17
 
 **Lanes and the coordinator now share a merge queue whose stamp claims are checked instead of trusted, risky changes need a cited owner approval before they ship, /review checks state machines cell by cell, pregate warns about timing assertions, and the update check notices when main moves without a version bump.** These are the field list 2 wave B items from the gbrain crew (W1-W4, W10, W12).
 
