@@ -13,7 +13,6 @@ import {
   bashCommandInvocation, resolveWindowsBash, resolveWindowsBashCached, runBashSync, runScriptSync, scriptInvocation, wtreeFingerprint,
   type BashProbe,
 } from '../lib/script-invocation';
-import { wtreeFingerprint as regenWtreeFingerprint } from '../lib/regen';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const BIN = path.join(ROOT, 'bin');
@@ -183,12 +182,11 @@ describe('wtreeFingerprint', () => {
     return dir;
   };
 
-  test('a SHA-1 repository yields a 40-hex tree, and the regen compatibility wrapper returns the same string', () => {
+  test('a SHA-1 repository yields a 40-hex tree', () => {
     const dir = repo();
     try {
       const r = wtreeFingerprint({ cwd: dir });
       expect('tree' in r && r.tree).toMatch(/^[0-9a-f]{40}$/);
-      expect(regenWtreeFingerprint(dir)).toBe('tree' in r ? r.tree : 'missing');
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 
@@ -209,7 +207,7 @@ describe('wtreeFingerprint', () => {
       const exit = wtreeFingerprint({ cwd: dir, env: { ...process.env, TMPDIR: path.join(dir, 'no-such-dir') } });
       expect(exit).toMatchObject({ kind: 'exit' });
       expect('error' in exit && exit.error).toMatch(/^gstack-wtree exited 1: .*set TMPDIR to a writable directory/);
-      expect(regenWtreeFingerprint(path.join(os.tmpdir()))).toBeNull();
+      expect(wtreeFingerprint({ cwd: os.tmpdir() })).toMatchObject({ kind: 'exit' });
     } finally { fs.rmSync(dir, { recursive: true, force: true }); }
   });
 

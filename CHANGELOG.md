@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.91.117.0] - 2026-10-17
+
+**Pregate understands bats repositories and says why a fingerprint failed, `gstack-doctor` lists rescued edits and pasted skill lists, oversized SKILL.md files can no longer grow, and hosts without plan mode drop the plan-mode preamble.** The last PR of the 2026-10-15 fix wave (`docs/designs/FIX_WAVE_2026_10_15.md`, PR 5), built after #3190.
+
+### Fixed
+- **Pregate recognises bats tests (#3161).** In a repository whose tests are `.bats` files, `lanes` failed every run with `PREGATE_NO_LANE`. A `.bats` file is now a test, a selection manifest's `.bats` paths are taken, and the bats TAP plan and pretty summary feed the zero-run rule. Contributed by @harjothkhara (#3177); reported in #3161.
+- **A working-tree fingerprint failure says what failed (#3197).** `gstack-pregate` reported it as `policy source unavailable: origin/<base> is not a resolvable commit` with `git fetch` as the fix. It is now `WTREE_UNAVAILABLE`. On Windows the line lists every Git Bash candidate tried and names `GSTACK_GIT_BASH`, and a `gstack-wtree` failure keeps its own repair (for example `set TMPDIR to a writable directory`).
+- **`gstack-pregate --json` refusals are JSON.** A refusal before any check runs is one `{ok:false,status:"refused",code,detail,fix,docs}` object on stdout with exit 3; `GSTACK_RESULT` moves to stderr under `--json`.
+- **Pregate reads `test_backend` on Windows.** The `gstack-config` read goes through Git Bash instead of a direct spawn that Windows cannot execute.
+- **No plan-mode section on hosts without plan mode (#3168).** Codex, Antigravity, Hermes, OpenClaw, Factory, Kiro, Slate, Cursor and GBrain skills drop the two plan-mode preamble sections (about 1.5k characters per skill).
+
+### Added
+- `gstack-doctor` lists `refs/gstack/rescue/*` with dates and the inspect and delete commands; warns when a gstack section in `~/.claude/CLAUDE.md` or the project's CLAUDE.md enumerates skills (#3169) and prints the short block; on Windows names the Git Bash gstack uses and what chose it.
+- A free test fails when a generated SKILL.md on any host exceeds 100,000 characters or grows past its pin (#3199).
+
+### If you…
+- **…use pregate on Windows** and saw `origin/<base> is not a resolvable commit`: update, then follow the `WTREE_UNAVAILABLE` line; usually `export GSTACK_GIT_BASH='C:/Program Files/Git/bin/bash.exe'` (Git Bash) or `$env:GSTACK_GIT_BASH = 'C:\Program Files\Git\bin\bash.exe'` (PowerShell).
+- **…parse `gstack-pregate --json`:** a refusal is now a JSON object on stdout (exit 3), not a `GSTACK_RESULT` line; switch on `status` (`refused`, `complete`, `incomplete`). `GSTACK_RESULT` is on stderr under `--json`.
+- **…keep tests as bats files:** `lanes` selects and runs them; declare `"runner": "bats {files}"` and map sources with `dependencies` in `.gstack/pregate.json` (bats files are not scanned for path literals).
+- **…use Codex, Antigravity, Hermes, OpenClaw, Factory, Kiro, Slate, Cursor or GBrain:** rerun `./setup` to get the smaller skills.
+- **…have local edits rescued by an auto-update:** `gstack-doctor` lists each rescue ref with the commands to inspect and delete it.
+- **…pasted gstack's skill list into a CLAUDE.md:** `gstack-doctor` warns and prints the two-line block to use instead.
+- **…are on Windows and `gstack-doctor --check` says your revision is too old:** it prints the held-install recovery for Git Bash and PowerShell 5.1 instead of `bin/gstack-upgrade`, which refuses on Git Bash installs.
+- **…edit a skill template:** `test/skill-md-size-guard.test.ts` fails when a generated SKILL.md grows past 100,000 characters or past its pin; when you shrink a pinned skill, lower its pin in `test/fixtures/skill-md-size-allowlist.json`.
+
 ## [1.91.116.0] - 2026-10-17
 
 **Lanes and the coordinator now share a merge queue whose stamp claims are checked instead of trusted, risky changes need a cited owner approval before they ship, /review checks state machines cell by cell, pregate warns about timing assertions, and the update check notices when main moves without a version bump.** These are the field list 2 wave B items from the gbrain crew (W1-W4, W10, W12).
