@@ -37,6 +37,8 @@ export interface GateItem {
   flags?: string[];
   /** Answered at an earlier revision on an unchanged proposal from a phase that did not rerun. */
   carried?: { from: string; chosen: string; gate_rev: number };
+  /** A round-cap item (lib/autoplan-budget.ts): `b` grants the phase one more round and reopens it. */
+  cap?: { phase: string; kind: 'deferred' | 'blocker' | 'delta'; ref?: string };
 }
 export interface GateList { schema_version: 1; run: string; gate_rev: number; items: GateItem[]; title?: string;
   /** Bumped by every `recommend`, so a `rec` relayed before it no longer matches `recHash`. */

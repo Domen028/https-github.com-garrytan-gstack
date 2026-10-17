@@ -17,6 +17,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { capyBootstrapCommand } from '../lib/doctor-components';
 import { RESULT_CODES } from '../lib/result-codes';
 import { capyHost, type CapyHost } from './helpers/capy-host';
 
@@ -222,7 +223,7 @@ describe('capy skill bootstrapper (capy/skill/gstack/scripts/install.sh)', () =>
     fs.rmSync(f.root, { recursive: true, force: true });
     const check = f.run(['--check', '--for', 'autoplan']);
     expect(check.status).toBe(1);
-    expect(check.last).toBe(`gstack: fail not-installed — no gstack checkout at ${f.root}; fix: bash ${BOOT} --for autoplan (installs)`);
+    expect(check.last).toBe(`gstack: fail not-installed — no gstack checkout at ${f.root}; fix: bash ${BOOT} --for autoplan (installs; on a machine without this skill: ${capyBootstrapCommand('autoplan', f.root)})`);
     const install = f.run(['--for', 'autoplan']);
     expect(install.status, install.stdout + install.stderr).toBe(0);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);

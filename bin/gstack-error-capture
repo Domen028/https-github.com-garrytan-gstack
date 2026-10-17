@@ -1,0 +1,4 @@
+#!/usr/bin/env bun
+import { dxErrorCaptureMain } from '../lib/dx-error-capture';
+
+process.exit(await dxErrorCaptureMain(process.argv.slice(2)));

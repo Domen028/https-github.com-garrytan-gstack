@@ -42,13 +42,19 @@ line yourself; gstack never writes the plan.
 
 - Always drive `gstack-autoplan`; never hand-adapt `autoplan/SKILL.md`. A plan you reviewed by
   hand is not an autoplan run: do not present it as one.
-- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder so a run at rest
-  survives machine replacement; restore with `resume --out <new dir> --from <dir>/<run>`.
+- Every prompt ends with a `GSTACK TRAILER` block: the reviewer runs the `--for review-voice`
+  install on its own machine (no ./setup, no skills; seconds when warm) and starts its reply
+  with the `gstack:` line. Never tell a reviewer that no install is needed; relay each
+  reviewer's line with its result, and treat a missing line as `gstack: fail not-installed`.
+- Set `GSTACK_AUTOPLAN_CHECKPOINT_DIR` to the private project-user Drive folder (or opt every run in
+  with `gstack-config set autoplan_checkpoint drive`) so a run survives machine replacement: a
+  generation is published at rest, after each bound voice and after each phase transition; restore
+  with `resume --out <new dir> --from <dir>/<run>`, which never redispatches a bound voice.
 
 ### Commands
 
-- `gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--scaffold]`
-  first call: init the run, print PHASE:, SCOPE:, DRIVER: and one ATTEMPT: per voice.
+- `gstack-autoplan next --out <dir> --plan <plan.md> [scope flags] [--light] [--spend-cap <usd>] [--max-rounds <n>] [--scaffold]`
+  first call: init the run, print PHASE:, SCOPE:, DRIVER: and one ATTEMPT: per voice; --max-rounds caps review rounds per phase (default 3 unattended), and an unattended Capy run reserves 5.00 per host attempt unless --estimate-usd <n> says otherwise, so --spend-cap binds.
 - `gstack-autoplan next --out <dir> [--redispatch <attempt>]`
   later calls: open the next phase or reprint open attempts; never redispatches on its own.
 - `gstack-autoplan submit --out <dir> --phase <p> --voice native|outside --record <file.md> --model <id> [--attempt <id>]`
@@ -69,8 +75,14 @@ line yourself; gstack never writes the plan.
   discharge a packaging or ordering change with no plan edit; reopens nothing.
 - `gstack-autoplan revise --out <dir> --withdraw <decision id>`
   drop a pending amendment instead of applying it.
+- `gstack-autoplan close --out <dir> --phase <p> --deferred "<reason>" --by human|agent:<id>`
+  close a phase accepted-with-findings: its open findings go to tasks.jsonl, and Critical, urgent or user-challenge findings become gate items; also the recovery from `STOP: reason=budget_exhausted`.
+- `gstack-autoplan budget --out <dir> [--spend-cap <usd>] [--max-rounds <n>] --by human|agent:<id>`
+  the owner's journaled cap raise; after a budget stop, `resume` continues the run.
 - `gstack-autoplan export --out <dir>`
   write the artifact set; then `gstack-artifact validate <dir>/run.json`.
+- `gstack-autoplan export --out <dir> --public <pub>`
+  a machine-path-free copy to commit or share (recorded roots rewritten, plan.md code kept, provenance digests); the private run is not touched; then `gstack-artifact validate --public <pub> --private <dir>/run.json` on this machine.
 - `gstack-autoplan status|resume --out <dir>`
   read the manifest (PENDING: lines name open attempts); take ownership after a crash (EXECUTION_UNKNOWN lists unfinished attempts).
 - `gstack-autoplan resume --out <new dir> --from <checkpoint>`
@@ -137,8 +149,8 @@ Merge conditions. A lane's PR merges only when: the required gate lanes are gree
 
 Behavior-change notices. Every user-visible behavior change outside the plan's own items is listed in the PR body under `## Behavior changes` with the file, the old behavior and the new one, before the review starts. An omitted change found in review is a CRITICAL finding, whatever its size.
 
-Spend caps. Each lane runs under the `--spend-cap` the coordinator names; a lane that reaches it stops with `status=budget_exhausted` and reports spent, reserved and unknown charges. Paid evals are never retried to change a verdict; a rerun needs a named repair. Host-subagent spend is reported as `unknown`, never zero.
+Spend caps. Each lane runs under the `--spend-cap` the coordinator names; a lane that reaches it stops `incomplete` (`STOP: reason=budget_exhausted`) and reports spent, reserved and unknown charges. Paid evals are never retried to change a verdict; a rerun needs a named repair. Host-subagent spend is reported as `unknown`, never zero.
 
-Before done. A lane runs `gstack-pregate run --allow-repo-commands` on its branch (the unit tier on the changed files plus the repo's guards) and reports done only after it passes. In a repo whose `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push, because a PR tool may not run local hooks.
+Before done. A lane pushes a WIP commit to its branch after each step and gates a pushed SHA. It runs `gstack-pregate run --allow-repo-commands` on its branch and reports done only after it passes. Where `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push.
 
 Handoff format. A lane reports in this order, identifiers first: PR URL (or `no PR` with branch and SHA), `GSTACK_RESULT` line, the `gstack: ok|fail <rev>` line, the `PREGATE:` line, gate summary (lanes passed/failed/skipped), behavior changes (or `none`), spend (spent/reserved/unknown), then what it could not verify. Full thread ids (`jam_…`), never short codes, in every cross-thread message. Prose after the identifiers may be truncated; nothing before them may be.

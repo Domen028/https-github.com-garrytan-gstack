@@ -51,6 +51,8 @@ const WINDOWS_FRAGILE_PATTERNS: Array<{ pattern: RegExp; reason: string }> = [
 // when possible; this list is for environment-/runtime-specific tests where
 // the failure mode is structural rather than detectable via source-file scan.
 export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }> = [
+  // Field list 2, W11: the review-voice install is a POSIX launcher contract, exercised end to end on Linux and macOS.
+  { file: 'test/capy-review-voice.test.ts', reason: 'copies the checkout with tar -C into the temp root (GNU tar reads a D: path as a remote host) and launches the bash --for review-voice installer with a colon-joined GSTACK_LAUNCH PATH' },
   // C-pregate. Since fix wave PR 5 (item 10b) test/helpers/pregate-fixture.ts and restamp-fixture.ts
   // runBin launch bins through lib/script-invocation.ts, so gstack-pregate runs on windows-latest
   // (fix wave PR 5 windows-free-tests run). These still fail there on Linux-host expectations, not

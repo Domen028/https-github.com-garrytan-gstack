@@ -238,8 +238,11 @@ the plan.
    `run.json`; then `gstack-artifact validate <dir>/run.json` and the
    consumption steps above apply unchanged. `$AP status --out <dir>` and
    `resume` work after the run directory moves (paths are re-rooted; journal
-   paths are run-relative). With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set, a run
-   at rest publishes an immutable, hash-listed generation under
+   paths are run-relative). With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set (on Capy,
+   `gstack-config set autoplan_checkpoint drive` defaults it to the private
+   project-user Drive folder; unset, the first `next` prints the export line),
+   a run at rest, after each bound voice and after each phase transition
+   publishes an immutable, hash-listed generation under
    `<dir>/<run>/generations/` and switches `current.json` to it (the previous
    generation is kept; a stale copy never replaces a newer one; a directory
    overlapping the run is refused with `CHECKPOINT_OVERLAP`; a failure is a

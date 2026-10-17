@@ -16,7 +16,7 @@ import type { ConsensusRecord } from './autoplan-reconcile';
 import { decisionId } from './gate-list';
 import { readDecisions, voiceRows, type RunState } from './autoplan-state';
 import type { FindingRow, TaskRow } from './headless-artifacts';
-import { renderUrgentBlock, sha256File } from './headless-artifacts';
+import { readJsonl, renderUrgentBlock, sha256File } from './headless-artifacts';
 
 export const PLAN_WARN_BYTES = 30_000;
 
@@ -24,8 +24,15 @@ export function buildTasks(state: RunState, findings: FindingRow[]): TaskRow[] {
   const tasks: TaskRow[] = [];
   const covered = new Set<string>();
   let n = 0;
-  for (const f of findings) {
-    if (covered.has(f.id) || !['Critical', 'High'].includes(f.severity) || f.disposition === 'rejected') continue;
+  for (const f of findings as Array<FindingRow & { settled_by?: string }>) {
+    if (f.settled_by || covered.has(f.id)) continue;
+    if (f.disposition === 'deferred') {
+      covered.add(f.id);
+      tasks.push({ schema_version: 2, run: state.run, id: `${state.run}-T${++n}`, title: `deferred from ${f.phase}: ${f.title}`, status: 'pending', depends_on: [], findings: [f.id],
+        blocked_by: [decisionId(state.run, state.gate_rev ?? 1, 'p1')], acceptance: f.resolution ? f.resolution : `the build resolves: ${f.title}`, priority: f.severity, ...(f.file ? { files: [f.file] } : {}), item: f.phase });
+      continue;
+    }
+    if (!['Critical', 'High'].includes(f.severity) || f.disposition === 'rejected') continue;
     const twin = typeof f.native_counterpart === 'string' ? f.native_counterpart : findings.find(x => x.native_counterpart === f.id)?.id;
     const ids = twin ? [f.id, twin] : [f.id];
     ids.forEach(id => covered.add(id));
@@ -39,14 +46,19 @@ export function buildTasks(state: RunState, findings: FindingRow[]): TaskRow[] {
 export function aggregateFindings(state: RunState): FindingRow[] {
   const out: FindingRow[] = [];
   for (const phase of state.phase_order) {
-    if (!state.phases[phase]?.closed_at) continue;
+    const ps = state.phases[phase];
+    if (!ps?.closed_at) continue;
     const consensus = JSON.parse(fs.readFileSync(path.join(state.out, `${phase}-consensus.json`), 'utf8')) as ConsensusRecord;
     const byOutside = new Map(consensus.rows.map(r => [r.outside_id, r]));
-    for (const row of voiceRows(state, phase, 'native')) out.push({ ...row, native_counterpart: null });
+    // A phase closed accepted-with-findings: its open rows (and the rows it carried from the round last reviewed) are deferred to the build.
+    const deferred = (row: FindingRow) => (ps.deferred && !(row as { settled_by?: string }).settled_by ? { disposition: 'deferred' as const } : {});
+    for (const row of voiceRows(state, phase, 'native')) out.push({ ...row, native_counterpart: null, ...deferred(row) });
     for (const row of voiceRows(state, phase, 'outside')) {
       const r = byOutside.get(row.id);
-      out.push({ ...row, native_counterpart: r?.disposition === 'unverified' ? null : r?.native_id ?? null, ...(r ? { reconciliation: r.disposition, reconciliation_resolution: r.resolution } : {}) } as FindingRow);
+      out.push({ ...row, native_counterpart: r?.disposition === 'unverified' ? null : r?.native_id ?? null, ...(r ? { reconciliation: r.disposition, reconciliation_resolution: r.resolution } : {}), ...deferred(row) } as FindingRow);
     }
+    const carried = ps.deferred?.carried_file && path.join(state.out, ps.deferred.carried_file);
+    if (carried && fs.existsSync(carried)) out.push(...(readJsonl(carried).rows as unknown as FindingRow[]).map(row => ({ ...row, native_counterpart: null, disposition: 'deferred' as const })));
   }
   return out;
 }
@@ -81,6 +93,12 @@ function runLog(state: RunState, findings: number, tasks: number, decisions: { t
   }
   for (const h of state.history) lines.push(`Reopened ${h.phase} at gate_rev ${h.gate_rev}: ${h.reason} (${h.at})`);
   if (state.history.length) lines.push('');
+  const budget = [
+    ...state.phase_order.flatMap(p => { const d = state.phases[p]?.deferred; return d ? [`Deferred ${p} at round ${d.round} (${d.cause}, by ${d.by}): ${d.reason}; ${d.open} open finding(s) carried into tasks.jsonl; owner items: ${d.blockers.join(', ') || 'none'}`] : []; }),
+    ...(state.capped_deltas ?? []).map(d => `Plan changed after the ${d.phase} cap (revise v${d.k}, round ${d.round} of ${d.cap}): +${d.added} -${d.removed} lines unreviewed; ${d.status}`),
+    ...[...(state.stops ?? []), ...(state.stop ? [state.stop] : [])].map(s => `Stopped ${s.reason} at ${s.at}: cap ${s.cap_usd ?? 'none'}, spent ${s.spent}, reserved ${s.reserved}, unknown ${s.unknown}${s === state.stop ? '' : ' (lifted)'}`),
+  ];
+  if (budget.length) lines.push(`Budget: max_rounds ${state.max_rounds ?? 'none'}${state.round_grants ? `, grants ${JSON.stringify(state.round_grants)}` : ''}.`, ...budget, '');
   lines.push(`Gate: ${state.gate_rev ? `gate_rev ${state.gate_rev}, ${decisions.total} decisions (${decisions.pending} pending)${state.gate && typeof (state.gate as any).reply === 'string' ? `; answered "${(state.gate as any).reply}"${typeof (state.gate as any).answered_by === 'string' ? ` answered by ${(state.gate as any).answered_by}` : ''}` : ''}` : 'not reached'}. Findings: ${findings}. Tasks: ${tasks}.`);
   return lines.join('\n') + '\n';
 }

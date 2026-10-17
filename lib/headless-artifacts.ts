@@ -351,15 +351,17 @@ function checkPhases(m: RunManifest, out: ValidationError[]): void {
   if (!TERMINAL_RUN.includes(m.status)) {
     out.push({ code: 'ARTIFACT_RUN_INTERRUPTED', path: 'run.json.status', message: `status ${m.status} is not terminal` });
   }
+  // A run stopped by its budget (status incomplete with a stop object) records the phases it never reached as such, not as missing.
+  const stopped = m.status === 'incomplete' && !!(m as { stop?: unknown }).stop;
   for (const phase of m.required_phases ?? []) {
     const p = m.phases?.[phase];
-    if (!p) { out.push({ code: 'ARTIFACT_REVIEWER_MISSING', path: `run.json.phases.${phase}`, message: 'required phase absent' }); continue; }
+    if (!p) { if (!stopped) out.push({ code: 'ARTIFACT_REVIEWER_MISSING', path: `run.json.phases.${phase}`, message: 'required phase absent' }); continue; }
     for (const voice of ['native', 'outside'] as const) {
       const v = p[voice];
       if (!v || typeof v !== 'object') { out.push({ code: 'ARTIFACT_REVIEWER_MISSING', path: `run.json.phases.${phase}.${voice}`, message: 'voice has no outcome' }); continue; }
       checkSchema(v, voiceOutcome, `.phases.${phase}.${voice}`, out, 'run.json');
       if (['pending', 'running'].includes(String(v.status))) {
-        out.push({ code: 'ARTIFACT_RUN_INTERRUPTED', path: `run.json.phases.${phase}.${voice}.status`, message: `voice is still ${v.status}` });
+        if (!stopped) out.push({ code: 'ARTIFACT_RUN_INTERRUPTED', path: `run.json.phases.${phase}.${voice}.status`, message: `voice is still ${v.status}` });
       } else if (!TERMINAL_VOICE.includes(String(v.status))) {
         continue;
       }
@@ -476,6 +478,9 @@ function checkGateSettled(m: RunManifest, decisions: Record<string, unknown>[] |
   }
   for (const a of Array.isArray(m.amendments) ? m.amendments as Array<Record<string, unknown>> : []) {
     if (a.status === 'pending') out.push({ code: 'ARTIFACT_GATE_UNSETTLED', path: 'run.json.amendments', message: `plan amendment ${String(a.decision)} is still pending` });
+  }
+  for (const d of Array.isArray(m.capped_deltas) ? m.capped_deltas as Array<Record<string, unknown>> : []) {
+    if (d.status === 'pending') out.push({ code: 'ARTIFACT_GATE_UNSETTLED', path: 'run.json.capped_deltas', message: `the plan change after the ${String(d.phase)} round cap (revise v${String(d.k)}) was never put to the owner` });
   }
 }
 

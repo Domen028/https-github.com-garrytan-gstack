@@ -16,7 +16,9 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { exportRun } from './autoplan-export';
-import { applyRenames, approve, closeDraftDirections, planReopen } from './autoplan-gate';
+import { applyRenames, approve, closeDraftDirections, finishGate, planReopen } from './autoplan-gate';
+import { atCap, pendingDeltas, roundCap, roundOf } from './autoplan-budget';
+import { diffStat, lineDiff } from './autoplan-confirm';
 import { SETTLEABLE_CHANGES } from './autoplan-reconcile';
 import { normalizeRevision, reviewHash, scaffold } from './autoplan-plan-text';
 import { parseScopeTokens } from './autoplan-scope';
@@ -80,12 +82,21 @@ function settleEvidence(state: RunState, ids: string[], revised?: string): { pla
   return { plan_sha256: active, changes };
 }
 
+/** Every accepted change is in: approve, unless a plan delta after a round cap still needs the owner (a new gate revision). */
+function approveOrRegate(state: RunState, at: string): string[] {
+  if (pendingDeltas(state).length) {
+    finishGate(state);
+    return [`GATE: gate_rev=${state.gate_rev} (a plan change after a round cap needs the owner) render with: gstack-gate render ${path.join(state.out, 'gate.json')}`];
+  }
+  return [...approve(state, at), `APPROVED: gate_rev=${state.gate_rev} (every accepted change is in the plan or settled)`];
+}
+
 /** Every accepted change is discharged: the answered gate stands (complete) unless a revise reopened phases still to rerun. */
 function finishAmendments(state: RunState, at: string): string[] {
   if (state.status !== 'amend_pending' || pendingAmendments(state).length) return [];
   journal(state.out, { event: 'amendments_settled', gate_rev: state.gate_rev ?? null });
   if (state.phase_order.some(p => !state.phases[p]?.closed_at)) { state.status = 'running'; return []; }
-  return [...approve(state, at), `APPROVED: gate_rev=${state.gate_rev} (every accepted change is in the plan or settled)`];
+  return approveOrRegate(state, at);
 }
 
 export function reviseRun(o: ReviseOptions): ReviseResult {
@@ -130,11 +141,19 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   const added = order.filter(p => !state.phase_order.includes(p));
   const opened = state.phase_order.filter(p => state.phases[p]?.snapshot);
   const changed = opened.filter(p => state.phases[p]!.snapshot !== newHash);
-  const reopen = state.phase_order.filter(p => changed.includes(p) || (p === 'eng' && opened.includes('eng') && changed.length > 0));
+  const touched = state.phase_order.filter(p => changed.includes(p) || (p === 'eng' && opened.includes('eng') && changed.length > 0));
+  // A phase that used its last round is not reopened: the delta becomes an owner gate item, so the cap neither loops nor hides it.
+  const capped = touched.filter(p => atCap(state, p));
+  const reopen = touched.filter(p => !capped.includes(p));
+  const delta = capped.length ? diffStat(lineDiff(fs.readFileSync(state.active_plan, 'utf8'), fs.readFileSync(path.join(staging, FILES.active), 'utf8'))) : { added: 0, removed: 0 };
   const atGate = state.status === 'gate_pending' ? state.gate_rev : undefined;
   journal(out, { event: 'revise_intent', k, staging: path.relative(out, staging), plan: file, old_plan_sha256: oldHash, new_plan_sha256: newHash, at_gate_rev: atGate ?? null, incorporates, withdraw, settle });
 
   const renames = reopen.length ? planReopen(state, reopen, state.gate_rev ?? 0, `revise v${k}`) : [];
+  for (const phase of capped) {
+    (state.capped_deltas ??= []).push({ k, phase, round: roundOf(state, phase), cap: roundCap(state, phase)!, old_plan_sha256: oldHash, new_plan_sha256: newHash, ...delta, status: 'pending', at });
+    journal(out, { event: 'cap_delta', k, phase, round: roundOf(state, phase), cap: roundCap(state, phase), old_plan_sha256: oldHash, new_plan_sha256: newHash, ...delta });
+  }
   for (const p of added) state.phases[p] = {};
   state.phase_order = order; state.required_phases = order;
   state.scope = { ...detected, ui: detected.ui || state.scope.ui, dx: detected.dx || state.scope.dx };
@@ -143,11 +162,17 @@ export function reviseRun(o: ReviseOptions): ReviseResult {
   delete state.plan_reality;
   const settled = [...settleAmendments(state, incorporates, 'incorporated', at, { old_plan_sha256: oldHash, new_plan_sha256: newHash }), ...settleAmendments(state, withdraw, 'withdrawn', at, { by: 'owner' }),
     ...settleAmendments(state, settle, 'settled', at, { plan_sha256: evidence?.plan_sha256 }).map(r => ({ ...r, changes: evidence!.changes[r.decision as string] }))];
-  if (amending) state.status = pendingAmendments(state).length ? 'amend_pending' : state.phase_order.some(p => !state.phases[p]?.closed_at) ? 'running' : 'complete';
+  if (amending) state.status = pendingAmendments(state).length ? 'amend_pending' : state.phase_order.some(p => !state.phases[p]?.closed_at) ? 'running' : pendingDeltas(state).length ? 'gate_pending' : 'complete';
+  const regate = capped.length > 0 && state.status === 'gate_pending';
   const committed = { event: 'plan_revised', k, plan: file, old_plan_sha256: oldHash, new_plan_sha256: newHash, reopened: reopen, added, at_gate_rev: atGate ?? null };
   fs.writeFileSync(path.join(staging, FILES.run), JSON.stringify({ state, renames, committed, settled }, null, 2) + '\n');
   publish(state, staging, renames, committed, settled);
-  const lines = [`REVISED: plan=${newHash.slice(0, 12)} reopened=${reopen.join(',') || 'none'}${added.length ? ` added=${added.join(',')}` : ''}`, amendmentLine(state)];
+  const lines = [`REVISED: plan=${newHash.slice(0, 12)} reopened=${reopen.join(',') || 'none'}${added.length ? ` added=${added.join(',')}` : ''}${capped.length ? ` capped=${capped.join(',')}` : ''}`, amendmentLine(state)];
+  for (const phase of capped) lines.push(`CAPPED: ${phase} used round ${roundOf(state, phase)} of ${roundCap(state, phase)}: not reopened; the gate asks the owner about the unreviewed delta (+${delta.added} -${delta.removed} lines)`);
+  if (regate) {
+    lines.push(...approveOrRegate(state, at));
+    writeState(state);
+  }
   if (state.status === 'complete') {
     lines.push(...closeDraftDirections(state, at.slice(0, 10)), `APPROVED: gate_rev=${state.gate_rev} (every accepted change is in the plan or settled)`);
     exportRun(state);

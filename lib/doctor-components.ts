@@ -23,6 +23,14 @@
  *             SKIP (not_applicable) when the selected workflow does not need it.
  *   optional  present-or-absent helpers (Codex CLI, CSO native helper). SKIP
  *             (optional) when absent and not required; FAIL only when required.
+ *
+ * Install profiles (INSTALL_PROFILES) are SKILL_REQUIREMENTS rows that name an
+ * install shape instead of a skill directory. `--for review-voice` is the one
+ * today: a dispatched reviewer's machine gets a clone or fast-forward and Bun
+ * at gstack's own minimum (the project's pins are never applied, so `pins`
+ * SKIPs), no ./setup and no host profiles, and the trailer certifies only the
+ * read-only helpers (`helpers`). Its verdict covers no host, so admission
+ * refuses every workflow with a `--for <skill>` fix.
  */
 
 import { RESULT_CODES } from './result-codes';
@@ -43,6 +51,7 @@ export const DOCTOR_COMPONENTS: readonly DoctorComponent[] = [
   { id: 'browse-bundle', title: 'browse bundle', kind: 'component' },
   { id: 'browser', title: 'Chromium launch and render', kind: 'component' },
   { id: 'cso', title: 'CSO native helper', kind: 'optional' },
+  { id: 'helpers', title: 'read-only helpers (gstack-pregate sealed, gstack-plan-reality, gstack-artifact, gstack-autoplan reads)', kind: 'component' },
   { id: 'runtime', title: 'gstack runtime (Bun)', kind: 'core' },
   { id: 'pins', title: 'project pins', kind: 'core' },
   { id: 'state-root', title: 'state root', kind: 'core' },
@@ -65,6 +74,28 @@ export interface SkillRequirement {
 const PLANNING: SkillRequirement = { requires: ['claude', 'codex', 'patch'], optional: ['codex-cli'] };
 const BROWSER: SkillRequirement = { requires: ['claude', 'codex', 'patch', 'browse-bundle', 'browser'], optional: ['codex-cli'] };
 const CLAUDE_ONLY: SkillRequirement = { requires: ['claude'], optional: [] };
+const REVIEW_VOICE: SkillRequirement = { requires: ['helpers'], optional: [] };
+
+/** SKILL_REQUIREMENTS rows that are install profiles, not skill directories (see the header). */
+export const INSTALL_PROFILES: readonly string[] = ['review-voice'];
+
+/** The read-only helpers the `helpers` row launches (`<bin> --help` loads each module graph with the launch Bun). */
+export const REVIEW_VOICE_HELPERS: readonly string[] = ['gstack-pregate', 'gstack-plan-reality', 'gstack-artifact', 'gstack-autoplan'];
+
+/** The checkout root the Capy skill bootstrapper resolves by default (GSTACK_CAPY_ROOT unset). */
+export const CAPY_INSTALL_ROOT = '$HOME/.local/share/gstack';
+export const GSTACK_REPO_URL = 'https://github.com/garrytan/gstack.git';
+
+/**
+ * The install command for a machine without the Drive skill: clone into ROOT
+ * when no checkout is there, then run the checkout's own bootstrapper (the
+ * file the Drive skill holds) by absolute path with that root, so the floor
+ * check and the fast-forward still run and the caller's working directory,
+ * and so its project, is kept. No `; ` inside, so it can ride a fix clause.
+ */
+export function capyBootstrapCommand(skill: string, root: string = CAPY_INSTALL_ROOT): string {
+  return `test -f "${root}/setup" || git clone --quiet --single-branch --depth 1 ${GSTACK_REPO_URL} "${root}" && GSTACK_CAPY_ROOT="${root}" bash "${root}/capy/skill/gstack/scripts/install.sh"${skill ? ` --for ${skill}` : ''}`;
+}
 
 /**
  * Every skill directory in the repo is classified here; test/doctor-components.test.ts
@@ -133,6 +164,7 @@ export const SKILL_REQUIREMENTS: Readonly<Record<string, SkillRequirement>> = {
   'sync-gbrain': CLAUDE_ONLY,
   'test-audit': CLAUDE_ONLY,
   unfreeze: CLAUDE_ONLY,
+  'review-voice': REVIEW_VOICE,
 };
 
 /**
@@ -182,6 +214,7 @@ export function renderDoctorComponentsSh(): string {
     `GSTACK_DOCTOR_OPTIONAL="${OPTIONAL_IDS.join(' ')}"`,
     `GSTACK_DOCTOR_SKILLS="${Object.keys(SKILL_REQUIREMENTS).join(' ')}"`,
     `GSTACK_BROWSER_LAZY_REASON="${BROWSER_LAZY_REASON}"`,
+    `GSTACK_DOCTOR_HELPERS="${REVIEW_VOICE_HELPERS.join(' ')}"`,
     '',
     '# gstack_doctor_component_title ID — the human title; returns 1 for an unknown id.',
     'gstack_doctor_component_title() {',
@@ -221,6 +254,20 @@ export function renderDoctorComponentsSh(): string {
     caseArm(PINS_ADVISORY_SKILLS, 'return 0'),
     '    *) return 1 ;;',
     '  esac',
+    '}',
+    '',
+    '# gstack_doctor_install_profile NAME — true for an install profile (helper runtime: no ./setup, no host profiles, project pins not applied).',
+    'gstack_doctor_install_profile() {',
+    '  case "$1" in',
+    caseArm(INSTALL_PROFILES, 'return 0'),
+    '    *) return 1 ;;',
+    '  esac',
+    '}',
+    '',
+    '# gstack_capy_bootstrap_cmd ROOT [SKILL] — the install command for a machine without the Drive skill (capyBootstrapCommand).',
+    'gstack_capy_bootstrap_cmd() {',
+    `  printf 'test -f "%s/setup" || git clone --quiet --single-branch --depth 1 %s "%s" && GSTACK_CAPY_ROOT="%s" bash "%s/capy/skill/gstack/scripts/install.sh"' "$1" '${GSTACK_REPO_URL}' "$1" "$1" "$1"`,
+    `  [ -z "\${2:-}" ] || printf ' --for %s' "$2"`,
     '}',
     '',
     '# gstack_result_anchor CODE — the docs/troubleshooting.md anchor for a lib/result-codes.ts code; returns 1 for an unknown code.',

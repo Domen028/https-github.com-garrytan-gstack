@@ -25,16 +25,20 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const current = (collection: string) => JSON.parse(fs.readFileSync(path.join(collection, 'current.json'), 'utf8'));
 const generations = (collection: string) => fs.readdirSync(path.join(collection, 'generations')).sort();
 
-/** A small run brought to gate_pending with the checkpoint env on for the last submit. */
+/**
+ * A small run brought to gate_pending with the checkpoint env on for the last submit only, so the collection holds one
+ * generation (field list 2, W7: a bound voice or a phase transition with the env on publishes one too; see
+ * test/autoplan-durability.test.ts).
+ */
 function checkpointed(name: string): { dir: string; out: string; root: string; collection: string; run: string; e: Record<string, string> } {
   const dir = path.join(TMP, name);
   const root = path.join(dir, 'drive');
   const e = env({ GSTACK_AUTOPLAN_CHECKPOINT_DIR: root });
   const out = startSmallRun(dir);
   runPhase(out, 'ceo');
-  expect(autoplan(['next', '--out', out], { env: e }).stderr).not.toContain('CHECKPOINT:');
+  expect(autoplan(['next', '--out', out]).status).toBe(0);
   for (const voice of ['native', 'outside'] as const) review(path.join(out, `eng-${voice}-prompt.md`));
-  expect(autoplan(['submit', '--out', out, '--phase', 'eng', '--voice', 'native', '--result', resultOf(out, 'eng', 'native'), '--model', 'anthropic/claude-opus-4-7'], { env: e }).status).toBe(0);
+  expect(autoplan(['submit', '--out', out, '--phase', 'eng', '--voice', 'native', '--result', resultOf(out, 'eng', 'native'), '--model', 'anthropic/claude-opus-4-7']).status).toBe(0);
   const gated = autoplan(['submit', '--out', out, '--phase', 'eng', '--voice', 'outside', '--result', resultOf(out, 'eng', 'outside'), '--model', 'openai/gpt-6-astra'], { env: e });
   expect(gated.stdout).toContain('status=gate_pending');
   const run = readRun(out).run;

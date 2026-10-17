@@ -3350,6 +3350,97 @@ unset, not in bare mode). Then re-run the review.
 **Expected result.** An `OUTSIDE VOICE (...)` report, or `CODEX SAYS (plan
 review — outside voice)` when the provider runs.
 
+<a id="artifact-machine-path"></a>
+### `ARTIFACT_MACHINE_PATH`
+
+**Meaning.** A public copy of an autoplan run still contains a path the run
+recorded on this machine: its run directory, the home directory, the plan's
+directory, the checkpoint directory or the worktree root. `gstack-artifact
+validate --public <dir> --private <run>/run.json` reports each hit with
+file:line; `gstack-autoplan export --public` runs that check on a staging copy
+and writes nothing when it fails.
+
+**Fix.** Export with `gstack-autoplan export --out <run> --public <dir>`, which
+rewrites recorded roots to repo-relative paths or `<local notes (not
+committed)>`. Export never rewrites inline code or fenced blocks in plan.md, so
+a hit there needs a plan edit: change the path, `revise`, and export again.
+Generic home-directory paths that are not recorded roots are WARN lines, not
+errors.
+
+<a id="artifact-public-target-exists"></a>
+### `ARTIFACT_PUBLIC_TARGET_EXISTS`
+
+**Meaning.** `gstack-autoplan export --public <dir>` found files in `<dir>`
+that are not an earlier public copy of the same run, and refused to overwrite
+them.
+
+**Fix.** Pass an empty or new directory, or the directory that already holds
+this run's public copy (it is replaced as a whole).
+
+<a id="prereg-diagnostic-untested"></a>
+### `PREREG_DIAGNOSTIC_UNTESTED`
+
+**Meaning.** `gstack-eval-plan prereg --check <file> --allow-repo-commands` ran
+the preregistration's declared summarizer (`## Diagnostics`: `summarizer:`,
+`fixture:` and one `| diagnostic | expected |` row each) on its synthetic
+fixture. Its result did not match the preregistered definitions: a count
+differed (`mismatch`), a declared diagnostic was absent (`missing`), it
+reported one nobody preregistered (`undeclared`), or the summarizer failed,
+timed out, or did not end its stdout with one JSON object of counts. Each
+`PREREG_DIAGNOSTIC:` line names one diagnostic. This is the gbrain-evals #162
+(D7) shape, where two diagnostic counts needed a post-paid amendment.
+
+**Fix.** Fix the summarizer, or correct the definition (the expected count or
+the fixture), until every line says `ok`. Then commit the freeze. The
+`PREREG_DIAGNOSTICS:` line's `sha256` binds the fixture you tested. Without
+`--allow-repo-commands`, the command lists the summarizer
+(`PREREG_COMMAND:`) and exits 3 (`REPO_COMMANDS_NOT_ALLOWED`), because the
+summarizer is a repository command.
+
+<a id="eval-models-invalid"></a>
+### `EVAL_MODELS_INVALID`
+
+**Meaning.** `.gstack/eval-models.json` could not be read or failed
+validation. Causes include JSON errors, `schema_version` other than 1, a
+missing or empty `allow`, an unknown key or scope, a glob in `families`, an id
+in two families, or a family that lists gstack's current catalog model after an
+older id. It also fires when `origin/<base>` cannot be resolved while a
+working-tree copy exists. While the rules are invalid, no arm passes.
+
+**Fix.** Correct the file as the line says (`docs/eval-models.md`) in a
+reviewed PR, or fetch the base branch. To test an unmerged edit, use
+`--models-from head`.
+
+<a id="eval-model-denied"></a>
+### `EVAL_MODEL_DENIED`
+
+**Meaning.** An arm's model matched `deny` or its scope's `deny`, matched no
+`allow` entry (unknown ids fail closed), or matched no entry of its scope's
+`allow` list. The `EVAL_MODEL:` line names the rule.
+
+**Fix.** Pick a model the rules allow for that scope. For a smoke run, pass
+`--scope smoke` (`price-gate` uses each call row's scope). To change the rule,
+edit `.gstack/eval-models.json` in a reviewed PR.
+
+<a id="eval-model-old-generation"></a>
+### `EVAL_MODEL_OLD_GENERATION`
+
+**Meaning.** The rules declare `families` (newest first), and an arm uses an id
+that is not the first one in its family.
+
+**Fix.** Use the family's newest id, which the `EVAL_MODEL:` line names. If the
+order is wrong, fix `families` in a reviewed PR.
+
+<a id="eval-model-generation-unresolved"></a>
+### `EVAL_MODEL_GENERATION_UNRESOLVED`
+
+**Meaning.** The rules declare `families`, so every arm must be its family's
+newest generation. This arm's model is in no family, so its generation cannot be
+checked, and the arm fails instead of passing unchecked.
+
+**Fix.** Add the model to its family (newest first) in
+`.gstack/eval-models.json` in a reviewed PR, or use a model a family lists.
+
 <a id="wtree-unavailable"></a>
 ### `gstack-pregate: cannot fingerprint the working tree: bin/gstack-wtree could not start (on Windows, no Git Bash was found) or it ran and failed (<detail>); fix: <fix> (WTREE_UNAVAILABLE)`
 
@@ -3407,3 +3498,110 @@ Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__*
 
 **Expected result.** The next `gstack-doctor` run shows
 `ok CLAUDE.md no gstack section lists skills (...)`.
+
+## gstack-error-capture
+
+`gstack-error-capture` runs one target CLI for `/devex-review` Step 3 with no
+terminal, a scrubbed environment and a private temporary HOME, and prints one
+redacted JSON record. Its own failures print one stderr line,
+`gstack-error-capture: <what>; fix: <fix> (<CODE>)`, and no record. Exit 2 is a
+usage error, 3 a refusal, 1 a helper failure. `gstack-error-capture --help` lists
+every flag and code.
+
+<a id="dx-capture-usage"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_USAGE)`
+
+**Meaning.** Gstack-error-capture arguments are malformed: an unknown flag, a flag missing its value, no `--`, or no command after it. Exit 2.
+
+**Fix.** Rerun as `gstack-error-capture [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]`: flags before `--`, the command and its arguments after it.
+
+<a id="dx-capture-bad-deadline"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_DEADLINE)`
+
+**Meaning.** --deadline is not a positive number of seconds (at most 3600, up to 3 decimals). Exit 2.
+
+**Fix.** Rerun with `--deadline 20`.
+
+<a id="dx-capture-bad-max-bytes"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_MAX_BYTES)`
+
+**Meaning.** --max-bytes is not an integer from 1 to 1048576. Exit 2.
+
+**Fix.** Rerun with `--max-bytes 65536`.
+
+<a id="dx-capture-bad-pass-env"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_PASS_ENV)`
+
+**Meaning.** --pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE). Exit 2.
+
+**Fix.** Rerun with `--pass-env NAME with NAME set in the calling environment`.
+
+<a id="dx-capture-bad-cwd"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_BAD_CWD)`
+
+**Meaning.** --cwd is not an existing directory. Exit 2.
+
+**Fix.** Rerun with `--cwd <existing directory> --approved`.
+
+<a id="dx-capture-approval-required"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_APPROVAL_REQUIRED)`
+
+**Meaning.** --pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files. Exit 3.
+
+**Fix.** Ask the user to approve the named variables, files or directory, then add --approved.
+
+<a id="dx-capture-config-refused"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_CONFIG_REFUSED)`
+
+**Meaning.** --copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB. Exit 3.
+
+**Fix.** Rerun with `--copy-config <regular file under $HOME, no symlinks>`.
+
+<a id="dx-capture-not-found"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_NOT_FOUND)`
+
+**Meaning.** The command does not resolve to an executable file; the record carries launch "not_found" and nothing ran. Exit 1.
+
+**Fix.** Install the command or pass its absolute path after --.
+
+<a id="dx-capture-temp-dir"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_TEMP_DIR)`
+
+**Meaning.** The private 0700 containment directory under the gstack state root could not be created. Exit 1.
+
+**Fix.** Make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun.
+
+<a id="dx-capture-containment-unavailable"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_CONTAINMENT_UNAVAILABLE)`
+
+**Meaning.** Process-group or Windows job containment is unavailable on this platform; nothing ran. Exit 1.
+
+**Fix.** Run the capture on Linux, macOS or Windows with job objects available.
+
+<a id="dx-capture-supervisor-failed"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_SUPERVISOR_FAILED)`
+
+**Meaning.** The deadline supervisor failed before reporting a result. Exit 1.
+
+**Fix.** Rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor.
+
+<a id="dx-capture-interrupted"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_INTERRUPTED)`
+
+**Meaning.** The helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed. Exit 1.
+
+**Fix.** Rerun the same command without interrupting it.
+
+<a id="dx-capture-redaction-failed"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_REDACTION_FAILED)`
+
+**Meaning.** The finished record still matched a secret check, so nothing was printed. Exit 1.
+
+**Fix.** Do not rerun with more --pass-env; report the command name to the gstack maintainers.
+
+<a id="dx-capture-internal"></a>
+### `gstack-error-capture: ... (DX_CAPTURE_INTERNAL)`
+
+**Meaning.** Unexpected helper failure; the line names the error class and its first stack frame. Exit 1.
+
+**Fix.** Rerun once; if it repeats, report the printed frame to the gstack maintainers.

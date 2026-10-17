@@ -715,7 +715,7 @@ describe('gstack-doctor --check', () => {
     expect(json.ok).toBe(false);
     expect(json.failed).toEqual(['runtime']);
     expect(json.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
-    expect(json.rows.map((x: { id: string }) => x.id)).toEqual(['claude', 'codex', 'patch', 'codex-cli', 'browse-bundle', 'browser', 'cso', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
+    expect(json.rows.map((x: { id: string }) => x.id)).toEqual(['claude', 'codex', 'patch', 'codex-cli', 'browse-bundle', 'browser', 'cso', 'helpers', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
     const runtime = json.rows.find((x: { id: string }) => x.id === 'runtime');
     expect(runtime.status).toBe('FAIL');
     expect(runtime.code).toBe('RUNTIME_BELOW_MINIMUM');

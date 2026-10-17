@@ -656,6 +656,115 @@ export const RESULT_CODES = {
     summary: 'a plan review ran without its second opinion: the outside provider did not run or failed, and the bounded native Plan reviewer was not offered or did not finish within five minutes',
     fix: 'repair the provider the line names (install it, or log in with `codex login`); for the native fallback use Claude Code 2.1.277 or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` unset), then re-run the review',
   },
+  // Field list 2, W6: the public copy of an autoplan run.
+  ARTIFACT_MACHINE_PATH: {
+    anchor: 'artifact-machine-path',
+    summary: 'a public copy of an autoplan run still contains a machine path the run recorded (its run directory, home, plan directory, checkpoint directory or worktree root)',
+    fix: 'export with `gstack-autoplan export --out <run> --public <dir>`, which rewrites recorded roots in prose; a root inside a code span or fence in the plan is never rewritten, so edit the plan, revise, and export again',
+  },
+  ARTIFACT_PUBLIC_TARGET_EXISTS: {
+    anchor: 'artifact-public-target-exists',
+    summary: '`gstack-autoplan export --public <dir>` writes only into an empty directory or over an earlier public copy of the same run',
+    fix: 'pass an empty or new --public directory, or the directory that already holds this run\'s public copy',
+  },
+  // Field list 2 (2026-10-16), W8: preregistered diagnostics run before the freeze commit.
+  PREREG_DIAGNOSTIC_UNTESTED: {
+    anchor: 'prereg-diagnostic-untested',
+    summary: 'the declared summarizer, run on the declared synthetic fixture, did not report every preregistered diagnostic at its expected count',
+    fix: 'fix the summarizer or the declared definition (expected count, fixture) until every PREREG_DIAGNOSTIC line says ok, then commit the freeze; never freeze a diagnostic the summarizer has not counted',
+  },
+  // Field list 2 (2026-10-16), W9: .gstack/eval-models.json.
+  EVAL_MODELS_INVALID: {
+    anchor: 'eval-models-invalid',
+    summary: 'the eval model rules (.gstack/eval-models.json) are unreadable or invalid, so no arm can be checked',
+    fix: 'fix what the line names (docs/eval-models.md: schema_version 1, a non-empty allow, optional deny, scopes and families newest first), or fetch the base branch; no arm passes until the rules parse',
+  },
+  EVAL_MODEL_DENIED: {
+    anchor: 'eval-model-denied',
+    summary: 'an arm names a model the eval model rules deny, or one no allow entry covers for its scope',
+    fix: 'pick a model the rules allow for that scope (the EVAL_MODEL line names the rule), or change .gstack/eval-models.json in a reviewed PR',
+  },
+  EVAL_MODEL_OLD_GENERATION: {
+    anchor: 'eval-model-old-generation',
+    summary: 'an arm names an older generation of a model family the eval model rules order newest first',
+    fix: 'use the newest id of the family the EVAL_MODEL line names, or reorder families in .gstack/eval-models.json in a reviewed PR',
+  },
+  EVAL_MODEL_GENERATION_UNRESOLVED: {
+    anchor: 'eval-model-generation-unresolved',
+    summary: 'the eval model rules declare families (newest generation only) and an arm names a model in none of them, so its generation cannot be checked',
+    fix: 'add the model to its family in .gstack/eval-models.json (newest first) in a reviewed PR, or pick a model a family lists',
+  },
+  // #3226: gstack-error-capture (lib/dx-error-capture.ts) prints these; exit codes and recovery live there.
+  DX_CAPTURE_USAGE: {
+    anchor: 'dx-capture-usage',
+    summary: 'gstack-error-capture arguments are malformed: an unknown flag, a flag missing its value, no `--`, or no command after it',
+    fix: 'gstack-error-capture [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]',
+  },
+  DX_CAPTURE_BAD_DEADLINE: {
+    anchor: 'dx-capture-bad-deadline',
+    summary: '--deadline is not a positive number of seconds (at most 3600, up to 3 decimals)',
+    fix: '--deadline 20',
+  },
+  DX_CAPTURE_BAD_MAX_BYTES: {
+    anchor: 'dx-capture-bad-max-bytes',
+    summary: '--max-bytes is not an integer from 1 to 1048576',
+    fix: '--max-bytes 65536',
+  },
+  DX_CAPTURE_BAD_PASS_ENV: {
+    anchor: 'dx-capture-bad-pass-env',
+    summary: '--pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE)',
+    fix: '--pass-env NAME with NAME set in the calling environment',
+  },
+  DX_CAPTURE_BAD_CWD: {
+    anchor: 'dx-capture-bad-cwd',
+    summary: '--cwd is not an existing directory',
+    fix: '--cwd <existing directory> --approved',
+  },
+  DX_CAPTURE_APPROVAL_REQUIRED: {
+    anchor: 'dx-capture-approval-required',
+    summary: '--pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files',
+    fix: 'ask the user to approve the named variables, files or directory, then add --approved',
+  },
+  DX_CAPTURE_CONFIG_REFUSED: {
+    anchor: 'dx-capture-config-refused',
+    summary: '--copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB',
+    fix: '--copy-config <regular file under $HOME, no symlinks>',
+  },
+  DX_CAPTURE_NOT_FOUND: {
+    anchor: 'dx-capture-not-found',
+    summary: 'the command does not resolve to an executable file; the record carries launch "not_found" and nothing ran',
+    fix: 'install the command or pass its absolute path after --',
+  },
+  DX_CAPTURE_TEMP_DIR: {
+    anchor: 'dx-capture-temp-dir',
+    summary: 'the private 0700 containment directory under the gstack state root could not be created',
+    fix: 'make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun',
+  },
+  DX_CAPTURE_CONTAINMENT_UNAVAILABLE: {
+    anchor: 'dx-capture-containment-unavailable',
+    summary: 'process-group or Windows job containment is unavailable on this platform; nothing ran',
+    fix: 'run the capture on Linux, macOS or Windows with job objects available',
+  },
+  DX_CAPTURE_SUPERVISOR_FAILED: {
+    anchor: 'dx-capture-supervisor-failed',
+    summary: 'the deadline supervisor failed before reporting a result',
+    fix: 'rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor',
+  },
+  DX_CAPTURE_INTERRUPTED: {
+    anchor: 'dx-capture-interrupted',
+    summary: 'the helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed',
+    fix: 'rerun the same command without interrupting it',
+  },
+  DX_CAPTURE_REDACTION_FAILED: {
+    anchor: 'dx-capture-redaction-failed',
+    summary: 'the finished record still matched a secret check, so nothing was printed',
+    fix: 'do not rerun with more --pass-env; report the command name to the gstack maintainers',
+  },
+  DX_CAPTURE_INTERNAL: {
+    anchor: 'dx-capture-internal',
+    summary: 'unexpected helper failure; the line names the error class and its first stack frame',
+    fix: 'rerun once; if it repeats, report the printed frame to the gstack maintainers',
+  },
   // Fix wave 2026-10-15, PR 5 (item 10b, #3197).
   WTREE_UNAVAILABLE: {
     anchor: 'wtree-unavailable',
