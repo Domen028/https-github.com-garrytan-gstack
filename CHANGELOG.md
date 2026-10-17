@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.91.111.0] - 2026-10-16
+
+**Four background reds in the paid PR gate were caused by a detector, a fixture interface, a gstack helper and a Review Army workflow block, not by the PRs that hit them.** Each is fixed where it starts, and each fix has a free regression built from the red run's captured events. Over the last 99 gate runs, 10 of 28 full-selection PR runs had a red. Replayed under these fixes, that drops to 8, and red verdicts drop from 13 to 10. No threshold, budget, trial count or quarantine changed.
+
+### What this means for you
+
+- **`gstack-skill-start --help` and `gstack-skill-end --help` print usage and touch nothing.** They used to ignore the flag and run a real session: minting a session id, writing a marker into your state root and emitting an instruction. Now `-h`/`--help` exits 0 before any side effect.
+- **/review and /ship's Review Army prints the scope signals it selects specialists from.** The "Detect stack and scope" block sourced `SCOPE_FRONTEND`, `SCOPE_BACKEND` and the rest without showing them, so agents added their own `echo` to the block. It now ends with `set | grep '^SCOPE_'`.
+
+### For contributors
+
+- The `ship-docsync-launch-failure` detector treats "until/unless/once/when/before/if Documentation is current" as a condition, not a claim. A new replay corpus in `test/fixtures/detector-corpora/ship-docsync-launch-failure/` covers it.
+- The docsync observation interface admits the lifecycle helpers' own `--help`. Every Bash command from the `ship-docsync-store` red run (`test/fixtures/docsync-store-38969924945-bash.json`) passes it.
+- The qa-only browser-deadline policy admits `ls -la <root>/qa-reports/screenshots`. Escapes, siblings, `-laR` and appended commands are still refused.
+
 ## [1.91.110.0] - 2026-10-16
 
 **A full install now ends ok on gbrain: the installer resolves and installs the project's pinned Node, and the launch PATH no longer puts a shared bin directory first.** On 1.91.107.0 a full install in gbrain still ended `gstack: fail pins`. gbrain pins node 24.18.0 in CI (`.github/workflows/native-locks.yml`), the Capy image ships 24.21.0 in `/usr/local/bin`, and the installer handled only Bun pins (GBRA-117). Changing nvm's default didn't help, because the launch PATH put the resolved Bun's directory first. When that Bun was `/usr/local/bin/bun`, the image's node came with it (GBRA-122).

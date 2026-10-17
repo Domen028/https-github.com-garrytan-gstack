@@ -233,3 +233,28 @@ test('the installed docs-candidate helper is admitted only with a private .json 
   expect(docsNativeInterface(fixture)).toContain(`${fixture.skills.split(path.sep).join('/')}/bin/gstack-docs-candidate snapshot`);
   expect(docsNativeInterface(fixture)).toContain('compare <that .json> and --help commands');
 });
+
+test('the installed lifecycle helpers are admitted for their own --help, which starts nothing', () => {
+  const skills = fixture.skills.split(path.sep).join('/');
+  for (const helper of ['gstack-skill-start', 'gstack-skill-end']) {
+    expect(docsCommandAllowed(`${skills}/bin/${helper} --help`, fixture)).toBe(true);
+    for (const command of [
+      `${skills}/bin/${helper} --help --skill review`,
+      `${skills}/bin/${helper} --skill review`,
+      `${skills}/bin/${helper} -h`,
+      `${skills}/bin/${helper} --help; ${skills}/bin/${helper} --skill document-release`,
+      `~/.claude/skills/gstack/bin/${helper} --help`,
+    ]) expect(docsCommandAllowed(command, fixture), command).toBe(false);
+  }
+  expect(docsNativeInterface(fixture)).toContain('or their own --help');
+});
+
+// PR gate run 38969924945 (ship-docsync-store) went red only on `gstack-skill-start --help`.
+test('every Bash command of the captured ship-docsync-store run is inside the interface', () => {
+  const capture = JSON.parse(fs.readFileSync(path.join(import.meta.dir, 'fixtures/docsync-store-38969924945-bash.json'), 'utf8'));
+  const commands: string[] = capture.commands.map((command: string) => command.replaceAll('<HOME>', fixture.home));
+  for (const file of ['docs-audit-20261016T2140Z-1-documentation.md', 'ship-report.md']) fs.writeFileSync(path.join(fixture.home, file), '');
+  const publish = path.join(fixture.home, 'fixture-publish.ts');
+  expect(commands).toHaveLength(54);
+  expect(commands.filter(command => !docsCommandAllowed(command, fixture, [publish]))).toEqual([]);
+});
