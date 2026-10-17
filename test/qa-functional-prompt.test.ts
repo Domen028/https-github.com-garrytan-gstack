@@ -302,7 +302,9 @@ test('fix runs rerun every pre-repair capture their verdict relies on; supersede
 });
 
 test('exploratory sections state one stop rule tied to per-rule input probes, and fix runs close superseded captures', () => {
-  const stop = 'Stop when scoped contracts are tested or blocked: each documented input rule needs its own probe breaking only that rule; rules left uncovered at a probe or time cap go in limits.';
+  // PR gates 38983306684, 39001107574 and 39073934326 (#3260 at 93449bc): cli-report counted `-5` as its sign probe and never
+  // probed the amount's digits-only rule with an otherwise valid value, so it missed the seeded non-digit defect.
+  const stop = "Stop when scoped contracts are tested or blocked: each field's documented input rule needs a probe breaking only it (a signed amount breaks sign and digits-only, covering neither); rules uncovered at a probe/time cap go in limits.";
   const fix = 'After a fix, every earlier capture is superseded, even from a client that prints no snapshot: rerun each one your verdict relies on, or report it as an open remainder.';
   for (const rel of ['qa/sections/exploratory.md', 'qa-only/sections/exploratory.md']) {
     const section = readFileSync(join(import.meta.dir, '..', rel), 'utf8');
@@ -311,7 +313,7 @@ test('exploratory sections state one stop rule tied to per-rule input probes, an
     expect(section.match(/input rule/g)).toHaveLength(1);
     expect(section.includes(fix)).toBe(rel.startsWith('qa/'));
   }
-  expect(readFileSync(join(import.meta.dir, '../qa/sections/system-functional.md'), 'utf8')).toContain('One probe per documented input rule');
+  expect(readFileSync(join(import.meta.dir, '../qa/sections/system-functional.md'), 'utf8')).toContain('One probe per documented input rule of each field (allowed characters, format, sign, range, arity) breaking only it:');
 });
 
 test('fix-stage checkpoint provenance survives intervening native regression tests', () => {
