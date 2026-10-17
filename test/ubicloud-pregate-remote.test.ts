@@ -156,7 +156,8 @@ describe('pregate-remote.sh inputs and the local tree check', () => {
     const f = fixture();
     const r = gate(f, null, KEY);
     expect(r.exit).toBe(2);
-    expect(r.out).toContain('PREGATE_FILES_FILE is not set; run: gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands');
+    expect(r.out).toContain('pregate-remote: PREGATE_REMOTE_USAGE: PREGATE_FILES_FILE is not set; run: gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands');
+    expect(r.out).toContain('see docs/pregate.md#remote-gate');
     expect(r.calls).toEqual([]);
     expect(fs.existsSync(path.join(f.repo, '.context'))).toBe(false);
   }, 60_000);
@@ -165,7 +166,7 @@ describe('pregate-remote.sh inputs and the local tree check', () => {
     const f = fixture();
     const r = gate(f, ['test/alpha.test.ts'], { ...KEY, PREGATE_TREE: 'f'.repeat(40) });
     expect(r.exit).toBe(3);
-    expect(r.out).toContain(`the working tree is ${f.tree.slice(0, 12)}, not the planned tree ffffffffffff`);
+    expect(r.out).toContain(`PREGATE_REMOTE_TREE_MISMATCH: the working tree is ${f.tree.slice(0, 12)}, not the planned tree ffffffffffff`);
     expect(r.out).toContain('nothing uploaded, nothing spent');
     expect(r.out).toContain('rerun: gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands');
     expect(r.calls).toEqual([]);
@@ -210,7 +211,7 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     const f = fixture();
     const low = gate(f, ['test/alpha.test.ts'], { ...KEY, PREGATE_SPEND_CAP_USD: '0.1' });
     expect(low.exit).toBe(5);
-    expect(low.out).toContain('worst case $0.17 (20 min x $0.00831/min on standard-16) exceeds the spend cap $0.1');
+    expect(low.out).toContain('PREGATE_REMOTE_CAP_TOO_LOW: worst case $0.17 (20 min x $0.00831/min on standard-16) exceeds the spend cap $0.1');
     expect(low.out).toContain('nothing created, nothing spent');
     expect(low.out).toContain('rerun with --spend-cap 0.17 or more');
     const big = gate(f, ['test/alpha.test.ts'], { ...KEY, PREGATE_SPEND_CAP_USD: '0.5', UBI_SIZE: 'standard-60' });
@@ -218,7 +219,7 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     expect(big.out).toContain('worst case $0.63 (20 min x $0.03117/min on standard-60) exceeds the spend cap $0.5');
     const unpriced = gate(f, ['test/alpha.test.ts'], { ...KEY, UBI_SIZE: 'burstable-1' });
     expect(unpriced.exit).toBe(5);
-    expect(unpriced.out).toContain('no price for UBI_SIZE=burstable-1');
+    expect(unpriced.out).toContain('PREGATE_REMOTE_NO_PRICE: no price for UBI_SIZE=burstable-1');
     const noCap = gate(f, ['test/alpha.test.ts'], { ...KEY, PREGATE_SPEND_CAP_USD: '' });
     expect(noCap.exit).toBe(2);
     expect([low, big, unpriced, noCap].every(r => r.report === null)).toBe(true);
@@ -228,7 +229,7 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
   test('create, setup and SSH failures exit 4 with the ubi-runner message, the VM, its teardown line, the log and spent=', () => {
     const create = gate(fixture(), ['test/alpha.test.ts'], { ...KEY, STUB_FAIL: 'create' });
     expect(create.exit, create.out).toBe(4);
-    expect(create.out).toContain('infrastructure failure (ubi-runner exit 1): ubi-runner: create failed');
+    expect(create.out).toContain('PREGATE_REMOTE_INFRA: infrastructure failure (ubi-runner exit 1): ubi-runner: create failed');
     expect(create.out).toContain('VM: eu-central-h1/ubirun-stub-1700000000-abcd; ubi-runner: gone: eu-central-h1/ubirun-stub-1700000000-abcd (never existed or already destroyed)');
     expect(create.out).toMatch(/log: \S+\/\.context\/pregate-remote\/\S+\/run\.log/);
     expect(create.out).toContain('spent=0.00 (0 billed min on standard-16)');
@@ -257,14 +258,14 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
   test('the VM refuses a tree that differs after unpack, a planned set that differs from the list, and a tree that moved during the run', () => {
     const edited = gate(fixture(), ['test/alpha.test.ts'], { ...KEY, STUB_VM_EDIT: 'test/alpha.test.ts' });
     expect(edited.exit, edited.out).toBe(3);
-    expect(edited.out).toContain('the VM refused before running tests: PREGATE_VM_TREE_MISMATCH vm=');
+    expect(edited.out).toContain('PREGATE_REMOTE_VM_TREE: the VM refused before running tests: PREGATE_VM_TREE_MISMATCH vm=');
     expect(edited.out).toContain('no tests ran; spent=0.01');
     const listed = gate(fixture(), ['test/alpha.test.ts'], { ...KEY, STUB_VM_LIST_ADD: 'test/beta.test.ts' });
     expect(listed.exit, listed.out).toBe(3);
     expect(listed.out).toContain('PREGATE_VM_PLAN_MISMATCH planned=');
     const moved = gate(fixture(), ['test/alpha.test.ts', 'test/mover.test.ts'], KEY);
     expect(moved.exit, moved.out).toBe(3);
-    expect(moved.out).toContain("the VM's tree moved during the run");
+    expect(moved.out).toContain("PREGATE_REMOTE_TREE_MOVED: the VM's tree moved during the run");
     expect(moved.out).toContain('  moved: A\tmoved.txt');
     expect([edited, listed, moved].every(r => r.report === null)).toBe(true);
   }, 90_000);
@@ -318,6 +319,7 @@ describe('pregate-remote.sh keyless path', () => {
     const r = gate(f, ['test/alpha.test.ts', 'test/beta.test.ts']);
     expect(r.exit, r.out).toBe(0);
     expect(r.out).toContain('no UBICLOUD_API_KEY: running 2 files locally in parallel shards');
+    expect(r.out).toMatch(/\nbackend=local \(\d+ cores; not the CI environment\)\nPREGATE_REMOTE: /);
     expect(r.report).toEqual({ tree: f.tree, tests: 2, failed: 0, spent: '0' });
     expect(remoteReportProblem(r.report!, f.tree)).toBeNull();
     expect(fs.existsSync(f.calls)).toBe(false);
@@ -326,16 +328,34 @@ describe('pregate-remote.sh keyless path', () => {
   test('a tree that moves during the local run fails without a report', () => {
     const r = gate(fixture(), ['test/alpha.test.ts', 'test/mover.test.ts']);
     expect(r.exit, r.out).toBe(3);
-    expect(r.out).toContain('the working tree moved during the run');
+    expect(r.out).toContain('PREGATE_REMOTE_TREE_MOVED: the working tree moved during the run');
     expect(r.out).toContain('  moved: A\tmoved.txt');
     expect(r.report).toBeNull();
+  }, 90_000);
+
+  test('paid test files in the selection are named and left to the paid PR gate; a paid-only selection reports tests=0 and cannot clear', () => {
+    const f = fixture();
+    const paid = ['test/skill-e2e-a.test.ts', 'test/skill-e2e-b.test.ts', 'test/skill-llm-eval.test.ts', 'test/codex-e2e-x.test.ts', 'test/carve-section-loading-y.test.ts', 'test/skill-routing-e2e.test.ts'];
+    const mixed = gate(f, ['test/alpha.test.ts', ...paid]);
+    expect(mixed.exit, mixed.out).toBe(0);
+    expect(mixed.out).toContain('6 paid test file(s) are covered by the paid PR gate, not the free tier: test/skill-e2e-a.test.ts, test/skill-e2e-b.test.ts, test/skill-llm-eval.test.ts, test/codex-e2e-x.test.ts, test/carve-section-loading-y.test.ts ...');
+    expect(mixed.out).toContain('no UBICLOUD_API_KEY: running 1 files locally in parallel shards');
+    expect(mixed.report).toEqual({ tree: f.tree, tests: 1, failed: 0, spent: '0' });
+    const keyed = gate(f, ['test/beta.test.ts', 'test/skill-e2e-a.test.ts'], KEY);
+    expect(keyed.exit, keyed.out).toBe(0);
+    expect(fs.readFileSync(path.join(f.vm, '.pregate-files.txt'), 'utf8')).toBe('test/beta.test.ts\n');
+    const only = gate(f, paid.slice(0, 2));
+    expect(only.exit, only.out).toBe(0);
+    expect(only.out).toContain('PREGATE_REMOTE_PAID_ONLY: every selected file is a paid test file');
+    expect(only.report).toEqual({ tree: f.tree, tests: 0, failed: 0, spent: '0' });
+    expect(remoteReportProblem(only.report!, f.tree)).toBe('the remote gate reported 0 tests');
   }, 90_000);
 
   test('a list test-free-shards rejects exits 1 without a report', () => {
     const r = gate(fixture(), ['test/alpha.test.ts', 'test/missing.test.ts']);
     expect(r.exit, r.out).toBe(1);
     expect(r.out).toContain('1 path(s) not in the free planned set: test/missing.test.ts');
-    expect(r.out).toContain('without a FILES-FROM RESULT line');
+    expect(r.out).toContain('PREGATE_REMOTE_NO_RESULT: test-free-shards exited 1 without a FILES-FROM RESULT line');
     expect(r.report).toBeNull();
   }, 90_000);
 });

@@ -5,7 +5,7 @@
 #
 #   gstack-pregate --stage tests --remote --spend-cap 2 --allow-repo-commands
 #
-# with PREGATE_FILES_FILE (the selected free test files, one per line),
+# with PREGATE_FILES_FILE (the selected test files, one per line),
 # PREGATE_TREE (the working-tree fingerprint being tested) and
 # PREGATE_SPEND_CAP_USD. It prints the contract line pregate reads
 # (docs/pregate.md#remote-gate):
@@ -40,22 +40,39 @@ root=$(cd "$here/../.." && pwd)
 rerun='gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands'
 
 say() { printf 'pregate-remote: %s\n' "$@"; }
-stop() { local code=$1; shift; say "$@"; exit "$code"; }
+stop() { local code=$1 reason=$2; shift 2; say "$reason: $1"; shift; [ $# -eq 0 ] || say "$@"; say "see docs/pregate.md#remote-gate"; exit "$code"; }
 
-[ -n "${PREGATE_FILES_FILE:-}" ] || stop 2 "PREGATE_FILES_FILE is not set; run: $rerun"
-[ -n "${PREGATE_TREE:-}" ] || stop 2 "PREGATE_TREE is not set; run: $rerun"
-[ -f "$PREGATE_FILES_FILE" ] || stop 2 "PREGATE_FILES_FILE=$PREGATE_FILES_FILE does not exist; run: $rerun"
+[ -n "${PREGATE_FILES_FILE:-}" ] || stop 2 PREGATE_REMOTE_USAGE "PREGATE_FILES_FILE is not set; run: $rerun"
+[ -n "${PREGATE_TREE:-}" ] || stop 2 PREGATE_REMOTE_USAGE "PREGATE_TREE is not set; run: $rerun"
+[ -f "$PREGATE_FILES_FILE" ] || stop 2 PREGATE_REMOTE_USAGE "PREGATE_FILES_FILE=$PREGATE_FILES_FILE does not exist; run: $rerun"
 
 wtree() { (cd "$root" && bin/gstack-wtree); }
-tree=$(wtree) || stop 3 "bin/gstack-wtree could not fingerprint $root" "nothing uploaded, nothing spent" "rerun: $rerun"
+tree=$(wtree) || stop 3 PREGATE_REMOTE_TREE_MISMATCH "bin/gstack-wtree could not fingerprint $root" "nothing uploaded, nothing spent" "rerun: $rerun"
 if [ "$tree" != "$PREGATE_TREE" ]; then
-  stop 3 "the working tree is ${tree:0:12}, not the planned tree ${PREGATE_TREE:0:12}" "nothing uploaded, nothing spent" "rerun: $rerun"
+  stop 3 PREGATE_REMOTE_TREE_MISMATCH "the working tree is ${tree:0:12}, not the planned tree ${PREGATE_TREE:0:12}" "nothing uploaded, nothing spent" "rerun: $rerun"
 fi
 
-count=$(grep -c . "$PREGATE_FILES_FILE" || true)
 logs="$root/.context/pregate-remote/$(date -u +%Y%m%dT%H%M%SZ)-$$"
 mkdir -p "$logs"
 log="$logs/run.log"
+
+# pregate's selection can name paid test files (skill-e2e and other paid
+# evals); the paid PR gate covers those, and test-free-shards --files-from
+# rejects them, so only the free files go on.
+files="$logs/free-files.txt"
+paid=$(cd "$root" && bun -e 'import { isPaidTestFile } from "./test/helpers/paid-test-set.ts"; import * as fs from "node:fs";
+const lines = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/).filter(Boolean);
+fs.writeFileSync(process.argv[2], lines.filter(f => !isPaidTestFile(f)).map(f => f + "\n").join(""));
+console.log(lines.filter(f => isPaidTestFile(f)).join("\n"));' "$PREGATE_FILES_FILE" "$files") || stop 2 PREGATE_REMOTE_USAGE "could not split $PREGATE_FILES_FILE into free and paid test files"
+if [ -n "$paid" ]; then
+  say "$(grep -c . <<<"$paid") paid test file(s) are covered by the paid PR gate, not the free tier: $(head -5 <<<"$paid" | paste -sd, - | sed 's/,/, /g')$( [ "$(grep -c . <<<"$paid")" -le 5 ] || echo " ...")"
+fi
+count=$(grep -c . "$files" || true)
+if [ "$count" -eq 0 ]; then
+  say "PREGATE_REMOTE_PAID_ONLY: every selected file is a paid test file; no free test ran, so this receipt cannot clear the obligation (tests=0)" "see docs/pregate.md#remote-gate"
+  echo "PREGATE_REMOTE: tree=$tree tests=0 failed=0 spent=0"
+  exit 0
+fi
 
 result_line() { grep '^\[test:free\] FILES-FROM RESULT: ' "$1" | tail -1 || true; }
 field() { sed -n "s/.* $1=\([0-9][0-9]*\).*/\1/p" <<<"$2"; }
@@ -63,17 +80,18 @@ field() { sed -n "s/.* $1=\([0-9][0-9]*\).*/\1/p" <<<"$2"; }
 if [ -z "${UBICLOUD_API_KEY:-${UBICLOUD_API_TOKEN:-}}" ]; then
   say "no UBICLOUD_API_KEY: running $count files locally in parallel shards"
   set +e
-  (cd "$root" && bun run scripts/test-free-shards.ts --files-from "$PREGATE_FILES_FILE") 2>&1 | tee "$log"
+  (cd "$root" && bun run scripts/test-free-shards.ts --files-from "$files") 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
   set -e
   after=$(wtree) || after=unavailable
   if [ "$after" != "$tree" ]; then
     (cd "$root" && git diff --name-status "$tree" "$after" 2>&1 | head -20 | sed 's/^/  moved: /') || true
-    stop 3 "the working tree moved during the run (${tree:0:12} before, ${after:0:12} after); no result reported" "log: $log" "rerun on a tree nothing else edits: $rerun"
+    stop 3 PREGATE_REMOTE_TREE_MOVED "the working tree moved during the run (${tree:0:12} before, ${after:0:12} after); no result reported" "log: $log" "rerun on a tree nothing else edits: $rerun"
   fi
   result=$(result_line "$log")
-  [ -n "$result" ] || stop "$(( rc == 0 ? 1 : rc ))" "test-free-shards exited $rc without a FILES-FROM RESULT line" "log: $log"
+  [ -n "$result" ] || stop "$(( rc == 0 ? 1 : rc ))" PREGATE_REMOTE_NO_RESULT "test-free-shards exited $rc without a FILES-FROM RESULT line" "log: $log"
   say "log: $log"
+  echo "backend=local ($(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu) cores; not the CI environment)"
   echo "PREGATE_REMOTE: tree=$tree tests=$(field tests "$result") failed=$(field failed "$result") spent=0"
   exit "$rc"
 fi
@@ -82,19 +100,19 @@ size=${UBI_SIZE:-standard-16}
 case $size in
   standard-2) ppm=0.00104 ;; standard-4) ppm=0.00208 ;; standard-8) ppm=0.00416 ;;
   standard-16) ppm=0.00831 ;; standard-30) ppm=0.01559 ;; standard-60) ppm=0.03117 ;;
-  *) stop 5 "no price for UBI_SIZE=$size (priced: standard-2, -4, -8, -16, -30, -60; Ubicloud list price per minute)" "nothing created, nothing spent" ;;
+  *) stop 5 PREGATE_REMOTE_NO_PRICE "no price for UBI_SIZE=$size (priced: standard-2, -4, -8, -16, -30, -60; Ubicloud list price per minute)" "nothing created, nothing spent" ;;
 esac
 cap=${PREGATE_SPEND_CAP_USD:-}
-[[ "$cap" =~ ^[0-9]+(\.[0-9]+)?$ ]] || stop 2 "PREGATE_SPEND_CAP_USD is not a dollar amount ('$cap'); run: $rerun"
+[[ "$cap" =~ ^[0-9]+(\.[0-9]+)?$ ]] || stop 2 PREGATE_REMOTE_USAGE "PREGATE_SPEND_CAP_USD is not a dollar amount ('$cap'); run: $rerun"
 max_min=45 min_min=20
 wall_min=$(awk -v c="$cap" -v p="$ppm" -v m="$max_min" 'BEGIN { w = int(c / p); print (w < m ? w : m) }')
 usd() { awk -v m="$1" -v p="$ppm" 'BEGIN { s = m * p; c = int(s * 100); if (c < s * 100) c++; printf "%.2f", c / 100 }'; }
 if [ "$wall_min" -lt "$min_min" ]; then
-  stop 5 "worst case \$$(usd "$min_min") ($min_min min x \$$ppm/min on $size) exceeds the spend cap \$$cap" "nothing created, nothing spent" "rerun with --spend-cap $(usd "$min_min") or more"
+  stop 5 PREGATE_REMOTE_CAP_TOO_LOW "worst case \$$(usd "$min_min") ($min_min min x \$$ppm/min on $size) exceeds the spend cap \$$cap" "nothing created, nothing spent" "rerun with --spend-cap $(usd "$min_min") or more"
 fi
 say "$count files on one $size VM; wall timeout $wall_min min, worst case \$$(usd "$wall_min") under the cap \$$cap"
 
-digest=$(tr -d '\r' <"$PREGATE_FILES_FILE" | grep . | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
+digest=$(tr -d '\r' <"$files" | grep . | LC_ALL=C sort | sha256sum | cut -d' ' -f1)
 prelude="$logs/vm-setup.sh"
 {
   printf '%s\n' 'set -euo pipefail' 'BASH_COMPAT=50' \
@@ -103,7 +121,7 @@ prelude="$logs/vm-setup.sh"
     "if [ \"\$vm_tree\" != $tree ]; then echo \"PREGATE_VM_TREE_MISMATCH vm=\$vm_tree\"; exit 3; fi" \
     'echo "PREGATE_VM_TREE $vm_tree"' \
     "cat > ~/.pregate-files.txt <<'PREGATE_FILES'"
-  tr -d '\r' <"$PREGATE_FILES_FILE" | grep .
+  tr -d '\r' <"$files" | grep .
   printf '%s\n' 'PREGATE_FILES' "cat > ~/.pregate-run.sh <<'PREGATE_RUN'" \
     'planned=$(bun run scripts/test-free-shards.ts --files-from ~/.pregate-files.txt --dry-run | sed -n "s/^\[test:free\] files-from .*: [0-9]* files, sha256=\([0-9a-f]*\)$/\1/p")' \
     "if [ \"\$planned\" != $digest ]; then echo \"PREGATE_VM_PLAN_MISMATCH planned=\${planned:-none} expected=$digest\"; exit 3; fi" \
@@ -156,7 +174,7 @@ started=$(date +%s)
 heartbeat=$!
 vmrun="" tailer=""
 trap 'kill "$heartbeat" $tailer 2>/dev/null || true' EXIT
-trap '[ -z "$vmrun" ] || kill -TERM "$(cat "$log.pid" 2>/dev/null)" 2>/dev/null; stop 130 "interrupted: ubi-runner is tearing the VM down on its own (log: $log)"' INT TERM
+trap '[ -z "$vmrun" ] || kill -TERM "$(cat "$log.pid" 2>/dev/null)" 2>/dev/null; stop 130 PREGATE_REMOTE_INTERRUPTED "interrupted: ubi-runner is tearing the VM down on its own (log: $log)"' INT TERM
 
 billed=0 attempt=0
 while :; do
@@ -202,7 +220,7 @@ say "log: $log"
 vm_tree=$(sed -n 's/^[0-9]* PREGATE_VM_TREE \([0-9a-f]*\)$/\1/p' "$log" | tail -1)
 mismatch=$(grep -m1 -oE 'PREGATE_VM_(TREE|PLAN)_MISMATCH .*' "$log" || true)
 if [ -n "$mismatch" ]; then
-  stop 3 "the VM refused before running tests: $mismatch (expected tree ${tree:0:12})" "no tests ran; spent=$spent ($billed billed min on $size)" "rerun: $rerun"
+  stop 3 PREGATE_REMOTE_VM_TREE "the VM refused before running tests: $mismatch (expected tree ${tree:0:12})" "no tests ran; spent=$spent ($billed billed min on $size)" "rerun: $rerun"
 fi
 result=$(result_line <(cut -d' ' -f2- "$log"))
 if [ -n "$result" ] && [ "$rc" -ne 124 ]; then
@@ -211,7 +229,7 @@ if [ -n "$result" ] && [ "$rc" -ne 124 ]; then
   sed -n 's/^[0-9]* PREGATE_VM_REBUILT /  setup rebuilt (committed build output, as the CI free lane rebuilds it): /p' "$log"
   if [ "$after" != "$built" ]; then
     sed -n 's/^[0-9]* PREGATE_VM_MOVED /  moved: /p' "$log"
-    stop 3 "the VM's tree moved during the run (${built:0:12} after setup, ${after:0:12} after tests); no result reported" "spent=$spent ($billed billed min on $size)" "rerun: $rerun"
+    stop 3 PREGATE_REMOTE_TREE_MOVED "the VM's tree moved during the run (${built:0:12} after setup, ${after:0:12} after tests); no result reported" "spent=$spent ($billed billed min on $size)" "rerun: $rerun"
   fi
   echo "PREGATE_REMOTE: tree=$vm_tree tests=$(field tests "$result") failed=$(field failed "$result") spent=$spent"
   exit $(( rc == 0 ? 0 : 1 ))
@@ -220,5 +238,5 @@ vm=$(sed -n 's/^[0-9]* ubi-runner: creating \([^ ]*\) .*/\1/p' "$log" | tail -1)
 down=$(grep -E 'ubi-runner: (destroyed|gone:|WARNING|FAILED to destroy)' "$log" | tail -1 | cut -d' ' -f2- || true)
 cause=$(grep -E 'ubi-runner: ' "$log" | grep -vE 'ubi-runner: (destroyed|gone:|destroy requested|waiting for an in-flight)' | tail -1 | cut -d' ' -f2- || true)
 [ "$rc" -ne 124 ] || cause="wall timeout of $(( wall_min - 3 )) min reached (cap \$$cap); the VM was torn down"
-stop 4 "infrastructure failure (ubi-runner exit $rc): ${cause:-no ubi-runner message}" \
+stop 4 PREGATE_REMOTE_INFRA "infrastructure failure (ubi-runner exit $rc): ${cause:-no ubi-runner message}" \
   "VM: ${vm:-none created}${down:+; $down}" "log: $log" "spent=$spent ($billed billed min on $size)"
