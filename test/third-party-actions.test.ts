@@ -63,6 +63,9 @@ D) Defer
 
   test('allows recovery questions but rejects conditional drive consent', () => {
     expect(asideDriveOptions('A) Open the Aside app so I can re-run the probe.')).toEqual([]);
+    // Captured tpa-absent-linux answer (paid run 38988927989): the English idiom is not the Aside browser.
+    expect(asideDriveOptions('D) Defer. I set this aside and mark it blocked on you, with no browsing now.')).toEqual([]);
+    expect(asideDriveOptions('D) Defer, or I drive it in Aside later.')).toHaveLength(1);
     expect(asideDriveOptions('A) Open the Aside app; if READY, I drive the dashboard.')).toHaveLength(1);
   });
 
