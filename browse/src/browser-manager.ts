@@ -301,6 +301,13 @@ export async function handleChromiumDisconnect(browser: Browser | null): Promise
 export const TAB_PROBE_TIMEOUT_MS = 1_000;
 
 /**
+ * Budget for saveState()'s per-tab storage read. Longer than the probe: a tab
+ * that misses it loses its localStorage/sessionStorage across a context
+ * recreation or handoff, so only a tab that is really stuck is skipped.
+ */
+const TAB_STORAGE_READ_TIMEOUT_MS = 5_000;
+
+/**
  * Resolve with `work`'s value, or with undefined once `ms` passes. The losing
  * read settles on its own when the renderer frees up, so callers pass a promise
  * that cannot reject.
@@ -1333,17 +1340,22 @@ export class BrowserManager {
     return released;
   }
 
-  async getTabListWithTitles(): Promise<Array<{ id: number; url: string; title: string; active: boolean }>> {
-    const tabs: Array<{ id: number; url: string; title: string; active: boolean }> = [];
-    for (const [id, page] of this.pages) {
-      tabs.push({
+  /**
+   * Every tab with its title. Titles are read in parallel, each bounded by
+   * TAB_PROBE_TIMEOUT_MS: a tab whose renderer is stuck comes back with
+   * `busy: true` and an empty title instead of hanging the list (#3247).
+   */
+  async getTabListWithTitles(): Promise<Array<{ id: number; url: string; title: string; active: boolean; busy: boolean }>> {
+    return Promise.all([...this.pages].map(async ([id, page]) => {
+      const title = await withinTabBudget(page.title().catch(() => ''), TAB_PROBE_TIMEOUT_MS);
+      return {
         id,
         url: page.url(),
-        title: await page.title().catch(() => ''),
+        title: title ?? '',
         active: id === this.activeTabId,
-      });
-    }
-    return tabs;
+        busy: title === undefined,
+      };
+    }));
   }
 
   // ─── Session Access ────────────────────────────────────────
@@ -1747,7 +1759,9 @@ export class BrowserManager {
   // ─── State Save/Restore (shared by recreateContext + handoff) ─
   /**
    * Capture browser state: cookies, localStorage, sessionStorage, URLs, active tab.
-   * Skips pages that fail storage reads (e.g., already closed).
+   * Skips the storage of pages that fail the read (e.g., already closed) or
+   * whose renderer is stuck past TAB_STORAGE_READ_TIMEOUT_MS, so `state save`
+   * still works while one tab is busy (#3247).
    */
   async saveState(): Promise<BrowserState> {
     if (!this.context) throw new Error('Browser not launched');
@@ -1757,13 +1771,10 @@ export class BrowserManager {
 
     for (const [id, page] of this.pages) {
       const url = page.url();
-      let storage = null;
-      try {
-        storage = await page.evaluate(() => ({
-          localStorage: { ...localStorage },
-          sessionStorage: { ...sessionStorage },
-        }));
-      } catch {}
+      const storage = await withinTabBudget(page.evaluate(() => ({
+        localStorage: { ...localStorage },
+        sessionStorage: { ...sessionStorage },
+      })).catch(() => null), TAB_STORAGE_READ_TIMEOUT_MS) ?? null;
 
       // Capture load-html content so a later context recreation (viewport --scale)
       // can replay it via setTabContent. Never persisted to disk.
