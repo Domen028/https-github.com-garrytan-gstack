@@ -177,7 +177,7 @@ export interface InvocationOptions extends BashProbe {
   bunExe?: string;
 }
 
-export type Invocation = { ok: true; cmd: string; argv: string[] } | { ok: false; error: string };
+export type Invocation = { ok: true; cmd: string; argv: string[] } | { ok: false; error: string; tried?: BashCandidate[] };
 
 /** The running Bun, or the `bun` on PATH when this process is a compiled binary. */
 export function bunExecutable(): string {
@@ -197,10 +197,10 @@ function readShebang(script: string): string {
 }
 
 const warned = new Set<string>();
-function windowsBash(o: InvocationOptions): { ok: true; bash: string } | { ok: false; error: string } {
+function windowsBash(o: InvocationOptions): { ok: true; bash: string } | { ok: false; error: string; tried: BashCandidate[] } {
   const res = o.resolve ? o.resolve() : resolveWindowsBash(o);
   if (res.warning && !warned.has(res.warning)) { warned.add(res.warning); process.stderr.write(res.warning + '\n'); }
-  return res.ok ? { ok: true, bash: res.bash } : { ok: false, error: res.message };
+  return res.ok ? { ok: true, bash: res.bash } : { ok: false, error: res.message, tried: res.tried };
 }
 
 /** How to run a gstack shebang bin on this platform. */
@@ -219,32 +219,33 @@ export function bashCommandInvocation(command: string, o: InvocationOptions = {}
 }
 
 /** A spawnSync-shaped failure for an invocation that could not be built, so callers keep one error path. */
-function unlaunched(error: string, encoding: unknown): SpawnSyncReturns<string | Buffer> {
+function unlaunched(error: string, encoding: unknown, tried?: BashCandidate[]): SpawnSyncReturns<string | Buffer> {
   const empty = encoding && encoding !== 'buffer' ? '' : Buffer.alloc(0);
-  return { pid: 0, output: [null, empty, empty], stdout: empty, stderr: empty, status: null, signal: null, error: Object.assign(new Error(error), { code: 'BASH_UNAVAILABLE' }) };
+  return { pid: 0, output: [null, empty, empty], stdout: empty, stderr: empty, status: null, signal: null, error: Object.assign(new Error(error), { code: 'BASH_UNAVAILABLE', tried }) };
 }
 
 export function runScriptSync(script: string, args: readonly string[], opts: SpawnSyncOptionsWithStringEncoding, o?: InvocationOptions): SpawnSyncReturns<string>;
 export function runScriptSync(script: string, args: readonly string[], opts: SpawnSyncOptions, o?: InvocationOptions): SpawnSyncReturns<string | Buffer>;
 export function runScriptSync(script: string, args: readonly string[], opts: SpawnSyncOptions, o: InvocationOptions = {}): SpawnSyncReturns<string | Buffer> {
   const inv = scriptInvocation(script, args, o);
-  return inv.ok ? spawnSync(inv.cmd, inv.argv, opts) : unlaunched(inv.error, opts.encoding);
+  return inv.ok ? spawnSync(inv.cmd, inv.argv, opts) : unlaunched(inv.error, opts.encoding, inv.tried);
 }
 
 export function runBashSync(command: string, opts: SpawnSyncOptionsWithStringEncoding, o?: InvocationOptions): SpawnSyncReturns<string>;
 export function runBashSync(command: string, opts: SpawnSyncOptions, o?: InvocationOptions): SpawnSyncReturns<string | Buffer>;
 export function runBashSync(command: string, opts: SpawnSyncOptions, o: InvocationOptions = {}): SpawnSyncReturns<string | Buffer> {
   const inv = bashCommandInvocation(command, o);
-  return inv.ok ? spawnSync(inv.cmd, inv.argv, opts) : unlaunched(inv.error, opts.encoding);
+  return inv.ok ? spawnSync(inv.cmd, inv.argv, opts) : unlaunched(inv.error, opts.encoding, inv.tried);
 }
 
-export type WtreeResult = { tree: string } | { error: string; kind: 'launch' | 'exit' };
+export type WtreeResult = { tree: string } | { error: string; kind: 'launch' | 'exit'; tried?: BashCandidate[] };
 
 /**
  * The working-tree content fingerprint (bin/gstack-wtree): tracked and
  * untracked non-ignored files, as a 40- or 64-hex git tree id (SHA-1 or
  * SHA-256 repositories). `launch` means gstack-wtree never ran (no bash, a
- * spawn error); `exit` means it ran and failed (its stderr says why).
+ * spawn error; `tried` lists each Windows bash candidate when none was
+ * found); `exit` means it ran and failed (its stderr says why).
  */
 export function wtreeFingerprint(o: { cwd: string; timeoutMs?: number; env?: NodeJS.ProcessEnv; invocation?: InvocationOptions }): WtreeResult {
   const r = runScriptSync(path.join(BIN_DIR, 'gstack-wtree'), [], {
@@ -253,7 +254,7 @@ export function wtreeFingerprint(o: { cwd: string; timeoutMs?: number; env?: Nod
   }, o.invocation);
   const out = (r.stdout ?? '').trim();
   if (r.status === 0 && /^[0-9a-f]{40,64}$/.test(out)) return { tree: out };
-  if (r.error && r.status === null && r.signal === null) return { kind: 'launch', error: `gstack-wtree could not start: ${r.error.message}` };
+  if (r.error && r.status === null && r.signal === null) return { kind: 'launch', error: `gstack-wtree could not start: ${r.error.message}`, tried: (r.error as { tried?: BashCandidate[] }).tried };
   const why = (r.stderr ?? '').trim().split('\n').pop() || (r.signal ? `killed by ${r.signal}` : r.status === 0 ? `unexpected output ${JSON.stringify(out.slice(0, 80))}` : 'no stderr');
   return { kind: 'exit', error: `gstack-wtree exited ${r.status ?? r.signal}: ${why}` };
 }

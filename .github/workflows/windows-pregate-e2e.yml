@@ -11,12 +11,13 @@ name: Windows Pregate E2E
 #     command through `bash -c`) and write (the no-scratch path);
 #   - gstack-evidence records a content fingerprint, its command through bash -c;
 #   - gstack-gate-diff records a candidate with a tree id, not `+nowtree`;
+#   - gstack-pregate run fingerprints the tree and runs its preflight checks
+#     (secrets through the gstack-redact bun bin, regen and guards);
 #   - a hook invocation is timed cold and warm (the cached resolution);
-#   - a missing GSTACK_GIT_BASH refuses with BASH_UNAVAILABLE, not `()`;
+#   - a missing GSTACK_GIT_BASH refuses with BASH_UNAVAILABLE, not `()`, and
+#     gstack-pregate --json refuses with one WTREE_UNAVAILABLE envelope;
 #   - the same journey under a pinned, checksum-verified PortableGit found
 #     only through `git --exec-path`.
-# `gstack-pregate run` joins this job in the follow-up that migrates the
-# pregate consumers (item 10b).
 #
 # Runner: GitHub-hosted free windows-latest. ~4-6 min.
 
@@ -40,6 +41,7 @@ on:
       - 'bin/gstack-evidence'
       - 'bin/gstack-gate-diff'
       - 'bin/gstack-redact'
+      - 'bin/gstack-pregate'
       - 'hosts/claude/hooks/**'
       - '.github/workflows/windows-pregate-e2e.yml'
   workflow_dispatch:
@@ -156,6 +158,10 @@ jobs:
           echo "$OUT" | grep -q 'cannot fingerprint the working tree (gstack-wtree could not start: gstack: no Git Bash found' || (echo "the refusal does not say why" && exit 1)
           echo "$OUT" | grep -q 'GSTACK_GIT_BASH C:/no-such-git/bin/bash.exe: does not exist' || (echo "the refusal does not list the override" && exit 1)
           echo "$OUT" | grep -q '(BASH_UNAVAILABLE)' || (echo "the refusal has no result code" && exit 1)
+          OUT=$(GSTACK_HOME="$T/home" GSTACK_GIT_BASH='C:\no-such-git\bin\bash.exe' bun "$GITHUB_WORKSPACE/bin/gstack-pregate" run --base main --stage preflight --json 2>/dev/null) && CODE=0 || CODE=$?
+          echo "$OUT"
+          test "$CODE" -eq 3 || (echo "gstack-pregate exited $CODE, expected 3 (refused)" && exit 1)
+          echo "$OUT" | bun -e 'const j = JSON.parse(await Bun.stdin.text()); const ok = j.ok === false && j.status === "refused" && j.code === "WTREE_UNAVAILABLE" && j.detail.includes("GSTACK_GIT_BASH C:/no-such-git/bin/bash.exe: does not exist") && j.fix.includes("GSTACK_GIT_BASH"); process.exit(ok ? 0 : 1);' || (echo "gstack-pregate --json did not refuse with one WTREE_UNAVAILABLE envelope" && exit 1)
         shell: bash
 
       - name: Download the pinned PortableGit and verify its checksum
@@ -222,6 +228,12 @@ jobs:
             test "$CODE" -eq 0 || (echo "gstack-gate-diff exited $CODE" && exit 1)
             ! echo "$OUT" | grep -q 'fingerprint unavailable' || (echo "gate-diff could not fingerprint the tree" && exit 1)
             echo "$OUT" | grep -qE 'candidate=[0-9a-f]{12}\+[0-9a-f]{12} ' || (echo "gate-diff candidate has no tree id" && exit 1)
+
+            OUT=$(bun "$G/bin/gstack-pregate" run --base main --stage preflight --only regen,secrets,literals,guards --allow-repo-commands 2>&1) || { echo "$OUT"; echo "gstack-pregate run failed"; exit 1; }
+            echo "$OUT" | tail -n 10
+            echo "$OUT" | grep -qE '^preflight  secrets   pass .* added lines clean' || (echo "pregate secrets did not scan through gstack-redact" && exit 1)
+            echo "$OUT" | grep -q 'GSTACK_RESULT: skill=pregate status=complete run=' || (echo "pregate did not complete" && exit 1)
+            grep -qE '"tree": "[0-9a-f]{40}"' .gstack/tmp/pregate.json || (echo "pregate.json has no tree fingerprint" && exit 1)
           }
           echo "::group::runner Git for Windows ($(git --version))"
           (journey)

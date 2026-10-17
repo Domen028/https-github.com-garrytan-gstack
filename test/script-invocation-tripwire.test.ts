@@ -21,11 +21,20 @@ const ROOT = path.resolve(import.meta.dir, '..');
 const SPAWN_BIN_BY_PATH = /\b(?:spawn|spawnSync|execFile|execFileSync)\(\s*(?:path\.)?join\(\s*(?:BIN_DIR|binDir|BIN|bin|binRoot|BIN_ROOT)\b/;
 const SPAWN_BARE_BASH = /\b(?:spawn|spawnSync|execFile|execFileSync|execSync)\(\s*['"]bash['"]|Bun\.spawn(?:Sync)?\(\s*\[\s*['"]bash['"]|\[\s*['"]bash['"]\s*,\s*['"]-l?c['"]/;
 const COMMENT = /^\s*(?:\/\/|\*|\/\*)/;
+/** `const X = path.resolve(…, 'bin', 'gstack-…')`: a bin path held in a constant, then spawned by name (#3190's gstack-config). */
+const BIN_CONSTANT = /\bconst\s+([A-Za-z_]\w*)\s*=\s*(?:path\.)?(?:resolve|join)\([^;]*['"]bin['"]\s*,\s*['"][^'"]+['"]\s*\)/g;
+function spawnsBinConstant(source: string): RegExp | null {
+  const names = [...source.matchAll(BIN_CONSTANT)].map(m => m[1]!);
+  return names.length ? new RegExp(`\\b(?:spawn|spawnSync|execFile|execFileSync)\\(\\s*(?:${names.join('|')})\\b`) : null;
+}
 
 const KNOWN_SITES: Record<string, string> = {
   'lib/evidence-bundle.ts': 'outside this wave: bundle replay commands (bash -lc) move to runBashSync',
   'bin/gstack-brain-context-load.ts': 'outside this wave: the brain context loader moves to runBashSync',
   'bin/gstack-issue-links': 'outside this wave: the gstack-issue-guard spawn moves to runScriptSync',
+  // Found when the bin-constant rule was added (fix wave PR 5, item 10b).
+  'bin/gstack-brain-cache': 'outside this wave: the gstack-config salience read moves to runScriptSync',
+  'lib/autoplan-admission.ts': 'returns before the spawn on win32; the bin/gstack-lease touch moves to runScriptSync with that bin\'s owner',
 };
 
 function productionFiles(): string[] {
@@ -51,9 +60,11 @@ function offendingSites(): Record<string, string[]> {
   const hits: Record<string, string[]> = {};
   for (const rel of productionFiles()) {
     if (rel === 'lib/script-invocation.ts') continue;
-    fs.readFileSync(path.join(ROOT, rel), 'utf8').split('\n').forEach((line, i) => {
+    const source = fs.readFileSync(path.join(ROOT, rel), 'utf8');
+    const spawnsConstant = spawnsBinConstant(source);
+    source.split('\n').forEach((line, i) => {
       if (COMMENT.test(line)) return;
-      if (SPAWN_BIN_BY_PATH.test(line) || SPAWN_BARE_BASH.test(line)) (hits[rel] ??= []).push(`${rel}:${i + 1}: ${line.trim().slice(0, 120)}`);
+      if (SPAWN_BIN_BY_PATH.test(line) || SPAWN_BARE_BASH.test(line) || spawnsConstant?.test(line)) (hits[rel] ??= []).push(`${rel}:${i + 1}: ${line.trim().slice(0, 120)}`);
     });
   }
   return hits;
@@ -80,6 +91,9 @@ describe('#3197: shebang bins and bash go through lib/script-invocation.ts', () 
     expect(SPAWN_BARE_BASH.test("spawnSync('bash', ['-c', cmd], { timeout: 1 })")).toBe(true);
     expect(SPAWN_BARE_BASH.test('const argv = ["bash", "-c", command];')).toBe(true);
     expect(SPAWN_BARE_BASH.test("spawnSync(process.execPath, [script], { timeout: 1 })")).toBe(false);
+    const constant = spawnsBinConstant("const GSTACK_CONFIG = path.resolve(import.meta.dir, '..', '..', 'bin', 'gstack-config');");
+    expect(constant?.test("const r = spawnSync(GSTACK_CONFIG, ['get', 'test_backend'], { timeout: 1 });")).toBe(true);
+    expect(constant?.test("const r = runScriptSync(GSTACK_CONFIG, ['get', 'test_backend'], { timeout: 1 });")).toBe(false);
   });
 });
 

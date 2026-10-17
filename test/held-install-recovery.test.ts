@@ -36,15 +36,16 @@ const CONFLICT_LINE = 'THROTTLE_SECONDS=3600  # 1 hour';
  * install sits one commit behind it, at the same tree without
  * bin/gstack-ff-update (an install that predates it), with VERSION 1.91.101.0.
  */
-function makeFixture() {
+function makeFixture(source = ROOT) {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-held-')));
   bases.push(base);
   const origin = path.join(base, 'origin.git');
   const work = path.join(base, 'work');
-  execFileSync('git', ['clone', '-q', '--shared', ROOT, work], { timeout: 60_000 });
+  execFileSync('git', ['clone', '-q', '--shared', source, work], { timeout: 60_000 });
   // A root commit of this tree: the checkout may be shallow, and a bare
-  // origin refuses a shallow push.
-  git(work, 'checkout', '-q', '--orphan', 'main');
+  // origin refuses a shallow push. The clone already has a local main when
+  // the source is on main (actions/checkout runs `checkout -B main` on a push).
+  git(work, 'checkout', '-q', '--orphan', 'held-fixture');
   fs.writeFileSync(path.join(work, 'VERSION'), '1.91.101.0\n');
   fs.rmSync(path.join(work, 'bin', 'gstack-ff-update'), { force: true });
   git(work, 'add', '-A');
@@ -59,7 +60,7 @@ function makeFixture() {
   git(work, 'commit', '-q', '-m', 'the fixed release');
   const fixed = git(work, 'rev-parse', 'HEAD');
   execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { timeout: 60_000 });
-  git(work, 'push', '-q', origin, 'main');
+  git(work, 'push', '-q', origin, 'HEAD:refs/heads/main');
   return { base, origin, held, fixed };
 }
 type Fx = ReturnType<typeof makeFixture>;
@@ -125,6 +126,23 @@ describe.skipIf(process.platform === 'win32')('held-install recovery (Git Bash f
     expect(form('recovery-gitbash')).toContain('d=$(mktemp -d)');
     expect(form('recovery-powershell')).toContain('d=$(mktemp -d)');
   });
+
+  for (const checkout of ['on main', 'detached with no branch'] as const) {
+    test(`the fixture builds from a source checkout ${checkout}`, () => {
+      const src = path.join(fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-held-src-'))), 'src');
+      bases.push(path.dirname(src));
+      execFileSync('git', ['clone', '-q', '--shared', ROOT, src], { timeout: 60_000 });
+      if (checkout === 'on main') git(src, 'checkout', '-q', '-B', 'main');
+      else {
+        git(src, 'checkout', '-q', '--detach');
+        for (const b of git(src, 'for-each-ref', '--format=%(refname:short)', 'refs/heads').split('\n').filter(Boolean)) git(src, 'branch', '-q', '-D', b);
+      }
+      const fx = makeFixture(src);
+      expect(git(fx.origin, 'rev-parse', 'refs/heads/main')).toBe(fx.fixed);
+      expect(git(fx.origin, 'rev-parse', `${fx.fixed}^`)).toBe(fx.held);
+      expect(git(fx.origin, 'rev-list', '--max-parents=0', fx.fixed)).toBe(fx.held);
+    }, 60_000);
+  }
 
   for (const state of ['clean', 'dirty', 'unmerged'] as const) {
     test(`a ${state} prefix-mode install reaches the fixed release; a planted symlink is never followed`, async () => {

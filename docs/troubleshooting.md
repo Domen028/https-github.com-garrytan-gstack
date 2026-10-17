@@ -3447,6 +3447,63 @@ checked, and the arm fails instead of passing unchecked.
 **Fix.** Add the model to its family (newest first) in
 `.gstack/eval-models.json` in a reviewed PR, or use a model a family lists.
 
+<a id="wtree-unavailable"></a>
+### `gstack-pregate: cannot fingerprint the working tree: bin/gstack-wtree could not start (on Windows, no Git Bash was found) or it ran and failed (<detail>); fix: <fix> (WTREE_UNAVAILABLE)`
+
+**Meaning.** `gstack-pregate` fingerprints the working tree with
+`bin/gstack-wtree` before any check runs, and refuses (exit 3) when it cannot.
+There are two causes, and the line says which:
+
+- **It could not start.** On Windows no Git Bash was found to run the script.
+  The detail lists every candidate tried with the reason it was rejected
+  (`GSTACK_GIT_BASH (unset): not set; git --exec-path …; install path …;
+  PATH bash: …`), in the order [`BASH_UNAVAILABLE`](#bash-unavailable)
+  describes. On macOS or Linux it means `bin/gstack-wtree` is missing.
+- **It ran and failed.** The detail is the script's own message, and the fix
+  is the repair it printed, for example `set TMPDIR to a writable directory`.
+
+Before this, both cases were reported as `policy source unavailable:
+origin/<base> is not a resolvable commit` with `git fetch` as the fix, which
+changed nothing.
+
+**Fix.** Run the fix the line prints. For the Windows case, point gstack at
+Git Bash's `bash.exe`, then rerun `gstack-pregate`:
+
+- Git Bash (this shell only): `export GSTACK_GIT_BASH='C:/Program Files/Git/bin/bash.exe'`
+- Windows PowerShell 5.1 or PowerShell 7 (this shell only):
+  `$env:GSTACK_GIT_BASH = 'C:\Program Files\Git\bin\bash.exe'`
+
+To set it for good (Claude Code reads it on its next start), follow the
+recipes under [`BASH_UNAVAILABLE`](#bash-unavailable), or install Git for
+Windows (`winget install --id Git.Git -e` in PowerShell).
+
+**With `--json`.** Every refusal before a check runs (this one, an
+unavailable base, an invalid pin file) is one JSON object on stdout,
+`{"ok":false,"status":"refused","code":"WTREE_UNAVAILABLE","detail":"…","fix":"…","docs":"…#wtree-unavailable"}`,
+with exit 3. A run's object carries the same `ok` and `status`
+(`complete` or `incomplete`), so `status` tells a refusal from a run. The
+`GSTACK_RESULT:` line goes to stderr under `--json`.
+
+<a id="claude-md-skill-list"></a>
+### `warn CLAUDE.md the gstack section in <file> lists <n> skills; Claude Code lists installed skills itself, and a pasted list goes stale with each release`
+
+**Meaning.** `gstack-doctor` found a gstack section in `~/.claude/CLAUDE.md`
+or in this project's `CLAUDE.md` that enumerates skills: an `Available
+skills:` line, or eight or more `/skill` names. Older install prompts asked
+for that list (#3169). Claude Code already lists every installed skill with
+its description, and a pasted list goes stale with each release, so the agent
+can take a partial list as the complete set.
+
+**Fix.** Replace the section with the short block the doctor prints (no skill
+list; keep any other gstack rules you wrote yourself):
+
+```
+## gstack
+Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
+```
+
+**Expected result.** The next `gstack-doctor` run shows
+`ok CLAUDE.md no gstack section lists skills (...)`.
 <a id="policy-gstack-too-old"></a>
 ### `POLICY_GSTACK_TOO_OLD`
 

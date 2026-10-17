@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ARTIFACT_SCHEMAS, checkSchema, type PregateFile, type PregateRemote, type ValidationError } from '../headless-artifacts';
-import { wtreeFingerprint } from '../regen';
+import { wtreeFingerprint, type WtreeResult } from '../script-invocation';
 import { guardsCheck } from './checks/guards';
 import { clearHint, lanesCheck, parseRemoteReport, REMOTE_GATE_LANE, remoteReportProblem } from './checks/lanes';
 import { literalsCheck } from './checks/literals';
@@ -124,10 +124,10 @@ export interface Verification { ok: boolean; code?: 'PREGATE_STALE' | 'PREGATE_R
  * current after final generation and stamping), no check may be fail or
  * incomplete, and every requires-remote obligation needs its receipt.
  */
-export function verifyPregate(repoRoot: string, file: PregateFile, treeNow = wtreeFingerprint(repoRoot)): Verification {
+export function verifyPregate(repoRoot: string, file: PregateFile, treeNow: WtreeResult = wtreeFingerprint({ cwd: repoRoot })): Verification {
   const uncleared = (file.requires_remote ?? []).filter(r => !r.receipt);
-  const current = !!treeNow && treeNow === file.tree;
-  if (!current) return { ok: false, code: 'PREGATE_STALE', message: `pregate.json was recorded against tree ${file.tree.slice(0, 12)}; the tree is now ${(treeNow ?? 'unknown').slice(0, 12)}`, current, uncleared };
+  const current = 'tree' in treeNow && treeNow.tree === file.tree;
+  if (!current) return { ok: false, code: 'PREGATE_STALE', message: `pregate.json was recorded against tree ${file.tree.slice(0, 12)}; ${'tree' in treeNow ? `the tree is now ${treeNow.tree.slice(0, 12)}` : `the tree cannot be fingerprinted now (${treeNow.error})`}`, current, uncleared };
   const failed = file.checks.filter(c => c.status === 'fail');
   if (failed.length) return { ok: false, code: 'PREGATE_LANE_FAILED', message: `${failed.length} check(s) failed: ${failed.map(c => c.id).join(', ')}`, current, uncleared };
   const incomplete = file.checks.filter(c => c.status === 'incomplete' || c.status === 'not_installed');

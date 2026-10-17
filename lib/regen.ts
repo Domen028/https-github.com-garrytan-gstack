@@ -21,7 +21,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { type ResultCodeName } from './result-codes';
-import { runBashSync, wtreeFingerprint as fingerprintTree } from './script-invocation';
+import { runBashSync, wtreeFingerprint } from './script-invocation';
 import { containedRelative, globToRegExp, matchesAny } from './ship-policy';
 
 export const GENERATED_PATH = '.gstack/generated.json';
@@ -128,17 +128,6 @@ export function selectEntries(registry: Registry, touched?: readonly string[]): 
   return registry.entries.filter(e => e.inputs.length === 0 || touched.some(t => matchesAny(e.inputs, t) || matchesAny(e.outputs, t)));
 }
 
-/**
- * Compatibility wrapper for the pregate consumers (lib/pregate/context.ts,
- * lib/pregate/index.ts), files #3190 changes: they move to
- * lib/script-invocation.ts's `{tree}|{error}` form in item 10b, which then
- * deletes this.
- */
-export function wtreeFingerprint(repoRoot: string): string | null {
-  const r = fingerprintTree({ cwd: repoRoot });
-  return 'tree' in r ? r.tree : null;
-}
-
 export interface Scratch { dir: string; wtree: string; remove: () => void }
 
 /**
@@ -148,7 +137,7 @@ export interface Scratch { dir: string; wtree: string; remove: () => void }
  * Error naming the step.
  */
 export function scratchWorktree(repoRoot: string, prefix = 'gstack-regen-'): Scratch {
-  const fp = fingerprintTree({ cwd: repoRoot });
+  const fp = wtreeFingerprint({ cwd: repoRoot });
   if ('error' in fp) throw new Error(`cannot fingerprint the working tree (${fp.error})`);
   const wtree = fp.tree;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -248,7 +237,7 @@ export function runRegen(o: RunRegenOptions): { results: EntryResult[]; wtree: s
     }
   } finally { scratch?.remove(); }
   if (scratch) return { results, wtree: scratch.wtree };
-  const fp = fingerprintTree({ cwd: o.repoRoot });
+  const fp = wtreeFingerprint({ cwd: o.repoRoot });
   return { results, wtree: 'tree' in fp ? fp.tree : null };
 }
 
