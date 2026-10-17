@@ -75,6 +75,7 @@ const BASELINE = [
   'test/detector-corpus-plan-eng-multi-finding-batching.test.ts', // B1 replay corpus (GSTA-23 red 37228573062): census captures through the paid case's review-question counter
   'test/detector-corpus-shared-libs-plan-callers.test.ts', // B1 replay corpus: census captures through the paid case's actor (approved plan item)
   'test/detector-corpus-ship-docsync-late-result.test.ts', // B1 replay corpus: census captures through the paid case's detectors (approved plan item)
+  'test/detector-corpus-ship-docsync-launch-failure.test.ts', // B1 replay corpus (GSTA-39 red 38336400566): PR gate captures through the paid case's docsActorVerdict
   'test/devex-peer-comparison-calibration.test.ts',
   'test/diagram-render-drift.test.ts',
   'test/disabled-dated-record-at.test.ts',
