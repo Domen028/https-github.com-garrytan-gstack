@@ -12,6 +12,7 @@
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { DEFAULT_HOST_ESTIMATE_USD } from '../lib/autoplan-budget';
 import { SMALL_PLAN } from './helpers/autoplan-run-fixture';
 import { capyRunner, phaseVia, readJsonl, readRunJson, writePlan } from './helpers/autoplan-capy';
 
@@ -102,7 +103,7 @@ describe('close --deferred', () => {
     expect(run.phases.ceo.outside.status).toBe('skipped');
     expect(run.phases.ceo.outside.attempts[0].state).toBe('deferred');
     const settled = spend(s.out).settled.find((x: any) => x.attempt === outsideAttempt);
-    expect(settled).toMatchObject({ usd: 'unknown', reserved_usd: 5 });
+    expect(settled).toMatchObject({ usd: 'unknown', reserved_usd: DEFAULT_HOST_ESTIMATE_USD });
     expect(spend(s.out).released).toEqual([]);
     const after = unknownUsd(s.out) + spend(s.out).reserved.reduce((t: number, x: any) => t + x.estimate_usd, 0);
     expect(after).toBe(before);
