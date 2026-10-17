@@ -160,7 +160,7 @@ describe('gstack-lease', () => {
     const renewed = path.join(dir, 'renewed');
     fs.writeFileSync(renewed, fresh);
     // The holder renews just before reclaim takes the lock, as if touch ran after the stale verdict.
-    const racing = bashEnv(dir, `mkdir() { case "$*" in *"/.lock") command cp "${renewed}" "${file}" ;; esac; command mkdir "$@"; }\n`);
+    const racing = bashEnv(dir, `ln() { case "$*" in *"/.lock") command cp "${renewed}" "${file}" ;; esac; command ln "$@"; }\n`);
     const r = run(['live', '--root', dir], { BASH_ENV: racing });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(r.stderr).not.toContain('reclaimed');
@@ -168,22 +168,64 @@ describe('gstack-lease', () => {
     expect(fs.readdirSync(leases).filter((n) => n.startsWith('.'))).toEqual([]);
   });
 
-  test('touch and reclaim take the directory lock; a lock a killed process left behind is broken after a minute', () => {
+  test('a lock whose holder died, or whose pid now belongs to another process, is broken at once', () => {
     const { dir, leases } = checkout();
-    fs.mkdirSync(path.join(leases, '.lock'), { recursive: true });
-    const old = new Date(Date.now() - 5 * 60_000);
-    fs.utimesSync(path.join(leases, '.lock'), old, old);
     const holder = sleeper();
-    const r = run(['touch', '--root', dir, '--pid', String(holder)]);
+    fs.mkdirSync(leases, { recursive: true });
+    fs.symlinkSync(`${deadPid()} `, path.join(leases, '.lock'));
+    const r = run(['touch', '--root', dir, '--pid', String(holder)], { GSTACK_LEASE_LOCK_TRIES: '3' });
     expect(r.status, r.stdout + r.stderr).toBe(0);
     expect(fs.existsSync(path.join(leases, '.lock'))).toBe(false);
-    expect(fs.readFileSync(path.join(leases, String(holder)), 'utf8')).toMatch(/^(linux|ps) /);
-    fs.mkdirSync(path.join(leases, '.lock'));
-    fs.writeFileSync(path.join(leases, String(holder)), otherStart(fs.readFileSync(path.join(leases, String(holder)), 'utf8').trim()) + '\n');
-    const held = run(['live', '--root', dir]);
-    expect(held.status, held.stdout + held.stderr).toBe(0);
-    expect(fs.existsSync(path.join(leases, String(holder)))).toBe(true);
-  }, 30_000);
+    const identity = fs.readFileSync(path.join(leases, String(holder)), 'utf8').trim();
+    expect(identity).toMatch(/^(linux|ps) /);
+    fs.symlinkSync(`${holder} ${otherStart(identity)}`, path.join(leases, '.lock'));
+    const again = run(['touch', '--root', dir, '--pid', String(holder)], { GSTACK_LEASE_LOCK_TRIES: '3' });
+    expect(again.status, again.stdout + again.stderr).toBe(0);
+    expect(fs.existsSync(path.join(leases, '.lock'))).toBe(false);
+  });
+
+  test('a live holder\'s lock is never broken, however old: touch exits 3 without writing and a reclaim keeps the lease', () => {
+    const { dir, leases } = checkout();
+    const owner = sleeper();
+    const holder = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(owner)]).status).toBe(0);
+    expect(run(['touch', '--root', dir, '--pid', String(holder)]).status).toBe(0);
+    const ownerToken = `${owner} ${fs.readFileSync(path.join(leases, String(owner)), 'utf8').trim()}`;
+    const lockPath = path.join(leases, '.lock');
+    fs.symlinkSync(ownerToken, lockPath);
+    const old = new Date(Date.now() - 5 * 60_000);
+    fs.lutimesSync(lockPath, old, old);
+    const holderFile = path.join(leases, String(holder));
+    const stale = otherStart(fs.readFileSync(holderFile, 'utf8').trim()) + '\n';
+    fs.writeFileSync(holderFile, stale);
+    const t = run(['touch', '--root', dir, '--pid', String(holder)], { GSTACK_LEASE_LOCK_TRIES: '3' });
+    expect(t.status, t.stdout + t.stderr).toBe(3);
+    expect(t.stderr).toContain(`locked by live process ${owner}`);
+    expect(fs.readFileSync(holderFile, 'utf8')).toBe(stale);
+    const l = run(['live', '--root', dir], { GSTACK_LEASE_LOCK_TRIES: '3' });
+    expect(l.status, l.stdout + l.stderr).toBe(0);
+    expect(l.stderr).not.toContain('reclaimed');
+    expect(l.stdout).toContain(`${holder} `);
+    expect(fs.existsSync(holderFile)).toBe(true);
+    expect(fs.readlinkSync(lockPath)).toBe(ownerToken);
+  });
+
+  test('unlock removes only its own lock: a lock that changed hands during a reclaim stays', () => {
+    const { dir, leases } = checkout();
+    const owner = sleeper();
+    const holder = sleeper();
+    expect(run(['touch', '--root', dir, '--pid', String(owner)]).status).toBe(0);
+    expect(run(['touch', '--root', dir, '--pid', String(holder)]).status).toBe(0);
+    const ownerToken = `${owner} ${fs.readFileSync(path.join(leases, String(owner)), 'utf8').trim()}`;
+    const holderFile = path.join(leases, String(holder));
+    fs.writeFileSync(holderFile, otherStart(fs.readFileSync(holderFile, 'utf8').trim()) + '\n');
+    const lockPath = path.join(leases, '.lock');
+    // While reclaim deletes the stale lease under its lock, the lock changes hands.
+    const swap = bashEnv(dir, `rm() { if [ "$*" = "-f ${holderFile}" ]; then command rm -f "${lockPath}"; command ln -s "${ownerToken}" "${lockPath}"; fi; command rm "$@"; }\n`);
+    const r = run(['live', '--root', dir, '--exclude-ancestry-of', String(owner)], { BASH_ENV: swap });
+    expect(r.stderr).toContain(`reclaimed stale lease ${holder}`);
+    expect(fs.readlinkSync(lockPath)).toBe(ownerToken);
+  });
 
   test('a lease without a recorded identity (older gstack) counts while fresh and is stale past the 120-minute window', () => {
     const { dir, leases } = checkout();

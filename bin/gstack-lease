@@ -13,7 +13,8 @@
 #       pid defaults to the harness pid behind this call
 #       (bin/gstack-harness-pid.sh, the same derivation the session marker
 #       uses), or behind --from (a caller whose own parent is short-lived
-#       passes its parent pid); leases older than 120 min are pruned
+#       passes its parent pid); leases older than 120 min are pruned. Exits 3
+#       and writes nothing when a live process holds the directory lock
 #   gstack-lease live [--root <checkout>] [--exclude-ancestry-of <pid>]
 #       print `<pid> <age>m <command>` per lease held by a live process that
 #       is neither the given pid nor one of its ancestors (the caller's own
@@ -30,7 +31,7 @@
 # runtime root's .source-path, else ../). A root that is not a git checkout
 # exits 2 and writes nothing. GSTACK_LEASE_DIR overrides the lease directory
 # (hermetic tests; a dev checkout's own tests must not lease it). Bash 3.2
-# plus git, ps, find.
+# plus git, ps, find, ln, readlink.
 set -u
 BIN="$(cd "$(dirname "$0")" && pwd -P)"
 # shellcheck source=bin/gstack-install-verdict.sh
@@ -98,20 +99,39 @@ state() {
 }
 # The lease directory's lock: touch's publish and prune, and reclaim's
 # reread-and-delete, run under it, so a reclaim never deletes a renewal and a
-# lease never disappears while it is live. mkdir is atomic everywhere; a lock
-# left by a killed process is broken once it is a minute old.
+# lease never disappears while it is live. The lock is a symlink whose target
+# names its holder (`<pid> <start identity>`): ln -s creates it and its owner
+# in one atomic step. It is broken only when that holder is dead or its pid
+# now belongs to another process, never by age, and unlock removes only the
+# caller's own lock. A live holder makes lock() give up after
+# GSTACK_LEASE_LOCK_TRIES tries 0.1 s apart (default 300).
+LOCK="$DIR/.lock" TOKEN=""
 lock() {
+  [ -n "$TOKEN" ] || TOKEN="$$ $(identity $$)"
   _tries=0
-  until mkdir "$DIR/.lock" 2>/dev/null; do
+  until ln -s "$TOKEN" "$LOCK" 2>/dev/null; do
     _tries=$((_tries + 1))
-    if [ "$_tries" -ge 50 ]; then
-      [ -n "$(find "$DIR/.lock" -maxdepth 0 -mmin +1 2>/dev/null)" ] && rmdir "$DIR/.lock" 2>/dev/null && continue
-      return 1
+    LOCK_OWNER=$(readlink "$LOCK" 2>/dev/null)
+    if [ -n "$LOCK_OWNER" ]; then
+      case "$(state "${LOCK_OWNER%% *}" "${LOCK_OWNER#* }" 0)" in
+        dead|stale) break_lock "$LOCK_OWNER"; continue ;;
+      esac
     fi
+    [ "$_tries" -ge "${GSTACK_LEASE_LOCK_TRIES:-300}" ] && return 1
     sleep 0.1
   done
 }
-unlock() { rmdir "$DIR/.lock" 2>/dev/null; }
+# break_lock OWNER — move the lock aside and delete it only if it still names
+# OWNER; a lock another process took meanwhile is put back.
+break_lock() {
+  _aside="$DIR/.lock.broken.$$"
+  rm -f "$_aside"
+  mv "$LOCK" "$_aside" 2>/dev/null || return 0
+  _moved=$(readlink "$_aside" 2>/dev/null)
+  [ "$_moved" = "$1" ] || ln -s "$_moved" "$LOCK" 2>/dev/null
+  rm -f "$_aside"
+}
+unlock() { [ "$(readlink "$LOCK" 2>/dev/null)" = "$TOKEN" ] && rm -f "$LOCK"; return 0; }
 # reclaim FILE RECORD — delete a stale lease only if, under the lock, it still
 # holds the record judged stale; a renewal since then keeps it.
 reclaim() {
@@ -129,10 +149,11 @@ case "$VERB" in
   touch)
     [ -n "$PID" ] || PID=$(gstack_harness_pid "${FROM:-$PPID}")
     mkdir -p "$DIR" || exit 2
-    _tmp="$DIR/.$PID.$$" _locked=1
-    lock && _locked=0
-    identity "$PID" > "$_tmp" && mv -f "$_tmp" "$DIR/$PID" || { rm -f "$_tmp"; [ "$_locked" = 0 ] && unlock; exit 2; }
-    [ "$_locked" = 0 ] && { find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null; unlock; }
+    lock || { echo "gstack-lease: the lease directory is locked by live process ${LOCK_OWNER%% *}; lease $PID not renewed" >&2; exit 3; }
+    _tmp="$DIR/.$PID.$$"
+    identity "$PID" > "$_tmp" && mv -f "$_tmp" "$DIR/$PID" || { rm -f "$_tmp"; unlock; exit 2; }
+    find "$DIR" -mmin +120 -type f -exec rm -f {} + 2>/dev/null
+    unlock
     exit 0 ;;
   list)
     for f in "$DIR"/*; do
