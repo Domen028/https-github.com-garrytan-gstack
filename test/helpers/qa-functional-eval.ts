@@ -104,6 +104,7 @@ export async function runQAFunctionalCase(entry: { id: string; family: QAFamily;
     fixtureGit(fixture.root, ['commit', '-m', 'Bind current QA instructions to fixture']);
     fixture.revision = fixtureGit(fixture.root, ['rev-parse', 'HEAD']);
     if (fixtureGit(fixture.root, ['status', '--porcelain'])) throw new Error('QA fixture must start clean');
+    const fixtureCleanAt = new Date().toISOString();
     observer = await observeQAWrites(fixture.root, { evidenceProducer: true, atomicWriteMode: entry.mode });
     await runRecordedOfficeHoursAttempt({
       collector, name: entry.id, suite: 'Functional QA native E2E',
@@ -117,7 +118,8 @@ export async function runQAFunctionalCase(entry: { id: string; family: QAFamily;
           timeout, completionReserveMs: timeout / 4,
           testName: entry.id, runId, signal, env: { CLAUDE_CONFIG_DIR: fixture.config,
             GIT_OPTIONAL_LOCKS: '0', QA_STATE_ROOT: path.join(fixture.root, '.qa-state'),
-            ...(qaFunctionalRequiredProbes(entry) ? { GSTACK_QA_REQUIRED_PROBES: JSON.stringify(qaFunctionalRequiredProbes(entry)) } : {}) },
+            ...(qaFunctionalRequiredProbes(entry) ? { GSTACK_QA_REQUIRED_PROBES: JSON.stringify(qaFunctionalRequiredProbes(entry)) } : {}),
+            ...(entry.mode === 'qa' && qaFunctionalRequiredProbes(entry) ? { GSTACK_QA_REQUIRED_AFTER_EDIT: JSON.stringify({ paths: [path.join(fixture.root, 'src')], since: fixtureCleanAt }) } : {}) },
         });
         return result;
       },
