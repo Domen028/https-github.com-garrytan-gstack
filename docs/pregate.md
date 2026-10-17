@@ -238,6 +238,24 @@ the supervision above. Close the obligation one of two ways:
   `spent, reserved, unknown`: a gate that prints no `spent=` is `unknown`,
   counted at the cap.
 
+gstack's own example: `.gstack/pregate.json` declares
+`"remote_gate": "bash scripts/ubicloud/pregate-remote.sh"`. With
+`UBICLOUD_API_KEY` set the script runs the selected files on one Ubicloud VM
+with `bun run test:ubicloud`'s environment, refuses before creating the VM when
+the cap cannot buy a 20-minute run at the size's list price (`UBI_SIZE`,
+default `standard-16`), checks the tree and the planned file set on the VM
+before any test runs, and reports `spent=` from billed minutes. Without a key
+it runs the same files locally in parallel shards
+(`test-free-shards.ts --files-from`) and reports `spent=0`. The command is the
+same either way (`--remote` always needs a cap; the keyless path spends
+nothing). `--timeout 2700` keeps pregate's default 600 s deadline from cutting
+off a slow VM run inside its 45-minute wall (the VM's teardown runs in its own
+session, so a pregate timeout never strands it):
+
+```bash
+gstack-pregate --stage tests --remote --spend-cap 2 --timeout 2700 --allow-repo-commands
+```
+
 <a id="guards"></a>
 ## Guards and the lane-done rule
 
