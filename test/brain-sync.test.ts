@@ -610,6 +610,57 @@ describe('gstack-brain-sync per-file hold', () => {
     expect(spoolFiles()).toHaveLength(3);
   }, 120_000);
 
+  test('successful add without an index entry keeps the queue and refuses publication', () => {
+    init();
+    write(CLEAN, '# queued plan\n');
+    const before = git(['rev-parse', 'HEAD']).stdout;
+    const shim = gitShim('case " $* " in *" add "*) exit 0;; esac');
+    expect(drain(shim.env).status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(statusJson().message).toContain('staged artifact validation refused');
+    expect(spoolText()).toContain(CLEAN);
+    expect(git(['rev-parse', 'HEAD']).stdout).toBe(before);
+    expect(remoteFiles()).not.toContain(CLEAN);
+  });
+
+  test('assume-unchanged cannot silently acknowledge stale indexed content', () => {
+    init();
+    write(CLEAN, '# first version\n');
+    drain();
+    expect(git(['update-index', '--assume-unchanged', CLEAN]).status).toBe(0);
+    write(CLEAN, '# second version\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(spoolText()).toContain(CLEAN);
+    expect(remoteShow(CLEAN).stdout).toBe('# first version\n');
+  });
+
+  test('unrelated staged entries are preserved and never included in a sync commit', () => {
+    init();
+    write(CLEAN, '# queued plan\n');
+    const extra = 'projects/p/ceo-plans/manual.md';
+    write(extra, '# manually staged\n', false);
+    expect(git(['add', '-f', '--', extra]).status).toBe(0);
+    const result = drain();
+    expect(result.status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(spoolText()).toContain(CLEAN);
+    expect(staged()).toContain(extra);
+    expect(staged()).toContain(CLEAN);
+    expect(remoteFiles()).not.toContain(extra);
+    expect(remoteFiles()).not.toContain(CLEAN);
+  });
+
+  test('staged content verification respects Git clean conversion', () => {
+    init();
+    fs.writeFileSync(path.join(tmpHome, '.gitattributes'), '*.md text eol=lf\n');
+    write(CLEAN, '# CRLF plan\r\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('ok');
+    expect(remoteShow(CLEAN).stdout).toBe('# CRLF plan\n');
+    expect(spoolFiles()).toHaveLength(0);
+  });
+
   test('a git add failure is reported, never swallowed', () => {
     if (!canRevokeWrites()) return; // chmod is advisory here (win32, root)
     init();
