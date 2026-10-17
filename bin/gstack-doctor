@@ -267,7 +267,7 @@ check_codex_probe() {
 }
 
 check_sync() {
-  local mode file json status held drainable drain push queue=0 now f detail fix="$BIN/gstack-brain-sync --status"
+  local mode file json status held drainable drain push queue=0 now f detail case_names fix="$BIN/gstack-brain-sync --status"
   mode=$("$BIN/gstack-config" get artifacts_sync_mode 2>/dev/null || echo off)
   if [ ! -d "$STATE_ROOT/.git" ]; then
     row "not configured" "artifacts sync" "off; cross-machine artifacts sync is unavailable" "$BIN/gstack-artifacts-init"
@@ -289,8 +289,9 @@ check_sync() {
   fi
   json=$(head -c 16384 "$file" 2>/dev/null | tr '\n\r' '  ')
   status=$(json_field status "$json")
-  case "$status" in ok|idle|held|blocked|push_failed|error) ;; *) status=unknown ;; esac
+  case "$status" in ok|idle|held|collision|blocked|push_failed|error) ;; *) status=unknown ;; esac
   held=$(json_field held_count "$json" | tr -cd '0-9')
+  case_names=$(json_field case_names "$json" | tr -cd 'A-Za-z0-9._?,-' | head -c 300)
   drainable=$(json_field drainable "$json" | tr -cd '0-9')
   drain=$(epoch_of "$(json_field last_drain_at "$json")")
   push=$(epoch_of "$(json_field last_push_at "$json")")
@@ -301,6 +302,10 @@ check_sync() {
     blocked) row warn "artifacts sync" "status blocked (a re-scan still flags staged content)" "$fix"; return ;;
     push_failed|error|unknown) row warn "artifacts sync" "status $status" "$fix"; return ;;
   esac
+  if [ -n "$case_names" ]; then
+    row warn "artifacts sync" "status $status; artifact paths differ only by letter case ($case_names), see docs/troubleshooting.md#artifact-case-collision" "$fix"
+    return
+  fi
   if [ "${drainable:-0}" -gt 0 ] && { [ -z "$push" ] || [ $((now - push)) -gt 86400 ]; }; then
     row warn "artifacts sync" "status $status; no push for 24h while $drainable record(s) wait" "$fix"
   elif [ "$queue" -gt 0 ] && [ -n "$drain" ] && [ $((now - drain)) -gt 86400 ]; then
