@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.91.111.0] - 2026-10-16
+
+**Four background reds in the paid PR gate were caused by a detector, a fixture interface, a gstack helper and a Review Army workflow block, not by the PRs that hit them.** Each is fixed where it starts, and each fix has a free regression built from the red run's captured events. Over the last 99 gate runs, 10 of 28 full-selection PR runs had a red. Replayed under these fixes, that drops to 8, and red verdicts drop from 13 to 10. No threshold, budget, trial count or quarantine changed.
+
+### What this means for you
+
+- **`gstack-skill-start --help` and `gstack-skill-end --help` print usage and touch nothing.** They used to ignore the flag and run a real session: minting a session id, writing a marker into your state root and emitting an instruction. Now `-h`/`--help` exits 0 before any side effect.
+- **/review and /ship's Review Army prints the scope signals it selects specialists from.** The "Detect stack and scope" block sourced `SCOPE_FRONTEND`, `SCOPE_BACKEND` and the rest without showing them, so agents added their own `echo` to the block. It now ends with `set | grep '^SCOPE_'`.
+
+### For contributors
+
+- The `ship-docsync-launch-failure` detector treats "until/unless/once/when/before/if Documentation is current" as a condition, not a claim. A new replay corpus in `test/fixtures/detector-corpora/ship-docsync-launch-failure/` covers it.
+- The docsync observation interface admits the lifecycle helpers' own `--help`. Every Bash command from the `ship-docsync-store` red run (`test/fixtures/docsync-store-38969924945-bash.json`) passes it.
+- The qa-only browser-deadline policy admits `ls -la <root>/qa-reports/screenshots`. Escapes, siblings, `-laR` and appended commands are still refused.
+
 ## [1.91.109.0] - 2026-10-16
 
 **Pregate's secrets check stops passing real keys it never scanned, Windows Git Bash can run `gstack-upgrade` again, and four user-reported workflow bugs are fixed.** The secrets check could miss a committed AWS key in two ways and flagged ordinary TypeScript as secrets. `gstack-upgrade` refused every Git Bash install. Catalog field names failed a check that can't be downgraded. Browse treated some server-side writes as read-only, and a plan review could delete another review's summary. Each fix has a test that fails on the previous release.
