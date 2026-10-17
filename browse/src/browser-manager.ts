@@ -302,12 +302,17 @@ export const TAB_PROBE_TIMEOUT_MS = 1_000;
 
 /**
  * Budget for saveState()'s per-tab storage read. Longer than the probe: a tab
- * that misses it loses its localStorage/sessionStorage across a context
- * recreation or handoff, so only a tab that is really stuck is skipped.
+ * that misses it falls back to the last storage it answered with, which may
+ * be stale, so only a tab that is really stuck takes that path.
  */
 const TAB_STORAGE_READ_TIMEOUT_MS = 5_000;
 
-type TabReadKind = 'probe' | 'title';
+type TabStorage = { localStorage: Record<string, string>; sessionStorage: Record<string, string> };
+type TabReadKind = 'probe' | 'title' | 'storage';
+
+function urlOrigin(url: string): string {
+  return URL.canParse(url) ? new URL(url).origin : '';
+}
 
 /**
  * Resolve with `work`'s value, or with undefined once `ms` passes. The losing
@@ -333,7 +338,7 @@ export interface BrowserState {
   pages: Array<{
     url: string;
     isActive: boolean;
-    storage: { localStorage: Record<string, string>; sessionStorage: Record<string, string> } | null;
+    storage: TabStorage | null;
     /**
      * HTML content loaded via load-html (setContent), replayed after context recreation.
      * In-memory only — never persisted to disk (HTML may contain secrets or customer data).
@@ -395,9 +400,11 @@ export class BrowserManager {
   private navigationGuards = new WeakMap<Page, { pending: Set<Promise<void>>; blocked: string | null }>();
   /** One pending read per page and kind (#3247). A read that outlives its
    * budget stays queued in the renderer until the page frees up, so a stuck
-   * tab reuses it instead of collecting a new one on every /health poll or
-   * `tabs` call. */
+   * tab reuses it instead of collecting a new one on every /health poll,
+   * `tabs` call or persist tick. */
   private pendingTabReads = new WeakMap<Page, Map<TabReadKind, Promise<unknown>>>();
+  /** The last storage each page answered with, and the origin it came from. */
+  private lastTabStorage = new WeakMap<Page, { origin: string; storage: TabStorage }>();
   // Our own 'disconnected' listeners per browser. Detach only these: removing
   // every 'disconnected' listener also strips Playwright's internal one that
   // resolves browser.close(), so each close waited the full race timeout (and
@@ -1782,9 +1789,9 @@ export class BrowserManager {
   // ─── State Save/Restore (shared by recreateContext + handoff) ─
   /**
    * Capture browser state: cookies, localStorage, sessionStorage, URLs, active tab.
-   * Skips the storage of pages that fail the read (e.g., already closed) or
-   * whose renderer is stuck past TAB_STORAGE_READ_TIMEOUT_MS, so `state save`
-   * still works while one tab is busy (#3247).
+   * Skips the storage of pages that fail the read (e.g., already closed).
+   * A page whose renderer is stuck past TAB_STORAGE_READ_TIMEOUT_MS does not
+   * hold up `state save` (#3247); see readTabStorage() for what it gets.
    */
   async saveState(): Promise<BrowserState> {
     if (!this.context) throw new Error('Browser not launched');
@@ -1794,10 +1801,7 @@ export class BrowserManager {
 
     for (const [id, page] of this.pages) {
       const url = page.url();
-      const storage = await withinTabBudget(page.evaluate(() => ({
-        localStorage: { ...localStorage },
-        sessionStorage: { ...sessionStorage },
-      })).catch(() => null), TAB_STORAGE_READ_TIMEOUT_MS) ?? null;
+      const storage = await this.readTabStorage(page, url);
 
       // Capture load-html content so a later context recreation (viewport --scale)
       // can replay it via setTabContent. Never persisted to disk.
@@ -1817,6 +1821,28 @@ export class BrowserManager {
     }
 
     return { cookies, pages };
+  }
+
+  /**
+   * One tab's localStorage/sessionStorage for saveState(). A failed read
+   * (closed page, opaque origin) is null. A read that times out returns the
+   * last storage this page gave for the same origin: a periodic
+   * BROWSE_PERSIST_STATE snapshot must not replace good storage on disk with
+   * null just because the page is busy.
+   */
+  private async readTabStorage(page: Page, url: string): Promise<TabStorage | null> {
+    const origin = urlOrigin(url);
+    const read = await withinTabBudget(this.sharedTabRead(page, 'storage', () => page.evaluate(() => ({
+      localStorage: { ...localStorage },
+      sessionStorage: { ...sessionStorage },
+    })).catch(() => null)), TAB_STORAGE_READ_TIMEOUT_MS);
+    if (read === undefined) {
+      const last = this.lastTabStorage.get(page);
+      return last?.origin === origin ? last.storage : null;
+    }
+    if (read) this.lastTabStorage.set(page, { origin, storage: read });
+    else this.lastTabStorage.delete(page);
+    return read;
   }
 
   /**

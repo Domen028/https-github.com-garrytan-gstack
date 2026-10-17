@@ -7,7 +7,7 @@
  *
  * A real Chromium tab is held in a busy loop while a second tab stays idle;
  * each surface must answer within its bound and name the busy tab, without
- * piling up reads on the stuck renderer.
+ * piling up reads on the stuck renderer or dropping its persisted storage.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import * as fs from 'fs';
@@ -17,6 +17,7 @@ import type { Page } from 'playwright';
 import { BrowserManager, TAB_PROBE_TIMEOUT_MS } from '../src/browser-manager';
 import { HEALTH_REQUEST_TIMEOUT_MS } from '../src/cli';
 import { handleMetaCommand } from '../src/meta-commands';
+import { persistSessionState } from '../src/session-persist';
 import { callRoute, stubRouteContext } from './route-test-harness';
 import { startTestServer } from './test-server';
 
@@ -43,6 +44,9 @@ beforeAll(async () => {
   idleId = await bm.newTab(`${testServer.url}/basic.html`);
   bm.switchTab(busyId, { bringToFront: false });
   busyPage = bm.getPage();
+  // The good snapshot a BROWSE_PERSIST_STATE tick takes before the page hangs.
+  await busyPage.evaluate(() => localStorage.setItem('probe', 'kept'));
+  await bm.saveState();
   await busyPage.evaluate((ms) => {
     setTimeout(() => { const end = Date.now() + ms; while (Date.now() < end) { /* busy */ } }, 50);
   }, BUSY_MS);
@@ -100,11 +104,13 @@ describe('busy active tab (#3247)', () => {
     expect(evaluates).toBeLessThanOrEqual(1);
   }, 10_000);
 
-  test('saveState finishes with every tab, skipping only the busy tab storage', async () => {
-    const state = await bm.saveState();
-    expect(state.pages).toHaveLength(2);
-    expect(state.pages.find(p => p.isActive)?.storage).toBeNull();
-    expect(state.pages.find(p => !p.isActive)?.storage).not.toBeNull();
+  test('a persisted snapshot taken while the tab is busy keeps its last good storage', async () => {
+    const file = path.join(profileDir, 'session-state.json');
+    await persistSessionState(bm, file);
+    const saved = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(saved.pages).toHaveLength(2);
+    expect(saved.pages.find((p: { isActive: boolean }) => p.isActive).storage.localStorage).toEqual({ probe: 'kept' });
+    expect(saved.pages.find((p: { isActive: boolean }) => !p.isActive).storage).not.toBeNull();
   }, 15_000);
 
   test('the idle tab still answers', async () => {
