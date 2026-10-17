@@ -10,7 +10,9 @@
 # written atomically by bin/gstack-capy-install (install and --check) with
 #   schema_version 2, checkout, head, for, required[], pins_planning_only, ok,
 #   trailer, min_revision, launch_path, time, project, pin (the exact Bun pin),
-#   bun_path (realpath), bun_version, bun_rule (gstack_bun_resolve), bun_install
+#   bun_path (realpath), bun_version, bun_rule (gstack_bun_resolve), bun_install,
+#   node_path (realpath), node_version, node_rule (gstack_node_resolve; empty
+#   when the project pins no Node)
 # and named in the GSTACK_LAUNCH line as GSTACK_INSTALL_VERDICT=<path>. It is
 # the one record the bun shim, lib/pregate/runtime.ts and admission read.
 # Readers fall back to the schema 1 file keyed by the checkout alone,
@@ -67,7 +69,7 @@ gstack_install_project() {
 _gstack_iv_json() { printf '"%s"' "$(printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | tr -d '\000-\037')"; }
 
 # gstack_install_verdict_write FILE CHECKOUT HEAD FOR REQUIRED(space list) PINS_PLANNING_ONLY(0|1) OK(0|1) TRAILER MIN LAUNCH_PATH
-#                              PROJECT PIN BUN_PATH BUN_VERSION BUN_RULE BUN_INSTALL
+#                              PROJECT PIN BUN_PATH BUN_VERSION BUN_RULE BUN_INSTALL [NODE_PATH NODE_VERSION NODE_RULE]
 gstack_install_verdict_write() {
   local file="$1" tmp id req="" first=1
   for id in $5; do
@@ -82,7 +84,8 @@ gstack_install_verdict_write() {
     printf ' "required": [%s],\n "pins_planning_only": %s,\n "ok": %s,\n' "$req" "$([ "$6" = 1 ] && echo true || echo false)" "$([ "$7" = 1 ] && echo true || echo false)"
     printf ' "trailer": %s,\n "min_revision": %s,\n "launch_path": %s,\n' "$(_gstack_iv_json "$8")" "$(_gstack_iv_json "$9")" "$(_gstack_iv_json "${10}")"
     printf ' "project": %s,\n "pin": %s,\n "bun_path": %s,\n "bun_version": %s,\n' "$(_gstack_iv_json "${11:-}")" "$(_gstack_iv_json "${12:-}")" "$(_gstack_iv_json "${13:-}")" "$(_gstack_iv_json "${14:-}")"
-    printf ' "bun_rule": %s,\n "bun_install": %s,\n "time": %s\n}\n' "$(_gstack_iv_json "${15:-}")" "$(_gstack_iv_json "${16:-}")" "$(_gstack_iv_json "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
+    printf ' "bun_rule": %s,\n "bun_install": %s,\n' "$(_gstack_iv_json "${15:-}")" "$(_gstack_iv_json "${16:-}")"
+    printf ' "node_path": %s,\n "node_version": %s,\n "node_rule": %s,\n "time": %s\n}\n' "$(_gstack_iv_json "${17:-}")" "$(_gstack_iv_json "${18:-}")" "$(_gstack_iv_json "${19:-}")" "$(_gstack_iv_json "$(date -u +%Y-%m-%dT%H:%M:%SZ)")"
   } > "$tmp" && mv -f "$tmp" "$file"
 }
 

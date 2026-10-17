@@ -259,9 +259,11 @@ export function renderPinLines(report: PinReport, platform: NodeJS.Platform = pr
   for (const s of report.summary) lines.push(`PIN_SUMMARY: ${s}`);
   for (const s of report.skipped) lines.push(`PIN_SKIP: ${s}`);
   for (const f of report.failures) lines.push(`PIN_FAIL: ${f}`);
-  const plan = exactPlan(report.pins, 'bun', platform);
-  for (const r of plan.required) lines.push(`PIN_EXACT_REQUIRED: bun ${r.version} ${r.source}`);
-  if (plan.ciAlternatives.length) lines.push(`PIN_CI_ALTERNATIVES: bun ${plan.ciAlternatives.join(' ')}`);
+  for (const tool of ['bun', 'node'] as const) {
+    const plan = exactPlan(report.pins, tool, platform);
+    for (const r of plan.required) lines.push(`PIN_EXACT_REQUIRED: ${tool} ${r.version} ${r.source}`);
+    if (plan.ciAlternatives.length) lines.push(`PIN_CI_ALTERNATIVES: ${tool} ${plan.ciAlternatives.join(' ')}`);
+  }
   lines.push(`PINS_VERDICT: ${report.verdict}`);
   return lines;
 }
