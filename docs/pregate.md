@@ -63,6 +63,7 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
+| `local` | `workflow.yml/job` lanes a local run satisfies: a platform-agnostic toolchain (an `ubuntu-latest` suite that runs the same on a Mac), or a repo whose CI is off. Their tests run here instead of becoming `requires-remote` |
 | `guards` | `[{ id, when: [globs], command, fix?, timeout_s? }]`: repo commands a lane must pass when a touched file matches `when` (manifest checks, subprocess goldens the import graph cannot see); see [guards](#guards) |
 | `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
 | `sealed` | sealed or eval output that must never reach a public destination; read by the pre-push hook and `gstack-pregate sealed` (see [sealed output](#sealed)) |
@@ -71,7 +72,16 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `remote_gate` | the repo's remote test gate command; under 8 cores the local test tier becomes a `requires-remote` obligation naming it, and `--remote` runs it (see [remote gate](#remote-gate)) |
 
 Only the `origin/<base>` copy is honoured, so a downgrade is reviewed before it
-takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
+takes effect. A repo that keeps `.gstack/` out of git (a shared repo where gstack
+is one contributor's tool) can hold the same file at
+`<GSTACK_HOME>/projects/<slug>/pregate.json`. It is read only when the base
+carries none (never under `--policy-from head`), it lives outside the repository
+so a PR still cannot reach it, and the record names it (`policy user <path>`).
+It covers `gstack-pregate run` only: `sealed` and `price_file` are read from the
+base branch's copy, so the user file refuses them (`PREGATE_CONFIG_INVALID`)
+rather than holding a policy nothing reads. A user file that exists but cannot
+be read refuses the same way instead of falling back to defaults.
+`gstack-pregate validate` / `init` cover the working-tree file.
 
 ## `gstack-pregate`
 
