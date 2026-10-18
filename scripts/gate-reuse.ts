@@ -41,6 +41,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { receiptDigest } from '../lib/ship-queue';
 import { isUnavailable, loadPolicyFromBase, matchesAny, type ShipPolicy } from '../lib/ship-policy';
+import { rewriteStamps } from '../lib/restamp';
 import { buildReceipt } from '../lib/tree-receipt';
 import { acceptedRun, ghFailureReason, runGh, type GhRunner, type WorkflowRun } from './recover-receipts';
 import type { PaidRunManifest } from './lib/paid-plan';
@@ -152,8 +153,8 @@ export function testedBase(git: Git, tested: string, head: string): { base: stri
 }
 
 /** The files whose differences count as stamps under the base's policy. */
-function stampSet(policy: ShipPolicy): { version: string; changelog: string | null; releaseOutputs: string[] } {
-  return { version: 'VERSION', changelog: policy.changelog ?? null, releaseOutputs: policy.release_outputs };
+function stampSet(policy: ShipPolicy): { version: string; changelog: string | null; releaseOutputs: string[]; patterns: string[] } {
+  return { version: 'VERSION', changelog: policy.changelog ?? null, releaseOutputs: policy.release_outputs, patterns: policy.stamp_patterns };
 }
 
 /** A version or [Unreleased] heading, which a restamp rewrites; any other heading is content. */
@@ -193,36 +194,58 @@ export function ownDiffSignature(git: Git, mergeBase: string, head: string, stam
     if (!r.ok) return { error: `git diff ${mergeBase.slice(0, 12)} ${head.slice(0, 12)} failed (${r.out.split('\n')[0]})` };
     patch = r.out;
   }
-  const blob = (rev: string, file: string) => { const r = git(['show', `${rev}:${file}`]); return r.ok ? r.out : null; };
+  const stampPaths = changed.filter(file => !others.includes(file));
+  let modes: string[] = [];
+  if (stampPaths.length) {
+    const raw = git(['diff', '--raw', '-z', '--no-renames', mergeBase, head, '--', ...stampPaths.map(file => `:(literal)${file}`)]);
+    if (!raw.ok) return { error: `git diff --raw ${mergeBase.slice(0, 12)} ${head.slice(0, 12)} failed (${raw.out.split('\n')[0]})` };
+    const fields = raw.out.split('\u0000');
+    for (let i = 0; i + 1 < fields.length; i += 2) {
+      const [oldMode, newMode] = fields[i]!.replace(/^:/, '').split(' ');
+      if (oldMode !== newMode) modes.push(`${fields[i + 1]} ${oldMode} ${newMode}`);
+    }
+    modes = modes.sort();
+  }
+  const blob = (rev: string, file: string): string | null => {
+    const r = git(['show', `${rev}:${file}`]);
+    if (r.ok) return r.out;
+    const listed = git(['ls-tree', '--name-only', rev, '--', `:(literal)${file}`]);
+    if (!listed.ok || listed.out.trim() !== '') throw new Error(`cannot read ${file} at ${rev.slice(0, 12)}`);
+    return null;
+  };
   const version = (rev: string) => blob(rev, stamps.version)?.trim() || null;
   const unstamped = (rev: string, file: string) => {
     const text = blob(rev, file);
     const v = version(rev);
-    return text === null ? null : v ? text.split(v).join('\u0000VERSION') : text;
+    return text === null ? null : v ? rewriteStamps(text, v, '\u0000VERSION', stamps.patterns).text : text;
   };
-  const manifest = (text: string | null) => {
-    if (text === null) return null;
-    try { const parsed = JSON.parse(text); delete parsed.version; return JSON.stringify(parsed); } catch { return text; }
-  };
-  const [pkgBase, pkgHead] = [manifest(blob(mergeBase, 'package.json')), manifest(blob(head, 'package.json'))];
-  const releases = changed.filter(isRelease).sort().flatMap(file => {
-    const [before, after] = [unstamped(mergeBase, file), unstamped(head, file)];
-    return before === after ? [] : [[file, before, after]];
-  });
-  let changelog = null;
-  if (stamps.changelog && changed.includes(stamps.changelog)) {
-    const [before, after] = [changelogParts(blob(mergeBase, stamps.changelog)), changelogParts(blob(head, stamps.changelog))];
-    const removed = [...before.sections];
-    const added: string[] = [];
-    for (const section of after.sections) {
-      const i = removed.indexOf(section);
-      if (i >= 0) removed.splice(i, 1);
-      else added.push(section);
+  try {
+    const manifest = (text: string | null) => {
+      if (text === null) return null;
+      try { const parsed = JSON.parse(text); delete parsed.version; return JSON.stringify(parsed); } catch { return text; }
+    };
+    const [pkgBase, pkgHead] = [manifest(blob(mergeBase, 'package.json')), manifest(blob(head, 'package.json'))];
+    const releases = changed.filter(isRelease).sort().flatMap(file => {
+      const [before, after] = [unstamped(mergeBase, file), unstamped(head, file)];
+      return before === after ? [] : [[file, before, after]];
+    });
+    let changelog = null;
+    if (stamps.changelog && changed.includes(stamps.changelog)) {
+      const [before, after] = [changelogParts(blob(mergeBase, stamps.changelog)), changelogParts(blob(head, stamps.changelog))];
+      const removed = [...before.sections];
+      const added: string[] = [];
+      for (const section of after.sections) {
+        const i = removed.indexOf(section);
+        if (i >= 0) removed.splice(i, 1);
+        else added.push(section);
+      }
+      changelog = { preamble: before.preamble === after.preamble ? null : [before.preamble, after.preamble], added: added.sort(), removed: removed.sort() };
     }
-    changelog = { preamble: before.preamble === after.preamble ? null : [before.preamble, after.preamble], added: added.sort(), removed: removed.sort() };
+    const body = { patch, modes, package: pkgBase === pkgHead ? null : [pkgBase, pkgHead], releases, changelog };
+    return { sha256: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
+  } catch (err) {
+    return { error: (err as Error).message };
   }
-  const body = { patch, package: pkgBase === pkgHead ? null : [pkgBase, pkgHead], releases, changelog };
-  return { sha256: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
 }
 
 /** slices-report: what this executed run proved, or why it binds nothing. */

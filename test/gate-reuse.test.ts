@@ -84,6 +84,18 @@ beforeAll(() => {
   sha.rebasedDigest = commit(work, 'rebased-digest', sha.rebased, { 'agents-digest/gstack-AGENTS.md': '# gstack digest v1.0.1.0 — regenerate after upgrading\n\nbody\nhand-written instruction\n' }, 'rebased plus release-output content');
   sha.rebasedDrop = commit(work, 'rebased-drop', sha.rebased, { 'CHANGELOG.md': ['# Changelog', '', ...entry].join('\n') }, 'rebased plus a deleted CHANGELOG section');
   sha.rebasedPreamble = commit(work, 'rebased-preamble', sha.rebased, { 'CHANGELOG.md': changelog(entry).replace('# Changelog', '# Changelog (edited)') }, 'rebased plus a CHANGELOG preamble edit');
+  const protocol = (version: string, protocolVersion: string) => ({ 'agents-digest/gstack-AGENTS.md': '# gstack digest v' + version + ' — regenerate after upgrading\n\nbody\ncompatible with protocol ' + protocolVersion + '\n' });
+  sha.gatedProtocol = commit(work, 'gated-protocol', sha.base, { ...files('1.0.1.0', protocol('1.0.1.0', '1.0.1.0')), 'CHANGELOG.md': changelog(entry) }, 'a digest line that repeats the version as content');
+  sha.restampProtocol = commit(work, 'restamp-protocol', sha.moved, { ...files('1.0.2.0', protocol('1.0.2.0', '1.0.2.0')), 'CHANGELOG.md': changelog(['## [1.0.2.0] - 2026-10-03', '', '- the feature', '']) },
+    'rebased restamp that also changes the content line');
+  sha.restampProtocolKept = commit(work, 'restamp-protocol-kept', sha.moved, { ...files('1.0.2.0', protocol('1.0.2.0', '1.0.1.0')), 'CHANGELOG.md': changelog(['## [1.0.2.0] - 2026-10-03', '', '- the feature', '']) },
+    'rebased restamp that keeps the content line');
+  git(work, 'checkout', '-q', '-B', 'rebased-mode', sha.rebased);
+  git(work, 'update-index', '--chmod=+x', 'package.json');
+  git(work, 'commit', '-q', '-m', 'rebased plus a package.json mode change');
+  git(work, 'push', '-q', 'origin', 'rebased-mode');
+  git(work, 'reset', '-q', '--hard');
+  sha.rebasedMode = git(work, 'rev-parse', 'HEAD');
   sha.mainTouch = commit(work, 'main-touch', sha.base, { 'src/feature.ts': 'export const feature = 0;\n// main note\n' }, 'main edits the file the PR edits');
   sha.touchRebased = commit(work, 'touch-rebased', sha.mainTouch, { ...files('1.0.1.0', { 'src/feature.ts': 'export const feature = 1;\n// main note\n' }), 'CHANGELOG.md': changelog(entry) },
     'the feature, rebased onto a main that edited its file');
@@ -206,6 +218,14 @@ describe('find: main moved (R2)', () => {
     }
   });
 
+  test('a version-equal content line in a release output: only the stamp is normalised, so keeping the line reuses and changing it does not', () => {
+    const gated = binding({ head_sha: sha.gatedProtocol });
+    expect(find(sha.restampProtocolKept!, [run(300, sha.gatedProtocol!)], { 300: gated }, { baseSha: sha.moved }).candidate?.kind).toBe('main-moved');
+    const changed = find(sha.restampProtocol!, [run(300, sha.gatedProtocol!)], { 300: gated }, { baseSha: sha.moved });
+    expect(changed.candidate).toBeNull();
+    expect(changed.text).toContain("the PR's own diff (excluding stamp files) differs");
+  });
+
   test('a restamp on a moved main: stamp files are outside the own-diff compare', () => {
     const { candidate } = find(sha.restamp!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved });
     expect(candidate?.kind).toBe('main-moved');
@@ -236,8 +256,14 @@ describe('find: negative controls (each forces the full gate)', () => {
       'stamp-classified files outside the version file, package.json, CHANGELOG and release outputs: bun.lock');
   });
 
-  test('main moved and the own diff changed: a code byte, CHANGELOG entry text, a package.json field, release-output content, a deleted CHANGELOG section, a CHANGELOG preamble edit', () => {
-    for (const head of [sha.rebasedCode!, sha.rebasedEntry!, sha.rebasedPkg!, sha.rebasedDigest!, sha.rebasedDrop!, sha.rebasedPreamble!]) {
+  test('main moved and the own diff changed: a code byte, CHANGELOG entry text, a package.json field', () => {
+    for (const head of [sha.rebasedCode!, sha.rebasedEntry!, sha.rebasedPkg!]) {
+      refused(find(head, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }), "the PR's own diff (excluding stamp files) differs");
+    }
+  });
+
+  test('main moved and a stamp file changed beyond its stamp: release-output content, a deleted CHANGELOG section, a CHANGELOG preamble edit, a package.json mode', () => {
+    for (const head of [sha.rebasedDigest!, sha.rebasedDrop!, sha.rebasedPreamble!, sha.rebasedMode!]) {
       refused(find(head, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }), "the PR's own diff (excluding stamp files) differs");
     }
   });
