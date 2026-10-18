@@ -268,6 +268,9 @@ gstack_result_anchor() {
     STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
     WTREE_UNAVAILABLE) printf '%s' 'wtree-unavailable' ;;
     REGEN_DEPS_MISSING) printf '%s' 'regen-deps-missing' ;;
+    EVAL_QUOTA_STOP) printf '%s' 'eval-quota-stop' ;;
+    EVAL_BATCH_HELPER_MISSING) printf '%s' 'eval-batch-helper-missing' ;;
+    EVAL_BATCH_PREFLIGHT_FAILED) printf '%s' 'eval-batch-preflight-failed' ;;
     *) return 1 ;;
   esac
 }

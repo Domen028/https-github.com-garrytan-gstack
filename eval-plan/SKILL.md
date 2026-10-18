@@ -366,6 +366,10 @@ Usage: `/eval-plan [<prereg.md>] [--input <rows.jsonl>] [--arms <model,model>] [
 - Spend nothing before Step 3, and in Step 3 only what the ledger admits. A reservation the
   ledger refuses (`EVAL_BUDGET_EXHAUSTED`) ends the step; never retry to make room, never
   split a call to slip under the cap.
+- A subscription (CLI-metered) run goes through `gstack-eval-plan cli-run`, never a hand-written
+  loop. The first quota or rate-limit error ends the run (`EVAL_QUOTA_STOP`, exit 75): no retry, no
+  seat switch, no API key, no fallback; wait for the window to reset and rerun the same command to
+  resume. A full run needs the batch helper; `EVAL_BATCH_HELPER_MISSING` ends the step.
 - Preregistered text is frozen once the pilot starts: a bar, arm, decoy or stop rule
   changed after a priced call is a new eval with a new preregistration.
 - Held-out sets named in the preregistration are never read by this skill, pasted into a
@@ -387,7 +391,7 @@ Write (or open) the preregistration file. Each section is required and must be f
 | Bars | one line per metric: name, pass bar, direction, what a miss means for the decision |
 | Arms | one line per arm: model id (in the price table), settings, per-item cost from Step 1b |
 | Decoys | inputs the scorer must reject or score low; how many, how they were made, what a decoy pass proves |
-| Stop rules | the spend cap, a bar missed on the pilot, a scorer below its bar, `budget_exhausted` |
+| Stop rules | the spend cap, a bar missed on the pilot, a scorer below its bar, `budget_exhausted`, the first quota or rate-limit error |
 | Held-out exposure | every held-out set the plan touches: prior exposure (which runs, which models), the reservation on it |
 
 ```bash
@@ -460,7 +464,14 @@ anything else (`EVAL_DRY_RUN_FAILED`).
 `--out`): admission is `spent + reserved + unknown + estimate <= cap`, under a file lock
 shared with any concurrent worker. Run each `PILOT_ATTEMPT:` through the project's own
 eval command, then settle it with the actual cost from the provider's usage field, or
-`unknown` when the call was seat-metered or CLI-metered:
+`unknown` when the call was seat-metered or CLI-metered. A subscription (CLI-metered) attempt
+runs through `cli-run --scope smoke`: write one `{"id": "<attempt-id>", "prompt": "...", "args": ["--model", "<arm>"]}`
+line per attempt into a jobs file with your file-write tool, run it, then settle each attempt
+`unknown`. API-funded attempts keep the project's own command.
+
+```bash
+~/.claude/skills/gstack/bin/gstack-eval-plan cli-run --jobs <jobs.jsonl> --out <outdir> --scope smoke
+```
 
 ```bash
 ~/.claude/skills/gstack/bin/gstack-eval-plan pilot settle --out <outdir> --attempt <attempt-id> --usd <usd|unknown>
@@ -511,7 +522,12 @@ question with the projection as the recommended option only when `verdict=within
 Under `SESSION_KIND: unattended` write the question as an `approval` gate item through
 `gstack-gate` and end with `GSTACK_RESULT: skill=eval-plan status=gate_pending run=<outdir>`.
 The full run, when approved, keeps settling every attempt into the same ledger and reprints
-the spend table at each gate; `budget_exhausted` stops it.
+the spend table at each gate; `budget_exhausted` stops it. An approved full CLI-metered run
+is `cli-run --scope full`; `status=quota_stopped` stops it the same way:
+
+```bash
+~/.claude/skills/gstack/bin/gstack-eval-plan cli-run --jobs <jobs.jsonl> --out <outdir> --scope full --class <standard|fable>
+```
 
 ## Tier 3, after P7 (not in this skill yet)
 

@@ -30,6 +30,7 @@ const HOOK_FILES = [
   'lib/script-invocation.ts',
   'lib/result-codes.ts',
   'lib/result-codes-release.ts',
+  'lib/result-codes-eval-run.ts',
 ];
 const SLUG = 'stop-hook-slug-test';
 const BUDGET_MS = 2000;

@@ -12,6 +12,8 @@
  *   gstack-eval-plan pilot report --out <dir> --total <items> [--workers W] [--json]
  *   gstack-eval-plan price-gate --gate-file <file> | --gate "<exact gate command>" [--plan-file <file>] [--base <branch>] [--cap-usd N]
  *                               [--smoke-cap-usd N] [--allow-unpriced "<reason>"] [--out <dir>] [--json]
+ *   gstack-eval-plan cli-run --jobs <jobs.jsonl> --out <dir> [--workers N (1..8, default 2)] [--retries N (0..2, default 0)]
+ *                            [--timeout-sec S (default 1500)] [--scope smoke|full] [--class standard|fable] [--json]
  *
  * The dry run spends nothing (stub model) and prints the checklist: price-table
  * entry per arm, output budget sized for reasoning models, the retry prompt's
@@ -24,9 +26,16 @@
  * its binding (exact gate command, head, input hashes); it executes nothing and
  * writes a receipt (docs/eval-calls.md). arms, dry-run, pilot start and
  * price-gate lint every arm's model against the base branch's
- * .gstack/eval-models.json (docs/eval-models.md; lib/eval-models.ts). Exit 0 ok, 1 fail (incomplete
- * prereg, failed check, exceeded cap, unpriced or stale gate), 2 usage, 3 refused.
- * Logic: lib/eval-plan.ts.
+ * .gstack/eval-models.json (docs/eval-models.md; lib/eval-models.ts). `cli-run` is
+ * the subscription (CLI-metered) driver: a bounded pool of `claude -p` children
+ * with the API billing env removed, stopped by the first quota or rate-limit
+ * error (EVAL_QUOTA_STOP, exit 75; nothing retried, unstarted jobs cancelled,
+ * a rerun resumes). A full run re-executes itself under the seat-pinning batch
+ * helper (GSTACK_CLAUDE_BATCH, default claude-batch) and runs its preflight
+ * inside; no helper refuses (EVAL_BATCH_HELPER_MISSING). Exit 0 ok, 1 fail
+ * (incomplete prereg, failed check, exceeded cap, unpriced or stale gate, a
+ * cli-run job error), 2 usage, 3 refused, 75 quota stop (cli-run).
+ * Logic: lib/eval-plan.ts, lib/eval-cli-run.ts.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -37,6 +46,7 @@ import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { resultLine } from '../lib/result-codes';
 import { resolveBaseBranch } from '../lib/ship-policy';
 import { SpendCapExceeded } from '../lib/spend-ledger';
+import { BATCH_CLASSES, batchArgv, batchMarkerName, batchPreflight, type BatchClass, EXIT_QUOTA_STOP, parseJobs, renderCliRun, resolveBatchHelper, resolveCommand, runCliBatch, runInherited, scrubBillingEnv, SMOKE_MAX_JOBS, SMOKE_MAX_WORKERS, WRAPPED_ENV } from '../lib/eval-cli-run';
 
 const HELP = `gstack-eval-plan — preregistration, priced arms, $0 dry run, priced pilot (eval-plan/SKILL.md)
 
@@ -58,11 +68,20 @@ const HELP = `gstack-eval-plan — preregistration, priced arms, $0 dry run, pri
                                      policy's price_file at HEAD); checks the gate/head/input binding, executes nothing, writes a
                                      receipt (default .gstack/tmp/price-gate/); docs/eval-calls.md
 
+  cli-run --jobs <jobs.jsonl> --out <dir> [--workers N] [--retries N] [--timeout-sec S] [--scope smoke|full] [--class standard|fable] [--json]
+                                     subscription (CLI-metered) driver: jobs are {id, prompt, args?} lines run as \`claude -p --output-format json\`
+                                     by --workers (1..8, default 2) pull-based slots, API billing env removed; the first quota or rate-limit
+                                     error stops the run (EVAL_QUOTA_STOP, exit 75): no retry (--retries 0..2 covers other errors only),
+                                     unstarted jobs cancelled, a rerun with the same --out resumes. --scope full (default) needs --class and
+                                     re-runs itself under the batch helper (GSTACK_CLAUDE_BATCH, default claude-batch; missing =
+                                     EVAL_BATCH_HELPER_MISSING), which sets its marker (GSTACK_CLAUDE_BATCH_MARKER, default
+                                     MERIT_CLAUDE_BATCH_ID); inside, \`<helper> preflight\` must pass. --scope smoke: at most 10 jobs, 2 workers
+
   Model rules: arms, dry-run, pilot start and price-gate check every arm against .gstack/eval-models.json from
   origin/<base> (--base b; --models-from head for the unreviewed working-tree copy) at --scope smoke|full
   (default full; price-gate uses each call row's scope); docs/eval-models.md
 
-${exitTableHelp()}`;
+${exitTableHelp()} · 75 quota stop (cli-run)`;
 
 function flag(args: string[], name: string): string | undefined {
   const i = args.indexOf(name);
@@ -231,7 +250,86 @@ function doPriceGate(rest: string[]): number {
   return EXIT.ok;
 }
 
-function main(argv: string[]): number {
+const CLI_RUN_FLAGS = new Set(['--jobs', '--out', '--workers', '--retries', '--timeout-sec', '--scope', '--class']);
+
+function intFlag(args: string[], name: string, fallback: number, min: number, max: number): number {
+  const v = flag(args, name);
+  if (v === undefined) return fallback;
+  const n = Number(v);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${name} needs a whole number from ${min} to ${max}`);
+  return n;
+}
+
+/** `--jobs` / `--out` made absolute, so the re-exec under the batch helper reads the same files whatever its cwd. */
+function absoluteArgs(args: string[]): string[] {
+  return args.map((a, i) => (args[i - 1] === '--jobs' || args[i - 1] === '--out' ? path.resolve(a) : a));
+}
+
+async function doCliRun(rest: string[]): Promise<number> {
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === '--json') continue;
+    if (!CLI_RUN_FLAGS.has(rest[i]!) || rest[i + 1] === undefined) return usage(`cli-run: unknown flag or missing value ${rest[i]}`);
+    i++;
+  }
+  const jobsFile = flag(rest, '--jobs');
+  const out = flag(rest, '--out');
+  if (!jobsFile || !fs.existsSync(jobsFile)) return usage('cli-run needs --jobs <existing jobs.jsonl>');
+  if (!out) return usage('cli-run needs --out <dir>');
+  const scope = flag(rest, '--scope') ?? 'full';
+  if (scope !== 'smoke' && scope !== 'full') return usage('cli-run --scope needs smoke or full');
+  const clsFlag = flag(rest, '--class');
+  if (clsFlag !== undefined && !(BATCH_CLASSES as readonly string[]).includes(clsFlag)) return usage(`cli-run --class needs one of ${BATCH_CLASSES.join(', ')}`);
+  if (scope === 'full' && clsFlag === undefined) return usage('cli-run --scope full needs --class standard|fable (the batch helper pins the seat by class)');
+  const cls = (clsFlag ?? 'standard') as BatchClass;
+  let workers = intFlag(rest, '--workers', 2, 1, 8);
+  const retries = intFlag(rest, '--retries', 0, 0, 2);
+  const timeoutSec = intFlag(rest, '--timeout-sec', 1500, 1, 86_400);
+  const parsed = parseJobs(fs.readFileSync(jobsFile, 'utf8'));
+  if (parsed.errors.length) return usage(`cli-run: ${jobsFile}: ${parsed.errors.join('; ')}`);
+  if (scope === 'smoke') {
+    if (parsed.jobs.length > SMOKE_MAX_JOBS) return usage(`cli-run --scope smoke takes at most ${SMOKE_MAX_JOBS} jobs (got ${parsed.jobs.length}); a larger run is --scope full under the batch helper`);
+    workers = Math.min(workers, SMOKE_MAX_WORKERS);
+  }
+
+  // The helper, its preflight and every child see one env, with the API billing routes removed.
+  const { env } = scrubBillingEnv(process.env);
+  const ctx = 'gstack-eval-plan cli-run';
+  const markerName = batchMarkerName(env);
+  const marker = env[markerName];
+  let batch = 'none';
+  if (marker || scope === 'full') {
+    const helper = resolveBatchHelper(env);
+    if (!helper.path) { process.stderr.write(resultLine(ctx, 'EVAL_BATCH_HELPER_MISSING', `${helper.name} not found; no claude call was made`) + '\n'); return EXIT.refused; }
+    if (!marker) {
+      // Wrap the whole driver. A helper that runs us without setting the marker would loop; refuse instead.
+      if (env[WRAPPED_ENV] === '1') { process.stderr.write(resultLine(ctx, 'EVAL_BATCH_PREFLIGHT_FAILED', `${helper.path} run did not set ${markerName}; no claude call was made`) + '\n'); return EXIT.refused; }
+      const top = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 30_000 });
+      const repoRoot = top.status === 0 ? top.stdout.trim() : process.cwd();
+      process.stdout.write(`EVAL_BATCH: wrapping helper=${helper.path} class=${cls} scope=${scope}\n`);
+      return runInherited(batchArgv(helper.path, repoRoot, cls, process.execPath, path.resolve(process.argv[1]!), absoluteArgs(rest)), { ...env, [WRAPPED_ENV]: '1' });
+    }
+    const pre = batchPreflight(helper.path, env);
+    if (!pre.ok) { process.stderr.write(resultLine(ctx, 'EVAL_BATCH_PREFLIGHT_FAILED', `${helper.path} preflight exited ${pre.rc ?? 'on a signal or timeout'}${pre.stderr_tail ? `: ${pre.stderr_tail}` : ''}`) + '\n'); return EXIT.refused; }
+    batch = helper.path;
+    process.stdout.write(`EVAL_BATCH: ${marker} helper=${helper.path} scope=${scope}\n`);
+  } else {
+    process.stdout.write(`EVAL_BATCH: none scope=${scope}\n`);
+  }
+
+  if (!resolveCommand('claude', env)) { process.stderr.write(`${ctx}: claude is not on PATH; nothing ran\n`); return EXIT.refused; }
+  // runCliBatch scrubs again itself and reports the removed names, so it gets the original env.
+  const summary = await runCliBatch({ jobs: parsed.jobs, out, workers, retries, timeoutMs: timeoutSec * 1000, env: process.env });
+  const summaryFile = path.join(out, 'cli-run-summary.json');
+  if (rest.includes('--json')) process.stdout.write(JSON.stringify(summary) + '\n');
+  else process.stdout.write(renderCliRun(summary, { batch, scope, summaryFile }));
+  if (summary.status === 'quota_stopped') {
+    process.stderr.write(resultLine(ctx, 'EVAL_QUOTA_STOP', `${summary.quota_detail ?? 'quota'}; ${summary.cancelled} jobs cancelled; rerun the same command after the reset to resume`) + '\n');
+    return EXIT_QUOTA_STOP;
+  }
+  return summary.status === 'failed' ? EXIT.fail : EXIT.ok;
+}
+
+async function main(argv: string[]): Promise<number> {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === '--help' || cmd === '-h') { process.stdout.write(HELP + '\n'); return cmd ? EXIT.ok : EXIT.usage; }
   try {
@@ -240,6 +338,7 @@ function main(argv: string[]): number {
     if (cmd === 'dry-run') return doDryRun(rest);
     if (cmd === 'pilot') return doPilot(rest);
     if (cmd === 'price-gate') return doPriceGate(rest);
+    if (cmd === 'cli-run') return await doCliRun(rest);
     return usage(`unknown command ${cmd}`);
   } catch (e: any) {
     if (e instanceof SpendCapExceeded) { process.stderr.write(resultLine(`gstack-eval-plan ${cmd}`, 'EVAL_BUDGET_EXHAUSTED', e.message) + '\n'); return EXIT.fail; }
@@ -248,4 +347,4 @@ function main(argv: string[]): number {
   }
 }
 
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));

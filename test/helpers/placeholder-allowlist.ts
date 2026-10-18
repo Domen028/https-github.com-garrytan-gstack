@@ -59,6 +59,8 @@ export const IDENTIFIER_PLACEHOLDERS: Record<string, IdentifierGrammar> = {
   '<workers>': { grammar: NUM, what: 'concurrent eval workers' },
   '<attempt-id>': { grammar: ID, what: 'PILOT_ATTEMPT id printed by pilot start' },
   '<usd|unknown>': { grammar: /^(?:[0-9]+(?:\.[0-9]+)?|unknown)$/, what: 'actual cost in USD from the provider usage field, or unknown' },
+  '<jobs.jsonl>': { grammar: PATH, what: 'cli-run jobs file the agent wrote ({id, prompt} per line)' },
+  '<standard|fable>': { grammar: oneOf('standard', 'fable'), what: 'cli-run batch helper seat class' },
   '<run-id>': { grammar: NUM, what: 'GitHub Actions run id' },
   '<PID>': { grammar: NUM, what: 'process id printed by an earlier block' },
   '<retained-owner-token>': { grammar: ID, what: 'freeze owner token printed by acquire' },
