@@ -143,6 +143,24 @@ describe('Dart import graph', () => {
     expect(testsFor(g, 'a_fixture/lib/x.dart').tests).toEqual(['a_fixture/test/x_test.dart']);
   });
 
+  // Value: protects=a package name two other pubspecs share, imported from outside both, selects the importer for either copy, and a
+  //   leading BOM does not hide the file's directives; fails_when=the first root in ls-files order wins (the other copy loses its
+  //   dependent) or the BOM stops the line-start match (no edges, fail open); why_new=duplicate names resolved to one root and every
+  //   fixture file started at a directive; seam=none; no_claim=pub's own dependency resolution
+  test('an ambiguous package: import selects every same-name copy, and a BOM does not hide directives', () => {
+    const repo = dartRepo();
+    commit(repo, {
+      'a_fixture/pubspec.yaml': 'name: shared\n',
+      'a_fixture/lib/y.dart': 'int y() => 1;\n',
+      'b_fixture/pubspec.yaml': 'name: shared\n',
+      'b_fixture/lib/y.dart': 'int y() => 2;\n',
+      'test/y_test.dart': "\uFEFFimport 'package:shared/y.dart';\nvoid main() {}\n",
+    });
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'a_fixture/lib/y.dart').tests).toEqual(['test/y_test.dart']);
+    expect(testsFor(g, 'b_fixture/lib/y.dart').tests).toEqual(['test/y_test.dart']);
+  });
+
   // Value: protects=a pubspec.yaml that is a symlink out of the repo, or not a regular file, is skipped without throwing (a link to a
   //   device or FIFO could hang the read); fails_when=the guard is dropped and the outside file names a package or the read throws;
   //   why_new=every fixture pubspec was a regular in-repo file; seam=none; no_claim=a real /dev/zero or FIFO (a directory and an
@@ -186,6 +204,11 @@ describe('Dart runner and summary (pure)', () => {
     //   stays ZERO-RUN; fails_when=the Dart verdict is read first for every runner again; why_new=only Dart output was parsed;
     //   seam=none; no_claim=other runners echoing other runners' formats
     expect(parseSummary('received: "00:01 +2: All tests passed!"\n\n 0 pass\n 0 fail\nRan 0 tests across 1 file.', 'bun test {files}')).toEqual({ ran: 0, failed: 0 });
+    // Value: protects=a coloured or carriage-return-redrawn verdict still parses, so an all-skipped coloured run stays ZERO-RUN;
+    //   fails_when=colour codes reach the verdict regex, ran is null and exit 0 passes; why_new=only plain output was parsed;
+    //   seam=none; no_claim=other control sequences than CSI
+    expect(parseSummary('\x1b[32m+0\x1b[0m \x1b[33m~3\x1b[0m: All tests skipped.', 'flutter test {files}')).toEqual({ ran: 0, failed: 0 });
+    expect(parseSummary('00:01 +1: a\r00:02 +4 -1: Some tests failed.', 'dart test {files}')).toEqual({ ran: 5, failed: 1 });
   });
 
   test('without a declared runner, Dart tests group by package root; a declared runner takes every file', () => {

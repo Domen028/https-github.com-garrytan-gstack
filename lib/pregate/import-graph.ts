@@ -90,21 +90,19 @@ export function dartPackages(repoRoot: string, files: Iterable<string>): Map<str
   return out;
 }
 
-/** The repo file one Dart directive URI names: `package:<name>/x` → the first tracked `<root>/lib/x`, trying the deepest root that contains `fromFile` first (its own package), then the rest in ls-files order; a relative URI from `fromFile`; `dart:` and external packages are null. */
-function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fromFile: string, uri: string): string | null {
+/** The repo files one Dart directive URI names: `package:<name>/x` → the tracked `<root>/lib/x` of the deepest same-name root that contains `fromFile` (its own package) when that root holds it, otherwise every tracked `<root>/lib/x` (an ambiguous name selects more, never fewer); a relative URI from `fromFile`; `dart:` and external packages name none. */
+function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fromFile: string, uri: string): string[] {
   const pkg = /^package:([\w]+)\/(.+)$/.exec(uri);
   if (pkg) {
     const roots = packages.get(pkg[1]!) ?? [];
+    const targetIn = (root: string) => normalize(path.posix.join(root, 'lib', pkg[2]!));
     const own = roots.filter(r => r === '' || fromFile.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
-    for (const root of own === undefined ? roots : [own, ...roots.filter(r => r !== own)]) {
-      const target = normalize(path.posix.join(root, 'lib', pkg[2]!));
-      if (files.has(target)) return target;
-    }
-    return null;
+    if (own !== undefined && files.has(targetIn(own))) return [targetIn(own)];
+    return roots.map(targetIn).filter(t => files.has(t));
   }
-  if (/^[a-z][\w+.-]*:/.test(uri)) return null;
+  if (/^[a-z][\w+.-]*:/.test(uri)) return [];
   const target = normalize(path.posix.join(path.posix.dirname(fromFile), uri));
-  return files.has(target) ? target : null;
+  return files.has(target) ? [target] : [];
 }
 
 /**
@@ -360,7 +358,7 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
 export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, config: PathAliases = NO_ALIASES, unresolved?: string[], packages: Map<string, string[]> = new Map()): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
   if (rel.endsWith('.dart')) {
-    for (const run of source.matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) { const t = resolveDartUri(files, packages, rel, u[1]!); if (t) out.push({ target: t, via: 'import' }); }
+    for (const run of source.replace(/^\uFEFF/, '').matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) for (const t of resolveDartUri(files, packages, rel, u[1]!)) out.push({ target: t, via: 'import' });
   }
   const importOf = (spec: string) => {
     const targets = resolveRefs(files, dirs, rel, spec, false, config);

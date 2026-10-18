@@ -153,8 +153,9 @@ function parseDart(output: string): RunnerSummary | null {
   return d ? { ran: Number(d[1]) + Number(d[2] ?? 0), failed: Number(d[2] ?? 0) } : null;
 }
 
-/** The runner's own summary line: bun, node --test, vitest, jest, pytest, bats, dart/flutter test. A bats or dart/flutter runner's summary is tried first; for any other runner those formats are a last resort. `ran: null` when not recognised. */
-export function parseSummary(output: string, runner = ''): RunnerSummary {
+/** The runner's own summary line: bun, node --test, vitest, jest, pytest, bats, dart/flutter test. A bats or dart/flutter runner's summary is tried first; for any other runner those formats are a last resort. `ran: null` when not recognised. Colour codes are dropped and a carriage return ends a line, so a coloured or redrawn verdict still reads. */
+export function parseSummary(raw: string, runner = ''): RunnerSummary {
+  const output = raw.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '\n');
   if (/(?<![\w-])bats(?![\w-])/.test(runner)) { const b = parseBats(output); if (b) return b; }
   const dartRun = /(?<![\w-])(?:dart|flutter)(?![\w-])/.test(runner);
   if (dartRun) { const d = parseDart(output); if (d) return d; }
