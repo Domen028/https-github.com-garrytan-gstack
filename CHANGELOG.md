@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.141.0] - 2026-10-18
 
 **Daily `/cso` reports now leave out candidates without demonstrated in-scope impact.** The daily rubric already required an attacker-controlled entrypoint, a security-boundary crossing, demonstrated impact, and challenged protective controls. It now says what to omit: candidates whose impact needs code outside the snapshot or a future change, or that expose nothing sensitive. Those stay coverage evidence instead of supported findings. Comprehensive reports are unchanged and keep unresolved candidates as labeled hypotheses. In the third paid runtime qualification, daily precision was 47/53, below the 0.95 bar, and four of its five false-positive classes were findings of this kind. In a preregistered 12-cell pilot, 5 of the 6 false positives disappeared, every seeded issue was kept, and no new false positive appeared. Daily reports also drop low and informational real issues: 4 of the 13 pilot controls were lost this way. Garry accepted that trade-off. Comprehensive mode still reports them.
 
