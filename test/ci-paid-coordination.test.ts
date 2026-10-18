@@ -75,9 +75,9 @@ describe('paid CI coordination stays off the eval image', () => {
     test(`${name}: planning is independent of image startup and has no dependency install`, () => {
       const planner = jobs['plan-slices'];
       if (name === 'evals.yml') {
-        // The PR lane plans after its two tiny coordination jobs (push-burst debounce, base-ref receipt recovery), never after the image.
-        expect(planner.needs).toEqual(['debounce', 'recover-receipts']);
-        for (const id of ['debounce', 'recover-receipts']) {
+        // The PR lane plans after its two tiny coordination jobs (readiness, base-ref receipt recovery), never after the image.
+        expect(planner.needs).toEqual(['readiness', 'recover-receipts']);
+        for (const id of ['readiness', 'recover-receipts']) {
           const job = jobs[id] as Job & { 'runs-on'?: string };
           expect(job.container, id).toBeUndefined();
           expect(job['runs-on'], id).toBe('ubuntu-24.04');
@@ -110,7 +110,8 @@ describe('paid CI coordination stays off the eval image', () => {
       expect(executor.needs).toEqual(['build-image', 'plan-slices']);
       expect(JSON.stringify(executor.container)).toContain('needs.build-image.outputs.image-tag');
       if (name === 'evals.yml') {
-        expect(executor.if).toBe("${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' }}");
+        // A confirmed restamp-only reuse (R2a) is the one PR run that executes no slice.
+        expect(executor.if).toBe("${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' && needs.plan-slices.outputs.gate_reuse != 'true' }}");
       } else {
         expect(executor.if).toBeUndefined();
       }
@@ -165,12 +166,13 @@ describe('paid CI coordination stays off the eval image', () => {
   test('PR planning preserves the fork and Dependabot trust boundaries across the coordination jobs', () => {
     const jobs = workflows[0].jobs;
     const trust = "github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
-    // !cancelled() lets planning proceed when debounce/recovery were skipped or failed (reuse is then off); the trust clause still gates it.
-    expect(jobs['plan-slices'].if).toBe(`\${{ !cancelled() && needs.debounce.outputs.superseded != 'true' && ${trust} }}`);
+    // !cancelled() lets planning proceed when readiness was skipped (dispatch) or recovery was skipped or failed (reuse is then off);
+    // a readiness failure (Free Tests red on this head) or a superseded head plans nothing; the trust clause still gates it.
+    expect(jobs['plan-slices'].if).toBe(`\${{ !cancelled() && (needs.readiness.result == 'success' || needs.readiness.result == 'skipped') && needs.readiness.outputs.superseded != 'true' && ${trust} }}`);
     // The coordination jobs never run for Dependabot or for a fork PR either (recovery also serves an explicit pr_receipts dispatch).
-    expect(jobs.debounce.if).toContain("github.actor != 'dependabot[bot]'");
-    expect(jobs.debounce.if).toContain("github.event_name == 'pull_request'");
-    expect(jobs.debounce.if).toContain('github.event.pull_request.head.repo.full_name == github.repository');
+    expect(jobs.readiness.if).toContain("github.actor != 'dependabot[bot]'");
+    expect(jobs.readiness.if).toContain("github.event_name == 'pull_request'");
+    expect(jobs.readiness.if).toContain('github.event.pull_request.head.repo.full_name == github.repository');
     expect(jobs['recover-receipts'].if).toContain("github.actor != 'dependabot[bot]'");
     expect(jobs['recover-receipts'].if).toContain("(github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository");
     expect(jobs['recover-receipts'].if).toContain("(github.event_name == 'workflow_dispatch' && inputs.pr_receipts != '')");

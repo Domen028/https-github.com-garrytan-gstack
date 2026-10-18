@@ -120,47 +120,46 @@ jobs:
           docker manifest inspect "$EVAL_IMAGE" > /tmp/eval-runtime-manifest.json
           echo "id=$(sha256sum /tmp/eval-runtime-manifest.json | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
 
-  # ── Push-burst debounce (W1d: CEO-15, ENG-11, DX-7) ──────────────────────
-  # Only on `synchronize` when another evals.yml run for this PR started in
-  # the last 15 minutes (a push burst): wait 90 s before planning, so the next
-  # push's cancel-in-progress lands before any paid slice starts. A first push
-  # pays nothing. cancel-in-progress does the superseding; the head-SHA check
-  # only reports "superseded by <sha>" when this run outlives the wait. The PR
-  # label evals-no-debounce skips the wait.
-  debounce:
+  # ── Readiness-gated dispatch (R1, GSTA-48) ───────────────────────────────
+  # Paid slices for a PR head start only after the PR has been quiet for the
+  # window (vars.EVALS_QUIET_MINUTES, default 10; the evals-no-debounce label
+  # sets it to 0) and Free Tests has passed on the same head SHA. A newer push
+  # still cancels this run (cancel-in-progress), so the window is a sleep; the
+  # same heads get the same selection and verdict rules, only the start moves.
+  # Free Tests red on this head fails the run without paid work (re-run this
+  # workflow after a green Free Tests rerun). Dispatches never wait: they are
+  # explicit (eval:bg, census). Version Gate is not an input, so a stamp push
+  # waits for its own Free Tests only and always gets its gate.
+  readiness:
     runs-on: ubuntu-24.04
-    if: github.event_name == 'pull_request' && github.event.action == 'synchronize' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'evals-no-debounce')
-    timeout-minutes: 5
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+    timeout-minutes: 90
     permissions:
+      contents: read
       actions: read
       pull-requests: read
     outputs:
       superseded: ${{ steps.wait.outputs.superseded }}
     steps:
-      - name: Wait out a push burst
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - name: Wait for a quiet PR and green Free Tests on this head
         id: wait
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          QUIET_MINUTES: ${{ contains(github.event.pull_request.labels.*.name, 'evals-no-debounce') && '0' || vars.EVALS_QUIET_MINUTES || '10' }}
         run: |
-          since=$(date -u -d '15 minutes ago' +%s)
-          recent=$(gh api -X GET "repos/$GITHUB_REPOSITORY/actions/workflows/evals.yml/runs" -f event=pull_request \
-            -f branch="$HEAD_BRANCH" -f per_page=20 \
-            --jq "[.workflow_runs[] | select(.id < $GITHUB_RUN_ID and any(.pull_requests[]; .number == $PR_NUMBER) and ((.created_at | fromdateiso8601) >= $since))] | length" \
-            2>/dev/null || echo 0)
-          if [ "${recent:-0}" -eq 0 ]; then
-            echo "- Debounce: no other run for this PR in the last 15 min; no wait" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          echo "- Debounce: ${recent} run(s) for this PR started in the last 15 min; waiting 90 s (label evals-no-debounce skips this)" >> "$GITHUB_STEP_SUMMARY"
-          sleep 90
-          head=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq .head.sha 2>/dev/null || echo "$HEAD_SHA")
-          if [ "$head" != "$HEAD_SHA" ]; then
-            echo "superseded=true" >> "$GITHUB_OUTPUT"
-            echo "- Debounce: superseded by ${head}; this run plans no slices" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          bun --no-install run scripts/eval-readiness.ts wait --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --head-sha "$HEAD_SHA" \
+            --run-id "$GITHUB_RUN_ID" --quiet-minutes "$QUIET_MINUTES" --deadline-minutes 80 \
+            --github-output "$GITHUB_OUTPUT" --summary "$GITHUB_STEP_SUMMARY"
 
   # ── Receipt recovery (W1c: CEO-14/34, ENG-4/5/7) ─────────────────────────
   # A run cancelled by the next push never reaches slices-report, so its
@@ -175,10 +174,10 @@ jobs:
   # plan-slices turns reuse off, so cases execute unreduced.
   recover-receipts:
     runs-on: ubuntu-24.04
-    needs: [debounce]
-    # Runs after the debounce settles, so a superseded run's cancellation has usually completed.
+    needs: [readiness]
+    # Runs after readiness settles, so a superseded run's cancellation has usually completed; a head whose Free Tests failed recovers nothing.
     # A dispatch naming pr_receipts reads that PR's receipts from its runs' artifacts (cache entries are ref-scoped).
-    if: ${{ !cancelled() && needs.debounce.outputs.superseded != 'true' && github.actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'evals-fresh')) || (github.event_name == 'workflow_dispatch' && inputs.pr_receipts != '')) }}
+    if: ${{ !cancelled() && (needs.readiness.result == 'success' || needs.readiness.result == 'skipped') && needs.readiness.outputs.superseded != 'true' && github.actor != 'dependabot[bot]' && ((github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !contains(github.event.pull_request.labels.*.name, 'evals-fresh')) || (github.event_name == 'workflow_dispatch' && inputs.pr_receipts != '')) }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -221,6 +220,41 @@ jobs:
             --store /tmp/gstack-eval-input-cache --store-key "$STORE_KEY" --mode "$RECOVERY_MODE" --budget-seconds 60 >> "$GITHUB_STEP_SUMMARY" \
             || echo "- Receipt recovery crashed; reuse stays off this run" >> "$GITHUB_STEP_SUMMARY"
 
+      # R2a (GSTA-48), a narrow gate edit: base-ref code proposes reusing the
+      # newest executed GREEN gate of this PR when this head differs from it
+      # only by stamp files (TREE: same-modulo-stamps from the tree receipt
+      # under the base's ship policy) and main has not moved (same base SHA).
+      # plan-slices confirms the selection is identical. Anything else (a red
+      # or partial gate, a moved base, a non-stamp byte, no receipt, a gh or
+      # git error, evals-fresh) leaves no candidate: the full gate runs.
+      - name: Find a restamp-only gate to reuse (R2a, base-ref code)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ ! -f scripts/gate-reuse.ts ]; then
+            echo "- Restamp-only gate reuse unavailable: the base ref has no scripts/gate-reuse.ts; the full gate runs" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          bun --no-install run scripts/gate-reuse.ts find --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --head-repo "$HEAD_REPO" \
+            --branch "$HEAD_BRANCH" --run-id "$GITHUB_RUN_ID" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
+            --out /tmp/gate-reuse --budget-seconds 90 >> "$GITHUB_STEP_SUMMARY" \
+            || echo "- Restamp-only gate reuse crashed; the full gate runs" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Hand a restamp-only reuse candidate to plan-slices
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: gate-reuse-candidate
+          path: /tmp/gate-reuse
+          if-no-files-found: ignore
+          retention-days: 7
+
       - name: Hand the receipt store to plan-slices
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -248,15 +282,16 @@ jobs:
   # branch (see CLAUDE.md's garrytan-agents workflow).
   plan-slices:
     runs-on: ubicloud-standard-8
-    needs: [debounce, recover-receipts]
-    # !cancelled(): plans even when the debounce or recovery was skipped (first push, dispatch, evals-fresh) or recovery failed (reuse is then off); a superseded run plans nothing.
-    if: ${{ !cancelled() && needs.debounce.outputs.superseded != 'true' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    needs: [readiness, recover-receipts]
+    # !cancelled(): plans even when readiness or recovery was skipped (dispatch, evals-fresh) or recovery failed (reuse is then off); a superseded run, or a head whose readiness failed (Free Tests red), plans nothing.
+    if: ${{ !cancelled() && (needs.readiness.result == 'success' || needs.readiness.result == 'skipped') && needs.readiness.outputs.superseded != 'true' && github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     timeout-minutes: 10
     permissions:
       contents: read
     outputs:
       slices: ${{ steps.matrix.outputs.slices }}
       slice_timeouts: ${{ steps.matrix.outputs.slice_timeouts }}
+      gate_reuse: ${{ steps.gate_reuse.outputs.gate_reuse }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -311,6 +346,24 @@ jobs:
           EVALS_BASE: ${{ inputs.base_sha || (inputs.base_ref != '' && format('origin/{0}', inputs.base_ref)) || '' }}
         run: EVALS_TIER=gate bun --no-install run scripts/test-paid-shards.ts --tier gate --emit-plan /tmp/paid-plan/manifest.json --slice-budget 420 --jobs 2 --max-parallel 20
 
+      # R2a: reuse holds only when this head's own plan selects exactly the
+      # cases and trial plans the reused gate ran (selection fingerprint).
+      - name: Download a restamp-only reuse candidate
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: gate-reuse-candidate
+          path: /tmp/gate-reuse
+
+      - name: Confirm restamp-only gate reuse (R2a)
+        id: gate_reuse
+        if: github.event_name == 'pull_request'
+        run: |
+          mkdir -p /tmp/gate-reuse
+          bun --no-install run scripts/gate-reuse.ts confirm /tmp/gate-reuse /tmp/paid-plan/manifest.json --out /tmp/paid-plan \
+            --github-output "$GITHUB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+
       # CEO-13: the mode, case counts and, on fallback, every file that
       # restored the full gate with the edit that narrows it next time.
       - name: Summarize PR coverage
@@ -336,6 +389,7 @@ jobs:
             /tmp/paid-plan/manifest.json
             /tmp/paid-plan/receipts
             /tmp/paid-plan/store
+            /tmp/paid-plan/gate-reuse.json
           retention-days: 30
 
   eval-slices:
@@ -346,7 +400,8 @@ jobs:
     # !cancelled(), not always(): still runs when build-image was skipped
     # (image already published), but a newer push's cancel-in-progress stops
     # it instead of letting a superseded run finish its paid slices first.
-    if: ${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' }}
+    # A confirmed restamp-only reuse (R2a) runs no paid slice.
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' && needs.plan-slices.outputs.gate_reuse != 'true' }}
     # The planner packs ~7 minutes of recorded work per slice (EVALS_JOBS=2 x
     # EVALS_CONCURRENCY=2 per runner, never the old 40-way per-row fan-out
     # that queued claude session STARTUP behind 39 siblings). Each slice's job
@@ -500,7 +555,11 @@ jobs:
           retention-days: 30
 
   slices-report:
-    runs-on: ubicloud-standard-2
+    # GitHub-hosted, like recover-receipts: Ubicloud runners send actions/cache
+    # to Ubicloud's own transparent cache, which a GitHub-hosted restore never
+    # sees, so a store saved on Ubicloud was never restored (GSTA-48: every
+    # restore missed, e.g. #3253's restamp gate 3 minutes after a saved store).
+    runs-on: ubuntu-24.04
     needs: [plan-slices, eval-slices]
     # !cancelled(): the report must run (and FAIL) when an executor died — a
     # missing slice artifact reading as green is the class this lane kills —
@@ -518,7 +577,7 @@ jobs:
     permissions:
       contents: read
     outputs:
-      reconcile-exit: ${{ steps.reconcile.outputs.exit }}
+      reconcile-exit: ${{ steps.reconcile.outputs.exit || steps.reused.outputs.exit }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -543,6 +602,7 @@ jobs:
 
       - name: Reconcile slices against the manifest (fail-closed)
         id: reconcile
+        if: needs.plan-slices.outputs.gate_reuse != 'true'
         run: |
           set +e
           EVALS_TIER=gate bun --no-install run scripts/test-paid-shards.ts --tier gate --report /tmp/paid-report | tee /tmp/report.txt
@@ -551,6 +611,19 @@ jobs:
           # exit (always 0) — the fail-closed gate was silently fail-open
           # (caught by the ship review army; the wiring test now pins this).
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      # R2a: the planner confirmed a restamp-only reuse, so no slice ran; the
+      # verdict is the reused gate's, printed with its receipt. A missing or
+      # malformed reuse record exits 1 (fail-closed).
+      - name: Report the reused restamp-only verdict (R2a)
+        id: reused
+        if: needs.plan-slices.outputs.gate_reuse == 'true'
+        run: |
+          set +e
+          bun --no-install run scripts/gate-reuse.ts report /tmp/paid-report/gate-reuse.json --repo "$GITHUB_REPOSITORY" > /tmp/report.txt
+          code=$?
+          cat /tmp/report.txt
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
 
       - name: Summarize PR coverage and reuse
         if: always()
@@ -594,6 +667,29 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
+      # R2a: what this executed run proved, read by a later restamp-only push.
+      # Reused runs bind nothing, so reuse never chains off a reuse.
+      - name: Bind this run's verdict for restamp-only reuse (R2a)
+        if: always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RECONCILE_EXIT: ${{ steps.reconcile.outputs.exit }}
+        run: |
+          bun --no-install run scripts/gate-reuse.ts bind /tmp/paid-report --out /tmp/gate-binding --repo "$GITHUB_REPOSITORY" \
+            --pr "$PR_NUMBER" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --head-sha "$HEAD_SHA" \
+            --base-sha "$BASE_SHA" --profile "$EVALS_PROFILE" --reconcile-exit "$RECONCILE_EXIT" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the gate binding
+        if: always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: gate-binding-a${{ github.run_attempt }}
+          path: /tmp/gate-binding/gate-binding.json
+          if-no-files-found: ignore
+          retention-days: 30
+
       - name: Upload trial outcomes for pass-rate history
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -604,7 +700,7 @@ jobs:
           retention-days: 90
 
       - name: Fail the workflow when reconciliation failed
-        if: steps.reconcile.outputs.exit != '0'
+        if: (steps.reconcile.outputs.exit || steps.reused.outputs.exit) != '0'
         run: exit 1
 
   # PR comment in its OWN job with the write token and ZERO repo code: no
@@ -644,6 +740,13 @@ jobs:
           RECONCILE_EXIT: ${{ needs.slices-report.outputs.reconcile-exit }}
         run: |
           # shellcheck disable=SC2086,SC2059
+          # R2a: a confirmed restamp-only reuse ran no case; say so, with the
+          # reused run, the receipt and the identical selection.
+          REUSE=/tmp/paid-report/gate-reuse.json
+          if [ "${RECONCILE_EXIT:-1}" = "0" ] && [ -f "$REUSE" ] \
+            && jq -e '.schema == 1 and .tree == "same-modulo-stamps" and (.stamp_files | length > 0)' "$REUSE" >/dev/null 2>&1; then
+            BODY=$(jq -r --arg repo "$GITHUB_REPOSITORY" '"## E2E Evals: ✅ PASS (reused: restamp-only, R2a)\n\nNo paid case ran on `\(.current_head)`. It differs from `\(.gated_head)`, which passed the full gate in [run \(.reused_run_id)](https://github.com/\($repo)/actions/runs/\(.reused_run_id)), only by stamp files (\(.stamp_files | join(", "))), and main has not moved since (base `\(.base_sha)`).\n\n```\nTREE: same-modulo-stamps receipt=\(.receipt_sha256)\nselection: \(.selection_sha256) (identical to the reused gate)\nversion: \(.old_version // "-") -> \(.new_version // "-")\n```\n\n---\n*Restamp-only reuse (R2a): any non-stamp byte, a moved base or a missing receipt runs the full gate; the evals-fresh label opts out.*"' "$REUSE")
+          else
           TOTAL=0; PASSED=0; FAILED=0; MANUAL=0; EXECUTED=0; REUSED=0; COST="0"
           SUITE_LINES=""
           VERIFIED=/tmp/verdict/paid-report/collector-outcomes.json
@@ -737,6 +840,8 @@ jobs:
           \`\`\`
           ${FAILURES}
           \`\`\`"
+          fi
+
           fi
 
           COMMENT_ID=$(gh api repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments \

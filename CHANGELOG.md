@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+**The paid PR gate now starts only after a PR head's free tests pass and the PR has been quiet for 10 minutes, and a version-only restamp reuses the green gate it already has.** Over Oct 3 to 17, paid work on heads whose free tests failed, plus runs cancelled by a push within the window, cost about $2,990, about $1,390 a week (GSTA-47 estimate). The same heads still get the same selection and verdict rules; only the start time moves. A restamp whose tree equals the last green head modulo stamps, on an unchanged base, reports that verdict instead of paying again. The PR receipt store, which never restored once, now does.
+
+### Changed
+- **Readiness-gated dispatch (R1).** The `readiness` job in `evals.yml` replaces the 90-second push-burst debounce. It sleeps out the quiet window (repository variable `EVALS_QUIET_MINUTES`, default 10; `evals-no-debounce` sets it to 0), then waits for Free Tests to pass on the same head SHA, for up to 80 minutes. Free Tests red on the head fails the run with no paid work. A newer push still cancels the run. Dispatches never wait, and Version Gate is not an input, so a stamp push always gets its gate.
+- **The receipt store restores.** `slices-report` now runs on a GitHub-hosted runner like `recover-receipts`. On Ubicloud its `actions/cache` save went to Ubicloud's transparent cache, which the GitHub-hosted restore never sees: GitHub's cache held no `eval-input` entry at all, and #3253's restamp gate restored nothing 3 minutes after its green run saved 56 receipts.
+
+### Added
+- **Restamp-only gate reuse (R2a), a narrow gate edit.** A PR head reuses the newest executed gate's GREEN verdict only when that gate ran on the same base SHA, the tree receipt prints `TREE: same-modulo-stamps`, every differing file is VERSION, package.json, CHANGELOG.md or the agents digest, and this head's own plan has the same selection fingerprint. Base-ref code proposes the reuse (`scripts/gate-reuse.ts find`), the planner confirms the selection, no slice runs, and the PR comment says `PASS (reused: restamp-only, R2a)` with the reused run and receipt digest. A non-stamp byte (CHANGELOG entry text included), a moved base, a missing binding or receipt, a red or partial gate, or `evals-fresh` runs the full gate. Reuse across a main move (R2) is not enabled.
+
+### If you…
+- **…want a restamp to reuse its gate:** put the CHANGELOG entry in the gated push (under `## [Unreleased]` or the tentative version), so the stamp only re-heads it.
+- **…see "Free Tests run N concluded failure" on E2E Evals:** fix and push, or re-run Free Tests and then re-run E2E Evals.
+
 ## [1.91.133.0] - 2026-10-18
 
 **A lane on a small machine no longer reports done while its pregate test tier still waits on a remote run.** The coordinator contract every lane inherits (autoplan reviewer prompts, `gstack-autoplan contract`, /spec's gate-and-file section) now says a lane is done only when `gstack-pregate run --allow-repo-commands` passes, and that a `requires-remote` obligation needs `--stage tests --remote --spend-cap <cap>`.
