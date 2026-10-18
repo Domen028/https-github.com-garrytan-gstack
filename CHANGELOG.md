@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.91.139.0] - 2026-10-18
+
+**The docs-sync fixture's declared Git interface now includes read-only `git describe`, so `ship-docsync-store` no longer goes red when the /document-release child checks for release tags.** PR #3272's gate run 39153452209 failed that case on one command, `git describe --tags --always`, which the observer did not list. A focused paid rerun of `ship-docsync-store` on this tree passed ($3.83); the child ran the same command twice and the observer accepted it.
+
+### Changed
+- **Accepted:** `git describe` with any of `--tags`, `--always`, `--abbrev=<n>` and `--exact-match`, plus at most one literal revision. The observer prose that parents pass to children lists the same forms, so the code allowlist and the prompt agree.
+- **Still refused:** `--dirty` and `--broken`, which take `index.lock` and rewrite `.git/index` (seen under strace on git 2.55), plus `--contains`, `--all`, any other flag, a second revision, redirection and composition. Write-capable Git commands such as `git tag` and `git update-index` stay outside the interface.
+- **Gate integrity:** this widens one observer allowlist (`test/helpers/docsync-observer.ts`) and tightens nothing. Free regressions cover all 36 Bash commands of the captured run and run each accepted form against a tagged fixture with an out-of-date file timestamp, checking that the repository and the raw index bytes don't change. Negative controls show that `git describe --dirty` really rewrites the index.
+
 ## [1.91.138.0] - 2026-10-18
 
 **`scripts/gate-cost-replay.ts --history` replays PR gates' red runs and READY times, so the merge-train plan's two estimates are measured instead of assumed.** Over Oct 3 to 18 (505 E2E Evals runs, 92 merged PRs), the screen-provisional rule run on each failing head's diff from its tested base would have missed the PR-caused red on 2 of the 13 PRs that had one (#3036, #3121): 2 of 72 paid-relevant PRs (2.8%), against the plan's 6% estimate. 13 of 92 merged PRs had a PR-caused red, matching the plan's figure. Replaying READY arrivals through trains of 5 with a 3-hour fill limit, the realized train averages about 2.3 PRs, so trains make 22 to 29 gate attempts a week rather than the 12 to 20 the train model assumed, and READY-to-merge p90 runs 5 to 8 hours. This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
