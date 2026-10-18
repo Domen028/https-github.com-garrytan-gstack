@@ -21,6 +21,8 @@ import * as os from 'os';
 import * as path from 'path';
 
 import { generateTestBootstrap } from '../scripts/resolvers/testing';
+import { generateReviewArmy } from '../scripts/resolvers/review-army';
+import { HOST_PATHS } from '../scripts/resolvers/types';
 
 const section = generateTestBootstrap({} as never);
 
@@ -124,5 +126,44 @@ describe('/ship Step 4 detection is multi-ecosystem', () => {
     // The ask-and-persist contract, not a hardcoded project command.
     expect(section).toContain('AskUserQuestion');
     expect(section).toContain('persist the answer to CLAUDE.md');
+  });
+});
+
+// Value: protects=review-army STACK/TEST_FW name Dart and tell flutter_test from dart test; fails_when=the pubspec.yaml lines
+//   are dropped or the Flutter grep matches any `sdk:` (environment.sdk); why_new=no free test runs the review-army
+//   detection lines; seam=none; no_claim=specialist selection from these values (only the emitted lines run)
+describe('review-army stack detection names Dart and Flutter', () => {
+  const block = generateReviewArmy({ host: 'claude', skillName: 'ship', tmplPath: 'ship/SKILL.md.tmpl', paths: HOST_PATHS.claude });
+  const lines = (from: string, to: string): string => {
+    const start = block.indexOf(from);
+    const end = block.indexOf(to, start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    return block.slice(start, block.indexOf('\n', end));
+  };
+  const script = `${lines('STACK=""', 'echo "STACK:')}\n${lines('TEST_FW=""', 'echo "TEST_FW:')}\n`;
+
+  function stack(files: Record<string, string>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-army-stack-'));
+    try {
+      for (const [rel, body] of Object.entries(files)) fs.writeFileSync(path.join(dir, rel), body);
+      return execFileSync('bash', ['-c', script], { timeout: 30_000, cwd: dir, encoding: 'utf-8' });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test('Flutter app, pure Dart package, and a Dart SDK constraint that is not Flutter', () => {
+    const flutter = stack({ 'pubspec.yaml': 'name: app\ndependencies:\n  flutter:\n    sdk: flutter\n' });
+    expect(flutter).toContain('STACK: dart');
+    expect(flutter).toContain('TEST_FW: flutter-test');
+
+    const dart = stack({ 'pubspec.yaml': 'name: x\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n' });
+    expect(dart).toContain('STACK: dart');
+    expect(dart).toContain('TEST_FW: dart-test');
+
+    const none = stack({ 'README.md': 'x\n' });
+    expect(none).toContain('STACK: unknown');
+    expect(none).toContain('TEST_FW: unknown');
   });
 });

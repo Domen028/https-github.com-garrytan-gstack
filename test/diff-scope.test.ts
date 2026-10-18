@@ -95,6 +95,9 @@ describe('gstack-diff-scope', () => {
     expect(scope.SCOPE_BACKEND).toBe('true');
     expect(scope.SCOPE_TESTS).toBe('true');
     expect(runScope(createRepo(['pubspec.lock'])).SCOPE_CONFIG).toBe('true');
+    // Value: protects=a workspace package's pubspec.lock still reads as config; fails_when=the */pubspec.lock arm is dropped;
+    //   why_new=only the root lock was checked; seam=none; no_claim=none beyond protects
+    expect(runScope(createRepo(['packages/cache/pubspec.lock'])).SCOPE_CONFIG).toBe('true');
   });
 
   test('detects test files', () => {
