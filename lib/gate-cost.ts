@@ -306,6 +306,15 @@ export interface SelectionDeps {
   touchfiles(files: string[]): { e2e: string[]; global: boolean };
 }
 
+export interface ScreenSelection {
+  /** Gate cases the declared touchfiles and harness globals select (all of them when a global changed). */
+  e2e: string[];
+  global: boolean;
+  canary: boolean;
+  canaryReasons: string[];
+  preambleOnly: string[];
+}
+
 export interface SelectorCost { cases: number; judges: number; usd: number }
 export interface PrSelectionCost {
   pr: number;
@@ -354,6 +363,9 @@ export function fullGateUsd(deps: Pick<SelectionDeps, 'gateCases' | 'judgeCases'
   return costOf(deps.gateCases, table) + costOf(deps.judgeCases, table);
 }
 
+export const todaySelection = (diff: PrDiff, deps: SelectionDeps): TodaySelection =>
+  (diff.files.length ? deps.today(diff.files, diff.packageVersionOnly) : { e2e: [], judges: [], shadowE2e: null, mode: 'none' });
+
 /**
  * The screen-provisional rule: declared touchfiles and harness globals of the
  * files that are not heuristically preamble-only, every judge, and a canary
@@ -361,12 +373,9 @@ export function fullGateUsd(deps: Pick<SelectionDeps, 'gateCases' | 'judgeCases'
  * resolver, or files that reach cases only transitively. A package.json whose
  * only change is the version stamp is neither selected nor a canary trigger.
  */
-export function prSelectionCost(diff: PrDiff, deps: SelectionDeps, table: CaseCostTable, options: { canaryUsd?: number } = {}): PrSelectionCost {
-  const full = fullGateUsd(deps, table);
+export function screenSelection(diff: PrDiff, deps: SelectionDeps, today: TodaySelection): ScreenSelection {
   const gate = new Set(deps.gateCases);
   const stampOnly = (file: string) => file === 'package.json' && diff.packageVersionOnly;
-  const today = diff.files.length ? deps.today(diff.files, diff.packageVersionOnly) : { e2e: [], judges: [], shadowE2e: null, mode: 'none' };
-  const shadowE2e = today.shadowE2e ?? today.e2e;
   const preambleOnly = heuristicPreambleOnly(Object.fromEntries(Object.entries(diff.skillMdChangedLines).filter(([file]) => diff.files.includes(file))));
   const screenFiles = diff.files.filter(file => !preambleOnly.includes(file) && !stampOnly(file));
   const touch = screenFiles.length ? deps.touchfiles(screenFiles) : { e2e: [], global: false };
@@ -377,13 +386,19 @@ export function prSelectionCost(diff: PrDiff, deps: SelectionDeps, table: CaseCo
     ...diff.files.filter(file => file.startsWith('scripts/resolvers/')).map(file => `resolver ${file}`),
     ...(today.e2e.length > screenE2e.length ? ['transitive-only files (today selects more cases than declared touchfiles)'] : []),
   ];
-  const canary = canaryReasons.length > 0;
-  const screenUsd = costOf(screenE2e, table) + (canary && !touch.global ? options.canaryUsd ?? 12 : 0) + costOf(deps.judgeCases, table);
+  return { e2e: screenE2e, global: touch.global, canary: canaryReasons.length > 0, canaryReasons, preambleOnly };
+}
+
+export function prSelectionCost(diff: PrDiff, deps: SelectionDeps, table: CaseCostTable, options: { canaryUsd?: number } = {}): PrSelectionCost {
+  const today = todaySelection(diff, deps);
+  const shadowE2e = today.shadowE2e ?? today.e2e;
+  const { e2e, global, canary, canaryReasons, preambleOnly } = screenSelection(diff, deps, today);
+  const screenUsd = costOf(e2e, table) + (canary && !global ? options.canaryUsd ?? 12 : 0) + costOf(deps.judgeCases, table);
   return {
     pr: diff.pr, sha: diff.sha, files: diff.files.length, mode: today.mode,
     today: { cases: today.e2e.length, judges: today.judges.length, usd: costOf(today.e2e, table) + costOf(today.judges, table) },
     shadow: { cases: shadowE2e.length, judges: today.judges.length, usd: costOf(shadowE2e, table) + costOf(today.judges, table) },
-    screenProvisional: { cases: screenE2e.length, judges: deps.judgeCases.length, usd: Math.min(screenUsd, full), canary, canaryReasons, preambleOnly },
+    screenProvisional: { cases: e2e.length, judges: deps.judgeCases.length, usd: Math.min(screenUsd, fullGateUsd(deps, table)), canary, canaryReasons, preambleOnly },
   };
 }
 
@@ -536,6 +551,17 @@ export interface TrainModelResult {
   attemptRedShare: number;
 }
 
+/** Indexes of the PRs a policy screens: only paid-relevant PRs can screen; `random` draws from rnd. */
+export function screenedIndexes(prs: ReadonlyArray<{ paidRelevant: boolean; screenUsd: number }>, policy: ScreenPolicy, rnd: PyRandom): Set<number> {
+  const relevant = prs.map((pr, index) => ({ ...pr, index })).filter(pr => pr.paidRelevant);
+  const byCost = [...relevant].sort((a, b) => a.screenUsd - b.screenUsd);
+  const half = relevant.length >> 1;
+  const chosen = policy.kind === 'all' ? relevant : policy.kind === 'none' ? []
+    : policy.kind === 'random' ? rnd.sample(relevant, Math.floor(relevant.length * policy.fraction))
+    : policy.kind === 'cheapest-half' ? byCost.slice(0, half) : byCost.slice(half);
+  return new Set(chosen.map(pr => pr.index));
+}
+
 /**
  * Every merged PR lands in a train. Each paid-relevant PR carries a defect at
  * the screened or unscreened rate, and each gate attempt can also flake
@@ -550,15 +576,9 @@ export function simulateTrains(input: TrainModelInput): TrainModelResult {
   const full = input.fullGateUsd ?? 93.14, bisect = input.bisectUsd ?? 6, rescreen = input.rescreenFactor ?? 1.3;
   const reps = input.reps ?? 400;
   const rnd = new PyRandom(input.seed ?? 1);
-  const relevant = prs.map((pr, index) => ({ ...pr, index })).filter(pr => pr.paidRelevant);
-  const byCost = [...relevant].sort((a, b) => a.screenUsd - b.screenUsd);
-  const half = relevant.length >> 1;
   const t = { screen: 0, gates: 0, init: 0, initRed: 0, attRed: 0, bisects: 0, rebuildOnce: 0, stalls: 0 };
   for (let rep = 0; rep < reps; rep += 1) {
-    const chosen = policy.kind === 'all' ? relevant : policy.kind === 'none' ? []
-      : policy.kind === 'random' ? rnd.sample(relevant, Math.floor(relevant.length * policy.fraction))
-      : policy.kind === 'cheapest-half' ? byCost.slice(0, half) : byCost.slice(half);
-    const screened = new Set(chosen.map(pr => pr.index));
+    const screened = screenedIndexes(prs, policy, rnd);
     const queue = prs.map((pr, index) => {
       const s = screened.has(index);
       if (s) t.screen += pr.screenUsd * rescreen;
