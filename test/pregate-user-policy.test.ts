@@ -11,6 +11,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { loadConfigFromUser, validateConfig } from '../lib/pregate/config';
+import { buildContext } from '../lib/pregate/context';
+import { runPregate } from '../lib/pregate/index';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
 
 const repos: FixtureRepo[] = [];
@@ -54,6 +56,11 @@ describe('loadConfigFromUser', () => {
     const load = loadConfigFromUser(userPolicy);
     expect(load && 'errors' in load ? load.errors.map(e => [e.code, e.path]) : null).toEqual([['PREGATE_CONFIG_INVALID', userPolicy]]);
     expect(load && 'kind' in load ? [load.kind, load.label] : null).toEqual(['user', `user ${userPolicy}`]);
+    // Malformed JSON reaches the sealed/price_file probe too; it must still come back as a refusal, never a throw.
+    fs.rmSync(userPolicy, { recursive: true });
+    fs.writeFileSync(userPolicy, '{"local": [');
+    const bad = loadConfigFromUser(userPolicy);
+    expect(bad && 'errors' in bad ? bad.errors.map(e => e.message.startsWith('not valid JSON')) : null).toEqual([true]);
   });
 });
 
@@ -141,4 +148,59 @@ describe('gstack-pregate with a user-owned policy', () => {
     expect(based.out).toContain('origin/main@');
     expect(based.out).not.toContain('policy user');
   }, 60_000);
+
+  // Value: protects=the --remote refusal for a policy with no remote_gate tells the user where to declare it: the repo copy "on the
+  //   base branch", the user file by its path (never "on the base branch", which the user file is not on); fails_when=the
+  //   configFile ternary is dropped or inverted and the user is sent to edit a file nothing reads; why_new=no test reaches the
+  //   no-remote_gate branch and the user source is new; seam=none (userConfigPath and remote are existing buildContext options);
+  //   no_claim=the remote gate run itself
+  test('--remote with no remote_gate names the file to declare it in', async () => {
+    const lanesFix = async (repo: FixtureRepo, userConfigPath?: string) => {
+      const loaded = buildContext({ repoRoot: repo.work, base: 'main', policyFrom: 'base', allowRepoCommands: true, env: { ...process.env, ...repo.env }, progress: () => {}, cores: 16, testBackend: 'local', remote: { spendCapUsd: 1 }, userConfigPath });
+      if (!('ctx' in loaded)) throw new Error('fixture context refused');
+      const lanes = (await runPregate(loaded.ctx, { stage: 'tests' })).checks.find(c => c.id === 'lanes')!;
+      expect([lanes.status, lanes.code]).toEqual(['incomplete', 'PREGATE_INCOMPLETE']);
+      return lanes.fix!;
+    };
+    const { repo, userPolicy } = setup();
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    const user = await lanesFix(repo, userPolicy);
+    expect(user).toContain(`in ${userPolicy}, or run the tests locally`);
+    expect(user).not.toContain('on the base branch');
+
+    const based = makeFixtureRepo({ pregate: { ...BASE_PREGATE, local: LOCAL_ALL } });
+    repos.push(based);
+    commit(based, { 'lib/util.js': 'exports.add = (a, b) => b + a;\n' });
+    expect(await lanesFix(based)).toContain('in .gstack/pregate.json on the base branch, or run the tests locally');
+  }, 60_000);
+
+  // Value: protects=the strays fail fix, the strays warn fix and the PREGATE_STALLED fix each name the user file when it is the active
+  //   policy, so the user edits the file that is read; fails_when=any of the three reverts to a hardcoded .gstack/pregate.json, which a
+  //   base carrying none never reads; why_new=existing strays and stall tests assert detail and lines, never the fix, and only with a
+  //   repo copy; seam=none; no_claim=the stall timing itself (pregate-supervise covers it)
+  test('strays (fail and warn) and stall fixes name the user file', () => {
+    const { repo, userPolicy, run } = setup();
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    const check = (id: string) => JSON.parse(fs.readFileSync(path.join(repo.work, '.gstack/tmp/pregate.json'), 'utf8')).checks.find((c: { id: string }) => c.id === id);
+    const strays = (files: Record<string, string | null>) => {
+      commit(repo, files);
+      runBin(repo, 'gstack-pregate', ['--base', 'main', '--stage', 'preflight', '--only', 'strays'], { GSTACK_PROJECT_SLUG: SLUG });
+      return check('strays');
+    };
+
+    const fail = strays({ 'notes.txt': 'x\n', 'newtop/thing.js': 'module.exports = 1;\n' });
+    expect([fail.status, fail.code]).toEqual(['fail', 'PREGATE_STRAYS']);
+    expect(fail.fix).toContain(`goes in ${userPolicy} strays.allow`);
+
+    const warn = strays({ 'notes.txt': null });
+    expect([warn.status, warn.code]).toEqual(['warn', 'PREGATE_STRAYS']);
+    expect(warn.fix).toContain(`allow it in ${userPolicy} strays.allow`);
+
+    commit(repo, { 'newtop/thing.js': null, 'test/hang.test.js': 'setInterval(() => {}, 1000);\n' });
+    run(['--stall-timeout', '2']);
+    const stalled = check('lanes');
+    expect(stalled.code).toBe('PREGATE_STALLED');
+    expect(stalled.fix).toContain(`stall_timeout_s in ${userPolicy}; 0 disables`);
+  }, 60_000);
 });
+
