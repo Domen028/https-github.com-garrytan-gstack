@@ -14,6 +14,7 @@ import { collectorOutcomeCounts } from '../scripts/test-paid-shards';
 import { E2E_TOUCHFILES, GLOBAL_TOUCHFILES, selectTests } from './helpers/touchfiles';
 import nativeNoChangeCases from './fixtures/shared-libs-no-change-ci-public.json';
 import r44 from './fixtures/shared-libs-index-flags-r44-packets.json';
+import claudeVersionProbe from './fixtures/shared-libs-claude-version-probe.json';
 import skipDescriptions from './fixtures/shared-libs-index-flags-skip-description-public.json';
 import { seedPathReviewPrerequisites, checkPathReviewPrerequisites } from './helpers/shared-libs-path-fixture';
 
@@ -1799,6 +1800,24 @@ describe('retained native runtime callback failures', () => {
     for (const command of ['git -c protocol.ext.allow=never ls-files -z --stage', 'git -c core.safecrlf=false ls-files']) {
       expect(isInternalClaudeGitRequest(request, [...commands, command])).toBe(false);
     }
+  });
+
+  test('recognizes the captured Claude Code 2.1.292 version probe as that exact argv only', () => {
+    const request = claudeVersionProbe.public_request, commands = claudeVersionProbe.matching_model_commands;
+    expect(request.args.slice(0, 2)).toEqual(['-c', 'core.askPass=']);
+    expect(request.args.at(-1)).toBe('--version');
+    expect(commands).toEqual([]);
+    expect(isInternalClaudeGitRequest(request, commands)).toBe(true);
+    expect(isGuardedGitRequest(request)).toBe(false);
+    for (const parentExecutable of ['/usr/bin/bash', '/runtime/notclaude.exe', '']) {
+      expect(isInternalClaudeGitRequest({ ...request, parentExecutable }, commands)).toBe(false);
+    }
+    expect(isInternalClaudeGitRequest({ ...request, ppid: undefined }, commands)).toBe(false);
+    for (const args of [[...request.args.slice(0, -1), 'status'], [...request.args.slice(0, -1), 'log', '-1'],
+      [...request.args, 'status'], request.args.slice(2), request.args.filter(arg => arg !== 'hook.post-index-change.enabled=false')]) {
+      expect(isInternalClaudeGitRequest({ ...request, args }, commands), args.slice(-2).join(' ')).toBe(false);
+    }
+    expect(isInternalClaudeGitRequest(request, [`git ${request.args.join(' ')}`])).toBe(false);
   });
 
   test('answers the exact captured two-question skip-only request without altering its input', async () => {

@@ -410,6 +410,8 @@ export function currentFilePermissionEpoch(file: string | undefined, expected: s
     if (!stat.isFile() || stat.size > MAX_RECORD_BYTES || transcript.status !== 'ready') return null;
     const r = JSON.parse(fs.readFileSync(file,'utf8'));
     const sessions = new Set([...transcript.calls.map(c=>c.sessionId),...transcript.assistantMessages.map(m=>m.sessionId)]);
+    // A parent that has only used tools so far (no text, no question) is identified by its public tool events.
+    if (!sessions.size) readPlanCountTranscript(config, cwd, event => sessions.add(event.sessionId));
     const time = Date.parse(r.timestamp);
     const validId = (id: unknown) => typeof id === 'string' && id.startsWith(r.sessionId+':') && identifier(id.slice(r.sessionId.length+1));
     if (r.cwd !== cwd || r.expected !== expected || !identifier(r.sessionId) || sessions.size !== 1 || !sessions.has(r.sessionId) ||

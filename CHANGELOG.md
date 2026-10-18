@@ -8,8 +8,16 @@
 - **Model under test:** `CLAUDE_CAPTURE_EVAL_MODEL` in `lib/eval-model.ts` (renamed from `CLAUDE_FRONTIER_EVAL_MODEL`; Opus 5.5 is the catalog's smart tier, not its frontier) is `claude-opus-5-5`. Every `claude -p`, PTY and Agent SDK eval runner passes it as `--model` unless a test names a model or `EVALS_MODEL` is set.
 - **The judge stays Fable 5.1.** The new `CLAUDE_JUDGE_EVAL_MODEL` (`claude-fable-5-1`) is the `judge` default, the arm benchmark's judge and the judge calibration configs' model, because the calibration fixtures are keyed to it. The `claude-fable-5-*` → `fable-5` overlay routing now holds while the judge is a Fable 5 release.
 - **plan-review-report** drops its `claude-opus-4-7` pin and follows the capture default; it was the only PR-gate case on Opus 4.7. The periodic Opus 4.7 files keep their pins (TODOS).
-- **A new pass-rate series:** `HARNESS_VERSION` 5 → 6, so no Fable trial pools with an Opus one, and shard-reuse receipts already key on `lib/eval-model.ts`. Warmup and distill stay on Haiku.
-- **Gate integrity:** no threshold, assertion, trial count, case kind or judge changed. Test edits only update asserted model IDs and their prices, plus one assertion naming `scripts/harness-version.json` so pregate maps the manifest to a test lane.
+- **A new pass-rate series:** `HARNESS_VERSION` 5 → 6 (which also covers the floor runner change below), so no Fable trial pools with an Opus one, and shard-reuse receipts already key on `lib/eval-model.ts`. Warmup and distill stay on Haiku.
+- **Gate integrity:** no threshold, trial count, case kind or judge changed. The detector and prompt edits are listed under Fixed. Eight floor tests that expected `timeout` for a permission dialog nobody answered now expect the named failure `permission_unanswered`. Other test edits update asserted model IDs and their prices, plus one assertion naming `scripts/harness-version.json` so pregate maps the manifest to a test lane.
+
+### Fixed
+The second Opus gate (run 39161502626) went 127/132. Each of the five reds is now replayed from its captured run as a free regression, with negative controls that still fail.
+- **review-coverage-audit:** the read detector rejected `cd <cwd>; cat -n … && echo ---- && cat -n …` and a trailing `wc -l <files>`. A leading `cd` to the recorded cwd followed by `;` may now precede one uniform `&&` chain, and `wc -l` accepts literal files inside the cwd. Other separator mixes and outside paths still fail.
+- **shared-libs-unsupported-git:** Claude Code 2.1.292's own `git --version` probe (which starts with `core.askPass=`) is recognized as that exact argv only. Any added argument, a non-Claude parent or a model command that copies it still fails.
+- **ship-local-hook-preservation:** "integrate the hook yourself" and "combine … by hand" now count as reporting manual integration, beside "manual".
+- **qa-only-no-fix:** the fixture prompt now says the 30-second guard starts only after the charter Write has completed. The budget and the assertion are unchanged.
+- **plan-ceo-finding-floor:** Opus saved its D1 decision to the owned working plan before printing any text, as the 0D Save step requires. The permission check identified the parent session only from text or questions, so it never granted that Create and the run timed out after 600 s. A parent with only tool events is now identified by them, still as exactly one session that owns the pending Write. The floor runner also fails within 20 s with `PERMISSION_DIALOG_UNANSWERED` when a permission dialog gets no owned grant.
 
 ### If you…
 - **…compare pass rates across the switch:** Fable trials carry `harness_version: 5` and Opus trials `6`; they are separate series.

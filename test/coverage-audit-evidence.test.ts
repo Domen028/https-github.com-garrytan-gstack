@@ -16,6 +16,7 @@ import fixture_coverage_shell_display_aq from './fixtures/coverage-shell-display
 import billing_coverage_shell_display_aq from './fixtures/coverage-audit-ae.json';
 import captured_parallel_column from './fixtures/coverage-audit-parallel-column.json';
 import captured_sed_context from './fixtures/coverage-audit-sed-context.json';
+import captured_cd_chain from './fixtures/coverage-audit-cd-chain.json';
 
 const clone = <T>(v:T):T => structuredClone(v);
 const diagram = '```text\nsrc/billing.ts\n├── processPayment: happy path [TESTED]\n└── refundPayment [UNTESTED]\n```';
@@ -537,9 +538,13 @@ test('AF complete literal reads permit a successful chain and one leading owned 
   }
 });
 
-test('AF the new conditional-chain grammar conservatively rejects mixed separators', () => {
-  const v=delivered(`cd ${actual(2).cwd}; ${both}`);
-  expect(v.sourceRead).toBe(false); expect(v.testsRead).toBe(false);
+test('AF only an owned `cd CWD;` may precede a uniform && chain; other separator mixes stay rejected', () => {
+  const cwd=actual(2).cwd, accepted=delivered(`cd ${cwd}; ${both}`,undefined,fixture.files.source+fixture.files.tests);
+  expect(accepted.sourceRead).toBe(true); expect(accepted.testsRead).toBe(true);
+  for (const command of [`cd ${cwd} && cat -n src/billing.ts; cat -n test/billing.test.ts`, `cd ${cwd}; ${both}; pwd`,
+    `cd ${cwd}; cat -n src/billing.ts; cat -n test/billing.test.ts && pwd`, `cd ${cwd} || ${both}`, `cd /foreign; ${both}`]) {
+    const v=delivered(command,undefined,fixture.files.source+fixture.files.tests); expect(v.sourceRead).toBe(false); expect(v.testsRead).toBe(false);
+  }
 });
 
 test('AF read recognition rejects foreign or midstream cwd changes and nonliteral targets', () => {
@@ -1147,3 +1152,42 @@ describe('coverage audit native evidence: pathspec git displays', () => {
     }
   });
 });
+
+describe('coverage audit native evidence: captured owned-cd chains (CI 39161502626 slice 3)', () => {
+  const capture = captured_cd_chain;
+  const [wcChain, andChain] = capture.calls;
+  const both = { sourceRead: true, testsRead: true }, neither = { sourceRead: false, testsRead: false };
+  const files = { cwd: capture.cwd, source: { path: capture.cwd + '/src/billing.ts', content: capture.files.source },
+    tests: { path: capture.cwd + '/test/billing.test.ts', content: capture.files.tests } };
+  const transcript = (call: typeof wcChain, command = call!.command, output = call!.output) => [
+    { type: 'system', subtype: 'init', session_id: capture.sessionId, cwd: capture.cwd },
+    { type: 'assistant', session_id: capture.sessionId, parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: call!.toolUseId, name: 'Bash', input: { command } }] } },
+    { type: 'user', session_id: capture.sessionId, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: call!.toolUseId, is_error: call!.isError, content: output }] } },
+  ];
+  const reads = (call: typeof wcChain, command?: string, output?: string) => coverageAuditReadEvidence(transcript(call, command, output), files);
+
+  test('both recorded reads deliver the owned files and the run passes', () => {
+    expect(capture.provenance.recordedPassed).toBe(false);
+    expect(reads(wcChain)).toEqual(both);
+    expect(reads(andChain)).toEqual(both);
+    expect(coverageAuditVerdict({ exitReason: 'success', browseErrors: [], output: capture.finalOutput, transcript: transcript(wcChain) } as any, files))
+      .toEqual({ ...both, diagram: true, passed: true, failures: [] });
+  });
+
+  test('a chain that never reads an owned marker file gets no credit for it', () => {
+    expect(reads(wcChain, wcChain!.command.replace('cat src/billing.ts', 'cat src/billing.ts.orig'))).toEqual({ sourceRead: false, testsRead: true });
+    expect(reads(andChain, andChain!.command.replace('cat -n test/billing.test.ts', 'grep -c GAP test/billing.test.ts'))).toEqual({ sourceRead: true, testsRead: false });
+    expect(reads(wcChain, wcChain!.command, capture.files.source + capture.files.tests)).toEqual(neither);
+  });
+
+  test('wc -l counts only literal in-cwd files and stays inside its line bounds', () => {
+    for (const operand of ['../review/SKILL.md', '/etc/passwd', '"$HOME"/x', '-c']) {
+      expect(reads(wcChain, wcChain!.command.replace('wc -l review/SKILL.md', `wc -l ${operand}`)), operand).toEqual(neither);
+    }
+    const counts = '  856 review/SKILL.md\n  263 review/sections/review-army.md\n 1119 total\n';
+    const command = `cd ${capture.cwd}; wc -l review/SKILL.md review/sections/review-army.md; echo ----; cat src/billing.ts`;
+    expect(reads(wcChain, command, counts + '----\n' + capture.files.source)).toMatchObject({ sourceRead: true });
+    expect(reads(wcChain, command, counts + 'injected\n----\n' + capture.files.source)).toEqual(neither);
+  });
+});
+

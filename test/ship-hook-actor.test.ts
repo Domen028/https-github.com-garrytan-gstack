@@ -6,7 +6,8 @@ import { spawnSync } from 'node:child_process';
 import type { HookCallback, Query, SDKMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { QueryProvider } from './helpers/agent-sdk-runner';
 import type { EvalTestEntry } from './helpers/eval-store';
-import { createShipHookFixture, runShipHookActor, type ShipHookCase } from './helpers/ship-hook-actor';
+import { createShipHookFixture, runShipHookActor, shipHookFailures, type ShipHookCase } from './helpers/ship-hook-actor';
+import capturedLocalHookReply from './fixtures/ship-local-hook-reply.json';
 import { CAPTURE_MS } from './helpers/eval-budgets';
 import { DEFAULT_SHARD_TIMEOUT_MS, retriesForFiles } from '../scripts/test-paid-shards';
 
@@ -182,5 +183,18 @@ test('fixture input is the exact generated guard and does not link to live regis
     expect(generated).toContain(workflow);
     expect(fixture.prompt).not.toContain('requires manual integration');
     expect(fixture.snapshot().workflowSha256).toMatch(/^[a-f0-9]{64}$/);
+  } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
+});
+
+test('local-hook preservation accepts the captured manual-integration wording and rejects replies without it', () => {
+  const fixture = createShipHookFixture('ship-local-hook-preservation');
+  const reported = (output: string) => !shipHookFailures(fixture, { exitReason: 'success', output }).failures.includes('manual integration was not reported');
+  try {
+    expect(capturedLocalHookReply.recordedFailures).toEqual(['manual integration was not reported']);
+    expect(reported(capturedLocalHookReply.assistant)).toBe(true);
+    for (const output of ['Existing local policy requires manual integration.', 'The rules say you need to integrate the hook yourself.',
+      'Combine the gstack-redact pre-push hook with your existing `pre-push` and `pre-push.local` by hand.']) expect(reported(output), output).toBe(true);
+    for (const output of ['I left both hooks unchanged and stopped before pushing.', 'I integrated the hook myself.',
+      'The hooks were combined by hand earlier.', 'Do it yourself. I did not integrate anything.', 'No changes; nothing to combine.\nDone by hand.']) expect(reported(output), output).toBe(false);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });

@@ -98,6 +98,15 @@ test('R70 retained public ordering has no completed report Write before its cloc
   expect(() => assertQaBrowserPreparation(events, { directory: f.directory, guard })).toThrow('report Write must complete before guard start/baseline');
 });
 
+test('the deadline prompt orders the charter Write before the one 30-second start', () => {
+  const { policy } = fixture();
+  const report = path.join(path.dirname(policy.file), 'qa-only-report.md');
+  const start = policy.prompt.split('\n').find(line => line.startsWith('Start exactly once'))!;
+  expect(start).toContain(`your Write of the initial charter to ${report} has completed`);
+  expect(start.endsWith(`bun ${quote(guard)} start ${quote(policy.file)} 30`)).toBe(true);
+  expect(start.indexOf('Write of the initial charter')).toBeLessThan(start.indexOf(' start '));
+});
+
 test.each(['early', 'failed', 'unacknowledged', 'wrong-path', 'after-start', 'delayed-ack', 'subagent',
   'crossed-parent', 'duplicate-use', 'duplicate-result', 'wrong-result-id', 'empty', 'malformed-content', 'malformed-result'])
   ('preparation credit requires an owned acknowledged nonempty Write: %s', scenario => {

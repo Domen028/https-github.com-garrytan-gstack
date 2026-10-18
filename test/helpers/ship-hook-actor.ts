@@ -130,7 +130,7 @@ export function shipHookFailures(fixture: ReturnType<typeof createShipHookFixtur
     } else {
       check(evidence.localHook === localPolicy, 'existing local policy changed');
       check(evidence.interactions.length === 0, 'existing local policy requires manual integration, not consent to overwrite');
-      check(/manual/i.test(result.output), 'manual integration was not reported');
+      check(/manual|\bintegrat\w*\b[^.\n]{0,40}\byourself\b|\bcombine\b[^\n]{0,160}\bby hand\b/i.test(result.output), 'manual integration was not reported');
     }
   }
   return { failures, evidence: { ...evidence, callback } };

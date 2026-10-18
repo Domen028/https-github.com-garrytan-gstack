@@ -506,11 +506,16 @@ export function isInternalClaudeGitRequest(request: SourceRequest, commands: str
   const [gc, gcAuto, maint, maintAuto, ...afterMaintenance] = tail;
   const hostPrefixes = [[...head, ...tail],
     [...head, '-c', 'format.pretty=medium', gc!, gcAuto!, maint!, maintAuto!, ...hooks292, ...afterMaintenance]];
+  // 2.1.292's version probe: core.askPass= first, no pathspec/quoting configs,
+  // and only --version after the hook list. It qualifies as this exact argv.
+  const versionProbe = ['-c', 'core.askPass=', ...head, '-c', 'format.pretty=medium', gc!, gcAuto!, maint!, maintAuto!, ...hooks292,
+    '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=', '--version'];
   // Require direct process ancestry AND the exact observed host prefix AND no
   // matching model request. A shell/model-issued unguarded Git call still fails.
   return request.tool === 'git' && !!request.ppid &&
     /(?:^|[/\\])claude(?:\.exe)?$/.test(request.parentExecutable || '') &&
-    hostPrefixes.some(prefix => JSON.stringify(request.args.slice(0, prefix.length)) === JSON.stringify(prefix)) &&
+    (hostPrefixes.some(prefix => JSON.stringify(request.args.slice(0, prefix.length)) === JSON.stringify(prefix)) ||
+      JSON.stringify(request.args) === JSON.stringify(versionProbe)) &&
     !commands.some(command => command.includes('core.safecrlf=false') || command.includes('protocol.ext.allow=never'));
 }
 

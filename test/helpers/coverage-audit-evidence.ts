@@ -138,6 +138,12 @@ function stagePieces(stage: string[], scope: ShellScope, alone: boolean): Piece[
   }
   if (name === 'grep' || name === 'ls') return [unknown()];
   if (text === 'pwd' || text === 'wc -l') return [unknown(1, 1)];
+  if (name === 'wc' && args[0] === '-l' && args.length > 1) {
+    // One count line per literal in-cwd file, plus a total for several.
+    if (args.slice(1).some(operand => !scopedFile(operand, scope))) return undefined;
+    const lines = args.length - 1 + (args.length > 2 ? 1 : 0);
+    return [unknown(lines, lines)];
+  }
   if (/^\[ -f [A-Za-z0-9_.\/-]+ \]$/.test(text)) return [unknown(0, 0)];
   if (displayAwk) return [unknown()];
   return undefined;
@@ -154,12 +160,15 @@ function commandPieces(command: unknown, scope: ShellScope): Piece[] | undefined
     else lists.at(-1)!.at(-1)!.push(word);
   }
   if (lists.some(pipeline => pipeline.some(stage => !stage.length))) return undefined;
-  // One leading assertion of the recorded cwd. Mixed separators after it could
-  // run later relative reads elsewhere, so they stay conservatively unsupported.
+  // One leading assertion of the recorded cwd, followed by one uniform list.
+  // `cd CWD;` runs the list whether or not cd succeeds, exactly like an all-;
+  // list, so only it may precede an && chain. Other mixes (`cd CWD && A; B`)
+  // could run later relative reads elsewhere and stay unsupported.
   if (lists[0]!.length === 1 && lists[0]![0]![0] === 'cd') {
     const [, target, ...rest] = lists[0]![0]!;
-    if (rest.length || target === undefined || literal(target) !== scope.cwd || lists.length < 2 ||
-        new Set(separators.filter(separator => separator !== '||')).size !== 1 || separators[0] === '||') return undefined;
+    const [assertion, ...chain] = separators, kinds = new Set(chain.filter(separator => separator !== '||'));
+    if (rest.length || target === undefined || literal(target) !== scope.cwd || lists.length < 2 || assertion === '||' ||
+        kinds.size > 1 || (assertion !== ';' && kinds.size && !kinds.has(assertion!))) return undefined;
     lists.shift(); separators.shift();
   }
   const pieces: Piece[] = [];
