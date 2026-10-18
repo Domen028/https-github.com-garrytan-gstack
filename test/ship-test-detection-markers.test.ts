@@ -109,6 +109,10 @@ describe('/ship Step 4 detection is multi-ecosystem', () => {
     expect(dart).toContain('RUNTIME:dart');
     expect(dart).not.toContain('FRAMEWORK:flutter');
     expect(testFileCount(dart)).toBe(0);
+
+    // dart_test.yaml can move discovery off *_test.dart (paths/filename), so it is test evidence on its own.
+    const configured = detect({ 'pubspec.yaml': 'name: x\n', 'dart_test.yaml': 'paths: [checks]\n', 'checks/test_math.dart': 'void main() {}\n' });
+    expect(configured).toContain('dart_test.yaml');
   });
 
   // Value: protects=the Step 7 coverage audit sees a Dart project and its *_test.dart files, like bootstrap does;
