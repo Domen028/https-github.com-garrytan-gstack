@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+**Daily `/cso` reports now leave out candidates without demonstrated in-scope impact.** The daily rubric already required an attacker-controlled entrypoint, a security-boundary crossing, demonstrated impact, and challenged protective controls. It now says what to omit: candidates whose impact needs code outside the snapshot or a future change, or that expose nothing sensitive. Those stay coverage evidence instead of supported findings. Comprehensive reports are unchanged and keep unresolved candidates as labeled hypotheses. In the third paid runtime qualification, daily precision was 47/53, below the 0.95 bar, and four of its five false-positive classes were findings of this kind. In a preregistered 12-cell pilot, 5 of the 6 false positives disappeared, every seeded issue was kept, and no new false positive appeared. Daily reports also drop low and informational real issues: 4 of the 13 pilot controls were lost this way. Garry accepted that trade-off. Comprehensive mode still reports them.
+
+### Changed
+- **`cso/SKILL.md.tmpl`: the daily supported-finding paragraph names what to omit.** The generated `cso/SKILL.md` is 18,097 bytes, under the 18,100 parity cap. This changes no gate, scorer, threshold, sample count, recall definition, baseline or answer key.
+
 ## [1.91.140.0] - 2026-10-18
 
 **/cso evaluation cells that run a repair no longer fail on helper dependency-closure names that use the helper's own 32-character finding IDs.** In the third paid runtime qualification, one comprehensive cell failed with REDACTION_FAILED again, on `dependency-closures/<finding id>-after-<plan hash>.json`. 1.91.135.0 taught the producer this name shape with a 64-character finding ID. The helper actually names closures with its 32-character finding IDs, so real names still fell through to the secret redactor, which reads some of them as wallet addresses.
