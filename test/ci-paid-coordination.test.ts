@@ -110,7 +110,7 @@ describe('paid CI coordination stays off the eval image', () => {
       expect(executor.needs).toEqual(['build-image', 'plan-slices']);
       expect(JSON.stringify(executor.container)).toContain('needs.build-image.outputs.image-tag');
       if (name === 'evals.yml') {
-        // A confirmed restamp-only reuse (R2a) is the one PR run that executes no slice.
+        // A confirmed verdict reuse (R2a/R2) is the one PR run that executes no slice.
         expect(executor.if).toBe("${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' && needs.plan-slices.outputs.gate_reuse != 'true' }}");
       } else {
         expect(executor.if).toBeUndefined();

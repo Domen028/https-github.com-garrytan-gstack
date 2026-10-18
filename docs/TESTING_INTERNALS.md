@@ -1126,7 +1126,7 @@ and `test:health` both say so.
   through today's selector and its shadow, and exits 1 on any MISS: a failed
   gate case the shadow would not run. `test/exercised-map.test.ts` pins zero.
 
-### PR receipts, recovery, readiness and restamp-only reuse
+### PR receipts, recovery, readiness and verdict reuse
 
 Passes and failures of single-trial shards are written as receipts at the
 execution boundary, so a cancelled run's finished work survives. The
@@ -1156,28 +1156,46 @@ nothing. Selection, trials and verdict rules do not change. Version Gate is not
 an input, so a stamp push waits only for its own Free Tests and always gets a
 gate. Dispatches (`eval:bg`, the census) never wait.
 
-**Restamp-only reuse (R2a, a gate edit).** A PR head reuses the verdict of the
-newest executed gate of the same PR instead of running one only when all of
-these hold: that gate is GREEN with reconcile exit 0 and a successful run; it
-ran the PR profile on the same base SHA as this run (main has not moved; reuse
-across a main move is R2 and is not enabled); the heads differ; the tree
-receipt (`lib/tree-receipt.ts` under the base's ship policy) prints
-`TREE: same-modulo-stamps` and every differing file is the version file,
-`package.json`, the CHANGELOG or a release output (the agents digest); and this
-head's own plan has the same selection fingerprint (cases, statuses, trial
-plans, profile). `recover-receipts` proposes the candidate from base-ref code,
-`plan-slices` confirms the selection, `eval-slices` is skipped, and the report and
-PR comment say `PASS (reused: restamp-only, R2a)` with the reused run, the
-receipt digest and the stamp files. Executed runs upload a `gate-binding-a<attempt>`
-artifact; reused runs bind nothing, so reuse never chains off a reuse. Any
-other case (a red, partial or cancelled gate, a moved base, a non-stamp byte
-including CHANGELOG entry text, a missing binding or receipt, a gh or git
-error) runs the full gate. For a restamp to qualify, write the CHANGELOG entry
-before the gated push (under `## [Unreleased]` or the tentative version) so the
-stamp only re-heads it.
+**Verdict reuse (R2a restamp-only, R2 main moved; a gate edit).** A PR head
+reuses the verdict of the newest executed gate of the same PR instead of
+running one only when all of these hold. Every newer run of the PR either bound
+a verdict or provably ran no paid slice (superseded, readiness-blocked, a reuse,
+or cancelled before a slice finished); a newer run that is still running,
+finished a slice, or holds a `paid-slice-*` artifact without a bound verdict
+blocks reuse, so a newer red or partial result is never skipped. The gate is
+GREEN with reconcile exit 0, a successful run and no manually accepted
+(unscored) case; it ran the PR profile on a different head. Then either:
+
+- **R2a, restamp-only:** it ran on the same base (the tested merge commit's
+  first parent), the tree receipt (`lib/tree-receipt.ts` under the base's ship
+  policy) prints `TREE: same-modulo-stamps`, and every differing file is the
+  version file, `package.json`, the CHANGELOG or a release output (the agents
+  digest); or
+- **R2, main moved:** the base moved, and the PR's own diff from its
+  merge-base, excluding stamp files, is byte-identical to the gated head's
+  (`git diff --binary --full-index`, so pre-image blob ids are compared and a
+  main change to a file the PR also changes is a difference; `package.json`
+  compared without its version; the CHANGELOG by the multiset of section bodies
+  the PR added, headings excluded).
+
+Finally this head's own plan must have the same selection fingerprint (cases,
+statuses, trial plans, profile), so a main move that changes what the PR gate
+selects runs the full gate. `recover-receipts` proposes the candidate from
+base-ref code (`scripts/gate-reuse.ts find`), `plan-slices` confirms the
+selection, `eval-slices` is skipped, and the report and PR comment say
+`PASS (reused: restamp-only, R2a)` or `PASS (reused: main moved, R2)` with
+the reused run, its head, why, and the receipt digest or own-diff signature.
+Free Tests and every other check still run on the new head. Executed runs
+upload a `gate-binding-a<attempt>` artifact (base, verdict, reconcile exit,
+manual count, selection); reused runs bind nothing, so reuse never chains off a
+reuse. Any other case (a changed own diff, a non-stamp byte including CHANGELOG
+entry text or a file mode, a missing binding, receipt or merge-base, a gh or git
+error, `evals-fresh`) runs the full gate. For a restamp to qualify, write the
+CHANGELOG entry before the gated push (under `## [Unreleased]` or the
+tentative version) so the stamp only re-heads it.
 
 PR labels: `evals-no-debounce` sets the quiet window to 0 (Free Tests is still
-required) and `evals-fresh` turns receipt reuse and restamp-only reuse off. Labels
+required) and `evals-fresh` turns receipt reuse and verdict reuse off. Labels
 apply from the next push, because adding a label does not start `evals.yml`.
 
 ## Free suite runner, judge reuse and engine skips

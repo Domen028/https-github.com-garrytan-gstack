@@ -220,14 +220,16 @@ jobs:
             --store /tmp/gstack-eval-input-cache --store-key "$STORE_KEY" --mode "$RECOVERY_MODE" --budget-seconds 60 >> "$GITHUB_STEP_SUMMARY" \
             || echo "- Receipt recovery crashed; reuse stays off this run" >> "$GITHUB_STEP_SUMMARY"
 
-      # R2a (GSTA-48), a narrow gate edit: base-ref code proposes reusing the
-      # newest executed GREEN gate of this PR when this head differs from it
-      # only by stamp files (TREE: same-modulo-stamps from the tree receipt
-      # under the base's ship policy) and main has not moved (same base SHA).
-      # plan-slices confirms the selection is identical. Anything else (a red
-      # or partial gate, a moved base, a non-stamp byte, no receipt, a gh or
-      # git error, evals-fresh) leaves no candidate: the full gate runs.
-      - name: Find a restamp-only gate to reuse (R2a, base-ref code)
+      # Verdict reuse (GSTA-48), a gate edit: base-ref code proposes reusing
+      # the newest executed GREEN gate of this PR when this head differs from
+      # it only by stamp files on the same base (R2a: TREE same-modulo-stamps
+      # from the tree receipt under the base's ship policy), or when main
+      # moved and the PR's own diff from its merge-base, stamp files excluded,
+      # is byte-identical (R2). plan-slices confirms the selection is
+      # identical. Anything else (a red, partial or cancelled gate, a changed
+      # own diff, a non-stamp byte, no binding or receipt, a gh or git error,
+      # evals-fresh) leaves no candidate: the full gate runs.
+      - name: Find a gate verdict to reuse (R2a/R2, base-ref code)
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -235,18 +237,17 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           if [ ! -f scripts/gate-reuse.ts ]; then
-            echo "- Restamp-only gate reuse unavailable: the base ref has no scripts/gate-reuse.ts; the full gate runs" >> "$GITHUB_STEP_SUMMARY"
+            echo "- Gate verdict reuse unavailable: the base ref has no scripts/gate-reuse.ts; the full gate runs" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           bun --no-install run scripts/gate-reuse.ts find --repo "$GITHUB_REPOSITORY" --pr "$PR_NUMBER" --head-repo "$HEAD_REPO" \
-            --branch "$HEAD_BRANCH" --run-id "$GITHUB_RUN_ID" --head-sha "$HEAD_SHA" --base-sha "$BASE_SHA" \
+            --branch "$HEAD_BRANCH" --run-id "$GITHUB_RUN_ID" --head-sha "$HEAD_SHA" --tested-sha "$GITHUB_SHA" \
             --out /tmp/gate-reuse --budget-seconds 90 >> "$GITHUB_STEP_SUMMARY" \
-            || echo "- Restamp-only gate reuse crashed; the full gate runs" >> "$GITHUB_STEP_SUMMARY"
+            || echo "- Gate verdict reuse crashed; the full gate runs" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Hand a restamp-only reuse candidate to plan-slices
+      - name: Hand a gate reuse candidate to plan-slices
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
@@ -346,9 +347,9 @@ jobs:
           EVALS_BASE: ${{ inputs.base_sha || (inputs.base_ref != '' && format('origin/{0}', inputs.base_ref)) || '' }}
         run: EVALS_TIER=gate bun --no-install run scripts/test-paid-shards.ts --tier gate --emit-plan /tmp/paid-plan/manifest.json --slice-budget 420 --jobs 2 --max-parallel 20
 
-      # R2a: reuse holds only when this head's own plan selects exactly the
+      # R2a/R2: reuse holds only when this head's own plan selects exactly the
       # cases and trial plans the reused gate ran (selection fingerprint).
-      - name: Download a restamp-only reuse candidate
+      - name: Download a gate reuse candidate
         if: github.event_name == 'pull_request'
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -356,7 +357,7 @@ jobs:
           name: gate-reuse-candidate
           path: /tmp/gate-reuse
 
-      - name: Confirm restamp-only gate reuse (R2a)
+      - name: Confirm gate verdict reuse (R2a/R2)
         id: gate_reuse
         if: github.event_name == 'pull_request'
         run: |
@@ -400,7 +401,7 @@ jobs:
     # !cancelled(), not always(): still runs when build-image was skipped
     # (image already published), but a newer push's cancel-in-progress stops
     # it instead of letting a superseded run finish its paid slices first.
-    # A confirmed restamp-only reuse (R2a) runs no paid slice.
+    # A confirmed verdict reuse (R2a/R2) runs no paid slice.
     if: ${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' && needs.plan-slices.outputs.gate_reuse != 'true' }}
     # The planner packs ~7 minutes of recorded work per slice (EVALS_JOBS=2 x
     # EVALS_CONCURRENCY=2 per runner, never the old 40-way per-row fan-out
@@ -612,10 +613,10 @@ jobs:
           # (caught by the ship review army; the wiring test now pins this).
           echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
-      # R2a: the planner confirmed a restamp-only reuse, so no slice ran; the
-      # verdict is the reused gate's, printed with its receipt. A missing or
-      # malformed reuse record exits 1 (fail-closed).
-      - name: Report the reused restamp-only verdict (R2a)
+      # R2a/R2: the planner confirmed a reuse, so no slice ran; the verdict is
+      # the reused gate's, printed with which run, which head and why. A
+      # missing or malformed reuse record exits 1 (fail-closed).
+      - name: Report the reused gate verdict (R2a/R2)
         id: reused
         if: needs.plan-slices.outputs.gate_reuse == 'true'
         run: |
@@ -667,19 +668,19 @@ jobs:
           if-no-files-found: ignore
           retention-days: 30
 
-      # R2a: what this executed run proved, read by a later restamp-only push.
-      # Reused runs bind nothing, so reuse never chains off a reuse.
-      - name: Bind this run's verdict for restamp-only reuse (R2a)
+      # R2a/R2: what this executed run proved, read by a later push. The base
+      # is the tested merge commit's first parent. Reused runs bind nothing,
+      # so reuse never chains off a reuse.
+      - name: Bind this run's verdict for reuse (R2a/R2)
         if: always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'
         env:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
           RECONCILE_EXIT: ${{ steps.reconcile.outputs.exit }}
         run: |
           bun --no-install run scripts/gate-reuse.ts bind /tmp/paid-report --out /tmp/gate-binding --repo "$GITHUB_REPOSITORY" \
             --pr "$PR_NUMBER" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --head-sha "$HEAD_SHA" \
-            --base-sha "$BASE_SHA" --profile "$EVALS_PROFILE" --reconcile-exit "$RECONCILE_EXIT" >> "$GITHUB_STEP_SUMMARY"
+            --tested-sha "$GITHUB_SHA" --profile "$EVALS_PROFILE" --reconcile-exit "$RECONCILE_EXIT" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload the gate binding
         if: always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'
@@ -740,12 +741,12 @@ jobs:
           RECONCILE_EXIT: ${{ needs.slices-report.outputs.reconcile-exit }}
         run: |
           # shellcheck disable=SC2086,SC2059
-          # R2a: a confirmed restamp-only reuse ran no case; say so, with the
-          # reused run, the receipt and the identical selection.
+          # R2a/R2: a confirmed verdict reuse ran no case; say which run,
+          # which head and why, with the receipt or own-diff signature.
           REUSE=/tmp/paid-report/gate-reuse.json
           if [ "${RECONCILE_EXIT:-1}" = "0" ] && [ -f "$REUSE" ] \
-            && jq -e '.schema == 1 and .tree == "same-modulo-stamps" and (.stamp_files | length > 0)' "$REUSE" >/dev/null 2>&1; then
-            BODY=$(jq -r --arg repo "$GITHUB_REPOSITORY" '"## E2E Evals: ✅ PASS (reused: restamp-only, R2a)\n\nNo paid case ran on `\(.current_head)`. It differs from `\(.gated_head)`, which passed the full gate in [run \(.reused_run_id)](https://github.com/\($repo)/actions/runs/\(.reused_run_id)), only by stamp files (\(.stamp_files | join(", "))), and main has not moved since (base `\(.base_sha)`).\n\n```\nTREE: same-modulo-stamps receipt=\(.receipt_sha256)\nselection: \(.selection_sha256) (identical to the reused gate)\nversion: \(.old_version // "-") -> \(.new_version // "-")\n```\n\n---\n*Restamp-only reuse (R2a): any non-stamp byte, a moved base or a missing receipt runs the full gate; the evals-fresh label opts out.*"' "$REUSE")
+            && jq -e '.schema == 1 and (.kind == "restamp-only" or .kind == "main-moved")' "$REUSE" >/dev/null 2>&1; then
+            BODY=$(jq -r --arg repo "$GITHUB_REPOSITORY" '"## E2E Evals: ✅ PASS (reused: \(if .kind == "restamp-only" then "restamp-only, R2a" else "main moved, R2" end))\n\nNo paid case ran on `\(.current_head)`. It carries the GREEN verdict of [run \(.reused_run_id)](https://github.com/\($repo)/actions/runs/\(.reused_run_id)) at `\(.gated_head)`, because \(.why).\n\n```\n\(if .kind == "restamp-only" then "TREE: same-modulo-stamps receipt=\(.receipt_sha256)" else "OWN DIFF: identical sha256=\(.own_diff_sha256) (merge-base \(.gated_merge_base) -> \(.merge_base))" end)\nbase: \(.gated_base) -> \(.base_sha)\nselection: \(.selection_sha256) (identical to the reused gate)\n```\n\n---\n*Verdict reuse (R2a restamp-only, R2 main moved): a changed own diff, a non-stamp byte, a changed selection, a newer red or unbound gate, or a missing binding or receipt runs the full gate; the evals-fresh label opts out. Free Tests and every other check still ran on this head.*"' "$REUSE")
           else
           TOTAL=0; PASSED=0; FAILED=0; MANUAL=0; EXECUTED=0; REUSED=0; COST="0"
           SUITE_LINES=""

@@ -1,7 +1,7 @@
 /**
  * PR paid-lane workflow pins (W1, CEO-13/14/34, ENG-7/11/12, DX-7, W8f):
  * coverage summaries, cancellation recovery off PR code, readiness-gated
- * dispatch (R1), restamp-only reuse wiring (R2a), dispatch inputs, and the
+ * dispatch (R1), verdict reuse wiring (R2a/R2), dispatch inputs, and the
  * absence of the old inline subset program.
  */
 import { describe, expect, test } from 'bun:test';
@@ -111,22 +111,26 @@ describe('evals.yml readiness-gated dispatch (R1, GSTA-48)', () => {
   });
 });
 
-describe('evals.yml restamp-only gate reuse wiring (R2a, GSTA-48)', () => {
+describe('evals.yml gate verdict reuse wiring (R2a restamp-only, R2 main moved; GSTA-48)', () => {
   test('base-ref recovery proposes a candidate; it never fails the run', () => {
-    const find = step('recover-receipts', 'Find a restamp-only gate to reuse (R2a, base-ref code)')!;
+    const find = step('recover-receipts', 'Find a gate verdict to reuse (R2a/R2, base-ref code)')!;
     expect(find.if).toBe("github.event_name == 'pull_request'");
-    expect(find.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', HEAD_SHA: '${{ github.event.pull_request.head.sha }}', BASE_SHA: '${{ github.event.pull_request.base.sha }}' });
+    expect(find.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', HEAD_SHA: '${{ github.event.pull_request.head.sha }}' });
+    expect(find.env?.BASE_SHA).toBeUndefined();
     expect(find.run).toContain('scripts/gate-reuse.ts find');
+    // The base is the tested merge commit's first parent, never the event's base.sha.
+    expect(find.run).toContain('--tested-sha "$GITHUB_SHA"');
+    expect(find.run).not.toContain('--base-sha');
     expect(find.run).toContain('exit 0');
     expect(find.run).toContain('|| echo');
-    expect(step('recover-receipts', 'Hand a restamp-only reuse candidate to plan-slices')?.with).toMatchObject({ name: 'gate-reuse-candidate', path: '/tmp/gate-reuse' });
+    expect(step('recover-receipts', 'Hand a gate reuse candidate to plan-slices')?.with).toMatchObject({ name: 'gate-reuse-candidate', path: '/tmp/gate-reuse' });
   });
 
   test('the planner confirms the selection after its own plan, and a confirmed reuse runs no slice', () => {
     const planner = workflow.jobs['plan-slices']!;
     const names = planner.steps.map(s => s.name);
-    expect(names.indexOf('Confirm restamp-only gate reuse (R2a)')).toBeGreaterThan(names.indexOf('Emit run manifest'));
-    expect(step('plan-slices', 'Confirm restamp-only gate reuse (R2a)')!.run).toContain('gate-reuse.ts confirm /tmp/gate-reuse /tmp/paid-plan/manifest.json --out /tmp/paid-plan');
+    expect(names.indexOf('Confirm gate verdict reuse (R2a/R2)')).toBeGreaterThan(names.indexOf('Emit run manifest'));
+    expect(step('plan-slices', 'Confirm gate verdict reuse (R2a/R2)')!.run).toContain('gate-reuse.ts confirm /tmp/gate-reuse /tmp/paid-plan/manifest.json --out /tmp/paid-plan');
     expect(planner.outputs?.gate_reuse).toBe('${{ steps.gate_reuse.outputs.gate_reuse }}');
     expect(workflow.jobs['eval-slices']!.if).toContain("needs.plan-slices.outputs.gate_reuse != 'true'");
   });
@@ -134,14 +138,16 @@ describe('evals.yml restamp-only gate reuse wiring (R2a, GSTA-48)', () => {
   test('the report prints a reused verdict fail-closed and only executed runs bind a verdict', () => {
     const report = workflow.jobs['slices-report']!;
     expect(step('slices-report', 'Reconcile slices against the manifest (fail-closed)')!.if).toBe("needs.plan-slices.outputs.gate_reuse != 'true'");
-    const reused = step('slices-report', 'Report the reused restamp-only verdict (R2a)')!;
+    const reused = step('slices-report', 'Report the reused gate verdict (R2a/R2)')!;
     expect(reused.if).toBe("needs.plan-slices.outputs.gate_reuse == 'true'");
     expect(reused.run).toContain('echo "exit=$code"');
     expect(report.outputs?.['reconcile-exit']).toBe('${{ steps.reconcile.outputs.exit || steps.reused.outputs.exit }}');
     expect(step('slices-report', 'Fail the workflow when reconciliation failed')!.if).toBe("(steps.reconcile.outputs.exit || steps.reused.outputs.exit) != '0'");
-    const bind = step('slices-report', "Bind this run's verdict for restamp-only reuse (R2a)")!;
+    const bind = step('slices-report', "Bind this run's verdict for reuse (R2a/R2)")!;
     expect(bind.if).toBe("always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'");
     expect(bind.env?.RECONCILE_EXIT).toBe('${{ steps.reconcile.outputs.exit }}');
+    expect(bind.run).toContain('--tested-sha "$GITHUB_SHA"');
+    expect(bind.env?.BASE_SHA).toBeUndefined();
     expect(step('slices-report', 'Upload the gate binding')?.with).toMatchObject({ name: 'gate-binding-a${{ github.run_attempt }}', path: '/tmp/gate-binding/gate-binding.json' });
   });
 });

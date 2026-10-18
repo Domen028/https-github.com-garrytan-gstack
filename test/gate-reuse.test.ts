@@ -1,6 +1,6 @@
 /**
- * Restamp-only gate reuse (R2a, GSTA-48): a gate edit, so every refusal is a
- * negative control. Real git fixtures (a bare origin, the base-ref receipt
+ * Paid-gate verdict reuse (R2a restamp-only, R2 main moved; GSTA-48): a gate
+ * edit, so every refusal is a negative control. Real git fixtures (a bare origin, the base-ref receipt
  * checkout) and scripted gh responses: no network, no API spend.
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -73,6 +73,28 @@ beforeAll(() => {
   sha.lockStamp = commit(work, 'lock-stamp', sha.gatedLock, { ...files('1.0.2.0'), 'CHANGELOG.md': changelog(['## [1.0.2.0] - 2026-10-03', '', '- the feature', '']),
     'bun.lock': lock('1.0.2.0') }, 'restamp that also moves the lockfile root version');
   sha.moved = commit(work, 'main', sha.base, { 'README.md': 'main moved\n' }, 'main moves');
+  git(work, 'checkout', '-q', '-B', 'merged', sha.gated);
+  git(work, 'merge', '-q', '--no-edit', sha.moved);
+  git(work, 'push', '-q', 'origin', 'merged');
+  sha.merged = git(work, 'rev-parse', 'HEAD');
+  sha.rebased = commit(work, 'rebased', sha.moved, { ...files('1.0.1.0'), 'CHANGELOG.md': changelog(entry) }, 'the feature, rebased onto moved main');
+  sha.rebasedCode = commit(work, 'rebased-code', sha.rebased, { 'src/feature.ts': 'export const feature = 3;\n' }, 'rebased plus a code byte');
+  sha.rebasedEntry = commit(work, 'rebased-entry', sha.rebased, { 'CHANGELOG.md': changelog(['## [1.0.1.0] - 2026-10-02', '', '- the feature, reworded', '']) }, 'rebased plus entry text');
+  sha.rebasedPkg = commit(work, 'rebased-pkg', sha.rebased, { 'package.json': JSON.stringify({ name: 'fixture', version: '1.0.1.0', scripts: { test: 'bun test --bail' } }, null, 2) + '\n' }, 'rebased plus a package script');
+  sha.mainTouch = commit(work, 'main-touch', sha.base, { 'src/feature.ts': 'export const feature = 0;\n// main note\n' }, 'main edits the file the PR edits');
+  sha.touchRebased = commit(work, 'touch-rebased', sha.mainTouch, { ...files('1.0.1.0', { 'src/feature.ts': 'export const feature = 1;\n// main note\n' }), 'CHANGELOG.md': changelog(entry) },
+    'the feature, rebased onto a main that edited its file');
+  const digest = (version: string, body: string) => ({ 'agents-digest/gstack-AGENTS.md': '# gstack digest v' + version + ' — regenerate after upgrading\n\nbody\n' + body });
+  const restampLog = { 'CHANGELOG.md': changelog(['## [1.0.2.0] - 2026-10-03', '', '- the feature', '']) };
+  sha.gatedDash = commit(work, 'gated-dash', sha.base, { ...files('1.0.1.0', digest('1.0.1.0', '-- old banner\n')), 'CHANGELOG.md': changelog(entry) }, 'a digest line that looks like a diff header');
+  sha.dashReplace = commit(work, 'dash-replace', sha.gatedDash, { ...files('1.0.2.0', digest('1.0.2.0', '++ new banner\n')), ...restampLog }, 'restamp that replaces a -- line with a ++ line');
+  sha.dashRemove = commit(work, 'dash-remove', sha.gatedDash, { ...files('1.0.2.0', digest('1.0.2.0', '')), ...restampLog }, 'restamp that removes a -- line');
+  sha.dashAdd = commit(work, 'dash-add', sha.gated, { ...files('1.0.2.0', digest('1.0.2.0', '++ ordinary non-version body text\n')), ...restampLog }, 'restamp that adds a ++ line');
+  git(work, 'checkout', '-q', '-B', 'mode', sha.restamp);
+  git(work, 'update-index', '--chmod=+x', 'agents-digest/gstack-AGENTS.md');
+  git(work, 'commit', '-q', '-m', 'restamp plus a digest mode change');
+  git(work, 'push', '-q', 'origin', 'mode');
+  sha.mode = git(work, 'rev-parse', 'HEAD');
   receipt = path.join(scratch, 'receipt');
   git(scratch, 'clone', '-q', '--depth=1', 'file://' + origin, receipt);
   git(receipt, 'fetch', '-q', '--depth=1', 'origin', sha.base);
@@ -80,16 +102,33 @@ beforeAll(() => {
 });
 
 const binding = (over: Partial<GateBinding> = {}): GateBinding => ({ schema: 1, repository: REPO, pr: 42, run_id: 300, run_attempt: 1,
-  head_sha: sha.gated!, base_sha: sha.base!, profile: 'pr', reconcile_exit: 0, verdict: 'GREEN', selection_sha256: 'f'.repeat(64), ...over });
+  head_sha: sha.gated!, base_sha: sha.base!, profile: 'pr', reconcile_exit: 0, verdict: 'GREEN', manual_accepted: 0, selection_sha256: 'f'.repeat(64), ...over });
 const run = (id: number, head: string, conclusion: string | null = 'success', over: Partial<WorkflowRun> = {}): WorkflowRun => ({
   id, status: 'completed', conclusion, event: 'pull_request', head_sha: head, run_attempt: 1, head_repository: { full_name: REPO },
   pull_requests: [{ number: 42 }], ...over });
 
-/** gh: the run list, each run's artifact list, and downloads that write the scripted binding (or raw text). */
-function fakeGh(runs: WorkflowRun[], bindings: Record<number, GateBinding | string>, failList = ''): GhRunner {
+type Jobs = Record<number, Array<{ name: string; conclusion: string | null }>>;
+
+/**
+ * gh: the run list, each run's artifact and job lists (a bound run ran its
+ * slices; an unbound one ran none unless scripted), downloads that write the
+ * scripted binding (or raw text), and merge-bases from the fixture repo.
+ */
+function fakeGh(runs: WorkflowRun[], bindings: Record<number, GateBinding | string>, failList = '', jobs: Jobs = {}, failCompare = false): GhRunner {
   return (args) => {
     const ok = (body: unknown) => ({ status: 0, stdout: JSON.stringify(body), stderr: '' });
     if (args.some(a => a.endsWith('/workflows/evals.yml/runs'))) return failList ? { status: 1, stdout: '', stderr: failList } : ok({ workflow_runs: runs });
+    const jobList = args.find(a => /\/runs\/\d+\/jobs$/.test(a));
+    if (jobList) {
+      const id = Number(/runs\/(\d+)\//.exec(jobList)![1]);
+      return ok({ jobs: [{ name: 'plan-slices', conclusion: 'success' }, ...(jobs[id] ?? (id in bindings ? [{ name: 'eval-slices (1)', conclusion: 'success' }] : []))] });
+    }
+    const compare = args.find(a => /\/compare\/[0-9a-f]{40}\.\.\.[0-9a-f]{40}$/.test(a));
+    if (compare) {
+      if (failCompare) return { status: 1, stdout: '', stderr: 'HTTP 404: Not Found' };
+      const [, a, b] = /compare\/([0-9a-f]{40})\.\.\.([0-9a-f]{40})$/.exec(compare)!;
+      return { status: 0, stdout: git(path.join(scratch, 'work'), 'merge-base', a!, b!) + '\n', stderr: '' };
+    }
     const listed = args.find(a => /\/runs\/\d+\/artifacts$/.test(a));
     if (listed) {
       const id = Number(/runs\/(\d+)\//.exec(listed)![1]);
@@ -106,11 +145,26 @@ function fakeGh(runs: WorkflowRun[], bindings: Record<number, GateBinding | stri
   };
 }
 
+/** The tested commit of a pull_request run: the merge of the head into the base (first parent), pushed like refs/pull/N/merge. */
+const merges = new Map<string, string>();
+function tested(base: string, head: string): string {
+  const key = base + head;
+  if (!merges.has(key)) {
+    const work = path.join(scratch, 'work');
+    const merge = git(work, 'commit-tree', head + '^{tree}', '-p', base, '-p', head, '-m', 'merge');
+    git(work, 'push', '-q', 'origin', merge + ':refs/heads/pull-merge-' + merges.size);
+    merges.set(key, merge);
+  }
+  return merges.get(key)!;
+}
+
 let outCount = 0;
-function find(head: string, runs: WorkflowRun[], bindings: Record<number, GateBinding | string>, over: { baseSha?: string; failList?: string } = {}) {
+function find(head: string, runs: WorkflowRun[], bindings: Record<number, GateBinding | string>,
+  over: { baseSha?: string; failList?: string; jobs?: Jobs; failCompare?: boolean; testedSha?: string } = {}) {
   const out = path.join(scratch, 'out-' + ++outCount);
   const result = findReusableGate({ repo: REPO, pr: 42, headRepo: REPO, branch: 'feature', selfRunId: 500, headSha: head,
-    baseSha: over.baseSha ?? sha.base!, repoRoot: receipt, out, gh: fakeGh(runs, bindings, over.failList) });
+    testedSha: over.testedSha ?? tested(over.baseSha ?? sha.base!, head), repoRoot: receipt, out,
+    gh: fakeGh(runs, bindings, over.failList, over.jobs, over.failCompare) });
   return { ...result, out, text: result.lines.join('\n') };
 }
 
@@ -119,16 +173,39 @@ describe('find: the positive case', () => {
     const { candidate, out, text } = find(sha.restamp!, [run(300, sha.gated!)], { 300: binding() });
     expect(text).toContain('TREE: same-modulo-stamps');
     expect(candidate).not.toBeNull();
-    expect(candidate!.stamp_files.sort()).toEqual(['CHANGELOG.md', 'VERSION', 'agents-digest/gstack-AGENTS.md', 'package.json']);
+    expect(candidate!.kind).toBe('restamp-only');
+    expect(candidate!.stamp_files!.sort()).toEqual(['CHANGELOG.md', 'VERSION', 'agents-digest/gstack-AGENTS.md', 'package.json']);
     expect(candidate!).toMatchObject({ reused_run_id: 300, gated_head: sha.gated, current_head: sha.restamp, base_sha: sha.base,
       old_version: '1.0.1.0', new_version: '1.0.2.0', selection_sha256: 'f'.repeat(64) });
     expect(candidate!.receipt_sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(parseReuse(JSON.parse(fs.readFileSync(path.join(out, CANDIDATE_FILE), 'utf8')))).toEqual(candidate);
   });
 
-  test('cancelled or skipped runs that bound nothing are passed over to the newest executed gate', () => {
-    const { candidate } = find(sha.restamp!, [run(320, sha.gated!, 'cancelled'), run(310, sha.gated!, 'success'), run(300, sha.gated!)], { 300: binding() });
+  test('newer runs whose paid slices never finished are passed over to the newest executed gate', () => {
+    const { candidate } = find(sha.restamp!, [run(330, sha.gated!, 'cancelled'), run(320, sha.gated!, 'cancelled'), run(310, sha.gated!, 'success'),
+      run(305, sha.gated!, 'failure'), run(300, sha.gated!)], { 300: binding() },
+      { jobs: { 330: [{ name: 'eval-slices (1)', conclusion: 'cancelled' }, { name: 'eval-slices (2)', conclusion: 'skipped' }],
+        310: [{ name: 'eval-slices', conclusion: 'skipped' }], 305: [{ name: 'readiness', conclusion: 'failure' }] } });
     expect(candidate?.reused_run_id).toBe(300);
+  });
+});
+
+describe('find: main moved (R2)', () => {
+  test('a head merged with the moved main, or rebased onto it, reuses the gate when its own diff is byte-identical', () => {
+    for (const head of [sha.merged!, sha.rebased!]) {
+      const { candidate, text } = find(head, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved });
+      expect(text).toContain('OWN DIFF: identical');
+      expect(candidate).toMatchObject({ kind: 'main-moved', reused_run_id: 300, gated_head: sha.gated, current_head: head,
+        gated_base: sha.base, base_sha: sha.moved, gated_merge_base: sha.base });
+      expect(candidate!.why).toContain('main moved');
+      expect(candidate!.own_diff_sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(parseReuse(candidate)).toEqual(candidate);
+    }
+  });
+
+  test('a restamp on a moved main: stamp files are outside the own-diff compare', () => {
+    const { candidate } = find(sha.restamp!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved });
+    expect(candidate?.kind).toBe('main-moved');
   });
 });
 
@@ -156,8 +233,65 @@ describe('find: negative controls (each forces the full gate)', () => {
       'stamp-classified files outside the version file, package.json, CHANGELOG and release outputs: bun.lock');
   });
 
-  test('a different base: main moved between the gate and this run', () => {
-    refused(find(sha.restamp!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }), 'main moved');
+  test('main moved and the own diff changed: a code byte, CHANGELOG entry text, a package.json field', () => {
+    for (const head of [sha.rebasedCode!, sha.rebasedEntry!, sha.rebasedPkg!]) {
+      refused(find(head, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }), "the PR's own diff (excluding stamp files) differs");
+    }
+  });
+
+  test('main moved and changed a file the PR also changes: the pre-image differs, so the own diff is not byte-identical', () => {
+    refused(find(sha.touchRebased!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.mainTouch }), 'OWN DIFF: changed');
+  });
+
+  test('main moved and a merge-base or the tested merge commit is unavailable', () => {
+    refused(find(sha.rebased!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved, failCompare: true }), 'a merge-base is unavailable');
+    refused(find(sha.rebased!, [run(300, sha.gated!)], { 300: binding() }, { testedSha: sha.rebased }), 'is not the merge of');
+    refused(find(sha.rebased!, [run(300, sha.gated!)], { 300: binding() }, { testedSha: 'd'.repeat(40) }), /cannot fetch|not readable/);
+  });
+
+  test('main moved and the newest executed gate is red, partial or a different profile', () => {
+    refused(find(sha.rebased!, [run(300, sha.gated!)], { 300: binding({ verdict: 'RED' }) }, { baseSha: sha.moved }), 'is RED');
+    refused(find(sha.rebased!, [run(300, sha.gated!, 'cancelled')], { 300: binding() }, { baseSha: sha.moved }), 'conclusion cancelled');
+    refused(find(sha.rebased!, [run(300, sha.gated!)], { 300: binding({ profile: 'full' }) }, { baseSha: sha.moved }), 'not the PR gate');
+  });
+
+  test('a newer run that finished a paid slice but bound no verdict blocks an older GREEN (never skipped)', () => {
+    for (const conclusion of ['failure', 'timed_out', 'success']) {
+      for (const runConclusion of ['failure', 'cancelled']) {
+        refused(find(sha.rebased!, [run(310, sha.merged!, runConclusion), run(300, sha.gated!)], { 300: binding() },
+          { baseSha: sha.moved, jobs: { 310: [{ name: 'eval-slices (1)', conclusion }, { name: 'eval-slices (2)', conclusion: 'cancelled' }] } }),
+        'newer run 310');
+      }
+    }
+    refused(find(sha.restamp!, [run(310, sha.gated!, 'success'), run(300, sha.gated!)], { 300: binding() },
+      { jobs: { 310: [{ name: 'eval-slices (1)', conclusion: 'success' }] } }), 'finished a paid slice (success) but bound no verdict');
+  });
+
+  test('release-output lines that look like diff headers are content, not headers (receipt parser)', () => {
+    for (const head of [sha.dashReplace!, sha.dashRemove!]) {
+      refused(find(head, [run(300, sha.gatedDash!)], { 300: binding({ head_sha: sha.gatedDash }) }), 'beyond stamps: agents-digest/gstack-AGENTS.md');
+    }
+    refused(find(sha.dashAdd!, [run(300, sha.gated!)], { 300: binding() }), 'beyond stamps: agents-digest/gstack-AGENTS.md');
+  });
+
+  test('a file mode change beside a restamp', () => {
+    refused(find(sha.mode!, [run(300, sha.gated!)], { 300: binding() }), 'beyond stamps: agents-digest/gstack-AGENTS.md');
+  });
+
+  test('a GREEN that includes manually accepted (unscored) cases', () => {
+    refused(find(sha.restamp!, [run(300, sha.gated!)], { 300: binding({ manual_accepted: 1 }) }), 'manually accepted (unscored)');
+    refused(find(sha.restamp!, [run(300, sha.gated!)], { 300: binding({ manual_accepted: -1 }) }), 'missing or malformed');
+  });
+
+  test('a newer run that holds slice results, or is still running, blocks an older GREEN', () => {
+    const gh = fakeGh([run(310, sha.gated!, 'cancelled'), run(300, sha.gated!)], { 300: binding() });
+    const withSlice: GhRunner = (args, t) => args.some(a => a.endsWith('/runs/310/artifacts'))
+      ? { status: 0, stdout: JSON.stringify({ artifacts: [{ name: 'paid-plan' }, { name: 'paid-slice-1-a1' }] }), stderr: '' } : gh(args, t);
+    const out = path.join(scratch, 'out-slice');
+    const r = findReusableGate({ repo: REPO, pr: 42, headRepo: REPO, branch: 'feature', selfRunId: 500, headSha: sha.restamp!,
+      testedSha: tested(sha.base!, sha.restamp!), repoRoot: receipt, out, gh: withSlice });
+    refused({ ...r, out, text: r.lines.join('\n') }, 'holds paid slice results (paid-slice-1-a1) but bound no verdict');
+    refused(find(sha.restamp!, [run(310, sha.gated!, null, { status: 'in_progress' }), run(300, sha.gated!)], { 300: binding() }), 'is still in_progress');
   });
 
   test('a missing receipt: no executed gate bound a verdict', () => {
@@ -239,7 +373,7 @@ describe('bind and report', () => {
     const dir = path.join(scratch, name);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest()));
-    fs.writeFileSync(path.join(dir, 'collector-outcomes.json'), JSON.stringify({ verdict: { verdict: 'GREEN' } }));
+    fs.writeFileSync(path.join(dir, 'collector-outcomes.json'), JSON.stringify({ verdict: { verdict: 'GREEN' }, totals: { manual_accepted: 0 } }));
     if (withReuse) fs.writeFileSync(path.join(dir, REUSE_FILE), '{}');
     return dir;
   };
@@ -256,11 +390,16 @@ describe('bind and report', () => {
 
   test('the CLI binds a missing reconcile exit as -1, never as a pass', () => {
     const out = path.join(scratch, 'bind-cli');
-    const r = spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/gate-reuse.ts'), 'bind', reportDir('bind-cli-report'), '--out', out,
-      '--repo', REPO, '--pr', '42', '--run-id', '300', '--run-attempt', '1', '--head-sha', 'a'.repeat(40), '--base-sha', 'b'.repeat(40),
-      '--profile', 'pr', '--reconcile-exit', ''], { encoding: 'utf8', timeout: 30_000 });
+    const bind = (head: string, testedSha: string, dir: string) => spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/gate-reuse.ts'), 'bind',
+      reportDir('bind-cli-report'), '--out', dir, '--repo', REPO, '--pr', '42', '--run-id', '300', '--run-attempt', '1', '--head-sha', head,
+      '--tested-sha', testedSha, '--profile', 'pr', '--reconcile-exit', ''], { cwd: receipt, encoding: 'utf8', timeout: 30_000 });
+    const r = bind(sha.gated!, tested(sha.moved!, sha.gated!), out);
     expect(r.status, r.stderr).toBe(0);
-    expect(JSON.parse(fs.readFileSync(path.join(out, BINDING_FILE), 'utf8')).reconcile_exit).toBe(-1);
+    expect(JSON.parse(fs.readFileSync(path.join(out, BINDING_FILE), 'utf8'))).toMatchObject({ reconcile_exit: -1, base_sha: sha.moved, head_sha: sha.gated });
+    // A tested commit that is not the merge of this head binds nothing.
+    const none = path.join(scratch, 'bind-cli-none');
+    expect(bind(sha.restamp!, tested(sha.moved!, sha.gated!), none).status).toBe(0);
+    expect(fs.existsSync(path.join(none, BINDING_FILE))).toBe(false);
   });
 
   test('report prints the reused verdict with its receipt, and fails closed without a valid record', () => {
@@ -270,6 +409,12 @@ describe('bind and report', () => {
     expect(text).toContain('GATE REUSED (R2a, restamp-only)');
     expect(text).toContain('TREE: same-modulo-stamps receipt=' + reuse.receipt_sha256);
     expect(text).toContain('https://github.com/garrytan/gstack/actions/runs/300');
+    const moved = find(sha.rebased!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }).candidate!;
+    const movedText = reuseReport(moved, REPO);
+    expect(movedText).toContain('GATE REUSED (R2, main moved)');
+    expect(movedText).toContain('OWN DIFF: identical sha256=' + moved.own_diff_sha256);
+    expect(movedText).toContain('why: main moved');
+    expect(movedText).toContain('at ' + sha.gated);
     const bad = spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/gate-reuse.ts'), 'report', path.join(scratch, 'missing.json'), '--repo', REPO],
       { encoding: 'utf8', timeout: 30_000 });
     expect(bad.status).toBe(1);
@@ -301,6 +446,13 @@ describe.skipIf(!Bun.which('jq') || !Bun.which('bash'))('the PR comment for a re
     expect(reused.stdout).toContain('## E2E Evals: ✅ PASS (reused: restamp-only, R2a)');
     expect(reused.stdout).toContain('TREE: same-modulo-stamps receipt=');
     expect(reused.stdout).toContain('actions/runs/300');
+    const moved = find(sha.rebased!, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }).candidate!;
+    fs.writeFileSync(path.join(paidDir, REUSE_FILE), JSON.stringify(moved));
+    const movedComment = exec('0');
+    expect(movedComment.status, movedComment.stderr).toBe(0);
+    expect(movedComment.stdout).toContain('## E2E Evals: ✅ PASS (reused: main moved, R2)');
+    expect(movedComment.stdout).toContain('OWN DIFF: identical sha256=' + moved.own_diff_sha256);
+    expect(movedComment.stdout).toContain('because main moved');
     const failed = exec('1');
     expect(failed.status, failed.stderr).toBe(0);
     expect(failed.stdout).not.toContain('PASS (reused');
