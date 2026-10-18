@@ -88,22 +88,27 @@ export function dartRunner(repoRoot: string, root: string, env: NodeJS.ProcessEn
   return { runner: `${fvm ? 'fvm ' : ''}${tool} test {files}` };
 }
 
+/** The run plan: the groups that can run, the files no runner claims, Dart SDKs missing from PATH, and `.dart` files with no pubspec.yaml above. */
+export interface RunPlan { groups: RunGroup[]; unclaimed: string[]; missing: string[]; noPubspec: string[] }
+
 /**
  * The invocations that run `files`. A declared runner takes every file. Otherwise
  * Dart tests run from their own package root (a sub-package's imports resolve
- * against its own pubspec), and the rest go to the detected runner; files no
- * runner claims are returned as `unclaimed`, with any Dart SDK missing from
- * PATH in `missing` (`incomplete`, never a pass).
+ * against its own pubspec), and the rest go to the detected runner. Files no
+ * runner claims (a Dart SDK missing from PATH, a `.dart` file outside any
+ * package, no detected runner) are `unclaimed`: the lane is `incomplete`, never a pass.
  */
-export function planRuns(ctx: PregateContext, files: readonly string[]): RunGroup[] | { unclaimed: string[]; missing: string[] } {
-  if (ctx.config.runner) return [{ runner: ctx.config.runner, cwd: '', files: [...files] }];
+export function planRuns(ctx: PregateContext, files: readonly string[]): RunPlan {
+  if (ctx.config.runner) return { groups: [{ runner: ctx.config.runner, cwd: '', files: [...files] }], unclaimed: [], missing: [], noPubspec: [] };
   const groups: RunGroup[] = [];
   const dart = new Map<string, string[]>();
   const seen = new Map<string, string | null>();
   const rest: string[] = [];
+  const noPubspec: string[] = [];
   for (const f of files) {
-    const root = f.endsWith('.dart') ? dartRoot(ctx.repoRoot, f, seen) : null;
-    if (root === null) { rest.push(f); continue; }
+    if (!f.endsWith('.dart')) { rest.push(f); continue; }
+    const root = dartRoot(ctx.repoRoot, f, seen);
+    if (root === null) { noPubspec.push(f); continue; }
     let list = dart.get(root);
     if (!list) dart.set(root, (list = []));
     list.push(root ? f.slice(root.length + 1) : f);
@@ -119,7 +124,17 @@ export function planRuns(ctx: PregateContext, files: readonly string[]): RunGrou
     if (runner) groups.push({ runner, cwd: '', files: rest });
     else unclaimed.push(...rest);
   }
-  return unclaimed.length ? { unclaimed, missing: [...missing].sort() } : groups;
+  return { groups, unclaimed: [...unclaimed, ...noPubspec], missing: [...missing].sort(), noPubspec };
+}
+
+/** Why `plan` leaves files unrun: their count, the missing SDKs, `.dart` files outside any package, and the fix. */
+function planGap(ctx: PregateContext, plan: RunPlan, total: number): Pick<CheckResult, 'code' | 'detail' | 'fix'> {
+  const { unclaimed, missing, noPubspec } = plan;
+  const detail = `no test runner detected for ${unclaimed.length} of ${total} selected file(s): ${unclaimed.slice(0, 8).join(' ')}${unclaimed.length > 8 ? ' …' : ''}${missing.length ? `; not on PATH: ${missing.join(', ')}` : ''}${noPubspec.length ? `; no pubspec.yaml above ${noPubspec.length} .dart file(s)` : ''}`;
+  const fix = missing.length ? `install ${missing.join(' and ')}${fvmPinnedFor(ctx.repoRoot, unclaimed) ? ' (or fvm, which this repo pins)' : ''} and rerun`
+    : noPubspec.length ? 'commit the Dart package\'s pubspec.yaml, or declare `runner` (with {files}) in .gstack/pregate.json'
+    : 'declare `runner` (with {files}) in .gstack/pregate.json';
+  return { code: 'PREGATE_INCOMPLETE', detail, fix };
 }
 
 export interface RunnerSummary { ran: number | null; failed: number | null }
@@ -132,13 +147,18 @@ function parseBats(output: string): RunnerSummary | null {
   return null;
 }
 
-/** The runner's own summary line: bun, node --test, vitest, jest, pytest, bats, dart/flutter test. A bats runner's summary is tried first; for any other runner bats output is a last resort. `ran: null` when not recognised. */
+/** dart/flutter test: the last `+passed ~skipped -failed: …` verdict line (`All tests skipped.` is +0, so zero-run); progress lines carry no verdict. */
+function parseDart(output: string): RunnerSummary | null {
+  const d = [...output.matchAll(/\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed!|All tests skipped\.|Some tests failed\.)/g)].pop();
+  return d ? { ran: Number(d[1]) + Number(d[2] ?? 0), failed: Number(d[2] ?? 0) } : null;
+}
+
+/** The runner's own summary line: bun, node --test, vitest, jest, pytest, bats, dart/flutter test. A bats or dart/flutter runner's summary is tried first; for any other runner those formats are a last resort. `ran: null` when not recognised. */
 export function parseSummary(output: string, runner = ''): RunnerSummary {
   if (/(?<![\w-])bats(?![\w-])/.test(runner)) { const b = parseBats(output); if (b) return b; }
+  const dartRun = /(?<![\w-])(?:dart|flutter)(?![\w-])/.test(runner);
+  if (dartRun) { const d = parseDart(output); if (d) return d; }
   let m: RegExpExecArray | null;
-  // dart/flutter test: the last `+passed ~skipped -failed: …` verdict line (`All tests skipped.` is +0, so zero-run); progress lines carry no verdict.
-  const dart = [...output.matchAll(/\+(\d+)(?: ~\d+)?(?: -(\d+))?: (?:All tests passed!|All tests skipped\.|Some tests failed\.)/g)].pop();
-  if (dart) return { ran: Number(dart[1]) + Number(dart[2] ?? 0), failed: Number(dart[2] ?? 0) };
   if ((m = /^\s*(?:#|ℹ)\s*tests\s+(\d+)/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(?:#|ℹ)\s*fail\s+(\d+)/m.exec(output)?.[1] ?? 0) };
   if ((m = /Ran\s+(\d+)\s+tests?\s+across/m.exec(output))) return { ran: Number(m[1]), failed: Number(/^\s*(\d+)\s+fail\b/m.exec(output)?.[1] ?? 0) };
   if ((m = /^\s*(\d+)\s+pass\s*$/m.exec(output))) return { ran: Number(m[1]) + Number(/^\s*(\d+)\s+fail\s*$/m.exec(output)?.[1] ?? 0), failed: Number(/^\s*(\d+)\s+fail\s*$/m.exec(output)?.[1] ?? 0) };
@@ -146,7 +166,7 @@ export function parseSummary(output: string, runner = ''): RunnerSummary {
   if ((m = /Tests\s+(?:(\d+)\s+failed\s*\|\s*)?(\d+)\s+passed/.exec(output))) return { ran: Number(m[2]) + Number(m[1] ?? 0), failed: Number(m[1] ?? 0) };
   if (/no tests ran/i.test(output) || /No tests found/i.test(output)) return { ran: 0, failed: 0 };
   if ((m = /(?:(\d+)\s+failed,?\s*)?(\d+)\s+passed/.exec(output))) return { ran: Number(m[2]) + Number(m[1] ?? 0), failed: Number(m[1] ?? 0) };
-  return parseBats(output) ?? { ran: null, failed: null };
+  return (dartRun ? null : parseDart(output)) ?? parseBats(output) ?? { ran: null, failed: null };
 }
 
 interface LocalRun { exit: number | null; outcome: Supervised['outcome']; ran: number | null; failed: number | null; tail: string[]; command: string; files: string[]; lastFile: string | null; ms: number }
@@ -308,18 +328,23 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
   }
   if (!ctx.allowRepoCommands) return { ...base, status: 'incomplete', code: 'REPO_COMMANDS_NOT_ALLOWED', detail: `${sel.localTests.length} local test file(s) selected but not run (pass --allow-repo-commands)`, fix: 'rerun with --allow-repo-commands (what /ship passes)' };
   if (sel.localTests.length === 0) return { ...base, status: sel.remote.length ? 'requires-remote' : 'pass', detail: `no local lane; ${sel.remote.length} requires-remote obligation(s)` };
-  const groups = planRuns(ctx, sel.localTests);
-  if (!Array.isArray(groups)) return { ...base, status: 'incomplete', code: 'PREGATE_INCOMPLETE', detail: `no test runner detected for ${groups.unclaimed.length} of ${sel.localTests.length} selected file(s): ${groups.unclaimed.slice(0, 8).join(' ')}${groups.unclaimed.length > 8 ? ' …' : ''}${groups.missing.length ? `; not on PATH: ${groups.missing.join(', ')}` : ''}`, fix: groups.missing.length ? `install ${groups.missing.join(' and ')}${fvmPinnedFor(ctx.repoRoot, groups.unclaimed) ? ' (or fvm, which this repo pins)' : ''} and rerun` : 'declare `runner` (with {files}) in .gstack/pregate.json' };
+  // Runnable groups run even when other files are unclaimed: a real failure is reported as one, and an all-green run is still incomplete.
+  const plan = planRuns(ctx, sel.localTests);
+  const gap = plan.unclaimed.length ? planGap(ctx, plan, sel.localTests.length) : null;
+  if (!plan.groups.length) return { ...base, status: 'incomplete', ...gap };
+  const { groups } = plan;
+  const total = groups.reduce((n, g) => n + g.files.length, 0);
   const runtime = launchRuntime(ctx.repoRoot, ctx.env);
   if (runtime.refusal) return { ...base, ...runtime.refusal, lines: [`runtime: ${runtime.label}`] };
   const r = await runLocal(ctx, runtime.env, groups);
   const adapters = [...new Set(groups.map(g => adapterFor(g.runner)).filter(Boolean))];
   const runLines = [...lines, `runtime: ${runtime.label}`, `progress: ${adapters.join(', ') || 'none (no progress adapter for this runner; serial files and heartbeats only)'}`, `ran: ${r.command.length > 200 ? `${r.command.slice(0, 200)}…` : r.command}`, `log: ${r.log}`, ...r.tail.map(l => `  ${l}`)];
   const withRun = { ...base, lines: runLines, inputs: { ...inputs, command: sha256(r.command), runtime: runtime.label } };
-  if (r.exit === null) return { ...withRun, status: 'incomplete', ...unfinished(ctx, r, sel.localTests.length) };
-  if (r.exit !== 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `local lane exited ${r.exit} (${r.failed ?? '?'} failed of ${r.ran ?? '?'} ran; ${sel.localTests.length} files; pipefail)`, fix: `read ${r.log}, fix the in-branch failure, rerun gstack-pregate --stage tests` };
-  if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests${r.zero ? ` in ${r.zero}` : ''} (${sel.localTests.length} selected file(s))`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
-  const detail = `${r.ran ?? 'count unavailable'} tests ran in ${sel.localTests.length} file(s)${r.serial ? ` (${r.serial} serial)` : ''}, exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;
+  if (r.exit === null) return { ...withRun, status: 'incomplete', ...unfinished(ctx, r, total) };
+  if (r.exit !== 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `local lane exited ${r.exit} (${r.failed ?? '?'} failed of ${r.ran ?? '?'} ran; ${total} files; pipefail)`, fix: `read ${r.log}, fix the in-branch failure, rerun gstack-pregate --stage tests` };
+  if (r.ran === 0) return { ...withRun, status: 'fail', code: 'PREGATE_LANE_FAILED', detail: `ZERO-RUN: the runner reported 0 tests${r.zero ? ` in ${r.zero}` : ''} (${total} selected file(s))`, fix: 'a bad selector, a missing file or a skipped describe; exit 0 is not a pass' };
+  const detail = `${r.ran ?? 'count unavailable'} tests ran in ${total} file(s)${r.serial ? ` (${r.serial} serial)` : ''}, exit 0${sel.remote.length ? `; ${sel.remote.length} requires-remote obligation(s)` : ''}`;
+  if (gap) return { ...withRun, status: 'incomplete', ...gap, detail: `${detail}; ${gap.detail}` };
   return { ...withRun, status: sel.remote.length ? 'requires-remote' : 'pass', detail };
 }
 

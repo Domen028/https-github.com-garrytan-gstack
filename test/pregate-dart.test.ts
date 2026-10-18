@@ -15,7 +15,7 @@ import { laneFileSet } from '../lib/pregate/lane-selection';
 import type { Lane } from '../lib/pregate/workflows';
 import { ROOT_OK } from '../lib/pregate/checks/strays';
 import { DEFAULT_CONFIG } from '../lib/pregate/config';
-import { buildGraph, dartPackages, isTestFile, testsFor } from '../lib/pregate/import-graph';
+import { buildGraph, dartPackages, isTestFile, readRepoFile, testsFor } from '../lib/pregate/import-graph';
 import type { PregateContext } from '../lib/pregate/types';
 import { parseWorkflow } from '../lib/pregate/workflows';
 import { cleanup, commit, makeFixtureRepo, runBin, write, type FixtureRepo } from './helpers/pregate-fixture';
@@ -68,6 +68,18 @@ function dartShim(repo: FixtureRepo, sleepS: number | Record<string, number> = 0
   return { PATH: `${dir}:${process.env.PATH ?? ''}` };
 }
 
+/** The shim dir, filled with links to every host PATH tool except fvm/dart/flutter: pregate and git still run, no real Dart tool is reachable. */
+function pathWithoutDartTools(repo: FixtureRepo): string {
+  const bin = path.join(repo.root, 'shim');
+  fs.mkdirSync(bin, { recursive: true });
+  for (const dir of (process.env.PATH ?? '').split(':')) {
+    let names: string[] = [];
+    try { names = fs.readdirSync(dir); } catch { continue; }
+    for (const name of names) if (!['fvm', 'dart', 'flutter'].includes(name) && !fs.lstatSync(path.join(bin, name), { throwIfNoEntry: false })) fs.symlinkSync(path.join(dir, name), path.join(bin, name));
+  }
+  return bin;
+}
+
 describe('Dart import graph', () => {
   test('_test.dart is a test; package:, relative, conditional, export and part directives all map; dart: and unknown packages do not', () => {
     const repo = dartRepo();
@@ -99,8 +111,31 @@ describe('Dart import graph', () => {
       'lib/multi.dart': 'int two() => 2;\n',
       'test/multi_test.dart': "import 'package:test/test.dart'; import 'package:app/multi.dart';\nvoid main() {}\n",
       'test/commented_test.dart': "void main() {} // see a; import 'package:app/multi.dart';\n",
+      'lib/cond.dart': 'int c() => 1;\n',
+      'lib/cond_io.dart': 'int c() => 2;\n',
+      'test/cond_test.dart': "import 'package:app/cond.dart'\n    if (dart.library.io) 'package:app/cond_io.dart'\n    show c;\nvoid main() {}\n",
     });
-    expect(testsFor(buildGraph(repo.work), 'lib/multi.dart').tests).toEqual(['test/multi_test.dart']);
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'lib/multi.dart').tests).toEqual(['test/multi_test.dart']);
+    // Value: protects=a directive dart format splits over indented lines (a conditional import) still maps both URIs once the run regex
+    //   is bounded for linear time; fails_when=the body stops at the first newline or the continuation rule rejects indented lines;
+    //   why_new=every directive fit on one line; seam=none; no_claim=the linear-time bound itself (measured, not asserted)
+    expect(testsFor(g, 'lib/cond.dart').tests).toEqual(['test/cond_test.dart']);
+    expect(testsFor(g, 'lib/cond_io.dart').tests).toEqual(['test/cond_test.dart']);
+  });
+
+  // Value: protects=two tracked pubspecs sharing a `name:` (a fixture copying the app's) keep both roots, so package: imports still
+  //   reach the real package; fails_when=the first root in ls-files order wins and the real package's edges silently drop (no lane);
+  //   why_new=every fixture package name was unique; seam=none; no_claim=pub's own resolution (both roots are tried, tracked file wins)
+  test('a package name two pubspecs share resolves to whichever root holds the file', () => {
+    const repo = dartRepo();
+    commit(repo, {
+      'a_fixture/pubspec.yaml': 'name: app\n',
+      'lib/x.dart': 'int x() => 1;\n',
+      'test/x_test.dart': "import 'package:app/x.dart';\nvoid main() {}\n",
+    });
+    expect(dartPackages(repo.work, ['a_fixture/pubspec.yaml', 'pubspec.yaml']).get('app')).toEqual(['a_fixture', '']);
+    expect(testsFor(buildGraph(repo.work), 'lib/x.dart').tests).toEqual(['test/x_test.dart']);
   });
 
   // Value: protects=a pubspec.yaml that is a symlink out of the repo, or not a regular file, is skipped without throwing (a link to a
@@ -115,10 +150,20 @@ describe('Dart import graph', () => {
     fs.symlinkSync(path.join(repo.root, 'outside', 'pubspec.yaml'), path.join(repo.work, 'packages', 'ext', 'pubspec.yaml'));
     fs.mkdirSync(path.join(repo.work, 'packages', 'dir', 'pubspec.yaml'), { recursive: true });
     const files = ['pubspec.yaml', 'packages/core/pubspec.yaml', 'packages/ext/pubspec.yaml', 'packages/dir/pubspec.yaml'];
-    expect([...dartPackages(repo.work, files)]).toEqual([['app', ''], ['core', 'packages/core']]);
+    expect([...dartPackages(repo.work, files)]).toEqual([['app', ['']], ['core', ['packages/core']]]);
     const env = dartShim(repo);
     expect(dartRunner(repo.work, 'packages/ext', env)).toEqual({ runner: 'dart test {files}' });
     expect(dartRunner(repo.work, 'packages/dir', env)).toEqual({ runner: 'dart test {files}' });
+    // Value: protects=a quoted pubspec `name:` (legal YAML) still registers the package, so its package: imports map to tests;
+    //   fails_when=the name regex stops accepting a leading quote and those imports silently resolve nowhere (no lane);
+    //   why_new=every fixture pubspec name was bare; seam=none; no_claim=a YAML parser
+    write(repo.work, 'packages/q/pubspec.yaml', "name: 'quoted_pkg'\n");
+    expect(dartPackages(repo.work, ['packages/q/pubspec.yaml']).get('quoted_pkg')).toEqual(['packages/q']);
+    // Value: protects=readRepoFile refuses a file over its byte cap (a huge committed pubspec is not read into memory);
+    //   fails_when=the size guard is dropped; why_new=only symlink and directory refusals were tested; seam=none (maxBytes is the
+    //   production parameter); no_claim=a real multi-MiB file (a small cap stands in)
+    expect(readRepoFile(repo.work, 'pubspec.yaml', 8)).toBeNull();
+    expect(readRepoFile(repo.work, 'pubspec.yaml')).toContain('name: app');
   });
 });
 
@@ -131,32 +176,43 @@ describe('Dart runner and summary (pure)', () => {
     //   alternation drops `All tests skipped.` and the lane passes on an unknown count; why_new=only passed/failed verdicts were parsed;
     //   seam=none; no_claim=none beyond protects
     expect(parseSummary('00:00 +0: loading\n00:01 +0 ~3: All tests skipped.')).toEqual({ ran: 0, failed: 0 });
+    expect(parseSummary('00:01 +2 -1: Some tests failed.', 'fvm flutter test {files}')).toEqual({ ran: 3, failed: 1 });
+    // Value: protects=a bun run whose output echoes a Dart verdict (an assertion message) is judged by bun's own summary, so 0 ran
+    //   stays ZERO-RUN; fails_when=the Dart verdict is read first for every runner again; why_new=only Dart output was parsed;
+    //   seam=none; no_claim=other runners echoing other runners' formats
+    expect(parseSummary('received: "00:01 +2: All tests passed!"\n\n 0 pass\n 0 fail\nRan 0 tests across 1 file.', 'bun test {files}')).toEqual({ ran: 0, failed: 0 });
   });
 
   test('without a declared runner, Dart tests group by package root; a declared runner takes every file', () => {
     const repo = dartRepo();
     const ctx = { repoRoot: repo.work, config: DEFAULT_CONFIG, env: dartShim(repo) } as unknown as PregateContext;
-    expect(planRuns(ctx, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual([
+    expect(planRuns(ctx, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual({ groups: [
       { runner: 'dart test {files}', cwd: '', files: ['test/ui/drawer_widget_test.dart'] },
       { runner: 'dart test {files}', cwd: 'packages/core', files: ['test/core_test.dart'] },
-    ]);
-    // Value: protects=non-Dart files beside Dart ones go to the detected runner, and a file no runner claims makes the plan null (incomplete);
+    ], unclaimed: [], missing: [], noPubspec: [] });
+    // Value: protects=non-Dart files beside Dart ones go to the detected runner, and a file no runner claims is unclaimed (incomplete) beside the runnable groups;
     //   fails_when=the rest group is dropped or an unclaimed file is silently skipped; why_new=only all-Dart lists were planned;
     //   seam=none; no_claim=the runners themselves (plan only)
-    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'test/util.test.js'])).toEqual([
+    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'test/util.test.js']).groups).toEqual([
       { runner: 'dart test {files}', cwd: '', files: ['test/ui/drawer_widget_test.dart'] },
       { runner: 'node --test {files}', cwd: '', files: ['test/util.test.js'] },
     ]);
-    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'spec/drawer_spec.rb'])).toEqual({ unclaimed: ['spec/drawer_spec.rb'], missing: [] });
+    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'spec/drawer_spec.rb'])).toEqual({ groups: [{ runner: 'dart test {files}', cwd: '', files: ['test/ui/drawer_widget_test.dart'] }], unclaimed: ['spec/drawer_spec.rb'], missing: [], noPubspec: [] });
     // Value: protects=a machine without the Dart SDK gets an incomplete lane naming the missing tool, never a test failure (exit 127);
     //   fails_when=the PATH check is dropped and the runner is planned anyway; why_new=every earlier plan had the SDK on PATH;
     //   seam=none; no_claim=a real SDK install (an empty PATH stands in for a machine without one)
     const noSdk = { ...ctx, env: { PATH: path.join(repo.root, 'empty-path') } } as PregateContext;
-    expect(planRuns(noSdk, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual({ unclaimed: ['test/ui/drawer_widget_test.dart', 'packages/core/test/core_test.dart'], missing: ['dart'] });
+    expect(planRuns(noSdk, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual({ groups: [], unclaimed: ['test/ui/drawer_widget_test.dart', 'packages/core/test/core_test.dart'], missing: ['dart'], noPubspec: [] });
     write(repo.work, 'pubspec.yaml', 'name: app\ndependencies:\n  flutter:\n    sdk: flutter\n');
-    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart'])).toMatchObject([{ runner: 'flutter test {files}' }]);
+    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart']).groups).toMatchObject([{ runner: 'flutter test {files}' }]);
+    // Value: protects=a .dart test with no pubspec.yaml above it is unclaimed (incomplete), never handed to the repo's JS runner;
+    //   fails_when=it falls through to detectRunner and a bun repo runs `bun test x_test.dart` (a false PREGATE_LANE_FAILED);
+    //   why_new=every Dart fixture had a root pubspec; seam=none; no_claim=the runner itself (plan only)
+    fs.rmSync(path.join(repo.work, 'pubspec.yaml'));
+    write(repo.work, 'bun.lock', '{}\n');
+    expect(planRuns(ctx, ['test/ui/drawer_widget_test.dart', 'test/util.test.js'])).toEqual({ groups: [{ runner: 'bun test {files}', cwd: '', files: ['test/util.test.js'] }], unclaimed: ['test/ui/drawer_widget_test.dart'], missing: [], noPubspec: ['test/ui/drawer_widget_test.dart'] });
     const declared = { ...ctx, config: { ...DEFAULT_CONFIG, runner: 'bash scripts/test.sh {files}' } } as PregateContext;
-    expect(planRuns(declared, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'])).toEqual([
+    expect(planRuns(declared, ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']).groups).toEqual([
       { runner: 'bash scripts/test.sh {files}', cwd: '', files: ['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart'] },
     ]);
   });
@@ -186,6 +242,16 @@ describe('Dart runner and summary (pure)', () => {
       write(repo.work, 'packages/core/pubspec.yaml', pubspec);
       expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
     }
+    // Value: protects=the PATH check looks for the tool the pubspec needs, so a Flutter package on a dart-only machine is missing
+    //   `flutter` (incomplete), not planned to exit 127; fails_when=the check is hardcoded to dart or to "any SDK"; why_new=the
+    //   no-SDK case had neither tool; seam=none; no_claim=a real SDK (a dart-only PATH shim)
+    const dartOnly = path.join(repo.root, 'dart-only');
+    fs.mkdirSync(dartOnly, { recursive: true });
+    fs.symlinkSync(path.join(repo.root, 'shim', 'dart'), path.join(dartOnly, 'dart'));
+    write(repo.work, 'packages/core/pubspec.yaml', 'name: core\ndependencies:\n  flutter:\n    sdk: flutter\n');
+    expect(dartRunner(repo.work, 'packages/core', { PATH: dartOnly })).toEqual({ missing: 'flutter' });
+    write(repo.work, 'packages/core/pubspec.yaml', 'name: core\n');
+    expect(dartRunner(repo.work, 'packages/core', { PATH: dartOnly })).toEqual({ runner: 'dart test {files}' });
   });
 
   // Value: protects=test paths in a run step resolve against the step's working-directory, else the job's, else the workflow's
@@ -202,9 +268,19 @@ describe('Dart runner and summary (pure)', () => {
       '    steps:', '      - run: dart test test/core_test.dart',
       '  top:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/app_test.dart',
       '  cmt:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: packages/core # the package',
-      '  abs:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: /home/runner/work/pkg', '',
+      '  abs:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: /home/runner/work/pkg',
+      '  up:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: ../sibling',
+      '  expr:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: ${{ matrix.pkg }}',
+      '  quoted:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: "packages/core"', '',
     ].join('\n');
-    const [step, job, top, cmt, abs] = parseWorkflow('w.yml', wf, 'darwin');
+    const [step, job, top, cmt, abs, up, expr, quoted] = parseWorkflow('w.yml', wf, 'darwin');
+    // Value: protects=a working-directory that escapes the repo (`..`) or is a `${{ }}` expression leaves the path unresolved rather than
+    //   inventing a path no selection can match, and a quoted directory is unquoted; fails_when=either guard or the quote strip is
+    //   dropped (the obligation silently stops matching); why_new=only comment, absolute and plain dirs were parsed; seam=none;
+    //   no_claim=expression evaluation (a matrix-dependent lane stays repo-root-relative)
+    expect(up!.testFiles).toEqual(['test/a_test.dart']);
+    expect(expr!.testFiles).toEqual(['test/a_test.dart']);
+    expect(quoted!.testFiles).toEqual(['packages/core/test/core_test.dart']);
     // A trailing YAML comment is not part of the directory; an absolute directory stays unresolved (as before) rather than unmatchable.
     expect(cmt!.testFiles).toEqual(['packages/core/test/core_test.dart']);
     expect(abs!.testFiles).toEqual(['test/a_test.dart']);
@@ -302,13 +378,7 @@ describe('gstack-pregate on a Dart repo with a committed policy', () => {
   test('an .fvmrc pin routes the Dart runner through fvm only when fvm is on PATH', () => {
     const repo = dartRepo();
     dartShim(repo);
-    const bin = path.join(repo.root, 'shim');
-    // The host PATH minus any real fvm/dart/flutter: every other tool pregate and git spawn stays reachable.
-    for (const dir of (process.env.PATH ?? '').split(':')) {
-      let names: string[] = [];
-      try { names = fs.readdirSync(dir); } catch { continue; }
-      for (const name of names) if (!['fvm', 'dart', 'flutter'].includes(name) && !fs.lstatSync(path.join(bin, name), { throwIfNoEntry: false })) fs.symlinkSync(path.join(dir, name), path.join(bin, name));
-    }
+    const bin = pathWithoutDartTools(repo);
     commit(repo, { '.fvmrc': '{"flutter":"3.24.0"}\n' });
     repo.git('push', '-q', 'origin', 'HEAD:main');
     repo.git('fetch', '-q', 'origin');
@@ -335,6 +405,20 @@ describe('gstack-pregate on a Dart repo with a committed policy', () => {
     expect(missing.out).toContain('fix: install dart (or fvm, which this repo pins) and rerun');
   }, 30_000);
 
+  // Value: protects=without an fvm pin the missing-SDK fix names only the SDK, never fvm; fails_when=fvmPinnedFor always reports a pin
+  //   (or the hint is unconditional) and an unpinned repo is told to install fvm; why_new=the missing-SDK run had a pin; seam=none;
+  //   no_claim=a real SDK install (PATH holds only host tools minus fvm/dart/flutter)
+  test('with no fvm pin, a missing Dart SDK is incomplete and the fix does not offer fvm', () => {
+    const repo = dartRepo();
+    const bin = pathWithoutDartTools(repo);
+    commit(repo, { 'packages/core/lib/core.dart': 'int one() => 2;\n' });
+    const r = run(repo, { PATH: bin });
+    expect(r.status).not.toBe(EXIT.ok);
+    expect(r.out).toMatch(/^tests {6}lanes {5}incomplete .*not on PATH: dart/m);
+    expect(r.out).toContain('fix: install dart and rerun');
+    expect(r.out).not.toContain('(or fvm');
+  }, 30_000);
+
   // Value: protects=a touched device test (integration_test/) is never run locally, fails with a fix naming .gstack/pregate.json and the
   //   `[]` remedy, and that documented declaration clears it; fails_when=the docs' remedy stops working or the fix loses the device hint;
   //   why_new=device tests were only checked at isTestFile; seam=none; no_claim=CI running the device test
@@ -357,5 +441,57 @@ describe('gstack-pregate on a Dart repo with a committed policy', () => {
     expect(declared.status).toBe(EXIT.ok);
     expect(declared.out).not.toContain('has no test lane');
     expect(declared.out).toContain('nothing touched selects a test');
+  }, 30_000);
+  // Value: protects=a .dart test outside any Dart package in a bun repo makes the lane incomplete naming the missing pubspec, never a
+  //   bun run of the .dart file; fails_when=the file falls to detectRunner (`bun test 'tools/test/x_test.dart'`, PREGATE_LANE_FAILED);
+  //   why_new=planRuns was the only check; seam=none; no_claim=a real Dart SDK
+  test('a .dart test with no pubspec.yaml above it is incomplete, not run by bun', () => {
+    const repo = makeFixtureRepo({ pregate: DART_PREGATE });
+    repos.push(repo);
+    commit(repo, { 'bun.lock': '{}\n', '.github/workflows/free-tests.yml': null, '.github/workflows/windows.yml': null }, 'bun');
+    repo.git('push', '-q', 'origin', 'HEAD:main');
+    repo.git('fetch', '-q', 'origin');
+    commit(repo, { 'tools/test/x_test.dart': 'void main() {}\n' });
+    const r = run(repo, dartShim(repo));
+    expect(r.status).not.toBe(EXIT.ok);
+    expect(r.out).toMatch(/^tests {6}lanes {5}incomplete .*tools\/test\/x_test\.dart; no pubspec\.yaml above 1 \.dart file\(s\)/m);
+    expect(r.out).not.toContain('bun test');
+  }, 30_000);
+
+  /** dartRepo plus a Flutter package `packages/ui` with one test; PATH has `dart` (the shim, `script` replacing its body when given) but no flutter. */
+  function mixedRepo(script?: string): { repo: FixtureRepo; env: { PATH: string } } {
+    const repo = dartRepo();
+    commit(repo, { 'packages/ui/pubspec.yaml': 'name: ui\ndependencies:\n  flutter:\n    sdk: flutter\n', 'packages/ui/test/ui_test.dart': 'void main() {}\n' });
+    repo.git('push', '-q', 'origin', 'HEAD:main');
+    repo.git('fetch', '-q', 'origin');
+    dartShim(repo);
+    const bin = pathWithoutDartTools(repo);
+    fs.rmSync(path.join(bin, 'flutter'));
+    if (script) fs.writeFileSync(path.join(bin, 'dart'), script, { mode: 0o755 });
+    commit(repo, { 'packages/core/lib/core.dart': 'int one() => 2;\n', 'packages/ui/test/ui_test.dart': 'void main() { }\n' });
+    return { repo, env: { PATH: bin } };
+  }
+
+  // Value: protects=a missing SDK for one package no longer suppresses the packages that can run: they run, and the all-green lane is
+  //   incomplete naming the missing tool; fails_when=planning is all-or-nothing again (nothing runs) or the green run passes;
+  //   why_new=the missing-SDK runs had no runnable package; seam=none; no_claim=a real Dart or Flutter SDK (PATH shim)
+  test('runnable packages run when another package\'s SDK is missing; the lane is incomplete', () => {
+    const { repo, env } = mixedRepo();
+    const r = run(repo, env);
+    expect(r.status).not.toBe(EXIT.ok);
+    expect(r.out).toMatch(/^tests {6}lanes {5}incomplete .*2 tests ran in 2 file\(s\), exit 0; no test runner detected for 1 of 3 selected file\(s\): packages\/ui\/test\/ui_test\.dart; not on PATH: flutter/m);
+    expect(r.out).toContain('fix: install flutter and rerun');
+    expect(fs.readFileSync(/log: (\S+)/.exec(r.out)![1]!, 'utf8')).toContain('ran in core: test/core_test.dart');
+  }, 30_000);
+
+  // Value: protects=a real failure in a runnable package is reported as PREGATE_LANE_FAILED even when another package's SDK is missing;
+  //   fails_when=the missing SDK masks the failure as incomplete; why_new=the mixed plan was only run green; seam=none;
+  //   no_claim=a real Dart SDK (PATH shim that fails)
+  test('a failing runnable package is a lane failure even when another package\'s SDK is missing', () => {
+    const { repo, env } = mixedRepo('#!/usr/bin/env bash\necho "00:01 +0 -1: Some tests failed."\nexit 1\n');
+    const r = run(repo, env);
+    expect(r.status).not.toBe(EXIT.ok);
+    expect(r.out).toMatch(/^tests {6}lanes {5}fail .*local lane exited 1/m);
+    expect(r.out).toContain('PREGATE_LANE_FAILED');
   }, 30_000);
 });

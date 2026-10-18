@@ -52,7 +52,7 @@ const PY_IMPORT = /(?:^|[;:])[ \t\f]*(?:from[ \t]+(\.+(?:\w[\w.]*)?|\w[\w.]*)[ \
 const PY_DOTTED = /^[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+$/;
 
 /** Flutter's device-only directories: their Dart files need a device, so they are never tests here (a touched one has no lane until declared `[]`). */
-export const DEVICE_TEST_DIR = /(?:^|\/)(?:integration_test|test_driver)\//;
+const DEVICE_TEST_DIR = /(?:^|\/)(?:integration_test|test_driver)\//;
 export function isDeviceDart(rel: string): boolean { return rel.endsWith('.dart') && DEVICE_TEST_DIR.test(rel); }
 export function isTestFile(rel: string): boolean { return TEST_FILE_RE.test(rel) && !isDeviceDart(rel); }
 
@@ -76,36 +76,42 @@ export function readRepoFile(repoRoot: string, rel: string, maxBytes = 1024 * 10
   } catch { return null; }
 }
 
-/** Dart package name → its root (`''` for the repository root), from every tracked pubspec.yaml. */
-export function dartPackages(repoRoot: string, files: Iterable<string>): Map<string, string> {
-  const out = new Map<string, string>();
+/** Dart package name → its roots (`''` for the repository root), from every tracked pubspec.yaml; a name two pubspecs share keeps both, in ls-files order. */
+export function dartPackages(repoRoot: string, files: Iterable<string>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
   for (const f of files) {
     if (path.posix.basename(f) !== 'pubspec.yaml') continue;
     const text = readRepoFile(repoRoot, f);
     if (text === null) continue;
     const name = /^name:\s*['"]?([A-Za-z_][\w]*)/m.exec(text)?.[1];
     const root = path.posix.dirname(f);
-    if (name && !out.has(name)) out.set(name, root === '.' ? '' : root);
+    if (name) out.set(name, [...(out.get(name) ?? []), root === '.' ? '' : root]);
   }
   return out;
 }
 
-/** The repo file one Dart directive URI names: `package:<name>/x` → `<root>/lib/x`, a relative URI from `fromFile`; `dart:` and external packages are null. */
-export function resolveDartUri(files: Set<string>, packages: Map<string, string>, fromFile: string, uri: string): string | null {
+/** The repo file one Dart directive URI names: `package:<name>/x` → the first `<root>/lib/x` that is tracked, a relative URI from `fromFile`; `dart:` and external packages are null. */
+function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fromFile: string, uri: string): string | null {
   const pkg = /^package:([\w]+)\/(.+)$/.exec(uri);
   if (pkg) {
-    const root = packages.get(pkg[1]!);
-    if (root === undefined) return null;
-    const target = normalize(path.posix.join(root, 'lib', pkg[2]!));
-    return files.has(target) ? target : null;
+    for (const root of packages.get(pkg[1]!) ?? []) {
+      const target = normalize(path.posix.join(root, 'lib', pkg[2]!));
+      if (files.has(target)) return target;
+    }
+    return null;
   }
   if (/^[a-z][\w+.-]*:/.test(uri)) return null;
   const target = normalize(path.posix.join(path.posix.dirname(fromFile), uri));
   return files.has(target) ? target : null;
 }
 
-/** A run of directives from a line start: several may share a line (`import 'a'; import 'b';`). Each one is split out by DART_DIRECTIVE. */
-const DART_DIRECTIVE_RUN = /^\s*(?:(?:library|import|export|part)\b[^;]*;[ \t]*)+/gm;
+/**
+ * A run of directives from a line start: several may share a line (`import 'a'; import 'b';`), and one may span lines
+ * (dart format indents the continuation of a conditional import). A body continues only onto an indented line that does not
+ * start another directive, and is bounded, so a `;`-less directive cannot scan the file (linear time). Each directive is split
+ * out by DART_DIRECTIVE.
+ */
+const DART_DIRECTIVE_RUN = /^[ \t]*(?:(?:library|import|export|part)\b(?:[^;\n]|\n(?=[ \t]+\S)(?![ \t]*(?:library|import|export|part)\b)){0,4000};[ \t]*)+/gm;
 const DART_DIRECTIVE = /(?:^|;)\s*(?:import|export|part)\b(?!\s+of\b)([^;]*)(?=;)/g;
 
 export function listRepoFiles(repoRoot: string): string[] {
@@ -349,7 +355,7 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
  * repo paths and join() segment runs. Import specifiers that resolve nowhere
  * and look like repo paths go to `unresolved` when given.
  */
-export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, config: PathAliases = NO_ALIASES, unresolved?: string[], packages: Map<string, string> = new Map()): Array<{ target: string; via: Edge['via'] }> {
+export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, config: PathAliases = NO_ALIASES, unresolved?: string[], packages: Map<string, string[]> = new Map()): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
   if (rel.endsWith('.dart')) {
     for (const run of source.matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) { const t = resolveDartUri(files, packages, rel, u[1]!); if (t) out.push({ target: t, via: 'import' }); }
