@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.91.130.0] - 2026-10-18
+
+**Every PR plan now shows what a tighter, exercised-path case map would run, without changing what actually runs.** Today a change to a bin or lib file reaches almost every gate case, because selection follows every mention of the file. The exercised-path map counts only what a case really executes: its touchfiles, its test's imports, the shell its skill runs, and the bins its recorded trials invoked. It runs in shadow mode. Replayed over every PR run that had a gate red between 2026-10-07 and 2026-10-17 (37 runs, 47 failed gate cases), it keeps all 47: `bun run test:exercised-map --replay`.
+
+### Added
+- **A shadow line in each PR plan's coverage summary.** It names the gate cases the map would select, drop and add, with per-file provenance and a predicted saving. The saving is a lower bound, because about 39% of observed case runs (the PTY trials) have no known cost.
+- **`bun run test:health` reports the shadow saving and shadow misses per week.** A red on a case the shadow would drop counts as a miss unless the case passed later at the same head SHA, which lists it as a flaky drop.
+- **MAP_GAP lines in the paid report.** A command a case ran outside its map is printed as `MAP_GAP <case> <bin>`, marked non-blocking for this PR, and widens the map at the next refresh. It never affects a verdict.
+- **`bun run test:exercised-map`** refreshes the committed map (`test/helpers/exercised-commands.json`) from a census run (`--from-run <id>`) or from local artifacts (`--from-dir`). Refreshes only add commands. Unavailable or partial input writes nothing and exits with a stable code: 2 usage, 3 unavailable, 4 incomplete.
+
+### For contributors
+- The weekly census unions its own recorded commands into the map and uploads it as `exercised-map-a<attempt>`.
+- A PR that changes only the map selects no paid case while the map is in shadow mode.
+- docs/TESTING_INTERNALS.md#exercised-path-map documents the edge classes, the refresh contract and the activation bar.
+
 ## [1.91.129.0] - 2026-10-18
 
 **PR paid-lane selection reads every script it depends on, and fails closed when it can't.** Selection derives which paid cases a changed file reaches by scanning imports. It skipped extensionless `bun`/`node` scripts, read 15 `.ts` files with the TSX loader, and treated a scan error as "no consumers", which under-selects. Across all 2,223 code files in the repo, scans now finish with 0 errors, and no (file, case) pair that main selected is lost.
