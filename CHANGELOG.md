@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.91.140.0] - 2026-10-18
+
+**The paid PR gate now tests Claude Opus 5.5 instead of Fable 5.1. Its first full Opus gate went 132/132 green and recorded $32.33, against Fable's $93.16 mean over ten full gates.** Garry's direction (2026-10-18) is to test each lab's best code model. Calibration run 39157502890 passed all 108 rule cases and 24 judges on one attempt each, with no reused receipts, on the same case set every Fable gate passed. Opus 5.5 sessions cost $30.86 (Fable: $90.49), judges $1.44 and Haiku side calls $0.08; with the unrecorded PTY sessions estimated, the full-gate scale is $37.13 against $106.17. Output tokens fell 37% (thinking 69%) and session time from 11,859 s to 6,159 s. The Claude CLI runs Opus 5.5 at medium effort by default and Fable at high.
+
+### Changed
+- **Model under test:** `CLAUDE_CAPTURE_EVAL_MODEL` in `lib/eval-model.ts` (renamed from `CLAUDE_FRONTIER_EVAL_MODEL`; Opus 5.5 is the catalog's smart tier, not its frontier) is `claude-opus-5-5`. Every `claude -p`, PTY and Agent SDK eval runner passes it as `--model` unless a test names a model or `EVALS_MODEL` is set.
+- **The judge stays Fable 5.1.** The new `CLAUDE_JUDGE_EVAL_MODEL` (`claude-fable-5-1`) is the `judge` default, the arm benchmark's judge and the judge calibration configs' model, because the calibration fixtures are keyed to it. The `claude-fable-5-*` → `fable-5` overlay routing now holds while the judge is a Fable 5 release.
+- **plan-review-report** drops its `claude-opus-4-7` pin and follows the capture default; it was the only PR-gate case on Opus 4.7. The periodic Opus 4.7 files keep their pins (TODOS).
+- **A new pass-rate series:** `HARNESS_VERSION` 5 → 6, so no Fable trial pools with an Opus one, and shard-reuse receipts already key on `lib/eval-model.ts`. Warmup and distill stay on Haiku.
+- **Gate integrity:** no threshold, assertion, trial count, case kind or judge changed. Test edits only update asserted model IDs and their prices, plus one assertion naming `scripts/harness-version.json` so pregate maps the manifest to a test lane.
+
+### If you…
+- **…compare pass rates across the switch:** Fable trials carry `harness_version: 5` and Opus trials `6`; they are separate series.
+- **…need Fable for one run:** set `GSTACK_EVAL_MODEL_CAPTURE=claude-fable-5-1` (or `EVALS_MODEL`).
+
 ## [1.91.139.0] - 2026-10-18
 
 **The docs-sync fixture's declared Git interface now includes read-only `git describe`, so `ship-docsync-store` no longer goes red when the /document-release child checks for release tags.** PR #3272's gate run 39153452209 failed that case on one command, `git describe --tags --always`, which the observer did not list. A focused paid rerun of `ship-docsync-store` on this tree passed ($3.83); the child ran the same command twice and the observer accepted it.
