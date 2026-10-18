@@ -1009,17 +1009,44 @@ select nothing: docs, any non-paid `*.test.ts(x)`, `FREE_ONLY_PR_FILES` (the
 free and paid duration seeds, `scripts/ubicloud/**`, every workflow that runs no
 paid evals, and free-only tools), and the fixtures in `FREE_FIXTURES`
 (`test/helpers/free-fixtures-data.ts`, each fixture with its free consumers).
-`PAID_WORKFLOW_FILES` (`evals.yml`, `evals-periodic.yml`, `evals-marathon.yml`)
-and any other unknown file restore the full gate (`prCoverage.mode =
-full-fallback`). The job summary and PR comment list each file that caused a
-fallback with one of three labels:
+Unmapped files under `DERIVABLE_PREFIXES` (bin/, lib/, scripts/, browse/,
+design/, make-pdf/, hosts/, extension/, model-overlays/, agents/, test/helpers/,
+capy/) are not unknown: `scripts/pr-dependencies.ts` derives the cases whose
+reference closure reaches them (`prCoverage.mode = dependents`), or reports that
+no paid case reaches them. The derivation scans the imports of every code file,
+including `#!`-shebang `.ts` files and extensionless Bun or Node scripts; if any
+import scan fails, every unmapped file restores the full gate (label **import
+scan failed**). `PR_FULL_GATE_FILES`, `PAID_WORKFLOW_FILES` (`evals.yml`,
+`evals-periodic.yml`, `evals-marathon.yml`) and any other unknown file restore
+the full gate (`prCoverage.mode = full-fallback`). The job summary and PR comment
+list each unmapped file that caused a fallback with one of these labels:
 
 - **needs touchfile entry**: a paid test, helper or fixture no case maps; add it
   to the owning case in `E2E_TOUCHFILES` (`test/helpers/touchfiles-data.ts`).
 - **add to FREE_ONLY_PR_FILES**: a file only free lanes read; add it to the list
   in `scripts/test-pr-profile.ts` (or a fixture to `FREE_FIXTURES`).
-- **real unknown dependency**: shared code (bin/, lib/, resolvers, hosts, setup)
-  whose dependents are not mapped; the full gate is the correct result.
+- **full-gate input**: a `PR_FULL_GATE_FILES` entry every case consumes; the
+  full gate is intended and no mapping narrows it.
+- **deleted but still referenced** and **import scan failed**: fix the named
+  reference or parse error.
+- **real unknown dependency**: a file outside the derivable directories that no
+  list classifies (for example `ETHOS.md`); map it, exempt it, or derive its
+  directory.
+
+The fallback rate is a label, not the bill: a dependents run whose derived
+closure reaches every gate case costs about what a full-fallback run does.
+`bun run test:health` leads with the cost per merged PR and reports
+`pr-cases-per-run` (mean selected gate cases and judges per PR run, per mode)
+and `pr-known-cost-per-run` (mean known trial cost per PR run, per mode) beside
+`pr-fallback-rate`.
+
+`package.json` (beyond a version-only change) and `bun.lock` stay full-gate
+inputs. Over the 225 PR runs from 2026-10-07 to 2026-10-17, no run fell back on
+them alone, dependabot PRs never reach the paid lane (`evals.yml` skips
+`github.actor == 'dependabot[bot]'`), and every runtime package's importer
+(`test/helpers/agent-sdk-runner.ts`, `test/helpers/llm-judge.ts`, `browse/src/*`,
+`make-pdf/src/*`) reaches every gate case or is in the global set, so narrowing
+them would select the same cases.
 
 `test/free-fixtures.test.ts` holds the inventory: each `test/fixtures/**` path
 belongs to a paid touchfile or `FREE_FIXTURES`, and each workflow to the paid or
@@ -1027,7 +1054,79 @@ free-only list. Editing a paid test file runs its own gate cases on the PR when
 their Bun test is named by the case id; the file's other cases stay deferred with
 a reason that says to name the test by its case id.
 
-### PR receipts, recovery and debounce
+### Exercised-path map
+
+The derived closure (above) reaches almost every gate case from most bin/ and
+lib/ files, because it follows prose, string and doc-comment mentions. The
+exercised-path map is a tighter consumer set that runs in **shadow mode**: it
+is computed and reported on every PR plan, and it never changes which cases a
+PR runs. Activating it is a later decision that needs PTY command capture for
+the cases that record no commands, two weeks of shadow data with zero shadow
+misses, and Garry's call on the measured saving.
+
+A case's exercised consumers (`exercisedConsumers` in
+`scripts/pr-dependencies.ts`) are the union of its touchfile matches, the
+closure of its test file and helpers, the executable shell of its loaded skill
+(template and generated SKILL.md) and of every bin, lib and script that shell
+runs, and the bins its recorded trials invoked. Shell edges are command-position
+`gstack-*` names and repo paths, `.`/`source`, `./setup`, quoted path
+literals, `path.join` pairs, data files, `bun run` scripts and compiled outfiles
+(`browse/dist/browse`, `$B`, `design/dist/design`, `$D`, `make-pdf/dist/pdf`).
+Comments, echo/printf/die messages, case patterns, bare `VAR=gstack-x` strings
+and slash-command skill names are not edges; command substitutions are kept, an
+expanding heredoc keeps its substitutions and a heredoc an interpreter reads
+stays whole. The closure stops at `PR_FULL_GATE_FILES` and the global set, which
+stay full. `test/exercised-map.test.ts` pins that this function equals or is a
+reviewed superset of the measured prototype (`test/helpers/exercised-prototype.ts`).
+
+The observed half is `test/helpers/exercised-commands.json` (generated; per case
+the bins and compiled outfiles its recorded trials ran, observation counts, the
+source run ids and a mean known cost per run). Refreshes are union-only: an
+observation never removes a command and a missing or empty artifact never erases
+one; removing a command is a reviewed edit. While the map is in shadow mode it
+changes no selection, so a PR that changes only the map selects no paid case.
+
+Dollar figures are lower bounds. Known cost excludes PTY trials, whose cost is
+unknown: about 39% of observed case runs in the committed map. The shadow block
+and `test:health` both say so.
+
+- **Shadow block:** `prCoverage.shadow` in the paid-plan manifest lists the gate
+  cases the map would select, would drop and would add, a provenance line per
+  changed file ("selects N case(s): touchfile (k), import (k), skill bash via
+  bin/gstack-x (k), observed bin/gstack-y (k)"), the predicted saving and the
+  unknown-cost share. The coverage summary prints one line of it.
+- **Shadow misses (`bun run test:health`, metric `pr-shadow-map`):** a red case
+  (more executed failed than passed trials in the run) that the shadow would
+  drop is an activation miss unless the case passed in a later run of the same
+  branch at the same head SHA. That later pass marks it a flaky drop, which is
+  listed but not counted. The D3 activation bar counts activation misses only.
+- **MAP_GAP:** the paid report runs the same bin matcher over each executed
+  case's recorded commands and prints, and writes to `map-gaps.txt`,
+  `MAP_GAP <case> <command>: non-blocking for this PR; the next census refresh
+  widens the map (docs/TESTING_INTERNALS.md#exercised-path-map)` for a command
+  outside the case's static-plus-observed closure. It is its own result: never a
+  case verdict, a lane problem or an INFRA re-dispatch input.
+- **Census refresh:** the weekly census unions its own recorded commands into the
+  map (no REST artifact downloads), uploads it as `exercised-map-a<attempt>`,
+  reports MAP_GAP lines and the cases that recorded no commands, and prints the
+  refresh command. Run `bun run test:exercised-map --from-run <id>`, or
+  `--from-dir <dir>` on a locally downloaded `exercised-map-a<attempt>` artifact
+  when the download hits HTTP 403, and open the change as an ordinary PR.
+  `bun run test:exercised-map --check` validates the committed file.
+- **Refresh contract:** a refresh whose input is unavailable or partial writes
+  nothing, keeps the committed union and exits with a stable code that names
+  what was missing: `2` usage; `3` input unavailable (a missing directory, or a
+  failed or HTTP 403 download); `4` input incomplete (no `shards/`, no
+  `trial-outcomes.jsonl`, an executed case without a shard artifact, or a missing
+  or malformed `exercised-commands.json`). The census step reports a failed
+  refresh in its job summary and uploads no map.
+- **Replay receipt:** `bun run test:exercised-map --replay` replays the recorded
+  red PR runs in `test/fixtures/exercised-map-replay.json` (every executed failed
+  gate trial in 225 `evals.yml` pull_request runs, 2026-10-07 to 2026-10-17)
+  through today's selector and its shadow, and exits 1 on any MISS: a failed
+  gate case the shadow would not run. `test/exercised-map.test.ts` pins zero.
+
+### PR receipts, recovery, readiness and verdict reuse
 
 Passes and failures of single-trial shards are written as receipts at the
 execution boundary, so a cancelled run's finished work survives. The
@@ -1040,13 +1139,65 @@ unresolved run. `plan-slices` turns reuse off when recovery degraded, the
 checkpoint is missing or a cancelled run is still unresolved; recovery itself
 never fails the run, and the job summary names the reason (rate limit with its
 reset time, `gh auth status`, the 60-second budget). The whole store is saved by
-`slices-report`.
+`slices-report`. Both the restore and the save run on GitHub-hosted runners: an
+Ubicloud runner sends `actions/cache` to Ubicloud's transparent cache, which a
+GitHub-hosted restore never sees (until GSTA-48 every restore missed).
 
-On a `synchronize` push, when another run for the same PR started in the last 15
-minutes, the debounce job waits 90 seconds before planning; a run that outlives
-the wait reports "superseded by <sha>". PR labels: `evals-no-debounce` skips the
-wait and `evals-fresh` turns receipt reuse off. Labels apply from the next push,
-because adding a label does not start `evals.yml`.
+**Readiness (R1).** Paid slices for a PR head start only when the PR has been
+quiet for the window (repository variable `EVALS_QUIET_MINUTES`, default 10,
+measured from the run's creation) and Free Tests has concluded success on the
+same head SHA. The `readiness` job (`scripts/eval-readiness.ts`) sleeps out the
+window with no API calls, since a newer push cancels the run anyway, then polls
+Free Tests every minute for up to 80 minutes. Free Tests red on the head fails
+the run without paid work; re-run Free Tests, then re-run this workflow (a
+re-run keeps the creation time, so it does not wait out the window again). A
+head that is no longer the PR's head reports "superseded by <sha>" and plans
+nothing. Selection, trials and verdict rules do not change. Version Gate is not
+an input, so a stamp push waits only for its own Free Tests and always gets a
+gate. Dispatches (`eval:bg`, the census) never wait.
+
+**Verdict reuse (R2a restamp-only, R2 main moved; a gate edit).** A PR head
+reuses the verdict of the newest executed gate of the same PR instead of
+running one only when all of these hold. Every newer run of the PR either bound
+a verdict or provably ran no paid slice (superseded, readiness-blocked, a reuse,
+or cancelled before a slice finished); a newer run that is still running,
+finished a slice, or holds a `paid-slice-*` artifact without a bound verdict
+blocks reuse, so a newer red or partial result is never skipped. The gate is
+GREEN with reconcile exit 0, a successful run and no manually accepted
+(unscored) case; it ran the PR profile on a different head. Then either:
+
+- **R2a, restamp-only:** it ran on the same base (the tested merge commit's
+  first parent), the tree receipt (`lib/tree-receipt.ts` under the base's ship
+  policy) prints `TREE: same-modulo-stamps`, and every differing file is the
+  version file, `package.json`, the CHANGELOG or a release output (the agents
+  digest); or
+- **R2, main moved:** the base moved, and the PR's own diff from its
+  merge-base, excluding stamp files, is byte-identical to the gated head's
+  (`git diff --binary --full-index`, so pre-image blob ids are compared and a
+  main change to a file the PR also changes is a difference; `package.json`
+  compared without its version; release outputs with each revision's version
+  replaced; the CHANGELOG by its preamble and the sections the PR added and
+  removed, dropping only version or `[Unreleased]` headings).
+
+Finally this head's own plan must have the same selection fingerprint (cases,
+statuses, trial plans, profile), so a main move that changes what the PR gate
+selects runs the full gate. `recover-receipts` proposes the candidate from
+base-ref code (`scripts/gate-reuse.ts find`), `plan-slices` confirms the
+selection, `eval-slices` is skipped, and the report and PR comment say
+`PASS (reused: restamp-only, R2a)` or `PASS (reused: main moved, R2)` with
+the reused run, its head, why, and the receipt digest or own-diff signature.
+Free Tests and every other check still run on the new head. Executed runs
+upload a `gate-binding-a<attempt>` artifact (base, verdict, reconcile exit,
+manual count, selection); reused runs bind nothing, so reuse never chains off a
+reuse. Any other case (a changed own diff, a non-stamp byte including CHANGELOG
+entry text or a file mode, a missing binding, receipt or merge-base, a gh or git
+error, `evals-fresh`) runs the full gate. For a restamp to qualify, write the
+CHANGELOG entry before the gated push (under `## [Unreleased]` or the
+tentative version) so the stamp only re-heads it.
+
+PR labels: `evals-no-debounce` sets the quiet window to 0 (Free Tests is still
+required) and `evals-fresh` turns receipt reuse and verdict reuse off. Labels
+apply from the next push, because adding a label does not start `evals.yml`.
 
 ## Free suite runner, judge reuse and engine skips
 

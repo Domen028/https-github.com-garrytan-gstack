@@ -1,7 +1,8 @@
 /**
  * PR paid-lane workflow pins (W1, CEO-13/14/34, ENG-7/11/12, DX-7, W8f):
- * coverage summaries, cancellation recovery off PR code, the push-burst
- * debounce, dispatch inputs, and the absence of the old inline subset program.
+ * coverage summaries, cancellation recovery off PR code, readiness-gated
+ * dispatch (R1), verdict reuse wiring (R2a/R2), dispatch inputs, and the
+ * absence of the old inline subset program.
  */
 import { describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
@@ -77,30 +78,77 @@ describe('evals.yml receipt recovery (CEO-14/34, ENG-7)', () => {
 });
 
 
-describe('evals.yml push-burst debounce (CEO-15, ENG-11, DX-7)', () => {
-  const debounce = workflow.jobs.debounce!;
+describe('evals.yml readiness-gated dispatch (R1, GSTA-48)', () => {
+  const readiness = workflow.jobs.readiness!;
 
-  test('a tiny job debounces only synchronize pushes, skippable by label, before recovery and planning', () => {
-    expect(debounce['runs-on']).toBe('ubuntu-24.04');
-    expect(debounce.if).toContain("github.event.action == 'synchronize'");
-    expect(debounce.if).toContain("!contains(github.event.pull_request.labels.*.name, 'evals-no-debounce')");
-    expect(debounce.permissions).toEqual({ actions: 'read', 'pull-requests': 'read' });
-    const wait = step('debounce', 'Wait out a push burst')!.run!;
-    expect(wait).toContain("date -u -d '15 minutes ago'");
-    expect(wait).toContain('sleep 90');
-    expect(wait).toContain('superseded=true');
-    expect(wait).toContain('superseded by ${head}');
+  test('a tiny PR-only job waits for a quiet PR and green Free Tests before recovery and planning', () => {
+    expect(readiness['runs-on']).toBe('ubuntu-24.04');
+    expect(readiness.if).toBe("github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository");
+    expect(readiness.permissions).toEqual({ contents: 'read', actions: 'read', 'pull-requests': 'read' });
+    expect(Number(readiness['timeout-minutes'])).toBeGreaterThan(80);
+    const wait = step('readiness', 'Wait for a quiet PR and green Free Tests on this head')!;
+    expect(wait.id).toBe('wait');
+    expect(wait.run).toContain('scripts/eval-readiness.ts wait');
+    expect(wait.run).toContain('--deadline-minutes 80');
+    expect(wait.run).toContain('--github-output "$GITHUB_OUTPUT"');
+    expect(wait.env?.HEAD_SHA).toBe('${{ github.event.pull_request.head.sha }}');
+    // The window is configurable and the old debounce label still skips it; nothing skips the Free Tests requirement.
+    expect(wait.env?.QUIET_MINUTES).toBe("${{ contains(github.event.pull_request.labels.*.name, 'evals-no-debounce') && '0' || vars.EVALS_QUIET_MINUTES || '10' }}");
+    expect(readiness.outputs?.superseded).toBe('${{ steps.wait.outputs.superseded }}');
     for (const job of ['recover-receipts', 'plan-slices']) {
-      expect(workflow.jobs[job]!.needs).toContain('debounce');
-      expect(workflow.jobs[job]!.if).toContain("needs.debounce.outputs.superseded != 'true'");
+      expect(workflow.jobs[job]!.needs).toContain('readiness');
+      expect(workflow.jobs[job]!.if).toContain("(needs.readiness.result == 'success' || needs.readiness.result == 'skipped')");
+      expect(workflow.jobs[job]!.if).toContain("needs.readiness.outputs.superseded != 'true'");
       expect(workflow.jobs[job]!.if).toContain('!cancelled()');
     }
+    expect(workflow.jobs.debounce).toBeUndefined();
   });
 
   test('cancel-in-progress stays keyed on the PR, and evals-fresh turns receipt reuse off', () => {
     expect(source).toContain('group: evals-${{ github.event.pull_request.number || github.run_id }}');
     expect(source).toContain('cancel-in-progress: true');
     expect(workflow.env.EVALS_FRESH).toContain("contains(github.event.pull_request.labels.*.name, 'evals-fresh')");
+  });
+});
+
+describe('evals.yml gate verdict reuse wiring (R2a restamp-only, R2 main moved; GSTA-48)', () => {
+  test('base-ref recovery proposes a candidate; it never fails the run', () => {
+    const find = step('recover-receipts', 'Find a gate verdict to reuse (R2a/R2, base-ref code)')!;
+    expect(find.if).toBe("github.event_name == 'pull_request'");
+    expect(find.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', HEAD_SHA: '${{ github.event.pull_request.head.sha }}' });
+    expect(find.env?.BASE_SHA).toBeUndefined();
+    expect(find.run).toContain('scripts/gate-reuse.ts find');
+    // The base is the tested merge commit's first parent, never the event's base.sha.
+    expect(find.run).toContain('--tested-sha "$GITHUB_SHA"');
+    expect(find.run).not.toContain('--base-sha');
+    expect(find.run).toContain('exit 0');
+    expect(find.run).toContain('|| echo');
+    expect(step('recover-receipts', 'Hand a gate reuse candidate to plan-slices')?.with).toMatchObject({ name: 'gate-reuse-candidate', path: '/tmp/gate-reuse' });
+  });
+
+  test('the planner confirms the selection after its own plan, and a confirmed reuse runs no slice', () => {
+    const planner = workflow.jobs['plan-slices']!;
+    const names = planner.steps.map(s => s.name);
+    expect(names.indexOf('Confirm gate verdict reuse (R2a/R2)')).toBeGreaterThan(names.indexOf('Emit run manifest'));
+    expect(step('plan-slices', 'Confirm gate verdict reuse (R2a/R2)')!.run).toContain('gate-reuse.ts confirm /tmp/gate-reuse /tmp/paid-plan/manifest.json --out /tmp/paid-plan');
+    expect(planner.outputs?.gate_reuse).toBe('${{ steps.gate_reuse.outputs.gate_reuse }}');
+    expect(workflow.jobs['eval-slices']!.if).toContain("needs.plan-slices.outputs.gate_reuse != 'true'");
+  });
+
+  test('the report prints a reused verdict fail-closed and only executed runs bind a verdict', () => {
+    const report = workflow.jobs['slices-report']!;
+    expect(step('slices-report', 'Reconcile slices against the manifest (fail-closed)')!.if).toBe("needs.plan-slices.outputs.gate_reuse != 'true'");
+    const reused = step('slices-report', 'Report the reused gate verdict (R2a/R2)')!;
+    expect(reused.if).toBe("needs.plan-slices.outputs.gate_reuse == 'true'");
+    expect(reused.run).toContain('echo "exit=$code"');
+    expect(report.outputs?.['reconcile-exit']).toBe('${{ steps.reconcile.outputs.exit || steps.reused.outputs.exit }}');
+    expect(step('slices-report', 'Fail the workflow when reconciliation failed')!.if).toBe("(steps.reconcile.outputs.exit || steps.reused.outputs.exit) != '0'");
+    const bind = step('slices-report', "Bind this run's verdict for reuse (R2a/R2)")!;
+    expect(bind.if).toBe("always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'");
+    expect(bind.env?.RECONCILE_EXIT).toBe('${{ steps.reconcile.outputs.exit }}');
+    expect(bind.run).toContain('--tested-sha "$GITHUB_SHA"');
+    expect(bind.env?.BASE_SHA).toBeUndefined();
+    expect(step('slices-report', 'Upload the gate binding')?.with).toMatchObject({ name: 'gate-binding-a${{ github.run_attempt }}', path: '/tmp/gate-binding/gate-binding.json' });
   });
 });
 
