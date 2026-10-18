@@ -8,10 +8,11 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { loadConfigFromUser, validateConfig } from '../lib/pregate/config';
-import { buildContext, sha256 } from '../lib/pregate/context';
+import { buildContext, sha256, userConfigRejection } from '../lib/pregate/context';
 import { runPregate } from '../lib/pregate/index';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
 
@@ -216,7 +217,7 @@ describe('gstack-pregate with a user-owned policy', () => {
   // Value: protects=a user path inside the checkout (GSTACK_HOME under the repo, or a relative state root when HOME is unset) is
   //   never read, so a PR cannot commit its own "user" policy; fails_when=userConfigRejection is dropped and the in-repo file
   //   becomes the policy; why_new=the trust check is new; seam=none (userConfigPath is an existing buildContext option);
-  //   no_claim=a symlinked state root (realish covers it, untested here)
+  //   no_claim=a symlinked state root (the next test)
   test('a user path inside the repository or relative is ignored, with an explain line', () => {
     const { repo } = setup();
     const inside = path.join(repo.work, '.gstack', 'projects', 'x', 'pregate.json');
@@ -230,15 +231,31 @@ describe('gstack-pregate with a user-owned policy', () => {
     }
   }, 60_000);
 
-  // Value: protects=--explain says when the user file was looked for and absent, and names a `local` id that matches no platform lane;
+  // Value: protects=the containment check sees through a symlinked state root and does not mistake an in-repo `..name`
+  //   directory for a parent; fails_when=the realpath half or the `..`-segment test regresses and a file a PR committed is read
+  //   as the user policy; why_new=both edges are new; seam=none; no_claim=case-only path differences (realpathSync.native)
+  test('a state root symlinked into the checkout, or under an in-repo ..name directory, is inside', () => {
+    const { repo } = setup();
+    fs.mkdirSync(path.join(repo.work, '.st'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'pregate-sr-'));
+    try {
+      const link = path.join(outside, 'root');
+      fs.symlinkSync(path.join(repo.work, '.st'), link);
+      expect(userConfigRejection(repo.work, path.join(link, 'projects', 'x', 'pregate.json'))).toContain('inside the repository');
+      expect(userConfigRejection(repo.work, path.join(repo.work, '..st', 'projects', 'x', 'pregate.json'))).toContain('inside the repository');
+      expect(userConfigRejection(repo.work, path.join(outside, 'projects', 'x', 'pregate.json'))).toBeNull();
+    } finally { fs.rmSync(outside, { recursive: true, force: true }); }
+  });
+
+  // Value: protects=--explain says when the user file was looked for and absent, and names a `local` id that matches no workflow lane;
   //   fails_when=either line is dropped and a typo'd slug or lane id silently does nothing; why_new=both lines are new; seam=none;
   //   no_claim=the line wording beyond its path and id
-  test('--explain names an absent user file and a local id that matches no platform lane', () => {
+  test('--explain names an absent user file and a local id that matches no workflow lane', () => {
     const { userPolicy, run } = setup();
     expect(run(['--explain']).out).toContain(`user policy: ${userPolicy} (absent)`);
     writePolicy(userPolicy, { local: [...LOCAL_ALL, 'ci.yml/nope'] });
     const r = run(['--explain']);
-    expect(r.out).toContain('local: ci.yml/nope matches no platform lane; ignored');
+    expect(r.out).toContain('local: ci.yml/nope matches no workflow lane; ignored');
     expect(r.out).not.toContain('local: free-tests.yml/unit matches');
   }, 60_000);
 

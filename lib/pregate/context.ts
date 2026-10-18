@@ -106,13 +106,13 @@ export function touchedFiles(repoRoot: string, mergeBase: string): TouchedFile[]
   return [...out.values()].filter(t => t.path !== 'node_modules' && !t.path.startsWith('node_modules/')).sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** The deepest existing ancestor realpathed, the rest re-joined: a symlinked state root inside the checkout still counts as inside. */
+/** The deepest existing ancestor realpathed (on-disk casing), the rest re-joined: a symlinked state root inside the checkout still counts as inside. */
 function realish(p: string): string {
   let head = path.resolve(p); const tail: string[] = [];
   while (!fs.existsSync(head) && path.dirname(head) !== head) { tail.unshift(path.basename(head)); head = path.dirname(head); }
-  try { return path.join(fs.realpathSync(head), ...tail); } catch { return path.resolve(p); }
+  try { return path.join(fs.realpathSync.native(head), ...tail); } catch { return path.resolve(p); }
 }
-const within = (root: string, p: string) => { const rel = path.relative(root, p); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+const within = (root: string, p: string) => { const rel = path.relative(root, p); return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); };
 
 /** Why a user policy path must not be read, or null: a relative path (no HOME) or one a PR could commit is never trusted. */
 export function userConfigRejection(repoRoot: string, file: string): string | null {
@@ -149,7 +149,7 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   const config = configLoad.config as PregateConfig;
   const lanes = discoverLanes(o.repoRoot, platform);
   // A lane that exists but is not platform-tier on this host already runs here, so only an unknown id is worth a line.
-  for (const id of config.local) if (!lanes.some(l => l.id === id)) explain.push(`local: ${id} matches no platform lane; ignored`);
+  for (const id of config.local) if (!lanes.some(l => l.id === id)) explain.push(`local: ${id} matches no workflow lane; ignored`);
   return {
     ctx: {
       repoRoot: o.repoRoot, base, baseRef, baseSha: baseSha.out, mergeBase, head, wtree, touched: touchedFiles(o.repoRoot, mergeBase),

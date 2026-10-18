@@ -65,7 +65,7 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
-| `local` | `workflow.yml/job` lanes a local run satisfies: a platform-agnostic toolchain (an `ubuntu-latest` suite that runs the same on a Mac), or a repo whose CI is off. Their tests run here instead of becoming `requires-remote`, except that on a machine under 8 cores with a `remote_gate` or a remote `test_backend` the small-machine rule still records the test tier as a `requires-remote` obligation. `--explain` notes an id that matches no platform lane |
+| `local` | `workflow.yml/job` lanes a local run satisfies: a platform-agnostic toolchain (an `ubuntu-latest` suite that runs the same on a Mac), or a repo whose CI is off. Their tests run here instead of becoming `requires-remote`, except that on a machine under 8 cores with a `remote_gate` or a remote `test_backend` the small-machine rule still records the test tier as a `requires-remote` obligation. `--explain` notes an id that matches no workflow lane |
 | `guards` | `[{ id, when: [globs], command, fix?, timeout_s? }]`: repo commands a lane must pass when a touched file matches `when` (manifest checks, subprocess goldens the import graph cannot see); see [guards](#guards) |
 | `serial_patterns` | test-file globs the `lanes` check runs one process per file, apart from the unit files (default `**/*.serial.test.*`) |
 | `sealed` | sealed or eval output that must never reach a public destination; read by the pre-push hook and `gstack-pregate sealed` (see [sealed output](#sealed)) |
@@ -77,8 +77,8 @@ Only the `origin/<base>` copy or the user-owned file below is honoured, so a
 downgrade is reviewed (or is the user's own) before it takes effect. A repo that
 keeps `.gstack/` out of git (a shared repo where gstack is one contributor's
 tool) can hold the same file at `<state root>/projects/<slug>/pregate.json`. The
-state root is `GSTACK_STATE_ROOT`, else `GSTACK_HOME`, else `~/.gstack` (full
-chain in [docs/state-root.md](state-root.md)); `<slug>` is what
+state root is `GSTACK_STATE_ROOT`, else `GSTACK_HOME`, else `GSTACK_STATE_DIR`,
+else a gstack plugin's data directory, else `~/.gstack` ([docs/state-root.md](state-root.md)); `<slug>` is what
 `~/.claude/skills/gstack/bin/gstack-slug` prints as `SLUG=` in the repository
 (`GSTACK_PROJECT_SLUG` overrides it). It is read only when the base carries none
 (never under `--policy-from head`), it lives outside the repository so a PR still
