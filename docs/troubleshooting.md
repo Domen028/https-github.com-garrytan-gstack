@@ -3026,6 +3026,46 @@ underneath). The run stops with status `budget_exhausted`; nothing is retried.
 **Fix.** Read the spend table (`gstack-eval-plan pilot report`), settle or
 release the open attempts, then raise `--cap` on purpose or stop.
 
+<a id="eval-quota-stop"></a>
+### `EVAL_QUOTA_STOP`
+
+**Meaning.** `gstack-eval-plan cli-run` got a quota or rate-limit error from
+a `claude -p` call: a structured signal (`error: "rate_limit"`, status 429,
+`quotaLimits.status: "rejected"`), a failed call whose text says so, or exit
+75 from the batch helper's open circuit. The run started no new job. Jobs
+already running finished; every job not started is `cancelled` in
+`cli-run.jsonl`. The quota job was not retried. Exit 75.
+
+**Fix.** Wait for the reset the error names, then rerun the same command with
+the same `--out`. It skips the jobs that finished `ok`. Never switch seats,
+never set an API key, and never split the run to slip past the limit.
+
+<a id="eval-batch-helper-missing"></a>
+### `EVAL_BATCH_HELPER_MISSING`
+
+**Meaning.** A `--scope full` run (or any run inside a batch marker) needs
+the batch helper that pins one subscription seat and trips a durable circuit
+on the first quota error. The helper (`GSTACK_CLAUDE_BATCH`, default
+`claude-batch`) is not on PATH, or that path is not executable. No `claude`
+call was made. Exit 3.
+
+**Fix.** Install the helper or set `GSTACK_CLAUDE_BATCH` to its path, then
+rerun. For a short check, use `--scope smoke` (at most 10 jobs, 2 workers).
+Do not replace the run with a hand-written loop.
+
+<a id="eval-batch-preflight-failed"></a>
+### `EVAL_BATCH_PREFLIGHT_FAILED`
+
+**Meaning.** Inside the batch, `<helper> preflight` exited non-zero: the
+marker (`GSTACK_CLAUDE_BATCH_MARKER`, default `MERIT_CLAUDE_BATCH_ID`) does
+not name the active, unstopped batch, or PATH `claude` is not the enforcing
+wrapper. The same code covers a helper whose `run` started the driver
+without setting the marker. No `claude` call was made. Exit 3.
+
+**Fix.** Read the helper's stderr tail on the error line. Fix the batch (a
+stopped circuit, the wrong seat, a PATH order that skips the wrapper), then
+rerun the same command.
+
 <a id="lane-conflict"></a>
 ### `LANE_CONFLICT`
 

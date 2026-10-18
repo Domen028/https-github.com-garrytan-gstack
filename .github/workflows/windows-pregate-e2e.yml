@@ -33,6 +33,7 @@ on:
       - 'lib/pregate/**'
       - 'lib/result-codes.ts'
       - 'lib/result-codes-release.ts'
+      - 'lib/result-codes-eval-run.ts'
       - 'bin/gstack-wtree'
       - 'bin/gstack-slug'
       - 'bin/gstack-path-spelling.sh'
