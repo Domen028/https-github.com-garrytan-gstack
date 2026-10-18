@@ -375,9 +375,11 @@ describe('Dart runner and summary (pure)', () => {
       '  cd:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/app', '        run: |', '          cd ../..', '          bun test test/root.test.ts',
       '  sib:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/a', '        run: cd ../b; dart test test/core_test.dart',
       '  sub:', '    runs-on: windows-latest', '    steps:', '      - working-directory: .', '        run: dart test test/first_test.dart && cd packages/app && flutter test test/x_test.dart',
-      '  var:', '    runs-on: windows-latest', '    steps:', '      - run: cd "$DIR" && dart test test/a_test.dart', '',
+      '  var:', '    runs-on: windows-latest', '    steps:', '      - run: cd "$DIR" && dart test test/a_test.dart',
+      '  push:', '    runs-on: windows-latest', '    steps:', '      - working-directory: .', '        run: |', '          pushd packages/app > /dev/null', '          cd lib  # into lib', '          cd ..', '          flutter test test/x_test.dart',
+      '  shell:', '    runs-on: windows-latest', '    steps:', '      - working-directory: .', '        run: (cd packages/app && flutter test test/x_test.dart) && dart test test/root_test.dart', '',
     ].join('\n');
-    const [step, job, top, cmt, abs, up, expr, quoted, win, cd, sib, sub, varCd] = parseWorkflow('w.yml', wf, 'darwin');
+    const [step, job, top, cmt, abs, up, expr, quoted, win, cd, sib, sub, varCd, push, shell] = parseWorkflow('w.yml', wf, 'darwin');
     // Value: protects=a step naming tests from a working-directory that escapes the repo (`..`), is absolute or is a `${{ }}` expression
     //   leaves the lane's file set unknown, which laneFileSet treats as may-run-any-test, so a Windows lane still owes the selected
     //   packages/core/test/core_test.dart; fails_when=the bare path is recorded as repo-relative again and selectLanes drops the
@@ -398,6 +400,22 @@ describe('Dart runner and summary (pure)', () => {
     expect(sib!.testFiles).toEqual(['packages/b/test/core_test.dart']);
     expect(sub!.testFiles).toEqual(['test/first_test.dart', 'packages/app/test/x_test.dart']);
     expect(varCd!.testFiles).toEqual([]);
+    // Value: protects=a redirect or comment after a cd target is not part of it, and a `( … )` subshell's cd ends at its `)`, so
+    //   these common CI forms still resolve instead of leaving the lane may-run-any-test, and a path after the subshell is not
+    //   resolved inside it; fails_when=the whole rest of the segment is taken as the target (unknown dir) or the subshell's directory
+    //   leaks past `)` (test/root_test.dart claimed as packages/app/test/root_test.dart, its obligation dropped); why_new=only bare
+    //   targets and top-level cds were covered; seam=none; no_claim=nested shells, functions
+    expect(push!.testFiles).toEqual(['packages/app/test/x_test.dart']);
+    expect(shell!.testFiles).toEqual(['packages/app/test/x_test.dart', 'test/root_test.dart']);
+    // Value: protects=a root package.json script run from a sub-directory is not resolved against it (npm runs the nearest
+    //   package.json's script), so its paths leave the lane unknown, while one run from the root still names its files;
+    //   fails_when=the root script's paths are prefixed with the sub-directory and the real file misses the lane; why_new=scripts were
+    //   walked from the current directory; seam=none; no_claim=reading sub-directory package.json files
+    const scripted = ['jobs:', '  root:', '    runs-on: windows-latest', '    steps:', '      - run: npm run t',
+      '  sub:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/app', '        run: npm run t', ''].join('\n');
+    const [rootRun, subRun] = parseWorkflow('s.yml', scripted, 'darwin', { t: 'bun test test/s.test.ts' });
+    expect(rootRun!.testFiles).toEqual(['test/s.test.ts']);
+    expect(subRun!.testFiles).toEqual([]);
     expect(step!.testFiles).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
     expect(step!.commands).toEqual(['dart test test/core_test.dart', 'dart test test/ui/drawer_widget_test.dart']);
     expect(job).toMatchObject({ tier: 'platform', testFiles: ['packages/core/test/core_test.dart'] });

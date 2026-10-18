@@ -85,9 +85,9 @@ function resolveDir(dir: string | null): string | null {
   const n = path.posix.normalize(d).replace(/\/$/, '');
   return n === '.' ? '' : n === '..' || n.startsWith('../') ? null : n;
 }
-/** `cur` after a `cd`/`pushd` segment: a literal relative target joins it; a non-literal, absolute, bare or repo-escaping target (or an unknown `cur`) is null. */
+/** `cur` after a `cd`/`pushd` segment: its first word (a redirect or comment after it is ignored), when a literal relative path, joins it; a non-literal, absolute, bare or repo-escaping target (or an unknown `cur`) is null. */
 function changeDir(cur: string | null, target: string | undefined): string | null {
-  const t = (target ?? '').trim().replace(/^(['"])(.*)\1$/, '$2');
+  const t = (/^\s*(?:(['"])(.*?)\1|([^\s'"]+))(?=\s|$)/.exec(target ?? '') ?? []).slice(2).find(x => x !== undefined) ?? '';
   if (cur === null || !t || /[$`~*?[\]{}'"\\\s]/.test(t) || t.startsWith('-') || path.posix.isAbsolute(t)) return null;
   const n = path.posix.normalize(path.posix.join(cur, t)).replace(/\/$/, '');
   return n === '.' ? '' : n === '..' || n.startsWith('../') ? null : n;
@@ -97,12 +97,17 @@ function changeDir(cur: string | null, target: string | undefined): string | nul
  * `start` (null: unknown). `cd`/`pushd <literal>` moves the directory; any other directory change (`popd`, `cd "$X"`, a `cd` not
  * leading its segment) makes it unknown for the rest of the command. A segment's paths resolve against the directory current at
  * it; a path named while it is unknown, or escaping the repo, returns null (the lane may run any test). The package.json script a
- * segment runs (one level deep, as expandScripts) is walked from the directory current at that segment.
+ * segment runs (one level deep, as expandScripts) is walked from the root when the segment runs there, else from an unknown directory (npm runs the nearest package.json's script). A `( … )` subshell's directory changes end at its `)`.
  */
 function commandTestFiles(command: string, start: string | null, scripts: Record<string, string> | null): string[] | null {
   let cur = start;
   const out: string[] = [];
-  for (const seg of command.split(/&&|\|\||[;|\n]/)) {
+  const saved: Array<string | null> = [];
+  for (const raw of command.split(/&&|\|\||[;|\n]/)) {
+    // A `( … )` subshell's cds end at its `)`.
+    const opens = /^\s*(\(+)/.exec(raw)?.[1]!.length ?? 0;
+    for (let i = 0; i < opens; i++) saved.push(cur);
+    const seg = raw.replace(/^\s*\(+/, '');
     for (const m of seg.matchAll(TEST_FILE)) {
       const joined = cur === null ? null : path.posix.normalize(path.posix.join(cur, m[1]!)).replace(/^\.\//, '');
       if (joined === null || joined.startsWith('../')) return null;
@@ -111,7 +116,8 @@ function commandTestFiles(command: string, start: string | null, scripts: Record
     if (scripts) {
       for (const m of seg.matchAll(/\b(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9:_.-]+)/g)) {
         if (!scripts[m[1]!]) continue;
-        const inner = commandTestFiles(scripts[m[1]!]!, cur, null);
+        // npm runs the nearest package.json's script; only from the root is that known to be the root's.
+        const inner = commandTestFiles(scripts[m[1]!]!, cur === '' ? '' : null, null);
         if (inner === null) return null;
         out.push(...inner);
       }
@@ -119,6 +125,7 @@ function commandTestFiles(command: string, start: string | null, scripts: Record
     const cd = /^\s*(?:cd|pushd)(?:\s+(.*))?$/.exec(seg);
     if (cd) cur = changeDir(cur, cd[1]);
     else if (/(?:^|[\s(){}])(?:cd|pushd|popd)(?=\s|$)/.test(seg)) cur = null;
+    for (let closes = (/(\)+)\s*$/.exec(seg)?.[1]!.length ?? 0); closes > 0 && saved.length; closes--) cur = saved.pop()!;
   }
   return out;
 }
