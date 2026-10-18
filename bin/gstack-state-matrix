@@ -4,16 +4,22 @@
  *
  *   gstack-state-matrix detect [--base <ref>] [--diff-base <sha>]
  *   gstack-state-matrix check <specialist-output|-> [--repo <dir>] [--expect <expectation.json>] [--json]
+ *   gstack-state-matrix outfile
  *
  * `detect` prints `SCOPE_STATE_MACHINE=true|false` (shell-safe for
  * `source <(...)`, with `# state-machine:` comment lines naming the hits) from
  * the lines the branch adds since its merge base with origin/<base>.
  * `check` reads the state-machines specialist's output and prints
  * `STATE_MATRIX_GAP:` per gap and `STATE_MATRIX_CHECK: ok | incomplete gaps=<n>`
- * last; exit 0 ok, 1 incomplete (STATE_MATRIX_INCOMPLETE). Logic: lib/state-matrix.ts.
+ * last; exit 0 ok, 1 incomplete (STATE_MATRIX_INCOMPLETE). `outfile` creates and
+ * prints a new empty 0600 file in the repo's private `.gstack/tmp/` (0700, kept
+ * out of git through info/exclude) for the specialist's output, so a later
+ * review never checks or commits an earlier run's file. Logic: lib/state-matrix.ts.
  */
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { addedLines } from '../lib/banned-terms';
 import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { resultLine } from '../lib/result-codes';
@@ -25,6 +31,7 @@ const HELP = `gstack-state-matrix — kind × owner action × resulting row for 
   detect [--base <ref>] [--diff-base <sha>]   SCOPE_STATE_MACHINE=true|false for the branch's added code lines
   check <file|-> [--repo <dir>] [--expect <json>] [--json]
                                              gaps in the state-machines specialist's output (review/specialists/state-machines.md)
+  outfile                                    print a new empty private file for that output
 
 ${exitTableHelp()}`;
 
@@ -64,11 +71,29 @@ function check(rest: string[]): number {
   return EXIT.ok;
 }
 
+function outfile(): number {
+  const root = git(['rev-parse', '--show-toplevel']);
+  const exclude = git(['rev-parse', '--git-path', 'info/exclude']);
+  if (!root.ok || !exclude.ok) { process.stderr.write('gstack-state-matrix outfile: not inside a git repository\n'); return EXIT.usage; }
+  const dir = path.join(root.out.trim(), '.gstack', 'tmp');
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+  const excludeFile = path.resolve(exclude.out.trim());
+  fs.mkdirSync(path.dirname(excludeFile), { recursive: true });
+  const excluded = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, 'utf8') : '';
+  if (!excluded.split('\n').includes('/.gstack/tmp/')) fs.appendFileSync(excludeFile, `${excluded && !excluded.endsWith('\n') ? '\n' : ''}/.gstack/tmp/\n`);
+  const file = path.join(dir, `state-machines.${randomBytes(6).toString('hex')}.md`);
+  fs.closeSync(fs.openSync(file, 'wx', 0o600));
+  process.stdout.write(file + '\n');
+  return EXIT.ok;
+}
+
 function main(argv: string[]): number {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === '--help' || cmd === '-h') { process.stdout.write(HELP + '\n'); return cmd ? EXIT.ok : EXIT.usage; }
   if (cmd === 'detect') return detect(rest);
   if (cmd === 'check') return check(rest);
+  if (cmd === 'outfile') return outfile();
   process.stderr.write(`gstack-state-matrix: unknown command ${cmd}\n${HELP}\n`);
   return EXIT.usage;
 }

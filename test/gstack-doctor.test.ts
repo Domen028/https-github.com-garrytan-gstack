@@ -263,6 +263,20 @@ describe('gstack-doctor', () => {
     expect(doctor(f).row('artifacts sync').state).toBe('ok');
   });
 
+  test('artifacts sync: case-colliding paths warn with the clamped names, held or not', () => {
+    const f = makeFixture();
+    syncOn(f, { status: 'collision', message: 'held projects/myapp/x.md', case_held: 1, case_names: 'MyApp,myapp', drainable: 0, last_drain_at: iso(60), last_push_at: iso(60) });
+    const held = doctor(f);
+    expect(held.row('artifacts sync').state).toBe('warn');
+    expect(held.row('artifacts sync').detail).toBe('status collision; artifact paths differ only by letter case (MyApp,myapp), see docs/troubleshooting.md#artifact-case-collision');
+    expect(held.out).not.toContain('projects/myapp');
+
+    syncOn(f, { status: 'ok', message: 'pushed 1 file(s)', case_held: 0, case_names: 'OLD,old', drainable: 0, last_drain_at: iso(60), last_push_at: iso(60) });
+    expect(doctor(f).row('artifacts sync').state).toBe('warn');
+    syncOn(f, { status: 'ok', message: 'pushed 1 file(s)', case_held: 0, case_names: '', drainable: 0, last_drain_at: iso(60), last_push_at: iso(60) });
+    expect(doctor(f).row('artifacts sync').state).toBe('ok');
+  });
+
   test('artifacts sync: stale push and stale drain warn, a fresh push clears them', () => {
     const f = makeFixture();
     syncOn(f, { status: 'ok', message: 'x', drainable: 4, last_drain_at: iso(60), last_push_at: iso(90_000) });

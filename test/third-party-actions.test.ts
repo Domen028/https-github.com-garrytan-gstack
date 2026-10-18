@@ -25,8 +25,9 @@ import { marked } from "marked";
 import { generateThirdPartyActions } from "../scripts/resolvers/third-party-actions";
 import { generateAsideSetup } from "../scripts/resolvers/aside";
 import { HOST_PATHS } from "../scripts/resolvers/types";
-import { asideDriveOptions } from './helpers/third-party-actions';
+import { asideDownloadPitch, asideDownloadPitchCount, asideDriveOptions } from './helpers/third-party-actions';
 import recoveryFixture from './fixtures/third-party-actions-recovery-public.json';
+import pitchCaptures from './fixtures/third-party-actions-pitch-captures.json';
 import { expectMentions, expectTokens } from './helpers/prompt-structure';
 
 const ROOT = path.resolve(import.meta.dir, "..");
@@ -341,6 +342,19 @@ describe("THIRD_PARTY_ACTIONS contract pins", () => {
     expect(section.match(/\(recommended\)/g)).toHaveLength(1);
   });
 
+  // Paid run 39011101113 (tpa-absent-linux): the contract lettered only the detected case, and the
+  // agent numbered the absent-Aside question 1/2/3, which asideDriveOptions cannot inspect.
+  test("absent Aside keeps the lettered B/C/D options; the captured numbered answer is the fail example", () => {
+    expect(section).toContain("When Aside is not detected, offer only options B), C) and D).");
+    const absent = section.slice(section.indexOf("When Aside is not detected"));
+    expect(absent.slice(0, absent.indexOf("D)."))).not.toMatch(/\bA\)/);
+    const numbered = "**Consent question**\n\nTo create a test-mode API token, I need to act on the Acme vendor dashboard at https://dashboard.acme.test. How would you like to proceed?\n\n1. I drive it in gstack's own visible browser. You take over for sign-in and any password, CAPTCHA, or identity step, then tell me you're done and I resume.\n2. I give you manual step-by-step instructions and you do it yourself.\n3. Defer this step for now. I mark it blocked on you.";
+    expect(numbered).not.toMatch(/\b[A-D]\)/);
+    const lettered = numbered.replace('1. ', 'B) ').replace('2. ', 'C) ').replace('3. ', 'D) ');
+    expect(lettered).toMatch(/\b[A-D]\)/);
+    expect(asideDriveOptions(lettered)).toEqual([]);
+  });
+
   // Drive discipline: the cookbook governs HOW, this contract overrides it.
   test("cookbook shape for driving; --help for flags; contract overrides vendor", () => {
     expect(section).toContain("aside --help");
@@ -385,5 +399,97 @@ describe("repo-wide generated output: Aside anti-drift tripwires", () => {
       expect(text, path.relative(ROOT, file)).not.toContain("releases.aside.com");
       expect(text, path.relative(ROOT, file)).not.toMatch(/brew install aside/);
     }
+  });
+});
+
+describe("NEEDS_ASIDE: Darwin download pitch detector", () => {
+  const darwinRed = pitchCaptures.captures.find(c => c.case === 'tpa-absent-darwin' && c.run === '39075977549')!;
+
+  test("the captured d6d82fb pitch (gate 39075977549) counts: the canonical phrase mid-sentence", () => {
+    expect(darwinRed.passed).toBe(false);
+    expect(darwinRed.text).toContain('you can download Aside (macOS 15+) at aside.com');
+    expect(darwinRed.text).toMatch(asideDownloadPitch);
+    expect(asideDownloadPitchCount(darwinRed.text)).toBe(1);
+  });
+
+  test("every captured passing Darwin pitch counts exactly once", () => {
+    const passing = pitchCaptures.captures.filter(c => c.case === 'tpa-absent-darwin' && c.passed);
+    expect(passing.length).toBeGreaterThanOrEqual(4);
+    for (const c of passing) expect(asideDownloadPitchCount(c.text), c.run).toBe(1);
+  });
+
+  test("captured Linux and READY narrations and both recovery-public responses never count", () => {
+    const narrations = pitchCaptures.captures.filter(c => c.case !== 'tpa-absent-darwin');
+    expect(narrations.map(c => c.case).sort()).toEqual([...Array(5).fill('tpa-absent-linux'), ...Array(5).fill('tpa-present')]);
+    for (const c of narrations) {
+      expect(c.text, `${c.case} ${c.run}`).not.toMatch(asideDownloadPitch);
+      expect(asideDownloadPitchCount(c.text)).toBe(0);
+    }
+    expect(recoveryFixture.responses).toHaveLength(2);
+    for (const response of recoveryFixture.responses) {
+      expect(response.text).toMatch(/no (?:Aside )?download pitch/);
+      expect(response.text).not.toMatch(asideDownloadPitch);
+    }
+  });
+
+  test("short forms count only at a sentence start; negated canonical phrases never count", () => {
+    expect('you can download it at aside.com').not.toMatch(asideDownloadPitch);
+    expect('you can download Aside at aside.com').not.toMatch(asideDownloadPitch);
+    expect('Download it at aside.com').toMatch(asideDownloadPitch);
+    expect('Note: download Aside at aside.com.').toMatch(asideDownloadPitch);
+    expect('Do not Download Aside (macOS 15+) at aside.com').not.toMatch(asideDownloadPitch);
+    expect("You don't need to download Aside (macOS 15+) at aside.com").not.toMatch(asideDownloadPitch);
+    expect("I won't download Aside (macOS 15+) at aside.com").not.toMatch(asideDownloadPitch);
+  });
+
+  // /review delta on 51f1e02 (Claude and GPT-6.1 Sol voices): the 0f71a55 detector counted these mentions and refusals
+  // as Darwin pitches because its negation check saw only the adjacent word and it accepted quoted policy text.
+  test("quoted, reported and clause-negated canonical mentions never count", () => {
+    const nonPitches = [
+      "Per the contract, the line 'Download Aside (macOS 15+) at aside.com' is shown only on macOS, so I am omitting it here.",
+      'The macOS-only pitch (download Aside (macOS 15+) at aside.com) does not apply on Linux.',
+      "The contract's macOS pitch, `download Aside (macOS 15+) at aside.com`, is skipped off macOS.",
+      "I am omitting the pitch 'download Aside (macOS 15+) at aside.com' as instructed.",
+      "The Darwin policy says to 'download Aside (macOS 15+) at aside.com', but I am skipping that recommendation.",
+      'Per the contract I will not ask you to download Aside (macOS 15+) at aside.com.',
+      "I can't pitch it here, so I won't say to download Aside (macOS 15+) at aside.com.",
+      'I will not tell you to download Aside (macOS 15+) at aside.com, because this is Linux.',
+      'You cannot download Aside (macOS 15+) at aside.com on Linux, so options B, C and D follow.',
+      'I cannot download Aside (macOS 15+) at aside.com for you.',
+      'There is no need to download Aside (macOS 15+) at aside.com here; Linux is unsupported.',
+      'No need to download Aside (macOS 15+) at aside.com.',
+      "You don't need to download Aside (macOS 15+) at aside.com on this platform.",
+      'Aside is READY, so there is no reason to download Aside (macOS 15+) at aside.com.',
+      'You already did download Aside (macOS 15+) at aside.com, and the probe says READY.',
+      'Do not download Aside (macOS 15+) at aside.com.',
+      'NOT download Aside (macOS 15+) at aside.com',
+      'I never download Aside (macOS 15+) at aside.com for you.',
+      'I won\u2019t download Aside (macOS 15+) at aside.com.',
+      'Whatever you do, do not\ndownload Aside (macOS 15+) at aside.com',
+      'Why not download Aside (macOS 15+) at aside.com? Then open it, sign in, and re-run.',
+    ];
+    for (const text of nonPitches) expect(asideDownloadPitchCount(text), text).toBe(0);
+  });
+
+  test("a recommendation at a sentence, clause, dash, bullet or bold start counts once", () => {
+    const pitches = [
+      "If you don't have it, download Aside (macOS 15+) at aside.com, then open it, sign in, and re-run.",
+      "If you'd rather not wait, download Aside (macOS 15+) at aside.com; open, sign in, re-run.",
+      "Aside isn't installed: download Aside (macOS 15+) at aside.com; open, sign in, re-run.",
+      'Aside is not installed \u2014 download Aside (macOS 15+) at aside.com; open, sign in, re-run.',
+      'One-time note: you can download Aside (macOS 15+) at aside.com, then open it, sign in, and re-run this task.',
+      '**Download Aside (macOS 15+) at aside.com**; open, sign in, re-run.',
+      '- Download Aside (macOS 15+) at aside.com; open, sign in, re-run.',
+    ];
+    for (const text of pitches) expect(asideDownloadPitchCount(text), text).toBe(1);
+    // Strict residual kept from the pre-0f71a55 detector: colon-introduced reported speech still counts, which can only
+    // turn a Linux/READY case red, never a Darwin case green.
+    expect(asideDownloadPitchCount('Only on macOS would I say: download Aside (macOS 15+) at aside.com. This machine is Linux.')).toBe(1);
+  });
+
+  test("a duplicated canonical phrase counts twice", () => {
+    expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Again: you can download Aside (macOS 15+) at aside.com.')).toBe(2);
+    expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run.\n\n(Reminder: you can download Aside (macOS 15+) at aside.com.)')).toBe(2);
+    expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Download it at aside.com.')).toBe(2);
   });
 });
