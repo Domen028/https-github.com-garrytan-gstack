@@ -39,7 +39,7 @@ export function preregTemplate(title = 'Eval preregistration'): string {
 <!-- Inputs the scorer must reject or score low; how many, how they were made, what a decoy pass proves. -->
 
 ## Stop rules
-<!-- When the run stops early: the spend cap, a bar missed on the pilot, a scorer below its bar, budget_exhausted. -->
+<!-- When the run stops early: the spend cap, a bar missed on the pilot, a scorer below its bar, budget_exhausted, the first quota or rate-limit error (a subscription run stops there; no retry, no API fallback). -->
 
 ## Held-out exposure
 <!-- Every held-out set this plan touches: | set | prior exposure (which runs, which models) | reservation (what this run may read) | -->

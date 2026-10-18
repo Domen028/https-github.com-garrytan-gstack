@@ -840,6 +840,10 @@ runs every row through the stub model for $0 and flags malformed rows
 (`EVAL_DRY_RUN_FAILED`); `pilot start|settle|release|report` runs three priced
 items, records actual spend, extrapolates to the full set against the cap
 (`EVAL_BUDGET_EXHAUSTED`) and prints the spend table the approval question shows.
+`cli-run` drives subscription (CLI-metered) runs as a bounded pool of `claude -p`
+calls that stops at the first quota or rate-limit error (`EVAL_QUOTA_STOP`, exit
+75), never retries it, and resumes on rerun; a full run goes through the
+seat-pinning batch helper (`EVAL_BATCH_HELPER_MISSING` when it is absent).
 The skill's closing section lists the tier-3 items (instrument audit, steady
 state, sealed paths, off-machine persistence, memory preflight, power tables, QA
 soak) as `tier 3, after P7`; none of them run yet.

@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { batchArgv, classifyClaudeResult, parseJobs } from '../lib/eval-cli-run';
+import { between, expectMentions, expectTokens } from './helpers/prompt-structure';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const BIN = path.join(ROOT, 'bin', 'gstack-eval-plan');
@@ -348,5 +349,16 @@ describe('cli-run batch gate', () => {
     expect(r.rc).toBe(75);
     expect(starts(f).map(c => c.prompt)).toEqual(['job-01', 'job-02']);
     expect(r.summary).toMatchObject({ status: 'quota_stopped', cancelled: 3 });
+  });
+});
+
+describe('/eval-plan skill template', () => {
+  const tmpl = fs.readFileSync(path.join(ROOT, 'eval-plan', 'SKILL.md.tmpl'), 'utf8');
+
+  test('subscription runs route through cli-run, and the quota rule forbids retry, API key and fallback', () => {
+    expectTokens(tmpl, ['gstack-eval-plan cli-run', 'EVAL_QUOTA_STOP', 'EVAL_BATCH_HELPER_MISSING'], 'eval-plan/SKILL.md.tmpl');
+    expectMentions(between(tmpl, '## Boundaries', '## Step 1'), [['quota', 'no retry', 'api key', 'fallback']], 'eval-plan Boundaries');
+    expectTokens(between(tmpl, '## Step 3', '## Step 4'), ['cli-run --jobs <jobs.jsonl> --out <outdir> --scope smoke'], 'eval-plan Step 3');
+    expectTokens(between(tmpl, '## Step 4', '## Tier 3'), ['--scope full --class <standard|fable>', 'status=quota_stopped'], 'eval-plan Step 4');
   });
 });
