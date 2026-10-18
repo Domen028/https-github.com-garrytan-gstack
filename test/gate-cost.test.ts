@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   PyRandom, SCREEN_LABEL, caseCostTable, changedLinesByFile, gateCostBreakdown, heuristicPreambleOnly, parseEvalReport,
@@ -7,8 +8,53 @@ import {
 } from '../lib/gate-cost';
 import { buildReport, checkoutSelectionDeps, formatReport, parseArgs, parseMergeLog, parseWindowDate, readGateRecord, type ReplayReport } from '../scripts/gate-cost-replay';
 
-const FIXTURES = path.join(import.meta.dir, 'fixtures', 'gate-cost');
-const run1 = () => readGateRecord(path.join(FIXTURES, 'run-1'), '1');
+/**
+ * A one-run artifact tree, written to a temporary directory: tracked files
+ * under test/fixtures would need a FREE_FIXTURES entry, and that registry is
+ * a paid-runner input that selects every PR-profile case.
+ */
+const RUN_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-cost-run-'));
+afterAll(() => fs.rmSync(RUN_DIR, { recursive: true, force: true }));
+const usage = (inputTokens: number, outputTokens: number, cacheReadInputTokens: number, cacheCreationInputTokens: number, thinkingTokens: number, costUSD: number) =>
+  ({ inputTokens, outputTokens, cacheReadInputTokens, cacheCreationInputTokens, thinkingTokens, costUSD });
+const FIXTURE_FILES: Record<string, unknown> = {
+  'paid-slice-1-a1/shards/skill-e2e-demo--case-a/1.0.0-HEAD-e2e-demo.json': { tests: [{
+    name: '/case a', tier: 'e2e', duration_ms: 40_500, cost_usd: 0.253, model: 'claude-fable-5-1', transcript: [
+      { type: 'assistant' },
+      { type: 'result', modelUsage: { 'claude-fable-5-1': usage(100, 2000, 100_000, 10_000, 500, 0.251), 'claude-haiku-4-5-20251001': usage(1000, 100, 0, 0, 0, 0.0015) } },
+      { type: 'result', modelUsage: { 'claude-fable-5-1': usage(50, 0, 0, 0, 0, 0.0005) } },
+    ] }] },
+  'paid-slice-1-a1/shards/skill-e2e-demo--case-a/_partial-e2e.json': { tests: [{ name: '/case a', duration_ms: 40_500, cost_usd: 99 }] },
+  'paid-slice-2-a1/shards/skill-llm-eval/1.0.0-HEAD-llm-judge.json': { tests: [{ name: 'demo/SKILL.md judge', tier: 'llm-judge', duration_ms: 20_000, cost_usd: 0.06 }] },
+};
+for (const [file, body] of Object.entries(FIXTURE_FILES)) {
+  fs.mkdirSync(path.dirname(path.join(RUN_DIR, file)), { recursive: true });
+  fs.writeFileSync(path.join(RUN_DIR, file), JSON.stringify(body));
+}
+const trial = (caseId: string, file: string, kind: string, durationMs: number, runner?: string) =>
+  JSON.stringify({ schema: 'gstack-trial-outcome/v1', case: caseId, file, kind, duration_ms: durationMs, cost_usd: 0, ...(runner ? { sessions: [{ runner }] } : {}) });
+fs.mkdirSync(path.join(RUN_DIR, 'trial-outcomes-pr-a1'));
+fs.writeFileSync(path.join(RUN_DIR, 'trial-outcomes-pr-a1', 'trial-outcomes.jsonl'), [
+  trial('case-a', 'test/skill-e2e-demo.test.ts', 'rule', 40_000, 'claude-p'),
+  trial('case-pty', 'test/skill-e2e-pty-demo.test.ts', 'rule', 100_000, 'pty'),
+  'not json',
+  trial('demo/SKILL.md judge', 'test/skill-llm-eval.test.ts', 'judge', 20_000),
+].join('\n') + '\n');
+const run1 = () => readGateRecord(RUN_DIR, '1');
+
+/** GSTA-49's l3.json: 92 merged PRs of 2026-10-03..18, [today's selection cost > 0 ? 1 : 0, screen cost on the 106.0259 full-gate scale]. */
+const L3_ROWS: Array<[number, number]> = [
+  [0,14.3731], [1,14.0509], [1,14.0509], [1,106.0259], [1,106.0259], [1,106.0259], [1,102.6497], [1,14.0509], [0,14.0509], [1,15.5642],
+  [0,15.5642], [0,0], [1,14.2545], [0,14.0509], [0,14.0509], [1,14.0509], [0,14.0509], [1,53.2204], [1,80.5128], [1,48.761],
+  [1,47.2944], [1,46.47], [0,15.5642], [1,86.2435], [1,14.0509], [1,50.8781], [1,27.4209], [1,57.6069], [1,106.0259], [1,14.0509],
+  [1,106.0259], [1,14.0509], [1,14.0509], [1,14.3731], [1,76.3276], [1,106.0259], [1,14.0509], [1,16.2643], [0,14.0509], [1,92.6175],
+  [1,78.0744], [1,14.6998], [1,31.99], [1,14.0509], [1,14.0509], [1,19.9311], [1,59.4491], [1,14.0509], [1,106.0259], [1,22.1538],
+  [1,14.0509], [1,78.4857], [1,62.5585], [1,106.0259], [1,14.0509], [1,50.6055], [1,79.9843], [1,79.5795], [1,67.6899], [0,0],
+  [1,106.0259], [1,14.0509], [1,14.0509], [1,14.6998], [1,95.9865], [1,14.6998], [0,15.5642], [1,20.58], [0,15.2423], [1,106.0259],
+  [1,33.2109], [1,106.0259], [1,106.0259], [0,15.5642], [0,14.0509], [0,15.5642], [1,106.0259], [1,106.0259], [1,106.0259], [0,15.5642],
+  [1,106.0259], [0,15.5642], [0,1.5133], [0,15.5642], [1,19.7931], [1,106.0259], [0,15.5642], [1,106.0259], [1,106.0259], [1,21.6093],
+  [1,106.0259], [1,106.0259],
+];
 
 describe('paid report artifacts', () => {
   test('reads eval reports and trial outcomes, skipping partial reports', () => {
@@ -120,8 +166,7 @@ describe('merge-train model', () => {
     expect(new PyRandom(2 ** 40 + 7).random()).toBe(0.6137037779936511);
   });
 
-  const l3 = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'l3-screen-costs.json'), 'utf8')).rows as Array<[number, number]>;
-  const prs = l3.map(([relevant, cost]) => ({ paidRelevant: relevant === 1, screenUsd: cost * 93.14 / 106.0259 }));
+  const prs = L3_ROWS.map(([relevant, cost]) => ({ paidRelevant: relevant === 1, screenUsd: cost * 93.14 / 106.0259 }));
   const model = (policy: Parameters<typeof simulateTrains>[0]['policy']) => simulateTrains({ prs, policy, windowDays: 15.1, trainSize: 5, outsideRed: 0.15 });
 
   test('reproduces the measurement sim (trains of 5, o=0.15, 6%/25% red, 400 reps, seed 1)', () => {

@@ -1,9 +1,0 @@
-{
- "tests": [
-  {
-   "name": "/case a",
-   "duration_ms": 40500,
-   "cost_usd": 99
-  }
- ]
-}
