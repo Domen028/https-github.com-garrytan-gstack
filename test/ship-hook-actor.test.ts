@@ -191,10 +191,12 @@ test('local-hook preservation accepts the captured manual-integration wording an
   const reported = (output: string) => !shipHookFailures(fixture, { exitReason: 'success', output }).failures.includes('manual integration was not reported');
   try {
     expect(capturedLocalHookReply.recordedFailures).toEqual(['manual integration was not reported']);
-    expect(reported(capturedLocalHookReply.assistant)).toBe(true);
+    for (const reply of capturedLocalHookReply.replies) expect(reported(reply.assistant), reply.source).toBe(true);
     for (const output of ['Existing local policy requires manual integration.', 'The rules say you need to integrate the hook yourself.',
-      'Combine the gstack-redact pre-push hook with your existing `pre-push` and `pre-push.local` by hand.']) expect(reported(output), output).toBe(true);
+      'Combine the gstack-redact pre-push hook with your existing `pre-push` and `pre-push.local` by hand.',
+      'The rule is to ask you to set up the hook by hand instead.', "You'd need to set up `pre-push` and `pre-push.local` yourself."]) expect(reported(output), output).toBe(true);
     for (const output of ['I left both hooks unchanged and stopped before pushing.', 'I integrated the hook myself.',
-      'The hooks were combined by hand earlier.', 'Do it yourself. I did not integrate anything.', 'No changes; nothing to combine.\nDone by hand.']) expect(reported(output), output).toBe(false);
+      'The hooks were combined by hand earlier.', 'Do it yourself. I did not integrate anything.', 'No changes; nothing to combine.\nDone by hand.',
+      'I did not add anything. Check it yourself.', 'Set up is complete; I verified the hooks by hand.']) expect(reported(output), output).toBe(false);
   } finally { fs.rmSync(fixture.root, { recursive: true, force: true }); }
 });

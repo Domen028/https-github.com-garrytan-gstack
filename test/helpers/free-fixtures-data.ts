@@ -145,7 +145,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/parity-baseline-v1.44.1.json': ['test/helpers/capture-parity-baseline.test.ts', 'test/parity-baseline-integrity.test.ts'],
   'test/fixtures/parity-baseline-v1.64.1.0.json': ['test/parity-suite.test.ts', 'test/qa-lazy-sections.test.ts', 'test/skill-size-budget.test.ts'],
   'test/fixtures/parity-baseline-v1.81.0.0.json': ['test/skill-size-budget.test.ts'],
-  'test/fixtures/plan-ceo-floor-toolonly-create.json': ['test/plan-create-toolonly-session.test.ts', 'test/plan-floor-permission.test.ts'],
+  'test/fixtures/plan-ceo-floor-toolonly-create.json': ['test/plan-create-prepublication.test.ts', 'test/plan-floor-permission.test.ts'],
   'test/fixtures/plan-count-design-questionless-report.md': ['test/plan-count-empty-review.test.ts'],
   'test/fixtures/plan-create-cropped-title-batching.json': ['test/plan-create-combined-permission.test.ts'],
   'test/fixtures/plan-ceo-floor-unasked-decisions-872e154.json': ['test/plan-ceo-floor-interactive-boundary.test.ts'],
