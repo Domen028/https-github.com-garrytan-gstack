@@ -25,7 +25,7 @@ export interface Lane {
   platform: Platform;
   /** Every `run:` step text, in order. */
   commands: string[];
-  /** Test file paths named literally in the run steps. */
+  /** Test file paths named literally in the run steps; empty when a step naming one has an unresolvable working-directory (the lane may run any test). */
   testFiles: string[];
   /** The `matrix:` value when it is a workflow expression, else null. */
   matrixExpression: string | null;
@@ -77,13 +77,16 @@ function find(blocks: Block[], key: string): Block | undefined { return blocks.f
 function defaultDir(parent: Block[]): string | null {
   return find(find(find(parent, 'defaults')?.children ?? [], 'run')?.children ?? [], 'working-directory')?.value ?? null;
 }
-/** A test path named in a run step, made repo-relative by the step's working directory (an expression, absolute or `..` directory is left unresolved). */
-function underDir(dir: string | null, file: string): string {
+/** A step's working directory, repo-relative (`''` for the root), or null when it cannot be resolved: an expression, absolute, or escaping `..`. */
+function resolveDir(dir: string | null): string | null {
   const d = (dir ?? '').replace(/\s+#.*$/, '').trim().replace(/^['"]|['"]$/g, '');
-  if (!d || /\$\{\{/.test(d) || path.posix.isAbsolute(d)) return file;
-  const joined = path.posix.normalize(path.posix.join(d, file)).replace(/^\.\//, '');
-  return joined.startsWith('..') ? file : joined;
+  if (!d) return '';
+  if (/\$\{\{/.test(d) || path.posix.isAbsolute(d)) return null;
+  const n = path.posix.normalize(d).replace(/\/$/, '');
+  return n === '.' ? '' : n === '..' || n.startsWith('../') ? null : n;
 }
+/** A command that changes directory (`cd`, `pushd`) no longer runs from the step's working directory. */
+const CHANGES_DIR = /(?:^|[\s;&|(])(?:cd|pushd)\s/;
 function deepValues(blocks: Block[], key: string, out: string[] = []): string[] {
   for (const b of blocks) { if (b.key === key && b.value) out.push(b.value); deepValues(b.children, key, out); }
   return out;
@@ -115,16 +118,23 @@ export function parseWorkflow(file: string, text: string, platform: NodeJS.Platf
     const jobName = find(job.children, 'name')?.value ?? job.key;
     // A step's paths resolve against its working-directory, else the job's defaults, else the workflow's.
     const jobDir = defaultDir(job.children) ?? defaultDir(top);
+    // A step naming tests from an unresolvable directory leaves the lane's set unknown (empty: laneFileSet's may-run-anything path).
+    // A command that cds claims each path both under the directory and repo-relative: over-claiming widens, never drops, an obligation.
+    let unresolved = false;
     const testFiles = [...new Set((find(job.children, 'steps')?.children ?? []).flatMap(step => {
-      const dir = find([step, ...step.children], 'working-directory')?.value ?? jobDir;
-      return expandScripts(deepValues([step], 'run'), scripts).flatMap(c => [...c.matchAll(TEST_FILE)].map(m => underDir(dir, m[1]!)));
+      const dir = resolveDir(find([step, ...step.children], 'working-directory')?.value ?? jobDir);
+      return expandScripts(deepValues([step], 'run'), scripts).flatMap(c => [...c.matchAll(TEST_FILE)].flatMap(m => {
+        const joined = dir === null ? null : path.posix.normalize(path.posix.join(dir, m[1]!)).replace(/^\.\//, '');
+        if (joined === null || joined.startsWith('../')) { unresolved = true; return []; }
+        return dir && CHANGES_DIR.test(c) ? [joined, m[1]!] : [joined];
+      }));
     }))];
     let tier: LaneTier = 'unit';
     if (jobPlatform !== 'any' && jobPlatform !== here) tier = 'platform';
     else if (/\b(e2e|evals?)\b/i.test(`${name} ${job.key} ${jobName}`)) tier = 'e2e';
     else if (maxParallel === '1' || /serial/i.test(`${job.key} ${jobName}`)) tier = 'serial';
     return {
-      id: `${file}/${job.key}`, workflow: file, workflowName: name, job: job.key, jobName, runsOn, platform: jobPlatform, commands, testFiles,
+      id: `${file}/${job.key}`, workflow: file, workflowName: name, job: job.key, jobName, runsOn, platform: jobPlatform, commands, testFiles: unresolved ? [] : testFiles,
       matrixExpression, tier, runsTests: commands.some(c => TEST_COMMAND.test(c)), manual, source: `.github/workflows/${file}:${job.line}`,
     };
   });

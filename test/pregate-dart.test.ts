@@ -15,7 +15,7 @@ import { laneFileSet } from '../lib/pregate/lane-selection';
 import type { Lane } from '../lib/pregate/workflows';
 import { ROOT_OK } from '../lib/pregate/checks/strays';
 import { DEFAULT_CONFIG } from '../lib/pregate/config';
-import { buildGraph, dartPackages, isTestFile, readRepoFile, testsFor } from '../lib/pregate/import-graph';
+import { blankDartComments, buildGraph, dartPackages, isTestFile, readRepoFile, testsFor } from '../lib/pregate/import-graph';
 import type { PregateContext } from '../lib/pregate/types';
 import { parseWorkflow } from '../lib/pregate/workflows';
 import { cleanup, commit, makeFixtureRepo, runBin, write, type FixtureRepo } from './helpers/pregate-fixture';
@@ -122,6 +122,19 @@ describe('Dart import graph', () => {
     //   why_new=every directive fit on one line; seam=none; no_claim=the linear-time bound itself (measured, not asserted)
     expect(testsFor(g, 'lib/cond.dart').tests).toEqual(['test/cond_test.dart']);
     expect(testsFor(g, 'lib/cond_io.dart').tests).toEqual(['test/cond_test.dart']);
+    // Value: protects=a `;` inside a comment within a directive does not end it, so the conditional URI after the comment still maps,
+    //   while a `//` inside a string is kept; fails_when=comments are not blanked before the directive scan (the comment's `;`
+    //   truncates the import and native.dart loses its dependent, failing open); why_new=no fixture put a comment inside a directive;
+    //   seam=none; no_claim=nested block comments or triple-quoted strings
+    commit(repo, {
+      'lib/base.dart': 'int b() => 1;\n',
+      'lib/native.dart': 'int b() => 2;\n',
+      'lib/web.dart': 'int b() => 3;\n',
+      'test/platform_test.dart': "import 'package:app/base.dart' // fallback; platform-specific below\n    if (dart.library.io) 'package:app/native.dart' /* io; */\n    if (dart.library.js_interop) 'package:app/web.dart';\nvoid main() {}\n",
+    });
+    const h = buildGraph(repo.work);
+    for (const f of ['lib/base.dart', 'lib/native.dart', 'lib/web.dart']) expect(testsFor(h, f).tests).toEqual(['test/platform_test.dart']);
+    expect(blankDartComments("var u = 'http://x'; // c;\n")).toBe("var u = 'http://x';      \n");
   });
 
   // Value: protects=two tracked pubspecs sharing a `name:` (a fixture copying the app's) keep both roots, so package: imports still
@@ -141,6 +154,27 @@ describe('Dart import graph', () => {
     const g = buildGraph(repo.work);
     expect(testsFor(g, 'lib/x.dart').tests).toEqual(['test/x_test.dart']);
     expect(testsFor(g, 'a_fixture/lib/x.dart').tests).toEqual(['a_fixture/test/x_test.dart']);
+  });
+
+  // Value: protects=an importer inside a third package (apps/app) imports a name the repo root and packages/shared both declare, and
+  //   both copies select it; fails_when=the importer's own package is taken as the deepest same-name root containing it (the root ''
+  //   contains everything), so the root copy steals the import and packages/shared/lib/a.dart has no lane (fail open);
+  //   why_new=no fixture nested an importer under a same-name ancestor it does not belong to; seam=none; no_claim=pub's own resolution
+  test('an ancestor same-name package does not steal an import from a package that is not its own', () => {
+    const repo = dartRepo();
+    commit(repo, {
+      'pubspec.yaml': 'name: shared\n',
+      'lib/a.dart': 'int a() => 1;\n',
+      'packages/shared/pubspec.yaml': 'name: shared\n',
+      'packages/shared/lib/a.dart': 'int a() => 2;\n',
+      'apps/app/pubspec.yaml': 'name: app\n',
+      'apps/app/test/x_test.dart': "import 'package:shared/a.dart';\nvoid main() {}\n",
+      'test/root_test.dart': "import 'package:shared/a.dart';\nvoid main() {}\n",
+    });
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'packages/shared/lib/a.dart').tests).toEqual(['apps/app/test/x_test.dart']);
+    // The root package's own test still resolves to its own copy only.
+    expect(testsFor(g, 'lib/a.dart').tests).toEqual(['apps/app/test/x_test.dart', 'test/root_test.dart']);
   });
 
   // Value: protects=a package name two other pubspecs share, imported from outside both, selects the importer for either copy, and a
@@ -270,6 +304,18 @@ describe('Dart runner and summary (pure)', () => {
       write(repo.work, 'packages/core/pubspec.yaml', pubspec);
       expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
     }
+    // Value: protects=`sdk: flutter` under a dependency not named flutter (flutter_test), flow style, nested or indented, picks
+    //   flutter test; fails_when=the flow arm requires the key `flutter:` again and a Flutter package runs under `dart test` (it cannot
+    //   load dart:ui, a false lane failure); why_new=every flow-style fixture keyed on `flutter:`; seam=none; no_claim=a YAML parser
+    for (const [pubspec, tool] of [
+      ['name: core\ndev_dependencies: {flutter_test: {sdk: flutter}}\n', 'flutter'],
+      ['name: core\ndev_dependencies:\n  flutter_test: {sdk: flutter}\n', 'flutter'],
+      ['name: core\ndev_dependencies:\n  flutter_test: {path: x, sdk: "flutter"}\n', 'flutter'],
+      ['name: core\nenvironment: {sdk: ">=3.0.0 <4.0.0"}\n', 'dart'],
+    ] as const) {
+      write(repo.work, 'packages/core/pubspec.yaml', pubspec);
+      expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
+    }
     // Value: protects=the PATH check looks for the tool the pubspec needs, so a Flutter package on a dart-only machine is missing
     //   `flutter` (incomplete), not planned to exit 127; fails_when=the check is hardcoded to dart or to "any SDK"; why_new=the
     //   no-SDK case had neither tool; seam=none; no_claim=a real SDK (a dart-only PATH shim)
@@ -299,19 +345,27 @@ describe('Dart runner and summary (pure)', () => {
       '  abs:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: /home/runner/work/pkg',
       '  up:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: ../sibling',
       '  expr:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/a_test.dart', '        working-directory: ${{ matrix.pkg }}',
-      '  quoted:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: "packages/core"', '',
+      '  quoted:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: "packages/core"',
+      '  win:', '    runs-on: windows-latest', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: ${{ matrix.pkg }}',
+      '      - run: dart test test/ui/drawer_widget_test.dart',
+      '  cd:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/app', '        run: |', '          cd ../..', '          bun test test/root.test.ts', '',
     ].join('\n');
-    const [step, job, top, cmt, abs, up, expr, quoted] = parseWorkflow('w.yml', wf, 'darwin');
-    // Value: protects=a working-directory that escapes the repo (`..`) or is a `${{ }}` expression leaves the path unresolved rather than
-    //   inventing a path no selection can match, and a quoted directory is unquoted; fails_when=either guard or the quote strip is
-    //   dropped (the obligation silently stops matching); why_new=only comment, absolute and plain dirs were parsed; seam=none;
-    //   no_claim=expression evaluation (a matrix-dependent lane stays repo-root-relative)
-    expect(up!.testFiles).toEqual(['test/a_test.dart']);
-    expect(expr!.testFiles).toEqual(['test/a_test.dart']);
+    const [step, job, top, cmt, abs, up, expr, quoted, win, cd] = parseWorkflow('w.yml', wf, 'darwin');
+    // Value: protects=a step naming tests from a working-directory that escapes the repo (`..`), is absolute or is a `${{ }}` expression
+    //   leaves the lane's file set unknown, which laneFileSet treats as may-run-any-test, so a Windows lane still owes the selected
+    //   packages/core/test/core_test.dart; fails_when=the bare path is recorded as repo-relative again and selectLanes drops the
+    //   obligation (fail open); why_new=unresolved directories were recorded as repo-root paths; seam=none; no_claim=expression evaluation
+    for (const lane of [up, expr, abs, win]) expect(lane!.testFiles).toEqual([]);
+    const sel = { explain: [], config: { ...DEFAULT_CONFIG, selection: {} } } as unknown as PregateContext;
+    expect(laneFileSet(sel, win!)).toBe('all');
     expect(quoted!.testFiles).toEqual(['packages/core/test/core_test.dart']);
-    // A trailing YAML comment is not part of the directory; an absolute directory stays unresolved (as before) rather than unmatchable.
+    // A trailing YAML comment is not part of the directory.
     expect(cmt!.testFiles).toEqual(['packages/core/test/core_test.dart']);
-    expect(abs!.testFiles).toEqual(['test/a_test.dart']);
+    // Value: protects=a run block that cds off its literal working-directory claims each path both under that directory and
+    //   repo-relative, so the Windows lane still owes test/root.test.ts; fails_when=the prefix is trusted across a `cd` (only
+    //   packages/app/test/root.test.ts is claimed and the obligation drops); why_new=no fixture changed directory inside a run block;
+    //   seam=none; no_claim=resolving the cd target
+    expect(cd!.testFiles).toEqual(['packages/app/test/root.test.ts', 'test/root.test.ts']);
     expect(step!.testFiles).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
     expect(step!.commands).toEqual(['dart test test/core_test.dart', 'dart test test/ui/drawer_widget_test.dart']);
     expect(job).toMatchObject({ tier: 'platform', testFiles: ['packages/core/test/core_test.dart'] });

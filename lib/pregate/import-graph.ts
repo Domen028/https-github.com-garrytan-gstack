@@ -90,14 +90,14 @@ export function dartPackages(repoRoot: string, files: Iterable<string>): Map<str
   return out;
 }
 
-/** The repo files one Dart directive URI names: `package:<name>/x` → the tracked `<root>/lib/x` of the deepest same-name root that contains `fromFile` (its own package) when that root holds it, otherwise every tracked `<root>/lib/x` (an ambiguous name selects more, never fewer); a relative URI from `fromFile`; `dart:` and external packages name none. */
+/** The repo files one Dart directive URI names: `package:<name>/x` → the tracked `<root>/lib/x` of the importer's own package (the deepest pubspec root of any name containing `fromFile`) when that package is `<name>` and holds it, otherwise every tracked `<root>/lib/x` of `<name>` (an ambiguous name selects more, never fewer); a relative URI from `fromFile`; `dart:` and external packages name none. */
 function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fromFile: string, uri: string): string[] {
   const pkg = /^package:([\w]+)\/(.+)$/.exec(uri);
   if (pkg) {
     const roots = packages.get(pkg[1]!) ?? [];
     const targetIn = (root: string) => normalize(path.posix.join(root, 'lib', pkg[2]!));
-    const own = roots.filter(r => r === '' || fromFile.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
-    if (own !== undefined && files.has(targetIn(own))) return [targetIn(own)];
+    const own = [...packages.values()].flat().filter(r => r === '' || fromFile.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+    if (own !== undefined && roots.includes(own) && files.has(targetIn(own))) return [targetIn(own)];
     return roots.map(targetIn).filter(t => files.has(t));
   }
   if (/^[a-z][\w+.-]*:/.test(uri)) return [];
@@ -113,6 +113,24 @@ function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fro
  */
 const DART_DIRECTIVE_RUN = /^[ \t]*(?:(?:library|import|export|part)\b(?:[^;\n]|\n(?=[ \t]+\S)(?![ \t]*(?:library|import|export|part)\b)){0,4000};[ \t]*)+/gm;
 const DART_DIRECTIVE = /(?:^|;)\s*(?:import|export|part)\b(?!\s+of\b)([^;]*)(?=;)/g;
+
+/** Dart source with line and block comments blanked to spaces (newlines kept, so line structure holds), quote-aware, in one linear pass. */
+export function blankDartComments(source: string): string {
+  let out = '';
+  let quote = '';
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i]!;
+    if (quote) { out += c; if (c === '\\') { out += source[i + 1] ?? ''; i++; } else if (c === quote || c === '\n') quote = ''; continue; }
+    if (c === "'" || c === '"') { quote = c; out += c; continue; }
+    const line = source.startsWith('//', i);
+    if (!line && !source.startsWith('/*', i)) { out += c; continue; }
+    const e = line ? source.indexOf('\n', i) : source.indexOf('*/', i + 2);
+    const stop = e < 0 ? source.length : line ? e : e + 2;
+    out += source.slice(i, stop).replace(/[^\n]/g, ' ');
+    i = stop - 1;
+  }
+  return out;
+}
 
 export function listRepoFiles(repoRoot: string): string[] {
   const r = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { cwd: repoRoot, encoding: 'utf8', timeout: 60_000, maxBuffer: 64 * 1024 * 1024 });
@@ -358,7 +376,7 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
 export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, config: PathAliases = NO_ALIASES, unresolved?: string[], packages: Map<string, string[]> = new Map()): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
   if (rel.endsWith('.dart')) {
-    for (const run of source.replace(/^\uFEFF/, '').matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) for (const t of resolveDartUri(files, packages, rel, u[1]!)) out.push({ target: t, via: 'import' });
+    for (const run of blankDartComments(source.replace(/^\uFEFF/, '')).matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) for (const t of resolveDartUri(files, packages, rel, u[1]!)) out.push({ target: t, via: 'import' });
   }
   const importOf = (spec: string) => {
     const targets = resolveRefs(files, dirs, rel, spec, false, config);
