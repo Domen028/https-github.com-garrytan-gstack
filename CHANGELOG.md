@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.91.140.0] - 2026-10-18
+
+**/cso evaluation cells that run a repair no longer fail on helper dependency-closure names that use the helper's own 32-character finding IDs.** In the third paid runtime qualification, one comprehensive cell failed with REDACTION_FAILED again, on `dependency-closures/<finding id>-after-<plan hash>.json`. 1.91.135.0 taught the producer this name shape with a 64-character finding ID. The helper actually names closures with its 32-character finding IDs, so real names still fell through to the secret redactor, which reads some of them as wallet addresses.
+
+### Fixed
+- **The eval producer recognizes dependency-closure names with 32- or 64-character finding IDs.** Any other word in the phase position still goes through the redactor. The test now uses a real-length, redactor-flagged 32-character name and fails on the 1.91.135.0 pattern.
+
 ## [1.91.139.0] - 2026-10-18
 
 **The docs-sync fixture's declared Git interface now includes read-only `git describe`, so `ship-docsync-store` no longer goes red when the /document-release child checks for release tags.** PR #3272's gate run 39153452209 failed that case on one command, `git describe --tags --always`, which the observer did not list. A focused paid rerun of `ship-docsync-store` on this tree passed ($3.83); the child ran the same command twice and the observer accepted it.

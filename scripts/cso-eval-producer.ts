@@ -180,7 +180,7 @@ function emptyArtifactInventory(): ProducerArtifactInventory {
 }
 
 /** A whole path component that is one of the helper's own identifiers: `<epoch ms>-<hex>` run and replay IDs, retired runs, hex artifact IDs with an optional lowercase-word prefix (`gitleaks-<hex>-<hex>.json`), and dependency-closure files (`<finding id>-before|after-<plan hash>.json`). */
-const HELPER_ID_COMPONENT = /^(?:\d{13}-[a-f0-9]{16}|\.retired-\d{13}-[a-f0-9]{16}-[a-f0-9]{32}|(?:[a-z]+-)*[a-f0-9]{16,64}(?:-[a-f0-9]{16})*(?:\.[a-z]+)?|[a-f0-9]{64}-(?:before|after)-[a-f0-9]{16}\.json)$/;
+const HELPER_ID_COMPONENT = /^(?:\d{13}-[a-f0-9]{16}|\.retired-\d{13}-[a-f0-9]{16}-[a-f0-9]{32}|(?:[a-z]+-)*[a-f0-9]{16,64}(?:-[a-f0-9]{16})*(?:\.[a-z]+)?|(?:[a-f0-9]{32}){1,2}-(?:before|after)-[a-f0-9]{16}\.json)$/;
 
 /**
  * Helper artifact paths are `<repoId>/<runId>/...` plus the helper's public-cache/ and legacy-imports/. Components that
