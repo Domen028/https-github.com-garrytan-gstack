@@ -321,14 +321,16 @@ describe('pregate-remote.sh keyed path (stub ubi-runner)', () => {
     expect(fs.readFileSync(f.calls, 'utf8').trim().split('\n')).toHaveLength(1);
     // Run under a process named gstack-pregate, the deadline is read from its --timeout (600 s when it passes none).
     const shim = path.join(path.dirname(f.repo), 'gstack-pregate');
-    fs.writeFileSync(shim, '#!/usr/bin/env bash\nexec bash scripts/ubicloud/pregate-remote.sh\n', { mode: 0o755 });
-    const run = (args: string[]) => {
-      const r = Bun.spawnSync(['bash', '-c', '"$0" "$@"; exit $?', shim, ...args], { cwd: f.repo, timeout: 90_000, env: { ...process.env, ...KEY, UBI_SIZE: '', GSTACK_FREE_JOBS: '2',
+    fs.writeFileSync(shim, '#!/usr/bin/env bash\nbash scripts/ubicloud/pregate-remote.sh\n', { mode: 0o755 });
+    const run = (args: string[], via = '"$0" "$@"; exit $?') => {
+      const r = Bun.spawnSync(['bash', '-c', via, shim, ...args], { cwd: f.repo, timeout: 90_000, env: { ...process.env, ...KEY, UBI_SIZE: '', GSTACK_FREE_JOBS: '2',
         STUB_CALLS: f.calls, STUB_VM_HOME: f.vm, STUB_BIN: f.bin, PREGATE_FILES_FILE: path.join(path.dirname(f.repo), 'files.txt'), PREGATE_TREE: f.tree, PREGATE_SPEND_CAP_USD: '2' } as Record<string, string> });
       return r.stdout.toString() + r.stderr.toString();
     };
     expect(run(['--stage', 'tests', '--remote', '--timeout', '1200'])).toMatch(/told to stop after 106[0-5]s \(gstack-pregate --timeout 1200s minus/);
     expect(run(['--stage', 'tests', '--remote'])).toMatch(/told to stop after 46[0-5]s \(gstack-pregate --timeout 600s minus/);
+    // An ancestor that only mentions gstack-pregate (a shell line running it beside the gate) is not the enclosing pregate.
+    expect(run([], ': bin/gstack-pregate --timeout 400; bash scripts/ubicloud/pregate-remote.sh; exit $?')).toContain("told to stop after 2520s (the cap's 45 min wall minus 3 min for teardown)");
   }, 120_000);
 
   test('the VM environment is bun run test:ubicloud\'s (scripts/ubicloud/test-free.sh), so the two cannot drift', () => {

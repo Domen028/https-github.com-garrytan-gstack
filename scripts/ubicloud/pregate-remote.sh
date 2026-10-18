@@ -127,8 +127,9 @@ if [ -z "$outer_s" ]; then
   for _ in 1 2 3 4 5 6 7 8; do
     { [ -n "$pid" ] && [ "$pid" -gt 1 ]; } || break
     cmdline=$(ps -o args= -p "$pid" 2>/dev/null) || break
-    case $cmdline in
-      *gstack-pregate*)
+    read -r arg0 arg1 _ <<<"$cmdline" || true
+    case "${arg0##*/} ${arg1##*/}" in
+      "gstack-pregate "*|*" gstack-pregate")
         outer_s=$(sed -n 's/.*--timeout[ =]\([0-9][0-9]*\).*/\1/p' <<<"$cmdline")
         outer_s=${outer_s:-600} outer_from="gstack-pregate --timeout"
         break ;;
