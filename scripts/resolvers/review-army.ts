@@ -33,6 +33,7 @@ STACK=""
 [ -f requirements.txt ] || [ -f pyproject.toml ] && STACK="\${STACK}python "
 [ -f go.mod ] && STACK="\${STACK}go "
 [ -f Cargo.toml ] && STACK="\${STACK}rust "
+[ -f pubspec.yaml ] && STACK="\${STACK}dart "
 echo "STACK: \${STACK:-unknown}"
 DIFF_BASE=$(git merge-base origin/<base> HEAD)
 DIFF_LINES=$(git diff "$DIFF_BASE" --numstat | awk '{n+=$1+$2} END {print n+0}')
@@ -44,6 +45,7 @@ TEST_FW=""
 { [ -f spec/spec_helper.rb ] || [ -f .rspec ]; } && TEST_FW="rspec"
 { [ -f pytest.ini ] || [ -f conftest.py ]; } && TEST_FW="pytest"
 [ -f go.mod ] && TEST_FW="go-test"
+[ -f pubspec.yaml ] && TEST_FW="dart-test" && grep -qs 'sdk: *flutter' pubspec.yaml && TEST_FW="flutter-test"
 echo "TEST_FW: \${TEST_FW:-unknown}"
 \`\`\`
 
