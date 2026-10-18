@@ -1199,6 +1199,39 @@ PR labels: `evals-no-debounce` sets the quiet window to 0 (Free Tests is still
 required) and `evals-fresh` turns receipt reuse and verdict reuse off. Labels
 apply from the next push, because adding a label does not start `evals.yml`.
 
+### Replay gate cost
+
+`bun run scripts/gate-cost-replay.ts --runs <id,...> [--since YYYY-MM-DD --until YYYY-MM-DD | --prs 3201,3202] [--json]`
+measures the paid PR gate's bill from recorded artifacts, for free. `--runs`
+names complete full-gate runs; their `paid-slice-*` and `trial-outcomes`
+artifacts are downloaded read-only with `gh` into `.context/gate-cost-cache`
+once and reused from there. It prints:
+
+- recorded $ per gate (mean, min, max), split by model and by token class
+  (cache write, output including thinking, cache read, uncached input), priced
+  through `lib/pricing.ts`;
+- a per-case mean cost table (`--cases` prints all of it); a case whose runs
+  record no cost (PTY sessions) is estimated from its duration and marked
+  estimated, at recorded dollars per recorded session-second unless
+  `--usd-per-second` pins the rate;
+- for each squash merge on origin/main's first-parent history in the window
+  (bare dates are UTC days, `--until` inclusive), the selection cost under
+  today's selector, R4's exercised-map shadow and the screening rule, and the
+  mean, median and mean case count per merged PR over every merged PR in the
+  window, zeros included;
+- a seeded merge-train model (every merged PR lands in a train; screened and
+  unscreened defect rates, outside reds, a $6 bisect per red, culprits
+  requeued, one rebuild per unattributed red) for each screening policy, with
+  $ per week and per merged PR and the multiple against $9,950 and $8,400 a week.
+
+Screening figures are labelled `screen-provisional`: the rule's preamble
+detector is a line-commonality heuristic, not T2's hunk classifier, so they
+stay heuristic until T2 lands. A `package.json` change that only moves the
+version is neither selected nor a canary trigger, and all 24 judges always run.
+The selectors are this checkout's, so an old merge is replayed against today's
+maps. A shallow checkout says which `git fetch --shallow-since` to run. Logic:
+`lib/gate-cost.ts`; tests: `test/gate-cost.test.ts`.
+
 ## Free suite runner, judge reuse and engine skips
 
 Moved verbatim from CLAUDE.md (#2096 size limit).

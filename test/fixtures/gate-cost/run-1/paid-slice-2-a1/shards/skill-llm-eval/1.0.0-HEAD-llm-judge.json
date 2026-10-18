@@ -1,0 +1,11 @@
+{
+ "tier": "llm-judge",
+ "tests": [
+  {
+   "name": "demo/SKILL.md judge",
+   "tier": "llm-judge",
+   "duration_ms": 20000,
+   "cost_usd": 0.06
+  }
+ ]
+}
