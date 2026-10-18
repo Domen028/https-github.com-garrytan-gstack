@@ -2360,6 +2360,12 @@ working-tree file silently.
 branch's own file deliberately, pass `--policy-from head --allow-repo-commands`;
 the receipt then says `policy: head (unreviewed)`.
 
+`--base` names a branch on `origin`. A commit SHA, a tag or another remote's
+ref (`upstream/main` in a fork clone) never resolves as `origin/<base>`, and
+fetching it cannot create that ref, so pass a branch that exists on `origin`
+(`git branch -r --list 'origin/*'` lists them). `gstack-pregate` says so in
+its fix instead of suggesting the fetch.
+
 <a id="policy-invalid"></a>
 ### `POLICY_INVALID`
 

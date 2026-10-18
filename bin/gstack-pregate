@@ -2,7 +2,7 @@
 /**
  * gstack-pregate — cheap checks before anything paid or remote (plan C8).
  *
- *   gstack-pregate [run] [--stage preflight|tests|all] [--only <check,..>] [--base <ref>]
+ *   gstack-pregate [run] [--stage preflight|tests|all] [--only <check,..>] [--base <branch>]
  *                  [--allow-repo-commands] [--policy-from base|head] [--out <pregate.json>]
  *                  [--timeout <s>] [--stall-timeout <s>] [--remote --spend-cap <usd>] [--run <id>] [--explain] [--json]
  *   gstack-pregate verify [--out <pregate.json>] [--json]      publication check: current tree, no fail/incomplete, obligations cleared
@@ -60,7 +60,7 @@ const HELP = `gstack-pregate — cheap checks before anything paid or remote (do
 
   --stage preflight|tests|all   default all
   --only <check,...>            restrict to these checks (${CHECK_IDS.join(', ')}; tier 2 later: ${PREGATE_TIER2.join(', ')})
-  --base <ref>                  base branch (default: origin/HEAD, else main)
+  --base <branch>               a branch on origin, not a commit (default: origin/HEAD's branch, else main)
   --allow-repo-commands         run pin-file commands and the test runner (what /ship passes); without it those checks are incomplete
   --policy-from base|head       base (default, reviewed) or head (unreviewed; needs --allow-repo-commands)
   --out <file>                  pregate.json path (default ${PREGATE_OUT_REL})
