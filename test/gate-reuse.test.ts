@@ -81,6 +81,9 @@ beforeAll(() => {
   sha.rebasedCode = commit(work, 'rebased-code', sha.rebased, { 'src/feature.ts': 'export const feature = 3;\n' }, 'rebased plus a code byte');
   sha.rebasedEntry = commit(work, 'rebased-entry', sha.rebased, { 'CHANGELOG.md': changelog(['## [1.0.1.0] - 2026-10-02', '', '- the feature, reworded', '']) }, 'rebased plus entry text');
   sha.rebasedPkg = commit(work, 'rebased-pkg', sha.rebased, { 'package.json': JSON.stringify({ name: 'fixture', version: '1.0.1.0', scripts: { test: 'bun test --bail' } }, null, 2) + '\n' }, 'rebased plus a package script');
+  sha.rebasedDigest = commit(work, 'rebased-digest', sha.rebased, { 'agents-digest/gstack-AGENTS.md': '# gstack digest v1.0.1.0 — regenerate after upgrading\n\nbody\nhand-written instruction\n' }, 'rebased plus release-output content');
+  sha.rebasedDrop = commit(work, 'rebased-drop', sha.rebased, { 'CHANGELOG.md': ['# Changelog', '', ...entry].join('\n') }, 'rebased plus a deleted CHANGELOG section');
+  sha.rebasedPreamble = commit(work, 'rebased-preamble', sha.rebased, { 'CHANGELOG.md': changelog(entry).replace('# Changelog', '# Changelog (edited)') }, 'rebased plus a CHANGELOG preamble edit');
   sha.mainTouch = commit(work, 'main-touch', sha.base, { 'src/feature.ts': 'export const feature = 0;\n// main note\n' }, 'main edits the file the PR edits');
   sha.touchRebased = commit(work, 'touch-rebased', sha.mainTouch, { ...files('1.0.1.0', { 'src/feature.ts': 'export const feature = 1;\n// main note\n' }), 'CHANGELOG.md': changelog(entry) },
     'the feature, rebased onto a main that edited its file');
@@ -233,8 +236,8 @@ describe('find: negative controls (each forces the full gate)', () => {
       'stamp-classified files outside the version file, package.json, CHANGELOG and release outputs: bun.lock');
   });
 
-  test('main moved and the own diff changed: a code byte, CHANGELOG entry text, a package.json field', () => {
-    for (const head of [sha.rebasedCode!, sha.rebasedEntry!, sha.rebasedPkg!]) {
+  test('main moved and the own diff changed: a code byte, CHANGELOG entry text, a package.json field, release-output content, a deleted CHANGELOG section, a CHANGELOG preamble edit', () => {
+    for (const head of [sha.rebasedCode!, sha.rebasedEntry!, sha.rebasedPkg!, sha.rebasedDigest!, sha.rebasedDrop!, sha.rebasedPreamble!]) {
       refused(find(head, [run(300, sha.gated!)], { 300: binding() }, { baseSha: sha.moved }), "the PR's own diff (excluding stamp files) differs");
     }
   });

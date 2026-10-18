@@ -1175,8 +1175,9 @@ GREEN with reconcile exit 0, a successful run and no manually accepted
   merge-base, excluding stamp files, is byte-identical to the gated head's
   (`git diff --binary --full-index`, so pre-image blob ids are compared and a
   main change to a file the PR also changes is a difference; `package.json`
-  compared without its version; the CHANGELOG by the multiset of section bodies
-  the PR added, headings excluded).
+  compared without its version; release outputs with each revision's version
+  replaced; the CHANGELOG by its preamble and the sections the PR added and
+  removed, dropping only version or `[Unreleased]` headings).
 
 Finally this head's own plan must have the same selection fingerprint (cases,
 statuses, trial plans, profile), so a main move that changes what the PR gate

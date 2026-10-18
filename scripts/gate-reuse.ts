@@ -39,9 +39,8 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseChangelog } from '../lib/changelog-check';
 import { receiptDigest } from '../lib/ship-queue';
-import { isUnavailable, loadPolicyFromBase, type ShipPolicy } from '../lib/ship-policy';
+import { isUnavailable, loadPolicyFromBase, matchesAny, type ShipPolicy } from '../lib/ship-policy';
 import { buildReceipt } from '../lib/tree-receipt';
 import { acceptedRun, ghFailureReason, runGh, type GhRunner, type WorkflowRun } from './recover-receipts';
 import type { PaidRunManifest } from './lib/paid-plan';
@@ -157,34 +156,72 @@ function stampSet(policy: ShipPolicy): { version: string; changelog: string | nu
   return { version: 'VERSION', changelog: policy.changelog ?? null, releaseOutputs: policy.release_outputs };
 }
 
+/** A version or [Unreleased] heading, which a restamp rewrites; any other heading is content. */
+const STAMP_HEADING = /^## \[(?:Unreleased|\d+(?:\.\d+)+)\](?: - \d{4}-\d{2}-\d{2})?\s*$/;
+
+/** The CHANGELOG as its preamble and the multiset of its sections, each without a stamp heading. */
+function changelogParts(text: string | null): { preamble: string; sections: string[] } {
+  if (text === null) return { preamble: '\u0000missing', sections: [] };
+  const chunks: string[][] = [[]];
+  for (const line of text.split('\n')) {
+    if (line.startsWith('## ')) chunks.push([]);
+    chunks[chunks.length - 1]!.push(line);
+  }
+  const [preamble, ...sections] = chunks;
+  return { preamble: preamble!.join('\n'), sections: sections.map(lines => (STAMP_HEADING.test(lines[0]!) ? lines.slice(1) : lines).join('\n').replace(/\n+$/, '')) };
+}
+
 /**
- * The PR's own diff from its merge-base with stamp files taken out: the full
- * binary patch of every other path (pre-image blob ids included, so a file
- * main also changed under the PR is a difference), package.json without its
- * version, and the CHANGELOG sections the PR added, without their headings.
+ * The PR's own diff from its merge-base with stamps taken out. Every changed
+ * path that is not a stamp file contributes its full binary patch (pre-image
+ * blob ids included, so a file main also changed under the PR is a
+ * difference). Stamp files contribute everything except the stamp: the root
+ * package.json without its version, each release output with its revision's
+ * version replaced (its pre-image too, when anything else changed), and the
+ * CHANGELOG's preamble plus the sections the PR added and removed, with only
+ * version or [Unreleased] headings dropped. The version file is the stamp.
  */
 export function ownDiffSignature(git: Git, mergeBase: string, head: string, stamps: ReturnType<typeof stampSet>): { sha256: string } | { error: string } {
-  const excluded = [stamps.version, 'package.json', ...(stamps.changelog ? [stamps.changelog] : []), ...stamps.releaseOutputs];
-  const patch = git(['diff', '--no-ext-diff', '--no-renames', '--no-color', '--binary', '--full-index', mergeBase, head, '--', '.',
-    ...excluded.map(file => `:(exclude)${file}`)]);
-  if (!patch.ok) return { error: `git diff ${mergeBase.slice(0, 12)} ${head.slice(0, 12)} failed (${patch.out.split('\n')[0]})` };
+  const names = git(['diff', '--name-only', '-z', '--no-renames', mergeBase, head]);
+  if (!names.ok) return { error: `git diff ${mergeBase.slice(0, 12)} ${head.slice(0, 12)} failed (${names.out.split('\n')[0]})` };
+  const changed = names.out.split('\u0000').filter(Boolean);
+  const isRelease = (file: string) => matchesAny(stamps.releaseOutputs, file);
+  const others = changed.filter(file => file !== stamps.version && file !== 'package.json' && file !== stamps.changelog && !isRelease(file));
+  let patch = '';
+  if (others.length) {
+    const r = git(['diff', '--no-ext-diff', '--no-renames', '--no-color', '--binary', '--full-index', mergeBase, head, '--', ...others.map(file => `:(literal)${file}`)]);
+    if (!r.ok) return { error: `git diff ${mergeBase.slice(0, 12)} ${head.slice(0, 12)} failed (${r.out.split('\n')[0]})` };
+    patch = r.out;
+  }
   const blob = (rev: string, file: string) => { const r = git(['show', `${rev}:${file}`]); return r.ok ? r.out : null; };
+  const version = (rev: string) => blob(rev, stamps.version)?.trim() || null;
+  const unstamped = (rev: string, file: string) => {
+    const text = blob(rev, file);
+    const v = version(rev);
+    return text === null ? null : v ? text.split(v).join('\u0000VERSION') : text;
+  };
   const manifest = (text: string | null) => {
     if (text === null) return null;
     try { const parsed = JSON.parse(text); delete parsed.version; return JSON.stringify(parsed); } catch { return text; }
   };
   const [pkgBase, pkgHead] = [manifest(blob(mergeBase, 'package.json')), manifest(blob(head, 'package.json'))];
-  const sections = (text: string | null) => text === null ? [] : parseChangelog(text).sections.map(s => s.lines.slice(1).join('\n').replace(/\n+$/, ''));
-  const own: string[] = [];
-  if (stamps.changelog) {
-    const before = sections(blob(mergeBase, stamps.changelog));
-    for (const body of sections(blob(head, stamps.changelog))) {
-      const i = before.indexOf(body);
-      if (i >= 0) before.splice(i, 1);
-      else own.push(body);
+  const releases = changed.filter(isRelease).sort().flatMap(file => {
+    const [before, after] = [unstamped(mergeBase, file), unstamped(head, file)];
+    return before === after ? [] : [[file, before, after]];
+  });
+  let changelog = null;
+  if (stamps.changelog && changed.includes(stamps.changelog)) {
+    const [before, after] = [changelogParts(blob(mergeBase, stamps.changelog)), changelogParts(blob(head, stamps.changelog))];
+    const removed = [...before.sections];
+    const added: string[] = [];
+    for (const section of after.sections) {
+      const i = removed.indexOf(section);
+      if (i >= 0) removed.splice(i, 1);
+      else added.push(section);
     }
+    changelog = { preamble: before.preamble === after.preamble ? null : [before.preamble, after.preamble], added: added.sort(), removed: removed.sort() };
   }
-  const body = { patch: patch.out, package: pkgBase === pkgHead ? null : [pkgBase, pkgHead], changelog: own.sort() };
+  const body = { patch, package: pkgBase === pkgHead ? null : [pkgBase, pkgHead], releases, changelog };
   return { sha256: createHash('sha256').update(JSON.stringify(body)).digest('hex') };
 }
 
