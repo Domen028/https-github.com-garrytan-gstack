@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.91.138.0] - 2026-10-18
+
+**A subscription eval now stops at the first quota error instead of burning the seat.** On 2026-10-13 an agent-written driver ran 1,164 headless `claude -p` calls in about 4 hours on one Claude subscription seat. It queued every job up front, ignored exit codes and stderr, and retried unparseable output twice. When the seat's five-hour window ran out, 389 calls were rejected in 4.5 minutes and the loop kept firing. Interactive sessions on the same seat lost their quota. `/eval-plan` told agents to run attempts through "the project's own eval command" and gave them no driver, so they wrote their own.
+
+### Added
+- **`gstack-eval-plan cli-run`, the subscription (CLI-metered) eval driver.** Jobs are `{id, prompt, args?}` lines, run as `claude -p --output-format json` by a fixed pool of `--workers` slots (1 to 8, default 2). A job starts only when a slot is free.
+- **The first quota or rate-limit error ends the run.** That includes a structured `rate_limit` error, an API 429, a rejected `quotaLimits` or stream `rate_limit_event` status (on stdout or stderr), the CLI's limit message on a failed call, or exit 75 from a batch helper. No new job starts, every unstarted job is recorded `cancelled`, and the run exits 75 with `EVAL_QUOTA_STOP`. A quota is never retried; `--retries` covers other errors only. Detection never relies on `rateLimitType`, which is often null on a rejected call.
+- **No API fallback.** The API billing variables (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, Bedrock, Vertex, Foundry) are removed before the helper or any child runs. The run prints only their names.
+- **Resume.** Every job is recorded in `<out>/cli-run.jsonl`, which only you can read (directory 0700, files 0600). After the window resets, rerun the same command and it skips the jobs that finished. A job whose prompt or args changed, such as a different model, runs again.
+- **Full runs go through a seat-pinning batch helper.** `--scope full` (the default) re-runs itself under `claude-batch run --repo <repo> --class standard|fable -- …` (override with `GSTACK_CLAUDE_BATCH`). Inside the batch it checks the marker (`MERIT_CLAUDE_BATCH_ID`, override with `GSTACK_CLAUDE_BATCH_MARKER`) and runs `<helper> preflight` before the first call. If the helper is missing, the run is refused (`EVAL_BATCH_HELPER_MISSING`, exit 3). If the preflight fails, it is refused too (`EVAL_BATCH_PREFLIGHT_FAILED`). Nothing falls back to an unwrapped run. `--scope smoke` needs no helper and is capped at 10 jobs and 2 workers.
+
+### Changed
+- **`/eval-plan` routes subscription runs through `cli-run`.** Pilot attempts use `--scope smoke`; an approved full run uses `--scope full --class <standard|fable>`. The first quota error is a preregistered stop rule. API-funded attempts keep the project's own command, unchanged.
+
+### If you…
+- **…run an eval on a Claude subscription:** write a jobs file and use `gstack-eval-plan cli-run`; don't hand-roll a thread pool around `claude -p`.
+- **…see `EVAL_QUOTA_STOP`:** wait for the reset time, then rerun the same command. Don't switch seats, set an API key, or split the run.
+- **…see `EVAL_BATCH_HELPER_MISSING`:** install the batch helper or point `GSTACK_CLAUDE_BATCH` at it; for a short check, use `--scope smoke`.
+
 ## [1.91.137.0] - 2026-10-18
 
 **`scripts/gate-cost-replay.ts` measures what the paid PR gate costs, and what each selection or merge-train policy would have cost, from recorded artifacts and for free.** On the nine full gates of Oct 17 and 18 it reproduces GSTA-49's measurement: $93.14 recorded per gate, 97.1% of it Fable 5.1 (the model under test), 49.8% cache writes and 40.3% output. Over the 92 squash merges of Oct 3 to 18, today's selector averages $78.67 per merged PR on the $106.19 full-gate scale, R4's exercised-map shadow $64.27, and the screening rule $45.17 (screen-provisional). This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
