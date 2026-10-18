@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.128.0] - 2026-10-18
 
 **The two free-suite duration seeds now refresh themselves weekly.** The shard packers read a Linux and a Windows duration seed, and both went stale as test files came and went. They were refreshed by hand twice this week. A new weekly workflow records both seeds and opens one seed-refresh PR when either seed's file set changes. That PR goes through the normal review.
 
