@@ -313,10 +313,7 @@ Based on the scope signals above, select which specialists to dispatch.
 6. **API Contract** — if SCOPE_API=true. Read `~/.claude/skills/gstack/review/specialists/api-contract.md`
 7. **Design** — if SCOPE_FRONTEND=true. Use the existing design review checklist at `~/.claude/skills/gstack/review/design-checklist.md` and run the mechanical pass at the top of that checklist (the user-installed design detector, when present) before the LLM items
 8. **Simplification** — if DIFF_LINES > 100. Read `~/.claude/skills/gstack/review/specialists/simplification.md`. Advisory-only lens: hunts unrequested structure (hand-rolled stdlib, one-implementation abstractions, dependencies duplicating platform features), never coverage.
-9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown: read `~/.claude/skills/gstack/review/specialists/state-machines.md`, then write its full output to `.gstack/tmp/state-machines.md` and check it:
-```bash
-~/.claude/skills/gstack/bin/gstack-state-matrix check .gstack/tmp/state-machines.md
-```
+9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown: read `~/.claude/skills/gstack/review/specialists/state-machines.md`, run `~/.claude/skills/gstack/bin/gstack-state-matrix outfile`, Read the file it prints, write the full output there, then run `~/.claude/skills/gstack/bin/gstack-state-matrix check <file>` on it.
 
 ### Adaptive gating
 

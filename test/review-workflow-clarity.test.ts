@@ -388,8 +388,11 @@ for (const skillName of ['review', 'ship']) {
     expect(block.indexOf('SCOPE_STATE_MACHINE=unknown')).toBeLessThan(block.indexOf("set | grep '^SCOPE_'"));
     const selection = between(army, '### Select specialists', '### Adaptive gating').replace(/\s+/g, ' ');
     expect(selection).toContain('9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown: read');
-    expect(selection).toContain('then write its full output to `.gstack/tmp/state-machines.md` and check it:');
-    expect(selection).toContain('gstack-state-matrix check .gstack/tmp/state-machines.md ');
+    // /review delta on 51f1e02: a fixed .gstack/tmp/state-machines.md let a second review check the previous run's
+    // output (Write refuses an unread existing file) and commit it; each run now checks the new file outfile prints.
+    expect(selection).toContain('/gstack-state-matrix outfile`, Read the file it prints, write the full output there, then run `');
+    expect(selection).toContain('/gstack-state-matrix check <file>` on it.');
+    expect(selection).not.toContain('.gstack/tmp/state-machines.md');
     expect(selection).not.toContain('<<');
     expect(selection).not.toContain('pipe output');
   });
