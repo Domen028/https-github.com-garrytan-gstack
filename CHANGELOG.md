@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.134.0] - 2026-10-18
 
 **The paid PR gate now starts only after a PR head's free tests pass and the PR has been quiet for 10 minutes, and a head whose own diff already passed the gate reuses that verdict instead of paying again.** Re-measured over Oct 3 to 17 (505 runs, $21,449) with GSTA-47's scripts: the readiness wait alone would have saved $2,986 (about $1,380 a week), and verdict reuse up to $601 more (restamp-only $97, main moved $504). Together that is up to $3,587, about $1,660 a week; how much of the main-moved share survives the selection check is between $146 and $390 of the $601 by approximation. The same heads still get the same selection and verdict rules; only the start time moves. The PR receipt store, which never restored once, now does.
 
