@@ -2840,6 +2840,9 @@ directory is not this empty lane.
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
 for files with no behaviour) under `dependencies` in `.gstack/pregate.json`.
 Other non-Markdown documentation goes in `empty_lanes` on the base branch.
+Dart files under `integration_test/` or `test_driver/` need a device, so pregate
+never runs them: declare `"**/integration_test/**": []` (and
+`"**/test_driver/**": []`) under `dependencies` and let CI run them.
 `--explain` prints every mapping and why. For a file with no lane it also prints the import
 specifiers in test files that resolved to no repo file (for example a
 `tsconfig.json` `paths` alias such as `@/lib/x` whose target is missing) and any
@@ -2863,8 +2866,9 @@ should have found it, report the specifier as a resolver gap.
 allowed, or the working tree changed while the check ran. Incomplete is never
 pass and blocks publication.
 
-**Fix.** Pass `--allow-repo-commands`, install the tool, raise `--timeout`, or
-keep the tree still, then rerun.
+**Fix.** Pass `--allow-repo-commands`, install the tool (for a Dart package the
+message names `not on PATH: dart` or `flutter`; fvm also works when the repo pins
+it), raise `--timeout`, or keep the tree still, then rerun.
 
 <a id="pregate-stalled"></a>
 ### `PREGATE_STALLED`
