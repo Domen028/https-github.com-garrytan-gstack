@@ -75,9 +75,9 @@ describe('paid CI coordination stays off the eval image', () => {
     test(`${name}: planning is independent of image startup and has no dependency install`, () => {
       const planner = jobs['plan-slices'];
       if (name === 'evals.yml') {
-        // The PR lane plans after its two tiny coordination jobs (readiness, base-ref receipt recovery), never after the image.
-        expect(planner.needs).toEqual(['readiness', 'recover-receipts']);
-        for (const id of ['readiness', 'recover-receipts']) {
+        // The PR lane plans after its three tiny coordination jobs (route, readiness, base-ref receipt recovery), never after the image.
+        expect(planner.needs).toEqual(['readiness', 'recover-receipts', 'route']);
+        for (const id of ['readiness', 'recover-receipts', 'route']) {
           const job = jobs[id] as Job & { 'runs-on'?: string };
           expect(job.container, id).toBeUndefined();
           expect(job['runs-on'], id).toBe('ubuntu-24.04');
@@ -144,7 +144,8 @@ describe('paid CI coordination stays off the eval image', () => {
       const captures = hiddenUploads.filter(step => step.with?.name === 'native-captures-${{ env.EVALS_RUN_ID }}');
       // evals-periodic's host-run Codex job mounts $RUNNER_TEMP/eval-home as the container's HOME.
       const hostHome = (pattern: string) => pattern.replace('${{ runner.temp }}/eval-home/', '~/');
-      expect(captures).toHaveLength(name === 'evals.yml' ? 1 : name === 'evals-periodic.yml' ? 3 : 2);
+      // evals.yml: eval-slices and train-bisect (GSTA-49 T1b), each under its own EVALS_RUN_ID.
+      expect(captures).toHaveLength(name === 'evals.yml' ? 2 : name === 'evals-periodic.yml' ? 3 : 2);
       for (const capture of captures) {
         expect(capture.if).toBe('always()');
         expect(String(capture.with?.path).trim().split('\n').map(hostHome)).toEqual([
@@ -159,7 +160,11 @@ describe('paid CI coordination stays off the eval image', () => {
         // The container sets TMPDIR under HOME, so shard logs land in the mounted HOME's cache.
         expect(String(codexLogs.with?.path).trim().split('\n').map(hostHome)).toEqual(['~/.cache/gstack-paid-shard-*.log']);
       }
-      expect(hiddenUploads.filter(step => !captures.includes(step))).toEqual(codexLogs ? [logs!, codexLogs] : [logs!]);
+      // GSTA-49 T1b: train-bisect keeps the same shard-log upload under its own name.
+      const bisectLogs = name === 'evals.yml'
+        ? jobs['train-bisect'].steps.find(step => step.with?.name === 'train-bisect-logs-${{ matrix.slice }}-a${{ github.run_attempt }}') : undefined;
+      if (name === 'evals.yml') expect(String(bisectLogs?.with?.path)).toBe(String(logs?.with?.path));
+      expect(hiddenUploads.filter(step => !captures.includes(step))).toEqual([logs!, ...(codexLogs ? [codexLogs] : []), ...(bisectLogs ? [bisectLogs] : [])]);
     });
   }
 
@@ -168,7 +173,9 @@ describe('paid CI coordination stays off the eval image', () => {
     const trust = "github.actor != 'dependabot[bot]' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)";
     // !cancelled() lets planning proceed when readiness was skipped (dispatch) or recovery was skipped or failed (reuse is then off);
     // a readiness failure (Free Tests red on this head) or a superseded head plans nothing; the trust clause still gates it.
-    expect(jobs['plan-slices'].if).toBe(`\${{ !cancelled() && (needs.readiness.result == 'success' || needs.readiness.result == 'skipped') && needs.readiness.outputs.superseded != 'true' && ${trust} }}`);
+    // GSTA-49 T1b: the route job must have succeeded and named a planned mode (pr, screen, train, dispatch); a superseded screen plans nothing.
+    const route = "needs.route.result == 'success' && needs.route.outputs.superseded != 'true' && contains(fromJSON('[\"pr\",\"screen\",\"train\",\"dispatch\"]'), needs.route.outputs.mode)";
+    expect(jobs['plan-slices'].if).toBe(`\${{ !cancelled() && (needs.readiness.result == 'success' || needs.readiness.result == 'skipped') && needs.readiness.outputs.superseded != 'true' && ${route} && ${trust} }}`);
     // The coordination jobs never run for Dependabot or for a fork PR either (recovery also serves an explicit pr_receipts dispatch).
     expect(jobs.readiness.if).toContain("github.actor != 'dependabot[bot]'");
     expect(jobs.readiness.if).toContain("github.event_name == 'pull_request'");

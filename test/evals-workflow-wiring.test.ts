@@ -362,7 +362,10 @@ describe('panel verdict surfaces (eval reliability policy)', () => {
     for (const source of [evalsYml, periodicYml, marathonYml]) {
       const jobs = jobsOf(source);
       const uploads = Object.values(jobs).flatMap(job => job.steps).filter(step => step.uses?.startsWith('actions/upload-artifact@'))
-        .map(step => step.with?.name ?? '').filter(name => /slice|census-\$/.test(name));
+        .map(step => step.with?.name ?? '').filter(name => /slice|census-\$/.test(name))
+        // GSTA-49 T1b: the train record keeps the fixed name gstack-ship-queue reads; it is built from the
+        // first attempt's slice results only (scripts/train-gate.ts buildTrainRecord), so a re-run cannot change it.
+        .filter(name => name !== '${{ needs.plan-slices.outputs.record_artifact }}');
       expect(uploads.length).toBeGreaterThan(0);
       for (const name of uploads) expect(name, name).toContain('-a${{ github.run_attempt }}');
       const downloads = Object.values(jobs).flatMap(job => job.steps).filter(step => step.uses?.startsWith('actions/download-artifact@') && step.with?.pattern);

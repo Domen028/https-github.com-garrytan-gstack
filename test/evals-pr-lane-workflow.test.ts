@@ -44,7 +44,7 @@ describe('evals.yml receipt recovery (CEO-14/34, ENG-7)', () => {
     expect(recover.permissions).toEqual({ contents: 'read', actions: 'read' });
     expect(planner.permissions).toEqual({ contents: 'read' });
     const checkout = recover.steps.find(s => s.uses?.startsWith('actions/checkout@'))!;
-    expect(checkout.with).toMatchObject({ ref: '${{ github.event.pull_request.base.sha || inputs.base_sha || github.event.repository.default_branch }}', 'persist-credentials': false });
+    expect(checkout.with).toMatchObject({ ref: '${{ github.event.pull_request.base.sha || needs.route.outputs.screen_base || inputs.base_sha || github.event.repository.default_branch }}', 'persist-credentials': false });
     const collect = step('recover-receipts', 'Recover receipts of cancelled runs (base-ref code)')!;
     expect(collect.env?.GH_TOKEN).toBe('${{ github.token }}');
     expect(collect.run).toContain('scripts/recover-receipts.ts collect');
@@ -105,7 +105,8 @@ describe('evals.yml readiness-gated dispatch (R1, GSTA-48)', () => {
   });
 
   test('cancel-in-progress stays keyed on the PR, and evals-fresh turns receipt reuse off', () => {
-    expect(source).toContain('group: evals-${{ github.event.pull_request.number || github.run_id }}');
+    // A dispatched screen (GSTA-49 T1b) is keyed on its PR too: a newer head's screen cancels the older one.
+    expect(source).toContain("group: evals-${{ github.event.pull_request.number || (inputs.screen_pr != '' && format('screen-{0}', inputs.screen_pr)) || github.run_id }}");
     expect(source).toContain('cancel-in-progress: true');
     expect(workflow.env.EVALS_FRESH).toContain("contains(github.event.pull_request.labels.*.name, 'evals-fresh')");
   });
@@ -114,12 +115,14 @@ describe('evals.yml readiness-gated dispatch (R1, GSTA-48)', () => {
 describe('evals.yml gate verdict reuse wiring (R2a restamp-only, R2 main moved; GSTA-48)', () => {
   test('base-ref recovery proposes a candidate; it never fails the run', () => {
     const find = step('recover-receipts', 'Find a gate verdict to reuse (R2a/R2, base-ref code)')!;
-    expect(find.if).toBe("github.event_name == 'pull_request'");
-    expect(find.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', HEAD_SHA: '${{ github.event.pull_request.head.sha }}' });
+    // GSTA-49 T1b: a dispatched screen finds too, with its route-checked head and its pinned merge commit as the tested sha.
+    expect(find.if).toBe("github.event_name == 'pull_request' || needs.route.outputs.mode == 'screen'");
+    expect(find.env).toMatchObject({ GH_TOKEN: '${{ github.token }}', HEAD_SHA: '${{ github.event.pull_request.head.sha || needs.route.outputs.screen_head }}',
+      TESTED_SHA: '${{ inputs.screen_merge_sha || github.sha }}' });
     expect(find.env?.BASE_SHA).toBeUndefined();
     expect(find.run).toContain('scripts/gate-reuse.ts find');
     // The base is the tested merge commit's first parent, never the event's base.sha.
-    expect(find.run).toContain('--tested-sha "$GITHUB_SHA"');
+    expect(find.run).toContain('--tested-sha "$TESTED_SHA"');
     expect(find.run).not.toContain('--base-sha');
     expect(find.run).toContain('exit 0');
     expect(find.run).toContain('|| echo');
@@ -144,9 +147,11 @@ describe('evals.yml gate verdict reuse wiring (R2a restamp-only, R2 main moved; 
     expect(report.outputs?.['reconcile-exit']).toBe('${{ steps.reconcile.outputs.exit || steps.reused.outputs.exit }}');
     expect(step('slices-report', 'Fail the workflow when reconciliation failed')!.if).toBe("(steps.reconcile.outputs.exit || steps.reused.outputs.exit) != '0'");
     const bind = step('slices-report', "Bind this run's verdict for reuse (R2a/R2)")!;
-    expect(bind.if).toBe("always() && github.event_name == 'pull_request' && needs.plan-slices.outputs.gate_reuse != 'true'");
+    // GSTA-49 T1b: a dispatched screen binds too; train, bisect and plain dispatches never bind.
+    expect(bind.if).toBe("always() && (github.event_name == 'pull_request' || needs.plan-slices.outputs.mode == 'screen') && needs.plan-slices.outputs.gate_reuse != 'true'");
+    expect(bind.env?.TESTED_SHA).toBe('${{ inputs.screen_merge_sha || github.sha }}');
     expect(bind.env?.RECONCILE_EXIT).toBe('${{ steps.reconcile.outputs.exit }}');
-    expect(bind.run).toContain('--tested-sha "$GITHUB_SHA"');
+    expect(bind.run).toContain('--tested-sha "$TESTED_SHA"');
     expect(bind.env?.BASE_SHA).toBeUndefined();
     expect(step('slices-report', 'Upload the gate binding')?.with).toMatchObject({ name: 'gate-binding-a${{ github.run_attempt }}', path: '/tmp/gate-binding/gate-binding.json' });
   });
@@ -163,19 +168,22 @@ describe('evals.yml carries no inline planner program (W8f)', () => {
 describe('evals.yml dispatch contract for eval:bg (CEO-17/29, DX-1, ENG-8/12)', () => {
   const inputs = workflow.on.workflow_dispatch.inputs as Record<string, { type: string; default: unknown }>;
 
-  test('dispatch inputs: evals_all, base_ref, base_sha, expected_sha, nonce, pr_receipts', () => {
-    expect(Object.keys(inputs).sort()).toEqual(['base_ref', 'base_sha', 'evals_all', 'expected_sha', 'nonce', 'pr_receipts']);
+  test('dispatch inputs: evals_all, base_ref, base_sha, expected_sha, nonce, pr_receipts, and the train inputs', () => {
+    // cases, prefix_shas, screen_pr, screen_merge_sha and screen_policy (GSTA-49 T1b) are validated by the route job.
+    expect(Object.keys(inputs).sort()).toEqual(['base_ref', 'base_sha', 'cases', 'evals_all', 'expected_sha', 'nonce', 'pr_receipts', 'prefix_shas', 'screen_merge_sha', 'screen_policy', 'screen_pr']);
     expect(inputs.evals_all).toMatchObject({ type: 'boolean', default: true });
-    for (const name of ['base_ref', 'base_sha', 'expected_sha', 'nonce', 'pr_receipts']) expect(inputs[name]).toMatchObject({ type: 'string', default: '' });
+    for (const name of ['base_ref', 'base_sha', 'expected_sha', 'nonce', 'pr_receipts', 'cases', 'prefix_shas', 'screen_pr', 'screen_merge_sha', 'screen_policy']) expect(inputs[name]).toMatchObject({ type: 'string', default: '' });
   });
 
   test('the nonce is reflected in the run name so the dispatcher resolves its own run', () => {
-    expect(workflow['run-name']).toBe("${{ inputs.nonce != '' && format('E2E Evals [eval-bg {0}]', inputs.nonce) || '' }}");
+    // A dispatched screen's name also ends ' screen #<pr>' (GSTA-49 T1b); eval-bg's runForNonce still matches 'eval-bg <nonce>]'.
+    expect(workflow['run-name']).toBe("${{ inputs.nonce != '' && format('E2E Evals [eval-bg {0}]{1}', inputs.nonce, inputs.screen_pr != '' && format(' screen #{0}', inputs.screen_pr) || '') || '' }}");
   });
 
   test('evals_all=false dispatches run the PR profile on the requested base; evals_all runs the full census', () => {
     expect(workflow.env.EVALS_PROFILE).toBe("${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && !inputs.evals_all)) && 'pr' || 'full' }}");
-    expect(step('plan-slices', 'Emit run manifest')?.env?.EVALS_BASE).toBe("${{ inputs.base_sha || (inputs.base_ref != '' && format('origin/{0}', inputs.base_ref)) || '' }}");
+    // A dispatched screen diffs against its merge commit's first parent (route's screen_base; empty for every other run).
+    expect(step('plan-slices', 'Emit run manifest')?.env?.EVALS_BASE).toBe("${{ needs.route.outputs.screen_base || inputs.base_sha || (inputs.base_ref != '' && format('origin/{0}', inputs.base_ref)) || '' }}");
   });
 
   test('a dispatch fails fast with a named fix when the checkout is not the expected revision', () => {

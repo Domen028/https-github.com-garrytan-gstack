@@ -129,9 +129,10 @@ type Jobs = Record<number, Array<{ name: string; conclusion: string | null }>>;
  * slices; an unbound one ran none unless scripted), downloads that write the
  * scripted binding (or raw text), and merge-bases from the fixture repo.
  */
-function fakeGh(runs: WorkflowRun[], bindings: Record<number, GateBinding | string>, failList = '', jobs: Jobs = {}, failCompare = false): GhRunner {
+function fakeGh(runs: WorkflowRun[], bindings: Record<number, GateBinding | string>, failList = '', jobs: Jobs = {}, failCompare = false, prCommits: string[] = []): GhRunner {
   return (args) => {
     const ok = (body: unknown) => ({ status: 0, stdout: JSON.stringify(body), stderr: '' });
+    if (args.some(a => /\/pulls\/42\/commits$/.test(a))) return { status: 0, stdout: prCommits.join('\n') + '\n', stderr: '' };
     if (args.some(a => a.endsWith('/workflows/evals.yml/runs'))) return failList ? { status: 1, stdout: '', stderr: failList } : ok({ workflow_runs: runs });
     const jobList = args.find(a => /\/runs\/\d+\/jobs$/.test(a));
     if (jobList) {
@@ -175,11 +176,11 @@ function tested(base: string, head: string): string {
 
 let outCount = 0;
 function find(head: string, runs: WorkflowRun[], bindings: Record<number, GateBinding | string>,
-  over: { baseSha?: string; failList?: string; jobs?: Jobs; failCompare?: boolean; testedSha?: string } = {}) {
+  over: { baseSha?: string; failList?: string; jobs?: Jobs; failCompare?: boolean; testedSha?: string; screen?: { policy: 'narrow' | 'broad' }; prCommits?: string[] } = {}) {
   const out = path.join(scratch, 'out-' + ++outCount);
   const result = findReusableGate({ repo: REPO, pr: 42, headRepo: REPO, branch: 'feature', selfRunId: 500, headSha: head,
-    testedSha: over.testedSha ?? tested(over.baseSha ?? sha.base!, head), repoRoot: receipt, out,
-    gh: fakeGh(runs, bindings, over.failList, over.jobs, over.failCompare) });
+    testedSha: over.testedSha ?? tested(over.baseSha ?? sha.base!, head), repoRoot: receipt, out, ...(over.screen ? { screen: over.screen } : {}),
+    gh: fakeGh(runs, bindings, over.failList, over.jobs, over.failCompare, over.prCommits) });
   return { ...result, out, text: result.lines.join('\n') };
 }
 
@@ -486,5 +487,74 @@ describe.skipIf(!Bun.which('jq') || !Bun.which('bash'))('the PR comment for a re
     expect(failed.status, failed.stderr).toBe(0);
     expect(failed.stdout).not.toContain('PASS (reused');
     expect(failed.stdout).toContain('❌ FAIL');
+  });
+});
+
+describe('dispatched screens (GSTA-49 T1b): authenticated by PR, head, repository and tested base', () => {
+  const title = (policy: string, pr = 42) => `E2E Evals [eval-bg pr.screen.${policy}-${'c'.repeat(12)}-${'d'.repeat(12)}-abc123] screen #${pr}`;
+  // A screen dispatches on main: the run's head_sha is main's tip, never the PR head; the binding carries the PR head and the merge commit.
+  const screenRun = (id: number, policy = 'narrow', over: Partial<WorkflowRun> = {}) => run(id, sha.base!, 'success', { event: 'workflow_dispatch', pull_requests: [], display_title: title(policy), ...over });
+  const screenBinding = (head: string, policy: 'narrow' | 'broad' = 'narrow', over: Partial<GateBinding> = {}) =>
+    binding({ head_sha: head, purpose: 'screen', tested_sha: tested(sha.base!, head), screen_policy: policy, ...over });
+  const commits = () => [sha.gated!, sha.restamp!];
+  const screen = (policy: 'narrow' | 'broad', runs: WorkflowRun[], bindings: Record<number, GateBinding | string>, over: { prCommits?: string[]; jobs?: Jobs } = {}) =>
+    find(sha.restamp!, runs, bindings, { screen: { policy }, prCommits: over.prCommits ?? commits(), jobs: over.jobs });
+
+  test('a screen, a restamp-only push, then a re-screen of the same policy reuses through R2a', () => {
+    const { candidate, text } = screen('narrow', [screenRun(300)], { 300: screenBinding(sha.gated!) });
+    expect(text).toContain('TREE: same-modulo-stamps');
+    expect(candidate).toMatchObject({ kind: 'restamp-only', reused_run_id: 300, gated_head: sha.gated, current_head: sha.restamp, base_sha: sha.base, reused_screen_policy: 'narrow' });
+    expect(reuseReport(candidate!, REPO)).toContain('(a narrow screen)');
+  });
+
+  test("a PR push under a train policy (no paid slice, no binding) is passed over; the PR's earlier screen still reuses", () => {
+    const summary = run(320, sha.restamp!, 'success');
+    const { candidate } = screen('narrow', [summary, screenRun(300)], { 300: screenBinding(sha.gated!) }, { jobs: { 320: [{ name: 'eval-slices', conclusion: 'skipped' }] } });
+    expect(candidate?.reused_run_id).toBe(300);
+  });
+
+  test('a broad screen never adopts a narrow run; a narrow screen never adopts a pull_request gate (broad); a broad screen may', () => {
+    const narrowRun = screen('broad', [screenRun(300)], { 300: screenBinding(sha.gated!) });
+    expect(narrowRun.candidate).toBeNull();
+    expect(narrowRun.text).toContain('gated the narrow selection; a broad screen never adopts it');
+    const prRun = screen('narrow', [run(300, sha.gated!)], { 300: binding() });
+    expect(prRun.candidate).toBeNull();
+    expect(prRun.text).toContain('gated the broad selection; a narrow screen never adopts it');
+    expect(screen('broad', [run(300, sha.gated!)], { 300: binding() }).candidate?.reused_run_id).toBe(300);
+  });
+
+  test('a forged screen is refused: another PR, a head outside the PR, a mismatched binding, a tested commit off its bound base, another repository', () => {
+    const refused: Array<[WorkflowRun[], Record<number, GateBinding | string>, string, string[]?]> = [
+      [[screenRun(300, 'narrow', { display_title: title('narrow', 43) })], { 300: screenBinding(sha.gated!) }, 'no earlier executed gate on this PR bound a verdict'],
+      [[screenRun(300)], { 300: screenBinding(sha.gated!) }, 'is not a commit of PR #42', [sha.restamp!]],
+      [[screenRun(300)], { 300: screenBinding(sha.gated!, 'narrow', { pr: 43 }) }, 'does not match the run it came from'],
+      [[screenRun(300)], { 300: binding() }, 'does not match the run it came from'],
+      [[screenRun(300)], { 300: screenBinding(sha.gated!, 'narrow', { tested_sha: tested(sha.moved!, sha.gated!) }) }, 'does not merge its head into its bound base'],
+      [[screenRun(300, 'narrow', { head_repository: { full_name: 'fork/gstack' } })], { 300: screenBinding(sha.gated!) }, 'no earlier executed gate on this PR bound a verdict'],
+      [[run(300, sha.gated!)], { 300: screenBinding(sha.gated!) }, 'does not match the run it came from'],
+    ];
+    for (const [runs, bindings, why, prCommits] of refused) {
+      const { candidate, text } = screen('narrow', runs, bindings, { prCommits });
+      expect(candidate, why).toBeNull();
+      expect(text, why).toContain(why);
+    }
+  });
+
+  test('train, bisect and plain dispatch runs never bind a verdict, so they never reuse or get reused', () => {
+    const report = path.join(scratch, 'bind-purpose');
+    fs.mkdirSync(report, { recursive: true });
+    fs.writeFileSync(path.join(report, 'manifest.json'), JSON.stringify(manifest()));
+    fs.writeFileSync(path.join(report, 'collector-outcomes.json'), JSON.stringify({ verdict: { verdict: 'GREEN' }, totals: { manual_accepted: 0 } }));
+    const args = { repository: REPO, pr: 42, runId: 300, runAttempt: 1, headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), profile: 'full', reconcileExit: 0, reportDir: report };
+    for (const purpose of ['train', 'bisect', 'dispatch'] as const) {
+      const bound = buildBinding({ ...args, purpose });
+      expect(bound.binding, purpose).toBeNull();
+      expect(bound.reason).toBe(`a ${purpose} run never binds a verdict for reuse`);
+    }
+    expect(buildBinding({ ...args, profile: 'pr', purpose: 'screen', testedSha: 'c'.repeat(40), screenPolicy: 'broad' }).binding)
+      .toMatchObject({ purpose: 'screen', tested_sha: 'c'.repeat(40), screen_policy: 'broad' });
+    // A train dispatch in the history is neither a screen nor a pull_request run of this PR: never listed, never a candidate.
+    const trainRun = run(310, sha.base!, 'success', { event: 'workflow_dispatch', pull_requests: [], display_title: 'E2E Evals [eval-bg gate.train-x]' });
+    expect(screen('narrow', [trainRun, screenRun(300)], { 300: screenBinding(sha.gated!), 310: screenBinding(sha.gated!) }).candidate?.reused_run_id).toBe(300);
   });
 });
