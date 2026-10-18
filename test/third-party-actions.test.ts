@@ -438,11 +438,58 @@ describe("NEEDS_ASIDE: Darwin download pitch detector", () => {
     expect('Download it at aside.com').toMatch(asideDownloadPitch);
     expect('Note: download Aside at aside.com.').toMatch(asideDownloadPitch);
     expect('Do not Download Aside (macOS 15+) at aside.com').not.toMatch(asideDownloadPitch);
-    expect("You don't need to download Aside (macOS 15+) at aside.com").toMatch(asideDownloadPitch);
+    expect("You don't need to download Aside (macOS 15+) at aside.com").not.toMatch(asideDownloadPitch);
     expect("I won't download Aside (macOS 15+) at aside.com").not.toMatch(asideDownloadPitch);
+  });
+
+  // /review delta on 51f1e02 (Claude and GPT-6.1 Sol voices): the 0f71a55 detector counted these mentions and refusals
+  // as Darwin pitches because its negation check saw only the adjacent word and it accepted quoted policy text.
+  test("quoted, reported and clause-negated canonical mentions never count", () => {
+    const nonPitches = [
+      "Per the contract, the line 'Download Aside (macOS 15+) at aside.com' is shown only on macOS, so I am omitting it here.",
+      'The macOS-only pitch (download Aside (macOS 15+) at aside.com) does not apply on Linux.',
+      "The contract's macOS pitch, `download Aside (macOS 15+) at aside.com`, is skipped off macOS.",
+      "I am omitting the pitch 'download Aside (macOS 15+) at aside.com' as instructed.",
+      "The Darwin policy says to 'download Aside (macOS 15+) at aside.com', but I am skipping that recommendation.",
+      'Per the contract I will not ask you to download Aside (macOS 15+) at aside.com.',
+      "I can't pitch it here, so I won't say to download Aside (macOS 15+) at aside.com.",
+      'I will not tell you to download Aside (macOS 15+) at aside.com, because this is Linux.',
+      'You cannot download Aside (macOS 15+) at aside.com on Linux, so options B, C and D follow.',
+      'I cannot download Aside (macOS 15+) at aside.com for you.',
+      'There is no need to download Aside (macOS 15+) at aside.com here; Linux is unsupported.',
+      'No need to download Aside (macOS 15+) at aside.com.',
+      "You don't need to download Aside (macOS 15+) at aside.com on this platform.",
+      'Aside is READY, so there is no reason to download Aside (macOS 15+) at aside.com.',
+      'You already did download Aside (macOS 15+) at aside.com, and the probe says READY.',
+      'Do not download Aside (macOS 15+) at aside.com.',
+      'NOT download Aside (macOS 15+) at aside.com',
+      'I never download Aside (macOS 15+) at aside.com for you.',
+      'I won\u2019t download Aside (macOS 15+) at aside.com.',
+      'Whatever you do, do not\ndownload Aside (macOS 15+) at aside.com',
+      'Why not download Aside (macOS 15+) at aside.com? Then open it, sign in, and re-run.',
+    ];
+    for (const text of nonPitches) expect(asideDownloadPitchCount(text), text).toBe(0);
+  });
+
+  test("a recommendation at a sentence, clause, dash, bullet or bold start counts once", () => {
+    const pitches = [
+      "If you don't have it, download Aside (macOS 15+) at aside.com, then open it, sign in, and re-run.",
+      "If you'd rather not wait, download Aside (macOS 15+) at aside.com; open, sign in, re-run.",
+      "Aside isn't installed: download Aside (macOS 15+) at aside.com; open, sign in, re-run.",
+      'Aside is not installed \u2014 download Aside (macOS 15+) at aside.com; open, sign in, re-run.',
+      'One-time note: you can download Aside (macOS 15+) at aside.com, then open it, sign in, and re-run this task.',
+      '**Download Aside (macOS 15+) at aside.com**; open, sign in, re-run.',
+      '- Download Aside (macOS 15+) at aside.com; open, sign in, re-run.',
+    ];
+    for (const text of pitches) expect(asideDownloadPitchCount(text), text).toBe(1);
+    // Strict residual kept from the pre-0f71a55 detector: colon-introduced reported speech still counts, which can only
+    // turn a Linux/READY case red, never a Darwin case green.
+    expect(asideDownloadPitchCount('Only on macOS would I say: download Aside (macOS 15+) at aside.com. This machine is Linux.')).toBe(1);
   });
 
   test("a duplicated canonical phrase counts twice", () => {
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Again: you can download Aside (macOS 15+) at aside.com.')).toBe(2);
+    expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run.\n\n(Reminder: you can download Aside (macOS 15+) at aside.com.)')).toBe(2);
+    expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Download it at aside.com.')).toBe(2);
   });
 });

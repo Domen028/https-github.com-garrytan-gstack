@@ -1,9 +1,11 @@
 /**
- * The NEEDS_ASIDE: Darwin download pitch. The full canonical phrase counts anywhere unless a negation precedes it; the
- * short forms count only at the start of a sentence, bullet or quote, so narration such as "no download pitch applies"
- * or "you can download it at aside.com" is not a pitch.
+ * The NEEDS_ASIDE: Darwin download pitch is a recommendation, so it counts only where a recommendation can start: a
+ * sentence, clause (after , : ; or a dash), bullet or line start, optionally led by "then/please/just/so/first/now" and
+ * "you can/could/may/should/need to". A quoted, parenthesised or reported mention ("the line 'download Aside ...'",
+ * "says to download ...") and a clause with a negation before the phrase ("you don't need to download ...", or "do not"
+ * ending the previous line) never count. The short forms count only at the start of a sentence, bullet or quote.
  */
-const ASIDE_DOWNLOAD_PITCH = String.raw`(?:^|[.!?;:]\s*|\n)\s*(?:[>*-]\s*)*["\u201C]?download (?:it|Aside) at aside\.com\b|(?<!(?:\bnot|\bnever|n['\u2019]t)\s+)download Aside \(macOS 15\+\) at aside\.com\b`;
+const ASIDE_DOWNLOAD_PITCH = String.raw`(?:^|[.!?;:]\s*|\n)\s*(?:[>*-]\s*)*["\u201C]?download (?:it|Aside) at aside\.com\b|(?:^|[.!?;:,\u2014\u2013\n])[\s>*_-]*(?<!(?:\b(?:not|never|no|cannot)|n['\u2019]t)\s+)(?:(?:then|please|just|so|first|now)\s+)?(?:you\s+(?:can|could|may|should|need\s+to)\s+)?download Aside \(macOS 15\+\) at aside\.com\b`;
 export const asideDownloadPitch = new RegExp(ASIDE_DOWNLOAD_PITCH, 'im');
 export const asideDownloadPitchCount = (text: string): number => [...text.matchAll(new RegExp(ASIDE_DOWNLOAD_PITCH, 'gim'))].length;
 
