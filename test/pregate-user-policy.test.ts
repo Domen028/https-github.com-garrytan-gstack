@@ -79,6 +79,19 @@ describe('gstack-pregate with a user-owned policy', () => {
     expect(all.out).toMatch(/^tests {6}lanes {5}pass /m);
   }, 60_000);
 
+  // Value: protects=a fix that says where to declare policy names the user file when it is the active policy, since an edit to the
+  //   repo's .gstack/pregate.json is never read on a base that carries none; fails_when=the fix hardcodes .gstack/pregate.json;
+  //   why_new=the user source is new; seam=none; no_claim=every fix string (strays, runner, remote_gate share ctx.configFile)
+  test('the no-lane fix names the user file when it is the active policy', () => {
+    const { repo, userPolicy, run } = setup();
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    commit(repo, { 'lib/orphan.js': 'exports.lonely = () => 2;\n' });
+    expect(run().status).not.toBe(EXIT.ok);
+    const lanes = JSON.parse(fs.readFileSync(path.join(repo.work, '.gstack/tmp/pregate.json'), 'utf8')).checks.find((c: { id: string }) => c.id === 'lanes');
+    expect(lanes.code).toBe('PREGATE_NO_LANE');
+    expect(lanes.fix).toContain(`under dependencies — or empty_lanes for other documentation — in ${userPolicy}`);
+  }, 60_000);
+
   // Value: protects=an invalid, sealed-bearing or unreadable user file refuses with PREGATE_CONFIG_INVALID naming the file, with a fix
   //   that points at the file rather than the base branch; fails_when=user-file errors run on defaults, or sealed/price_file are accepted
   //   and look active while nothing reads them; why_new=the user source is new; seam=none; no_claim=the sealed guard itself

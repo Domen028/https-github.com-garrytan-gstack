@@ -15,7 +15,7 @@ import { isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type
 import { RESULT_CODES, TROUBLESHOOTING_DOC, resultLine } from '../result-codes';
 import { runScriptSync, wtreeFingerprint, type InvocationOptions, type WtreeResult } from '../script-invocation';
 import { policyUnavailableLine } from '../ship-policy';
-import { isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, loadConfigFromUser, type ConfigError, type ConfigLoad, type PregateConfig } from './config';
+import { PREGATE_CONFIG_PATH, isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, loadConfigFromUser, type ConfigError, type ConfigLoad, type PregateConfig } from './config';
 import type { CheckResult, PregateContext, TouchedFile } from './types';
 import { discoverLanes } from './workflows';
 import type { RegistryError } from '../regen';
@@ -128,7 +128,7 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   return {
     ctx: {
       repoRoot: o.repoRoot, base, baseRef, baseSha: baseSha.out, mergeBase, head, wtree, touched: touchedFiles(o.repoRoot, mergeBase),
-      config, configLabel: configLoad.label, registry: registryLoad.registry as Registry, registryLabel: registryLoad.source.label,
+      config, configLabel: configLoad.label, configFile: configLoad.kind === 'user' && o.userConfigPath ? o.userConfigPath : PREGATE_CONFIG_PATH, registry: registryLoad.registry as Registry, registryLabel: registryLoad.source.label,
       lanes: discoverLanes(o.repoRoot, platform), platform, allowRepoCommands: o.allowRepoCommands, timeoutMs: o.timeoutMs ?? 600_000,
       stallTimeoutMs: o.stallTimeoutMs ?? (config.stall_timeout_s ?? DEFAULT_STALL_TIMEOUT_S) * 1000,
       progress: o.progress ?? (line => process.stderr.write(`${line}\n`)),
