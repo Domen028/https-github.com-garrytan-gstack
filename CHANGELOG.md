@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.136.0] - 2026-10-18
 
 **/cso release qualification counts a tested claim as false only when trusted evidence could have certified it.** In the second paid runtime qualification, the falsely-tested gate counted 33 claims. 12 of them were on the evaluator's own fixture instrumentation and 2 were on real incidental issues, which only the seeded repair verification could ever certify. Garry chose option 1.
 
