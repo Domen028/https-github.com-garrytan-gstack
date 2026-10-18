@@ -1,5 +1,26 @@
 # Changelog
 
+## [Unreleased]
+
+**On a machine under 8 cores, `gstack-pregate` clears its test tier on one Ubicloud VM in about 7 minutes for about $0.06, instead of running locally for an hour.** gstack's own `.gstack/pregate.json` now declares a remote gate, so a small machine records the local test tier as a `requires-remote` obligation and `gstack-pregate --stage tests --remote --spend-cap 2 --timeout 2700 --allow-repo-commands` clears it. All 1,280 free test files ran in 404 s (create 24 s, setup 72 s, tests 250 s) for $0.06; the same 798-file selection took 3,550 s locally on 4 cores. `gstack-next-version` also fetches open PRs' VERSION claims in parallel (8 PRs: 4,160 ms before, about 0.5 s now) and says so when it could not read one.
+
+### Added
+- **`scripts/ubicloud/pregate-remote.sh`, gstack's remote gate.** With `UBICLOUD_API_KEY` it runs the selected files on one VM with `bun run test:ubicloud`'s environment, checks the tree and the planned file set on the VM before any test runs, and reports `PREGATE_REMOTE: tree=… tests=… failed=… spent=…` from billed minutes. Without a key it runs the same files locally in parallel shards and prints `backend=local (N cores; not the CI environment)`.
+  - The spend cap buys the wall time at the size's list price (at most 45 minutes); a cap that cannot buy 20 minutes refuses before any VM exists.
+  - It finishes before pregate's own `--timeout`: 120 s are reserved for teardown, and a deadline too short to be useful refuses up front.
+  - At create time it prints the VM name and the exact `bash scripts/ubicloud/ubi-runner.sh down <name>` line.
+  - Paid test files in a selection are named and left to the paid PR gate; a paid-only selection reports `tests=0`, which never clears.
+  - Every refusal starts with a `PREGATE_REMOTE_*` reason code; the table is in docs/pregate.md#remote-gate.
+- **`test-free-shards.ts --files-from <path>`** plans exactly the listed files. Unknown paths, an empty list and malformed or repeated lines are rejected before planning.
+
+### Changed
+- **`gstack-next-version` fetches claims concurrently** (up to 10, 15 s each) and sorts its output by PR number. A fetch that times out or fails is listed in `unknown_claims`, the JSON says `complete: false`, and the pick is marked provisional on stdout and stderr. The fork/path hint appears only for HTTP 404.
+- **`gstack-restamp` in claim-at-open mode reports an incomplete claim queue as `claims: incomplete`**, naming the unknown PRs, instead of `read`.
+
+### If you…
+- **…run `gstack-pregate` on a machine under 8 cores in this repo:** clear the test tier with `gstack-pregate --stage tests --remote --spend-cap 2 --timeout 2700 --allow-repo-commands`. Keyless works too but is practical only for small selections (98 files took 103 s on 4 cores).
+- **…see `complete: false` from `gstack-next-version`:** rerun it before stamping; the slot may collide.
+
 ## [1.91.131.0] - 2026-10-18
 
 **`gstack-pregate` finds the tests for Python files, and a missing `node_modules` no longer reads as "stale generated files".** In a Python repo, the `lanes` check failed almost every touched `.py` file with `PREGATE_NO_LANE`, because the import graph only parsed JavaScript and TypeScript. In a FastAPI service with about 1,500 non-test modules, Scott Gigante's change (#3201) cut the unmapped count from 1,473 to 780, and most of the rest are migrations and scripts no import reaches. Separately, a fresh checkout without `node_modules` made the pre-gate report `REGEN_STALE` and suggest rerunning the generator, which sent people the wrong way.
