@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.140.0] - 2026-10-18
 
 **/cso evaluation cells that run a repair no longer fail on helper dependency-closure names that use the helper's own 32-character finding IDs.** In the third paid runtime qualification, one comprehensive cell failed with REDACTION_FAILED again, on `dependency-closures/<finding id>-after-<plan hash>.json`. 1.91.135.0 taught the producer this name shape with a 64-character finding ID. The helper actually names closures with its 32-character finding IDs, so real names still fell through to the secret redactor, which reads some of them as wallet addresses.
 
