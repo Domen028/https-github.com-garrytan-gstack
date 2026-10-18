@@ -1,5 +1,30 @@
 # Changelog
 
+## [1.91.127.0] - 2026-10-17
+
+**The paid PR gate stops failing on its own fixtures.** A 132-verdict PR gate was fully green only about a quarter of the time. Every red verdict since #3231 was diagnosed from its transcript and replayed through the real detector. This release fixes the remaining causes where they start: fixture actors that broke the production protocol, detectors that misread a correct run, and skill prompts that left the agent guessing. No threshold, trial count, case kind or quarantine changed.
+
+### Fixed
+- **The State Machines specialist runs when its detector fails.** The /review and /ship scope block now runs `gstack-state-matrix detect` itself and uses its output only on exit 0. A failure prints `SCOPE_STATE_MACHINE=unknown` with the detector's stderr, and unknown dispatches the specialist. Its output reaches `gstack-state-matrix check` as a file the agent writes, never as text in a shell command.
+- **Consent options are lettered B, C and D when Aside is absent**, matching the question's answer keys.
+- **Plan-reality tier 1 rows are never n/a.** A run no longer loops repairing `deferred-asks n/a` past its deadline.
+- **/qa's exploratory stop rule needs one probe per documented input rule of each field.** Each probe breaks only its rule and satisfies every other, so a value that breaks two rules covers neither. Rules left uncovered at the probe or time cap go to limits. After a fix, every earlier capture is superseded: rerun each one the verdict relies on, or report it as open.
+- **`gstack-docs-candidate snapshot --help` and `compare --help` exit 0** before any side effect, and a compare reject names the path, each bad field and a fix that never re-snapshots over the pre-audit baseline.
+- **The docsync fault actor uses the production candidate protocol.** It writes candidates through the installed snapshot, and a failed snapshot reports a stable reason with one retry under a fresh audit id.
+- **The required-probe reminder counts only captures after the last source edit** when the caller declares `GSTACK_QA_REQUIRED_AFTER_EDIT`. Pre-repair captures no longer look like post-repair coverage. Without the declaration nothing changes.
+- **Webhook fix evals reserve the post-repair reruns first** inside the unchanged 12-capture ceiling.
+- **The autoplan guard eval's actor waits for the reviewer.** It ends its turn after a background dispatch and reads the close packet only after the reviewer finishes; before, the haiku actor sometimes read it early and failed the case on ordering alone.
+- **The shim-dom scan check resolves the command's own `_REPORT`/`_RUN`**, so a correct scan is no longer a red.
+- **PTY failure dumps show the last non-blank screen**, and visible text no longer carries cursor show/hide escapes.
+- **Windows budgets:** the nested review-army and answer-invalidation tests get explicit 30-45 s timeouts instead of Bun's 5 s default.
+
+### Changed
+- **HARNESS_VERSION is 5.** The PTY `stripAnsi` change can change pattern matches, so every case starts a new pass-rate series.
+- **The qa-callers fixture prompt binds paths instead of teaching helper syntax**, and points to the QA section for every form.
+
+### If you…
+- **…write a caller for `gstack-qa-evidence`:** set `GSTACK_QA_REQUIRED_AFTER_EDIT={"paths":[absolute paths],"since":ISO}` when your required probes must run after a repair.
+
 ## [1.91.126.0] - 2026-10-17
 
 **Artifacts sync stops saying "ok" when two project folders differ only by letter case.** When the artifacts repo tracks two spellings of one project, such as `projects/MyApp/` and `projects/myapp/`, a Mac or Windows disk stores them as one file. Git there staged each write under the other spelling and the sync reported `ok`. One spelling then stayed modified forever, and other machines read the wrong bucket (#3220). This lands the detector from Kkkkkuro's #3223 and #3245, with credit, and holds those files instead of halting the whole sync.
