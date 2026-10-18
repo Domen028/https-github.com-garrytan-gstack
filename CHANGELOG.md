@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.91.129.0] - 2026-10-18
+
+**PR paid-lane selection reads every script it depends on, and fails closed when it can't.** Selection derives which paid cases a changed file reaches by scanning imports. It skipped extensionless `bun`/`node` scripts, read 15 `.ts` files with the TSX loader, and treated a scan error as "no consumers", which under-selects. Across all 2,223 code files in the repo, scans now finish with 0 errors, and no (file, case) pair that main selected is lost.
+
+### Fixed
+- **Shebang scripts and `.ts` files are scanned correctly.** A leading `#!` line is stripped before scanning, extensionless `bun`/`node` scripts count as code, and the loader is chosen by file extension. 41 files that reached no paid case now reach the cases that use them.
+- **A failed import scan restores the full gate** with the label `import scan failed` and the file to fix, instead of silently selecting nothing.
+- **Repository config no longer looks like an unknown dependency.** `.gstack/ship-policy.example.json`, `.github/dependabot.yml`, `.osv-scanner.toml`, `setup.ps1`, `.gitlab-ci.yml` and `.github/ISSUE_TEMPLATE/**` are audited free-only files; `capy/` paths are derived like other source; a full-gate file is labelled `full-gate input`.
+
+### Added
+- **`bun run test:health` reports cost per merged PR first**, plus gate cases per PR run and known cost per PR run, split by selection mode.
+
+### For contributors
+- The selection replay (`scripts/replay-pr-selection.ts`) honours the same free-only exemptions as the selector when it counts misses.
+- docs/TESTING_INTERNALS.md#pr-paid-lane-fallback describes the fallback classes as they now behave, and records why the lockfile stays a full-gate input.
+
 ## [1.91.128.0] - 2026-10-18
 
 **The two free-suite duration seeds now refresh themselves weekly.** The shard packers read a Linux and a Windows duration seed, and both went stale as test files came and went. They were refreshed by hand twice this week. A new weekly workflow records both seeds and opens one seed-refresh PR when either seed's file set changes. That PR goes through the normal review.
