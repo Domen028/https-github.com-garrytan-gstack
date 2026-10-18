@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { loadConfigFromUser, validateConfig } from '../lib/pregate/config';
-import { buildContext } from '../lib/pregate/context';
+import { buildContext, sha256 } from '../lib/pregate/context';
 import { runPregate } from '../lib/pregate/index';
 import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
 
@@ -61,6 +61,8 @@ describe('loadConfigFromUser', () => {
     fs.writeFileSync(userPolicy, '{"local": [');
     const bad = loadConfigFromUser(userPolicy);
     expect(bad && 'errors' in bad ? bad.errors.map(e => e.message.startsWith('not valid JSON')) : null).toEqual([true]);
+    // The JSON error names this file, not the repo copy parseConfig assumes.
+    expect(bad && 'errors' in bad ? bad.errors.map(e => e.path) : null).toEqual([userPolicy]);
   });
 });
 
@@ -69,7 +71,7 @@ describe('gstack-pregate with a user-owned policy', () => {
   //   requires-remote; fails_when=the user fallback or the `local` branch in selectLanes is dropped; why_new=both are new;
   //   seam=none; no_claim=a real CI host (lanes are judged by the fixture's workflows)
   test('the user file is read when the base has none, and a local lane runs here instead of requires-remote', () => {
-    const { userPolicy, run } = setup();
+    const { repo, userPolicy, run } = setup();
     expect(run().out).toContain('(no .gstack/pregate.json)');
 
     writePolicy(userPolicy, { local: ['free-tests.yml/unit'] });
@@ -81,6 +83,9 @@ describe('gstack-pregate with a user-owned policy', () => {
     writePolicy(userPolicy, { local: LOCAL_ALL });
     const all = run(['--explain']);
     expect(all.status).toBe(EXIT.ok);
+    // The record pins the user file's bytes, since no commit does.
+    const lanes = JSON.parse(fs.readFileSync(path.join(repo.work, '.gstack/tmp/pregate.json'), 'utf8')).checks.find((c: { id: string }) => c.id === 'lanes');
+    expect(lanes.inputs.policy).toBe(sha256(fs.readFileSync(userPolicy, 'utf8')));
     expect(all.out).toContain('Tiers ran: unit; requires-remote: none');
     expect(all.out).toContain('lane windows.yml/windows-shard: windows lane satisfied locally (pregate.json local)');
     expect(all.out).toMatch(/^tests {6}lanes {5}pass /m);
@@ -110,6 +115,7 @@ describe('gstack-pregate with a user-owned policy', () => {
     expect(invalid.err).toContain('PREGATE_CONFIG_INVALID');
     expect(invalid.err).toContain(`user ${userPolicy}`);
     expect(invalid.err).toContain(`fix: edit ${userPolicy} directly`);
+    expect(invalid.err).not.toContain('.gstack/pregate.json has');
 
     for (const [key, value] of [['sealed', { paths: ['evals/**'] }], ['price_file', 'evals/calls.json']] as const) {
       writePolicy(userPolicy, { [key]: value });
@@ -147,6 +153,10 @@ describe('gstack-pregate with a user-owned policy', () => {
     expect(based.err).not.toContain('PREGATE_CONFIG_INVALID');
     expect(based.out).toContain('origin/main@');
     expect(based.out).not.toContain('policy user');
+    // A base copy is pinned by inputs.base; no user digest is recorded.
+    const lanes = JSON.parse(fs.readFileSync(path.join(repo.work, '.gstack/tmp/pregate.json'), 'utf8')).checks.find((c: { id: string }) => c.id === 'lanes');
+    expect(lanes.inputs.base).toContain('origin/main@');
+    expect('policy' in lanes.inputs).toBe(false);
   }, 60_000);
 
   // Value: protects=the --remote refusal for a policy with no remote_gate tells the user where to declare it: the repo copy "on the
@@ -202,5 +212,47 @@ describe('gstack-pregate with a user-owned policy', () => {
     expect(stalled.code).toBe('PREGATE_STALLED');
     expect(stalled.fix).toContain(`stall_timeout_s in ${userPolicy}; 0 disables`);
   }, 60_000);
-});
 
+  // Value: protects=a user path inside the checkout (GSTACK_HOME under the repo, or a relative state root when HOME is unset) is
+  //   never read, so a PR cannot commit its own "user" policy; fails_when=userConfigRejection is dropped and the in-repo file
+  //   becomes the policy; why_new=the trust check is new; seam=none (userConfigPath is an existing buildContext option);
+  //   no_claim=a symlinked state root (realish covers it, untested here)
+  test('a user path inside the repository or relative is ignored, with an explain line', () => {
+    const { repo } = setup();
+    const inside = path.join(repo.work, '.gstack', 'projects', 'x', 'pregate.json');
+    fs.mkdirSync(path.dirname(inside), { recursive: true });
+    fs.writeFileSync(inside, JSON.stringify({ local: ['not-a-lane'] }));
+    for (const [file, why] of [[inside, 'inside the repository'], [path.join('.gstack', 'projects', 'x', 'pregate.json'), 'not an absolute path']] as const) {
+      const loaded = buildContext({ repoRoot: repo.work, base: 'main', policyFrom: 'base', allowRepoCommands: false, env: { ...process.env, ...repo.env }, progress: () => {}, cores: 16, testBackend: 'local', userConfigPath: file });
+      if (!('ctx' in loaded)) throw new Error(`refused: ${loaded.refused.message}`);
+      expect(loaded.ctx.configLabel).not.toStartWith('user ');
+      expect(loaded.ctx.explain).toContain(`user policy: ${file} ignored (${why}${why === 'inside the repository' ? '; a PR could supply it' : ''})`);
+    }
+  }, 60_000);
+
+  // Value: protects=--explain says when the user file was looked for and absent, and names a `local` id that matches no platform lane;
+  //   fails_when=either line is dropped and a typo'd slug or lane id silently does nothing; why_new=both lines are new; seam=none;
+  //   no_claim=the line wording beyond its path and id
+  test('--explain names an absent user file and a local id that matches no platform lane', () => {
+    const { userPolicy, run } = setup();
+    expect(run(['--explain']).out).toContain(`user policy: ${userPolicy} (absent)`);
+    writePolicy(userPolicy, { local: [...LOCAL_ALL, 'ci.yml/nope'] });
+    const r = run(['--explain']);
+    expect(r.out).toContain('local: ci.yml/nope matches no platform lane; ignored');
+    expect(r.out).not.toContain('local: free-tests.yml/unit matches');
+  }, 60_000);
+
+  // Value: protects=with no GSTACK_PROJECT_SLUG the bin finds the user file under the slug gstack-slug resolves for the repo;
+  //   fails_when=the bin computes the slug some other way (a different cwd or state root) and the documented path is never read;
+  //   why_new=every other test pins GSTACK_PROJECT_SLUG; seam=none; no_claim=slug rules themselves (state-root tests cover them)
+  test('the default slug path is the one gstack-slug prints', () => {
+    const { repo } = setup();
+    const noSlug = { GSTACK_PROJECT_SLUG: '' };
+    const slug = /^SLUG=(.+)$/m.exec(runBin(repo, 'gstack-slug', [], noSlug).out)?.[1];
+    expect(slug).toBeTruthy();
+    const userPolicy = path.join(repo.home, 'projects', slug!, 'pregate.json');
+    fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    expect(runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], noSlug).out).toContain(`policy user ${userPolicy}`);
+  }, 60_000);
+});

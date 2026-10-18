@@ -2753,7 +2753,8 @@ Both tools read their pin file (`.gstack/generated.json`, `.gstack/pregate.json`
 from `origin/<base>`, never the working tree, and run repo-declared commands only
 under `--allow-repo-commands` or inside `/ship`. When the base carries no
 `.gstack/pregate.json`, `gstack-pregate run` reads
-`<GSTACK_HOME>/projects/<slug>/pregate.json` instead (outside the repository).
+`<state root>/projects/<slug>/pregate.json` instead (outside the repository; see
+docs/pregate.md for the state root and slug).
 Details: docs/pregate.md.
 
 <a id="regen-registry-invalid"></a>
@@ -2809,14 +2810,15 @@ repository's lockfile), then rerun `gstack-regen check` or the pre-gate.
 
 **Meaning.** `.gstack/pregate.json` has an unknown key, a wrong type, a glob
 that escapes the repository, a runner without `{files}`, or `secrets` in `warn`.
-The user-owned `<GSTACK_HOME>/projects/<slug>/pregate.json` also refuses when it
+The user-owned `<state root>/projects/<slug>/pregate.json` also refuses when it
 sets `sealed` or `price_file` (both are read only from the base branch's copy)
 or exists but cannot be read.
 
 **Fix.** `gstack-pregate validate`. `secrets` and required-lane obligations
 cannot be downgraded; every other check id in `warn` is honoured only from the
-base branch's copy. For the user-owned file, edit it directly at the path the
-message names.
+base branch's copy or the user-owned file. For the user-owned file, edit it
+directly at the path the message names. A user file inside the repository is
+ignored rather than read (`--explain` names it).
 
 <a id="pregate-secrets"></a>
 ### `PREGATE_SECRETS`

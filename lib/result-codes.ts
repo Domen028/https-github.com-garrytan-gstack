@@ -363,7 +363,7 @@ export const RESULT_CODES = {
   },
   PREGATE_CONFIG_INVALID: {
     anchor: 'pregate-config-invalid',
-    summary: '.gstack/pregate.json has an unknown key, a wrong type, a non-downgradable check in `warn`, or an uncontained glob',
+    summary: 'the pregate policy (.gstack/pregate.json, or the user-owned copy) has an unknown key, a wrong type, a non-downgradable check in `warn`, or an uncontained glob',
     fix: 'run `gstack-pregate validate` and fix the file on the base branch (secrets and required lanes cannot be downgraded)',
   },
   PREGATE_SECRETS: {
