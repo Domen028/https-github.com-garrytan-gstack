@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.91.138.0] - 2026-10-18
+
+**`scripts/gate-cost-replay.ts --history` replays PR gates' red runs and READY times, so the merge-train plan's two estimates are measured instead of assumed.** Over Oct 3 to 18 (505 E2E Evals runs, 92 merged PRs), the screen-provisional rule run on each failing head's diff from its tested base would have missed the PR-caused red on 2 of the 13 PRs that had one (#3036, #3121): 2 of 72 paid-relevant PRs (2.8%), against the plan's 6% estimate. 13 of 92 merged PRs had a PR-caused red, matching the plan's figure. Replaying READY arrivals through trains of 5 with a 3-hour fill limit, the realized train averages about 2.3 PRs, so trains make 22 to 29 gate attempts a week rather than the 12 to 20 the train model assumed, and READY-to-merge p90 runs 5 to 8 hours. This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
+
+### Added
+- **Red attribution as code.** Each failed case of a red PR-gate run is PR-caused or outside by GSTA-47's rule: a transcript diagnosis, red in another PR within 72 hours, the next gated run's own diff, or whether the push to it changed the case's inputs. It reproduces all 22 of GSTA-47's PR-caused runs and the same 13 PRs.
+- **The red-head replay.** Every PR-caused red case is checked against the screen-provisional rule on the failing head (not the merged squash), diffed from the base its run tested (the tested merge commit's first parent). The canary set is fixed in code before any replay (`SCREEN_CANARY_CASES`, one gate case per preamble-dependent surface) and is provisional until T2 lands. The report also lists misses with an empty canary set: here it made no difference, and 22 of the 28 red cases were caught only because the failing head changed a harness global, which makes the screen the full gate.
+- **The READY-arrival replay.** READY is approximated by the first time the merged own diff (modulo main merges and stamps) had green Free Tests and E2E Evals before the merge; READY reports are not machine-readable. Arrivals then run through the train policy (screened PRs first, unscreened in their own train once 5 wait, 45 minutes a gate and a bisect, the train model's red and rebuild rules), reporting occupancy, rebuilds and READY-to-merge p50/p90 beside today's (p50 0.1 h, p90 3.3 h).
+- Logic lives in `lib/gate-cost-history.ts`; the CLI reads runs, PRs and `report-verdict`/`trial-outcomes` artifacts read-only with `gh`, cached, and fetches old PR heads by SHA.
+
+### If you…
+- **…want current numbers:** run `bun run scripts/gate-cost-replay.ts --runs <full-gate run ids> --since <date> --until <date> --history`. A cold run downloads the full gates once (about 9 minutes); a cached rerun takes about a minute.
+
 ## [1.91.137.0] - 2026-10-18
 
 **`scripts/gate-cost-replay.ts` measures what the paid PR gate costs, and what each selection or merge-train policy would have cost, from recorded artifacts and for free.** On the nine full gates of Oct 17 and 18 it reproduces GSTA-49's measurement: $93.14 recorded per gate, 97.1% of it Fable 5.1 (the model under test), 49.8% cache writes and 40.3% output. Over the 92 squash merges of Oct 3 to 18, today's selector averages $78.67 per merged PR on the $106.19 full-gate scale, R4's exercised-map shadow $64.27, and the screening rule $45.17 (screen-provisional). This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
