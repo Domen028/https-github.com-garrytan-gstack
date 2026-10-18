@@ -445,7 +445,7 @@ Behavior-change notices. Every user-visible behavior change outside the plan's o
 
 Spend caps. Each lane runs under the `--spend-cap` the coordinator names; a lane that reaches it stops `incomplete` (`STOP: reason=budget_exhausted`) and reports spent, reserved and unknown charges. Paid evals are never retried to change a verdict; a rerun needs a named repair. Host-subagent spend is reported as `unknown`, never zero.
 
-Before done. A lane pushes a WIP commit to its branch after each step and gates a pushed SHA. It runs `gstack-pregate run --allow-repo-commands` on its branch and reports done only after it passes. Where `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push.
+Before done. A lane pushes a WIP commit to its branch after each step and gates a pushed SHA. It is done only when `gstack-pregate run --allow-repo-commands` passes; `requires-remote` needs `--stage tests --remote --spend-cap <cap>`. Where `.gstack/pregate.json` has a `sealed` key, it runs `gstack-pregate sealed` before any push or PR creation; a refusal stops the push.
 
 Handoff format. A lane reports in this order, identifiers first: PR URL (or `no PR` with branch and SHA), `GSTACK_RESULT` line, the `gstack: ok|fail <rev>` line, the `PREGATE:` line, gate summary (lanes passed/failed/skipped), behavior changes (or `none`), spend (spent/reserved/unknown), then what it could not verify. Full thread ids (`jam_…`), never short codes, in every cross-thread message. Prose after the identifiers may be truncated; nothing before them may be.
 

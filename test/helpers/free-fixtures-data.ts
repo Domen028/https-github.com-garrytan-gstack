@@ -16,6 +16,7 @@
 export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/auq-matrix/**': ['test/auq-native-capture.test.ts'],
   'test/fixtures/autoplan-edit-digests-al.json': ['test/autoplan-edit-digests-al.test.ts'],
+  'test/fixtures/autoplan-guard-pty-phase-boundary-stop-screen.txt': ['test/autoplan-guard-pty-fixture.test.ts'],
   'test/fixtures/autoplan-home-phase-entry-fb10.json': ['test/autoplan-method-read-audit.test.ts'],
   'test/fixtures/autoplan-owned-state-edit.json': ['test/autoplan-owned-state.test.ts'],
   'test/fixtures/autoplan-pairing/run-20261014-pairs.json': ['test/autoplan-pairing.test.ts'],
@@ -116,6 +117,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/eng-test-plan-edit-cli.js': ['test/eng-test-plan-edit-approval.test.ts'],
   'test/fixtures/eng-test-plan-edit-dacc.json': ['test/eng-test-plan-edit-approval.test.ts'],
   'test/fixtures/eval-history/wave-reds-8-censuses.json': ['test/eval-history.test.ts'],
+  'test/fixtures/exercised-map-replay.json': ['scripts/exercised-map.ts'],
   'test/fixtures/exit-propagation/**': ['test/exit-propagation.test.ts'],
   'test/fixtures/free-shard-capture.ts': ['test/test-free-shards-capture.test.ts'],
   'test/fixtures/golden/**': ['test/host-config.test.ts', 'test/ship-review-loop.test.ts'],

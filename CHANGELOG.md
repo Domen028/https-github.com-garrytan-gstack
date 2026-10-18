@@ -1,5 +1,105 @@
 # Changelog
 
+## [1.91.134.0] - 2026-10-18
+
+**The paid PR gate now starts only after a PR head's free tests pass and the PR has been quiet for 10 minutes, and a head whose own diff already passed the gate reuses that verdict instead of paying again.** Re-measured over Oct 3 to 17 (505 runs, $21,449) with GSTA-47's scripts: the readiness wait alone would have saved $2,986 (about $1,380 a week), and verdict reuse up to $601 more (restamp-only $97, main moved $504). Together that is up to $3,587, about $1,660 a week; how much of the main-moved share survives the selection check is between $146 and $390 of the $601 by approximation. The same heads still get the same selection and verdict rules; only the start time moves. The PR receipt store, which never restored once, now does.
+
+### Changed
+- **Readiness-gated dispatch (R1).** The `readiness` job in `evals.yml` replaces the 90-second push-burst debounce. It sleeps out the quiet window (repository variable `EVALS_QUIET_MINUTES`, default 10; `evals-no-debounce` sets it to 0), then waits for Free Tests to pass on the same head SHA, for up to 80 minutes. Free Tests red on the head fails the run with no paid work. A newer push still cancels the run. Dispatches never wait, and Version Gate is not an input, so a stamp push always gets its gate.
+- **The receipt store restores.** `slices-report` now runs on a GitHub-hosted runner like `recover-receipts`. On Ubicloud its `actions/cache` save went to Ubicloud's transparent cache, which the GitHub-hosted restore never sees: GitHub's cache held no `eval-input` entry at all, and #3253's restamp gate restored nothing 3 minutes after its green run saved 56 receipts.
+
+### Added
+- **Paid-gate verdict reuse (R2a restamp-only, R2 main moved), a gate edit.** A PR head reuses the newest executed gate's GREEN verdict only when every newer run of the PR provably ran no paid slice, the gate had reconcile exit 0 and no manually accepted case, this head's own plan has the same selection fingerprint, and either (R2a) the base is unchanged and the tree receipt prints `TREE: same-modulo-stamps` with only VERSION, package.json, CHANGELOG.md or the agents digest differing, or (R2) main moved and the PR's own diff from its merge-base, stamp files excluded, is byte-identical. Base-ref code proposes the reuse (`scripts/gate-reuse.ts find`), the planner confirms the selection, no slice runs, and the PR comment says `PASS (reused: restamp-only, R2a)` or `PASS (reused: main moved, R2)` with the reused run, its head, why, and the receipt digest or own-diff signature. Free Tests and every other check still run on the new head. Anything else (a changed own diff, a non-stamp byte, a newer red or partial run, a missing binding, receipt or merge-base, `evals-fresh`) runs the full gate.
+
+### Fixed
+- **The tree receipt no longer drops diff lines that start with `--` or `++`.** Its unified-diff parser treated `---`/`+++` inside a hunk as file headers, so a release-output line beginning `++` or `--` could pass as a stamp. It now reads headers only before a file's first hunk, and a file mode change is never a stamp.
+- **`autoplan-guard-pty` no longer stalls at the phase boundary.** Its scripted actor (haiku) published Phase 1, printed "Phase 1 complete." and ended its turn, so the case idled to its 480 s deadline with 2 of 4 guarded allows. This is the 489 s red seen on #3190, #3258, #3260 and this PR's stamped gate (run 39099195754). The script now runs steps 1 to 11 in one continuous run, and says the Phase 1 line is a boundary, not the end. The publication and the Phase 2 entry stay in separate messages. The case also stops waiting as soon as the actor ends its turn there, and names the cause `PHASE_BOUNDARY_STOP`.
+
+### If you…
+- **…want a restamp to reuse its gate:** put the CHANGELOG entry in the gated push (under `## [Unreleased]` or the tentative version), so the stamp only re-heads it.
+- **…want a main merge to reuse its gate:** merge or rebase without touching the PR's own files; if main changed a file your PR also changes, the full gate runs.
+- **…see "Free Tests run N concluded failure" on E2E Evals:** fix and push, or re-run Free Tests and then re-run E2E Evals.
+
+## [1.91.133.0] - 2026-10-18
+
+**A lane on a small machine no longer reports done while its pregate test tier still waits on a remote run.** The coordinator contract every lane inherits (autoplan reviewer prompts, `gstack-autoplan contract`, /spec's gate-and-file section) now says a lane is done only when `gstack-pregate run --allow-repo-commands` passes, and that a `requires-remote` obligation needs `--stage tests --remote --spend-cap <cap>`.
+
+### Changed
+- **Coordinator contract, "Before done":** `requires-remote` is unfinished, and the step names the `--remote` command that clears it. The WIP-push and sealed-guard rules are unchanged.
+
+## [1.91.132.0] - 2026-10-18
+
+**On a machine under 8 cores, `gstack-pregate` clears its test tier on one Ubicloud VM in about 7 minutes for about $0.06, instead of running locally for an hour.** gstack's own `.gstack/pregate.json` now declares a remote gate, so a small machine records the local test tier as a `requires-remote` obligation and `gstack-pregate --stage tests --remote --spend-cap 2 --timeout 2700 --allow-repo-commands` clears it. All 1,280 free test files ran in 404 s (create 24 s, setup 72 s, tests 250 s) for $0.06; the same 798-file selection took 3,550 s locally on 4 cores. `gstack-next-version` also fetches open PRs' VERSION claims in parallel (8 PRs: 4,160 ms before, about 0.5 s now) and says so when it could not read one.
+
+### Added
+- **`scripts/ubicloud/pregate-remote.sh`, gstack's remote gate.** With `UBICLOUD_API_KEY` it runs the selected files on one VM with `bun run test:ubicloud`'s environment, checks the tree and the planned file set on the VM before any test runs, and reports `PREGATE_REMOTE: tree=… tests=… failed=… spent=…` from billed minutes. Without a key it runs the same files locally in parallel shards and prints `backend=local (N cores; not the CI environment)`.
+  - The spend cap buys the wall time at the size's list price (at most 45 minutes); a cap that cannot buy 20 minutes refuses before any VM exists.
+  - It finishes before pregate's own `--timeout`: 120 s are reserved for teardown, and a deadline too short to be useful refuses up front.
+  - At create time it prints the VM name and the exact `bash scripts/ubicloud/ubi-runner.sh down <name>` line.
+  - Paid test files in a selection are named and left to the paid PR gate; a paid-only selection reports `tests=0`, which never clears.
+  - Every refusal starts with a `PREGATE_REMOTE_*` reason code; the table is in docs/pregate.md#remote-gate.
+- **`test-free-shards.ts --files-from <path>`** plans exactly the listed files. Unknown paths, an empty list and malformed or repeated lines are rejected before planning.
+
+### Changed
+- **`gstack-next-version` fetches claims concurrently** (up to 10, 15 s each) and sorts its output by PR number. A fetch that times out or fails is listed in `unknown_claims`, the JSON says `complete: false`, and the pick is marked provisional on stdout and stderr. The fork/path hint appears only for HTTP 404.
+- **`gstack-restamp` in claim-at-open mode reports an incomplete claim queue as `claims: incomplete`**, naming the unknown PRs, instead of `read`.
+
+### If you…
+- **…run `gstack-pregate` on a machine under 8 cores in this repo:** clear the test tier with `gstack-pregate --stage tests --remote --spend-cap 2 --timeout 2700 --allow-repo-commands`. Keyless works too but is practical only for small selections (98 files took 103 s on 4 cores).
+- **…see `complete: false` from `gstack-next-version`:** rerun it before stamping; the slot may collide.
+
+## [1.91.131.0] - 2026-10-18
+
+**`gstack-pregate` finds the tests for Python files, and a missing `node_modules` no longer reads as "stale generated files".** In a Python repo, the `lanes` check failed almost every touched `.py` file with `PREGATE_NO_LANE`, because the import graph only parsed JavaScript and TypeScript. In a FastAPI service with about 1,500 non-test modules, Scott Gigante's change (#3201) cut the unmapped count from 1,473 to 780, and most of the rest are migrations and scripts no import reaches. Separately, a fresh checkout without `node_modules` made the pre-gate report `REGEN_STALE` and suggest rerunning the generator, which sent people the wrong way.
+
+### Added
+- **Python import edges in `lanes`** (thanks @scottgigante-hubflow, #3201). `import a.b`, `from a.b import c`, parenthesised lists and relative `from . import x` resolve from the repository root to `a/b.py` or `a/b/__init__.py`, plus the package `__init__.py` files Python runs on the way in. Stdlib and site-packages imports add nothing. In test files, a dotted `mock.patch` target such as `'pkg.mod.Class.method'` maps to its module.
+- **`REGEN_DEPS_MISSING`.** When a regen command exits 0 with different outputs, `package.json` declares dependencies and `node_modules` is missing, `gstack-regen check` and the pre-gate say "dependencies missing (no node_modules); run bun install, then rerun the check" instead of `REGEN_STALE`. The install command follows the lockfile. The pre-gate check is `incomplete`, never `pass`.
+
+### Fixed
+- **The Python scanner stays linear on hostile input and does not drop tests.** Review found several problems before landing, all fixed:
+  - Long runs of dots or spaces after `from` no longer backtrack quadratically.
+  - Deep dotted names stay linear, and real deep modules still map.
+  - An escaped triple quote no longer swallows the imports after it.
+  - A literal that names a repo file still gets its `mock.patch` reading.
+  - A package and a same-named module both map.
+  - Imports after `;` or `:` count.
+
+### If you…
+- **…run `gstack-pregate` in a Python repo:** touched modules now select the pytest files that import them. `conftest.py`, `src/` layouts and `importlib` calls still need `.gstack/pregate.json` `dependencies` declarations.
+- **…see `REGEN_DEPS_MISSING`:** run the printed install command, then rerun the check.
+
+## [1.91.130.0] - 2026-10-18
+
+**Every PR plan now shows what a tighter, exercised-path case map would run, without changing what actually runs.** Today a change to a bin or lib file reaches almost every gate case, because selection follows every mention of the file. The exercised-path map counts only what a case really executes: its touchfiles, its test's imports, the shell its skill runs, and the bins its recorded trials invoked. It runs in shadow mode. Replayed over every PR run that had a gate red between 2026-10-07 and 2026-10-17 (37 runs, 47 failed gate cases), it keeps all 47: `bun run test:exercised-map --replay`.
+
+### Added
+- **A shadow line in each PR plan's coverage summary.** It names the gate cases the map would select, drop and add, with per-file provenance and a predicted saving. The saving is a lower bound, because about 39% of observed case runs (the PTY trials) have no known cost.
+- **`bun run test:health` reports the shadow saving and shadow misses per week.** A red on a case the shadow would drop counts as a miss unless the case passed later at the same head SHA, which lists it as a flaky drop.
+- **MAP_GAP lines in the paid report.** A command a case ran outside its map is printed as `MAP_GAP <case> <bin>`, marked non-blocking for this PR, and widens the map at the next refresh. It never affects a verdict.
+- **`bun run test:exercised-map`** refreshes the committed map (`test/helpers/exercised-commands.json`) from a census run (`--from-run <id>`) or from local artifacts (`--from-dir`). Refreshes only add commands. Unavailable or partial input writes nothing and exits with a stable code: 2 usage, 3 unavailable, 4 incomplete.
+
+### For contributors
+- The weekly census unions its own recorded commands into the map and uploads it as `exercised-map-a<attempt>`.
+- A PR that changes only the map selects no paid case while the map is in shadow mode.
+- docs/TESTING_INTERNALS.md#exercised-path-map documents the edge classes, the refresh contract and the activation bar.
+
+## [1.91.129.0] - 2026-10-18
+
+**PR paid-lane selection reads every script it depends on, and fails closed when it can't.** Selection derives which paid cases a changed file reaches by scanning imports. It skipped extensionless `bun`/`node` scripts, read 15 `.ts` files with the TSX loader, and treated a scan error as "no consumers", which under-selects. Across all 2,223 code files in the repo, scans now finish with 0 errors, and no (file, case) pair that main selected is lost.
+
+### Fixed
+- **Shebang scripts and `.ts` files are scanned correctly.** A leading `#!` line is stripped before scanning, extensionless `bun`/`node` scripts count as code, and the loader is chosen by file extension. 41 files that reached no paid case now reach the cases that use them.
+- **A failed import scan restores the full gate** with the label `import scan failed` and the file to fix, instead of silently selecting nothing.
+- **Repository config no longer looks like an unknown dependency.** `.gstack/ship-policy.example.json`, `.github/dependabot.yml`, `.osv-scanner.toml`, `setup.ps1`, `.gitlab-ci.yml` and `.github/ISSUE_TEMPLATE/**` are audited free-only files; `capy/` paths are derived like other source; a full-gate file is labelled `full-gate input`.
+
+### Added
+- **`bun run test:health` reports cost per merged PR first**, plus gate cases per PR run and known cost per PR run, split by selection mode.
+
+### For contributors
+- The selection replay (`scripts/replay-pr-selection.ts`) honours the same free-only exemptions as the selector when it counts misses.
+- docs/TESTING_INTERNALS.md#pr-paid-lane-fallback describes the fallback classes as they now behave, and records why the lockfile stays a full-gate input.
+
 ## [1.91.128.0] - 2026-10-18
 
 **The two free-suite duration seeds now refresh themselves weekly.** The shard packers read a Linux and a Windows duration seed, and both went stale as test files came and went. They were refreshed by hand twice this week. A new weekly workflow records both seeds and opens one seed-refresh PR when either seed's file set changes. That PR goes through the normal review.
