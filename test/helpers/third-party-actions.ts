@@ -34,3 +34,9 @@ export function asideDriveOptions(text: string): string[] {
     return /\bAside\b/.test(option) && /\b(?:drive|driving|browse|browsing|navigate|click)\b/i.test(currentOffer);
   });
 }
+
+/** The manual option: "manual", or one sentence offering instructions or steps the user follows themselves. */
+export function offersManualSteps(text: string): boolean {
+  return /manual/i.test(text) || text.split(/[.!?](?:\s|$)|\n/).some(sentence => /\b(?:instructions?|steps?)\b/i.test(sentence) &&
+    (/\byourself\b/i.test(sentence) || (/\bby\s+hand\b/i.test(sentence) && /\byour?\b/i.test(sentence))));
+}

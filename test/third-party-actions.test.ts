@@ -25,7 +25,8 @@ import { marked } from "marked";
 import { generateThirdPartyActions } from "../scripts/resolvers/third-party-actions";
 import { generateAsideSetup } from "../scripts/resolvers/aside";
 import { HOST_PATHS } from "../scripts/resolvers/types";
-import { asideDownloadPitch, asideDownloadPitchCount, asideDriveOptions } from './helpers/third-party-actions';
+import { asideDownloadPitch, asideDownloadPitchCount, asideDriveOptions, offersManualSteps } from './helpers/third-party-actions';
+import manualWording from './fixtures/third-party-actions-manual-wording.json';
 import recoveryFixture from './fixtures/third-party-actions-recovery-public.json';
 import pitchCaptures from './fixtures/third-party-actions-pitch-captures.json';
 import { expectMentions, expectTokens } from './helpers/prompt-structure';
@@ -491,5 +492,21 @@ describe("NEEDS_ASIDE: Darwin download pitch detector", () => {
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Again: you can download Aside (macOS 15+) at aside.com.')).toBe(2);
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run.\n\n(Reminder: you can download Aside (macOS 15+) at aside.com.)')).toBe(2);
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Download it at aside.com.')).toBe(2);
+  });
+});
+
+describe('manual-option detector', () => {
+  test('the captured CI 39166935531 tpa-absent-linux reply offers manual steps', () => {
+    expect(manualWording.recordedFailure).toContain('/manual/i');
+    expect(manualWording.assistantText).not.toMatch(/manual/i);
+    expect(offersManualSteps(manualWording.assistantText)).toBe(true);
+    expect(asideDriveOptions(manualWording.assistantText)).toEqual([]);
+  });
+  test('only an offer of instructions the user follows themselves counts beside "manual"', () => {
+    for (const text of ['C) manual instructions', 'C) I give you step-by-step instructions to do it yourself.',
+      'C) I list the steps so you can do them by hand.']) expect(offersManualSteps(text), text).toBe(true);
+    const withoutC = manualWording.assistantText.split('\n').filter(line => !line.includes('**C)**')).join('\n');
+    for (const text of [withoutC, 'C) I do it myself in the dashboard.', 'D) Defer, and do it yourself later.',
+      'I followed the steps by hand earlier.', 'The steps are done. Check it yourself.']) expect(offersManualSteps(text), text).toBe(false);
   });
 });

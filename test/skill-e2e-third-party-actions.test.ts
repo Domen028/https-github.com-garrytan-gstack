@@ -30,7 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { runSkillTest, type SkillTestResult } from './helpers/session-runner';
-import { asideDownloadPitch, asideDriveOptions } from './helpers/third-party-actions';
+import { asideDownloadPitch, asideDriveOptions, offersManualSteps } from './helpers/third-party-actions';
 import { resolveEvalModel } from '../lib/eval-model';
 import {
   ROOT, describeIfSelected, testIfSelected, createEvalCollector,
@@ -219,7 +219,7 @@ describeIfSelected('third-party-actions consent gate', [
       // the detected case; here agents legitimately either re-letter from A or
       // keep the contract's B/C/D lettering with A dropped (observed live).
       expect(text).toMatch(/\b[A-D]\)/);
-      expect(text).toMatch(/manual/i);
+      expect(offersManualSteps(text)).toBe(true);
       // The gstack drive is the universal fallback — it must be on offer.
       expect(text).toMatch(/gstack('s| own| drive)|\$B|headed|visible browser/i);
     } finally { cleanup(); }
