@@ -1,6 +1,5 @@
 # Changelog
 
-<<<<<<< HEAD
 ## [Unreleased]
 
 **`gstack-pregate` finds the tests for Python files, and a missing `node_modules` no longer reads as "stale generated files".** In a Python repo, the `lanes` check failed almost every touched `.py` file with `PREGATE_NO_LANE`, because the import graph only parsed JavaScript and TypeScript. In a FastAPI service with about 1,500 non-test modules, Scott Gigante's change (#3201) cut the unmapped count from 1,473 to 780, and most of the rest are migrations and scripts no import reaches. Separately, a fresh checkout without `node_modules` made the pre-gate report `REGEN_STALE` and suggest rerunning the generator, which sent people the wrong way.
@@ -21,7 +20,7 @@
 ### If you…
 - **…run `gstack-pregate` in a Python repo:** touched modules now select the pytest files that import them. `conftest.py`, `src/` layouts and `importlib` calls still need `.gstack/pregate.json` `dependencies` declarations.
 - **…see `REGEN_DEPS_MISSING`:** run the printed install command, then rerun the check.
-=======
+
 ## [1.91.127.0] - 2026-10-17
 
 **The paid PR gate stops failing on its own fixtures.** A 132-verdict PR gate was fully green only about a quarter of the time. Every red verdict since #3231 was diagnosed from its transcript and replayed through the real detector. This release fixes the remaining causes where they start: fixture actors that broke the production protocol, detectors that misread a correct run, and skill prompts that left the agent guessing. No threshold, trial count, case kind or quarantine changed.
@@ -60,7 +59,6 @@
 
 ### If you…
 - **…see the case-collision line:** keep one spelling with the repair steps in the troubleshooting doc. Nothing is merged or renamed automatically.
->>>>>>> origin/main
 
 ## [1.91.125.0] - 2026-10-17
 
