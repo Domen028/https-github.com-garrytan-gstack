@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+**/cso release qualification counts a tested claim as false only when trusted evidence could have certified it.** In the second paid runtime qualification, the falsely-tested gate counted 33 claims. 12 of them were on the evaluator's own fixture instrumentation and 2 were on real incidental issues, which only the seeded repair verification could ever certify. Garry chose option 1.
+
+### Changed
+- **Tested claims on declared instrumentation count in neither direction.** A finding the evaluator marks `instrumentation` is never falsely tested and never certified, the same way precision leaves it out.
+- **A tested claim on an incidental finding needs a passing replay.** The evaluator replays the helper's signed repair bundle for that finding against the trusted source and records `trustedReplay`. Only `passed` with a 64-hex `replayEvidenceHash` certifies the claim. `failed` or `missing` (no bound bundle) leaves it falsely tested.
+- **Recall, repair, held-out repair, the v2 baseline and every threshold are unchanged.** Those still need the seeded issue and the judge's own held-out verification. Validation rejects `trustedReplay` on any judgment other than a claimed `incidental`, a malformed or reused hash, and unknown fields.
+
+### If you…
+- **…write an evaluator for `cso-eval.ts`:** write `trustedReplay` only on claimed `incidental` findings, with `result` `passed`, `failed` or `missing`, and `replayEvidenceHash` on `passed` only.
+
 ## [1.91.135.0] - 2026-10-18
 
 **/cso evaluation cells that run a repair no longer fail on the helper's own file names.** In the second paid runtime qualification, one comprehensive Rails cell failed with REDACTION_FAILED. Once a repair ran, the helper retained dependency closures as `<finding id>-before-<plan hash>.json`. The producer's artifact inventory checks each path component, and this name didn't match any known helper-ID shape. So the secret redactor read the 64-character hex finding ID as a credential and failed the whole cell.

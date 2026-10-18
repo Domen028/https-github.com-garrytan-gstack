@@ -306,6 +306,18 @@ true positive per distinct `incidentalKey` in its cell, never counts toward
 recall, and needs no seeded match. Recall still measures only the seeded issue,
 and the thresholds are unchanged.
 
+The falsely-tested gate (`zeroFalselyTestedRepairs`) counts every finding the
+producer claimed was tested that trusted evidence does not certify. A claim on
+the seeded issue is certified only by the judge's own held-out repair
+verification. A claim on an `incidental` finding is certified only when the
+evaluator replayed the helper's signed repair bundle for that finding against
+the trusted source and the replay passed: the evaluator records
+`trustedReplay: { result: "passed", replayEvidenceHash }`. A `failed` replay or a
+`missing` bundle leaves the claim falsely tested. A claim on an
+`instrumentation` finding counts in neither direction, the same way precision
+leaves it out. Neither a replay nor an instrumentation claim ever counts toward
+recall, repair or held-out rates, which need the seeded issue.
+
 The judge observes held-out attacks in one boot: a `VerificationRequest`'s
 `security` field is either one assertion or an array of up to eight assertions
 with distinct names, judged in a single before/after pair. The before phase is
