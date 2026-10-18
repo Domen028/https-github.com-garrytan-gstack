@@ -291,7 +291,8 @@ async function doCliRun(rest: string[]): Promise<number> {
     workers = Math.min(workers, SMOKE_MAX_WORKERS);
   }
 
-  const env = process.env;
+  // The helper, its preflight and every child see one env, with the API billing routes removed.
+  const { env } = scrubBillingEnv(process.env);
   const ctx = 'gstack-eval-plan cli-run';
   const markerName = batchMarkerName(env);
   const marker = env[markerName];
@@ -315,8 +316,9 @@ async function doCliRun(rest: string[]): Promise<number> {
     process.stdout.write(`EVAL_BATCH: none scope=${scope}\n`);
   }
 
-  if (!resolveCommand('claude', scrubBillingEnv(env).env)) { process.stderr.write(`${ctx}: claude is not on PATH; nothing ran\n`); return EXIT.refused; }
-  const summary = await runCliBatch({ jobs: parsed.jobs, out, workers, retries, timeoutMs: timeoutSec * 1000, env });
+  if (!resolveCommand('claude', env)) { process.stderr.write(`${ctx}: claude is not on PATH; nothing ran\n`); return EXIT.refused; }
+  // runCliBatch scrubs again itself and reports the removed names, so it gets the original env.
+  const summary = await runCliBatch({ jobs: parsed.jobs, out, workers, retries, timeoutMs: timeoutSec * 1000, env: process.env });
   const summaryFile = path.join(out, 'cli-run-summary.json');
   if (rest.includes('--json')) process.stdout.write(JSON.stringify(summary) + '\n');
   else process.stdout.write(renderCliRun(summary, { batch, scope, summaryFile }));

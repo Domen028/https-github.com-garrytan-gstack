@@ -69,7 +69,8 @@ const fs = require('node:fs'); const path = require('node:path');
 const DIR = ${JSON.stringify(dir)};
 const ctl = JSON.parse(fs.readFileSync(path.join(DIR, 'helper.json'), 'utf8'));
 const argv = process.argv.slice(2);
-fs.appendFileSync(path.join(DIR, 'helper.jsonl'), JSON.stringify({ argv, t: Date.now(), marker: process.env.MERIT_CLAUDE_BATCH_ID ?? null }) + '\\n');
+const billing = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_USE_BEDROCK', 'CLAUDE_CODE_USE_VERTEX', 'CLAUDE_CODE_USE_FOUNDRY'].filter(n => n in process.env);
+fs.appendFileSync(path.join(DIR, 'helper.jsonl'), JSON.stringify({ argv, t: Date.now(), marker: process.env.MERIT_CLAUDE_BATCH_ID ?? null, billing }) + '\\n');
 if (argv[0] === 'preflight') {
   if (!process.env.MERIT_CLAUDE_BATCH_ID) { process.stderr.write('not inside a batch\\n'); process.exit(1); }
   if (ctl.preflight_rc) { process.stderr.write('batch b1 circuit is open\\n'); process.exit(ctl.preflight_rc); }
@@ -89,7 +90,7 @@ process.exit(2);
 interface Fixture {
   dir: string; bin: string; out: string; jobs: string; cwd: string;
   control(c: Control): void; helper(c: { preflight_rc?: number; set_marker?: boolean }): string;
-  writeJobs(ids: string[]): void; calls(): Call[]; helperCalls(): Array<{ argv: string[]; t: number; marker: string | null }>; peak(): number;
+  writeJobs(ids: string[]): void; calls(): Call[]; helperCalls(): Array<{ argv: string[]; t: number; marker: string | null; billing: string[] }>; peak(): number;
   env(extra?: Record<string, string>): Record<string, string>;
 }
 
@@ -294,10 +295,13 @@ describe('cli-run batch gate', () => {
     f.writeJobs(ids(4));
     f.control({ default: { kind: 'ok' }, by_prompt: { 'job-03': { kind: 'quota_json' } } });
     const helper = f.helper({});
-    const r = run(f, ['--class', 'fable', '--workers', '1'], f.env({ GSTACK_CLAUDE_BATCH: helper }));
+    const r = run(f, ['--class', 'fable', '--workers', '1'], f.env({ GSTACK_CLAUDE_BATCH: helper, ANTHROPIC_API_KEY: 'sk-test-helper', CLAUDE_CODE_USE_VERTEX: '1' }));
     expect(r.rc).toBe(75);
     const h = f.helperCalls();
     expect(h.map(c => c.argv[0])).toEqual(['run', 'preflight']);
+    // The helper and its preflight never see an API billing route, so nothing downstream can fall back to the API.
+    expect(h.map(c => c.billing)).toEqual([[], []]);
+    expect(starts(f).every(c => c.billing!.length === 0)).toBe(true);
     expect(h[0]!.argv).toEqual(['run', '--repo', f.cwd, '--class', 'fable', '--', BUN, BIN, 'cli-run', '--jobs', f.jobs, '--out', f.out, '--class', 'fable', '--workers', '1']);
     expect(h[0]!.marker).toBeNull();
     expect(h[1]!.marker).toBe('b1');
