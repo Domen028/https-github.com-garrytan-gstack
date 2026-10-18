@@ -90,11 +90,13 @@ export function dartPackages(repoRoot: string, files: Iterable<string>): Map<str
   return out;
 }
 
-/** The repo file one Dart directive URI names: `package:<name>/x` → the first `<root>/lib/x` that is tracked, a relative URI from `fromFile`; `dart:` and external packages are null. */
+/** The repo file one Dart directive URI names: `package:<name>/x` → the first tracked `<root>/lib/x`, trying the deepest root that contains `fromFile` first (its own package), then the rest in ls-files order; a relative URI from `fromFile`; `dart:` and external packages are null. */
 function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fromFile: string, uri: string): string | null {
   const pkg = /^package:([\w]+)\/(.+)$/.exec(uri);
   if (pkg) {
-    for (const root of packages.get(pkg[1]!) ?? []) {
+    const roots = packages.get(pkg[1]!) ?? [];
+    const own = roots.filter(r => r === '' || fromFile.startsWith(`${r}/`)).sort((a, b) => b.length - a.length)[0];
+    for (const root of own === undefined ? roots : [own, ...roots.filter(r => r !== own)]) {
       const target = normalize(path.posix.join(root, 'lib', pkg[2]!));
       if (files.has(target)) return target;
     }

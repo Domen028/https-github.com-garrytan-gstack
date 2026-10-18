@@ -125,8 +125,8 @@ describe('Dart import graph', () => {
   });
 
   // Value: protects=two tracked pubspecs sharing a `name:` (a fixture copying the app's) keep both roots, so package: imports still
-  //   reach the real package; fails_when=the first root in ls-files order wins and the real package's edges silently drop (no lane);
-  //   why_new=every fixture package name was unique; seam=none; no_claim=pub's own resolution (both roots are tried, tracked file wins)
+  //   reach the real package; fails_when=the first root in ls-files order wins, so a fixture that mirrors lib/ steals the real package's edges (no lane);
+  //   why_new=every fixture package name was unique; seam=none; no_claim=pub's own resolution (the importer's own root first, then the rest; tracked file wins)
   test('a package name two pubspecs share resolves to whichever root holds the file', () => {
     const repo = dartRepo();
     commit(repo, {
@@ -136,6 +136,11 @@ describe('Dart import graph', () => {
     });
     expect(dartPackages(repo.work, ['a_fixture/pubspec.yaml', 'pubspec.yaml']).get('app')).toEqual(['a_fixture', '']);
     expect(testsFor(buildGraph(repo.work), 'lib/x.dart').tests).toEqual(['test/x_test.dart']);
+    // The fixture mirrors the file: the importer's own package (the deepest root containing it) wins over ls-files order.
+    commit(repo, { 'a_fixture/lib/x.dart': 'int x() => 2;\n', 'a_fixture/test/x_test.dart': "import 'package:app/x.dart';\nvoid main() {}\n" });
+    const g = buildGraph(repo.work);
+    expect(testsFor(g, 'lib/x.dart').tests).toEqual(['test/x_test.dart']);
+    expect(testsFor(g, 'a_fixture/lib/x.dart').tests).toEqual(['a_fixture/test/x_test.dart']);
   });
 
   // Value: protects=a pubspec.yaml that is a symlink out of the repo, or not a regular file, is skipped without throwing (a link to a
