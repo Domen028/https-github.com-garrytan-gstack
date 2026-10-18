@@ -124,7 +124,9 @@ Two stages with separate clocks, both printed:
   `*_test.dart` files under a `test/` directory are tests, except under `integration_test/` and
   `test_driver/`: they need a device, so pregate never runs them, and a touched
   one has no lane until you declare `"**/integration_test/**": []` (and
-  `"**/test_driver/**": []`) under `dependencies` and let CI run them), transitively through
+  `"**/test_driver/**": []`) under `dependencies` and let CI run them; Dart files, device tests
+  included, are source code, so a `dependencies` `[]` declaration clears them and `empty_lanes`
+  does not), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched source file with no lane is `FAIL lanes — <file> has no test lane`,
   never a pass. Markdown that no test depends on is a docs/no-tests empty lane
