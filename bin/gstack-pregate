@@ -36,6 +36,8 @@ import { ensureTmpExcluded } from '../lib/restamp';
 import { RESULT_CODES, resultCodeSuffix, resultLine } from '../lib/result-codes';
 import { DEFAULT_STALL_TIMEOUT_S } from '../lib/pregate/context';
 import { cancelActive } from '../lib/pregate/supervise';
+import { slugFromEnvironment } from '../lib/bin-context';
+import { resolveStateRoot } from '../lib/state-root';
 import { defaultGh, evaluateRegate, renderRegate } from '../lib/pregate/regate';
 import { GATE_AHEAD_REL } from '../lib/restamp';
 import { evaluateSealed, publishedCommits, rangeCommits, renderSealed } from '../lib/sealed-guard';
@@ -145,7 +147,8 @@ async function cmdRun(root: string, rest: string[], json: boolean): Promise<numb
     remote = { spendCapUsd: cap };
   } else if (flag(rest, '--spend-cap') !== undefined) { process.stderr.write('gstack-pregate: --spend-cap applies only with --remote\n'); return EXIT.usage; }
   const base = resolveBaseBranch(root, flag(rest, '--base'));
-  const loaded = buildContext({ repoRoot: root, base, policyFrom, allowRepoCommands: allow, timeoutMs, stallTimeoutMs, remote, knownChecks: [...CHECK_IDS, ...PREGATE_TIER2] });
+  const userConfigPath = path.join(resolveStateRoot(), 'projects', slugFromEnvironment(undefined, root), 'pregate.json');
+  const loaded = buildContext({ repoRoot: root, base, policyFrom, allowRepoCommands: allow, timeoutMs, stallTimeoutMs, remote, knownChecks: [...CHECK_IDS, ...PREGATE_TIER2], userConfigPath });
   if ('refused' in loaded) {
     const refusal = describeRefusal(loaded.refused, base);
     process.stderr.write(refusal.line + '\n');

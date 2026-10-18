@@ -15,7 +15,7 @@ import { isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type
 import { RESULT_CODES, TROUBLESHOOTING_DOC, resultLine } from '../result-codes';
 import { runScriptSync, wtreeFingerprint, type InvocationOptions, type WtreeResult } from '../script-invocation';
 import { policyUnavailableLine } from '../ship-policy';
-import { isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, type ConfigError, type PregateConfig } from './config';
+import { isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, loadConfigFromUser, type ConfigError, type ConfigLoad, type PregateConfig } from './config';
 import type { CheckResult, PregateContext, TouchedFile } from './types';
 import { discoverLanes } from './workflows';
 import type { RegistryError } from '../regen';
@@ -27,6 +27,8 @@ export interface BuildContextOptions {
   stallTimeoutMs?: number; progress?: (line: string) => void; cores?: number; testBackend?: string; remote?: { spendCapUsd: number } | null;
   /** How gstack's own bash bins launch (gstack-wtree, gstack-config); tests inject a Windows probe. */
   invocation?: InvocationOptions;
+  /** `<GSTACK_HOME>/projects/<slug>/pregate.json`: read only when the base carries no pregate.json. */
+  userConfigPath?: string;
 }
 
 export const DEFAULT_STALL_TIMEOUT_S = 300;
@@ -110,9 +112,10 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   if (!baseSha.ok || !baseSha.out) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: `${baseRef} is not a resolvable commit` } };
   const head = git(o.repoRoot, ['rev-parse', 'HEAD']).out;
   const mergeBase = git(o.repoRoot, ['merge-base', baseSha.out, 'HEAD']).out || baseSha.out;
-  const configLoad = o.policyFrom === 'head' ? loadConfigFromHead(o.repoRoot, o.knownChecks) : loadConfigFromBase(o.repoRoot, base, o.knownChecks);
+  let configLoad: ConfigLoad = o.policyFrom === 'head' ? loadConfigFromHead(o.repoRoot, o.knownChecks) : loadConfigFromBase(o.repoRoot, base, o.knownChecks);
+  if (o.policyFrom === 'base' && o.userConfigPath && !isConfigUnavailable(configLoad) && configLoad.kind === 'none') configLoad = loadConfigFromUser(o.userConfigPath, o.knownChecks) ?? configLoad;
   if (isConfigUnavailable(configLoad)) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: configLoad.detail } };
-  if (configLoad.errors.length) return { refused: { code: 'PREGATE_CONFIG_INVALID', message: `${configLoad.label}: ${configLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: configLoad.errors } };
+  if (configLoad.errors.length) return { refused: { code: 'PREGATE_CONFIG_INVALID', message: `${configLoad.label}: ${configLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: configLoad.errors, ...(configLoad.kind === 'user' ? { fix: `edit ${o.userConfigPath} directly at each path the message names, then rerun gstack-pregate; it lives outside the repository, so a base-branch change does not reach it` } : {}) } };
   const registryLoad = o.policyFrom === 'head' ? loadRegistryFromHead(o.repoRoot) : loadRegistryFromBase(o.repoRoot, base);
   if (isRegistryUnavailable(registryLoad)) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: registryLoad.detail } };
   if (registryLoad.errors.length) return { refused: { code: 'REGEN_REGISTRY_INVALID', message: `${registryLoad.source.label}: ${registryLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: registryLoad.errors } };
