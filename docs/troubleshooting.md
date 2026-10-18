@@ -3684,6 +3684,198 @@ and the current one. Record the live attempt, or prepare a new one with
 `gate-ahead --after <pr>` and run the gate there without editing tracked
 files.
 
+<a id="queue-train-off"></a>
+### `QUEUE_TRAIN_OFF`
+
+**Meaning.** A merge-train command (`train …` or `verify --train`) ran
+against a base revision whose `.gstack/ship-policy.json` declares no `train`
+block, so the train surface is off and the per-PR queue applies. Nothing was
+written.
+
+**Fix.** Use the per-PR queue (`ready --pr <n>`, `stamp`, `verify`), or land
+a `train` block with `min_gstack_version` on the base branch first
+([Run a merge train](ship-policy.md#run-a-merge-train)).
+
+<a id="queue-train-untrusted"></a>
+### `QUEUE_TRAIN_UNTRUSTED`
+
+**Meaning.** A pinned PR's head repository is not the base repository. The
+train branch and its dispatches run with repository secrets, so fork work
+never rides a train.
+
+**Fix.** Run the printed `train build --prs <list without it>`; the fork PR
+stays on the trusted-branch path.
+
+<a id="queue-train-moved"></a>
+### `QUEUE_TRAIN_MOVED`
+
+**Meaning.** A PR's head is no longer the SHA the train pinned (at build, or
+past its pin beyond stamps at verify), so the train would not test what
+merges. At verify after earlier slots merged, the queue also freezes
+(`QUEUE_TRAIN_FROZEN`).
+
+**Fix.** Ask the lane for a fresh READY on the new head, then build the train
+with the new pin (`train build --prs <n>@<new sha>,…`).
+
+<a id="queue-train-conflict"></a>
+### `QUEUE_TRAIN_CONFLICT`
+
+**Meaning.** Merging a PR onto the prefix before it conflicts outside the
+version files and the CHANGELOG. The `QUEUE_TRAIN_CONFLICT:` line names the
+PR, the conflicting files and the PRs merged before it. Nothing was
+dispatched and no branch was pushed.
+
+**Fix.** Run the printed `train build --prs <list without that PR>`. The PR's
+lane merges main (with the earlier PRs once they land) and reports READY
+again.
+
+<a id="queue-train-free-red"></a>
+### `QUEUE_TRAIN_FREE_RED`
+
+**Meaning.** The free tests dispatched on `train/<nonce>` are red, cancelled,
+missing (no `workflow_dispatch` run appeared before `--free-timeout`) or ran
+on another SHA, so the paid gate was not dispatched.
+
+**Fix.** Read the free-tests run. A PR-caused red drops that PR (`train build
+--prs <list without it>`); a flaky test goes to its owner before the next
+build.
+
+<a id="queue-train-dispatch-unknown"></a>
+### `QUEUE_TRAIN_DISPATCH_UNKNOWN`
+
+**Meaning.** A train dispatch was attempted, but no run carrying its nonce
+appeared, so whether it started is unknown (`gh workflow run` can fail after
+GitHub accepted the dispatch). It is never dispatched again blindly.
+
+**Fix.** Run `gstack-ship-queue train status --train <nonce>`. It adopts the
+run carrying the nonce, or marks the dispatch absent; only then does
+`train build --train <nonce>` dispatch it again, under the same nonce.
+
+<a id="queue-train-waiting"></a>
+### `QUEUE_TRAIN_WAITING`
+
+**Meaning.** The train has fewer PRs than `train.max_size` and its oldest
+READY PR has waited less than `train.fill_hours`, so it does not dispatch
+yet. The message prints when it will.
+
+**Fix.** Add READY PRs, rerun after the printed time, or pass `--urgent` for a
+one-PR train.
+
+<a id="queue-train-pending"></a>
+### `QUEUE_TRAIN_PENDING`
+
+**Meaning.** The train's run (free tests, the full gate or the bisect) has
+not finished, so there is no verdict yet.
+
+**Fix.** Rerun the printed `NEXT:` command later. Nothing is dispatched again
+while a run is pending.
+
+<a id="queue-train-incomplete"></a>
+### `QUEUE_TRAIN_INCOMPLETE`
+
+**Meaning.** The train gate did not complete its census: INFRA or INCOMPLETE
+panels, an unbound, partial or cancelled shard, a slice killed before its
+upload, a record bound to another nonce, head or tree, or no published
+record. An incomplete gate is never green.
+
+**Fix.** When every gap is machine-classified INFRA or INCOMPLETE, take the
+one re-dispatch EVAL_POLICY.infraRedispatch allows (`train rebuild --train
+<nonce> --infra`) and report both runs. Otherwise diagnose the run.
+
+<a id="queue-train-red"></a>
+### `QUEUE_TRAIN_RED`
+
+**Meaning.** The train's full gate is red on the train tree; the message names
+the red cases. Its PRs do not merge, and nothing is retried to change the
+verdict.
+
+**Fix.** Bisect the red cases (`train bisect --train <nonce> --spend-cap
+<usd>`). After a rebuild's second red, route the cases to a repair lane.
+
+<a id="queue-train-red-on-main"></a>
+### `QUEUE_TRAIN_RED_ON_MAIN`
+
+**Meaning.** The bisect found the red cases red on every prefix, main (T0)
+included: main is broken, not the train's PRs.
+
+**Fix.** Fix forward on main first (a one-PR train), then rebuild this train
+unchanged.
+
+<a id="queue-train-unattributed"></a>
+### `QUEUE_TRAIN_UNATTRIBUTED`
+
+**Meaning.** The bisect pattern blames no PR and not main: all green, or not
+monotone. One trial per prefix cannot tell a flake from a break.
+
+**Fix.** All green: the one preregistered rebuild (`train rebuild --train
+<nonce>`), reporting both runs. Any other pattern: a repair lane, then a
+changed train once the repair merges.
+
+<a id="queue-train-bisect-capped"></a>
+### `QUEUE_TRAIN_BISECT_CAPPED`
+
+**Meaning.** The bisect's reserved price (every case×prefix trial, trials
+without cost data at `train.trial_reservation_usd`) passes `--spend-cap`.
+Prefixes that fit were launched, completed prefixes are kept, and the
+outcome stays unattributed; it is never green.
+
+**Fix.** Resume with a higher cap (`train bisect --train <nonce> --spend-cap
+<usd>`). Only prefixes without a result run.
+
+<a id="queue-train-prefix-invalid"></a>
+### `QUEUE_TRAIN_PREFIX_INVALID`
+
+**Meaning.** A bisect prefix is not an ancestor of the train head on
+`train/<nonce>` (the branch moved), or a red case is not in the gate's plan,
+so the bisect inputs are refused before any dispatch.
+
+**Fix.** Check that `train/<nonce>` still points at the recorded head
+(`train status`). A moved branch needs a new train.
+
+<a id="queue-train-rebuild-refused"></a>
+### `QUEUE_TRAIN_REBUILD_REFUSED`
+
+**Meaning.** `train rebuild` is not allowed: there is no bisect record (or,
+with `--infra`, no INFRA/INCOMPLETE-only census), the bisect was not all
+green, or the train was already rebuilt or re-dispatched once.
+
+**Fix.** Route the red cases to a repair lane; the train is rebuilt only once
+the repair merges (a changed train).
+
+<a id="queue-train-tree-mismatch"></a>
+### `QUEUE_TRAIN_TREE_MISMATCH`
+
+**Meaning.** Main's tree is neither the train's prefix before this PR nor the
+one after it, modulo stamps, so the merge would not publish what the gate
+tested.
+
+**Fix.** Stop merging. If earlier PRs of the train merged, the queue is now
+frozen (`QUEUE_TRAIN_FROZEN`); otherwise build a new train on current main.
+
+<a id="queue-train-frozen"></a>
+### `QUEUE_TRAIN_FROZEN`
+
+**Meaning.** A train stopped partway through publication, so main holds a
+prefix no gate covered on its own. The `QUEUE_TRAIN_FROZEN:` line lists the
+merged PRs, main's tree and the backstop run dispatched on main's SHA. The
+freeze lives in local state and on `refs/notes/gstack-trains`. Ordinary
+trains and other trains' merges are refused until a repair lands.
+
+**Fix.** Admit one repair PR at its exact head (`train build --repair --prs
+<n>@<sha>`). The freeze clears when verify finds main's tree after that merge
+in a green record; `NEXT:` then builds a train of the PRs still unmerged.
+
+<a id="ready-screen-choice-required"></a>
+### `READY_SCREEN_CHOICE_REQUIRED`
+
+**Meaning.** The base policy turns trains on, so READY needs an explicit
+screen choice: `--screen` (pay for a screen on the PR's merge SHA now) or
+`--no-screen`. The `SCREEN:` lines show the selection and the recommendation.
+
+**Fix.** Rerun `gstack-ship-queue ready` with the printed recommendation. A
+lane that already ran focused local cases says so in the READY block and may
+pass `--no-screen`.
+
 <a id="pregate-timing-assertion"></a>
 ### `PREGATE_TIMING_ASSERTION`
 

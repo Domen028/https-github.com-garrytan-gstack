@@ -18,7 +18,7 @@ introduces or changes the policy runs under the reviewed bootstrap path
 
 Tools: `gstack-ship-policy init|validate|show-effective|check-history`,
 `gstack-restamp`, `gstack-tree-receipt`, `gstack-ship-receipt`,
-`gstack-ship-queue` ([shared merge queue](#run-a-shared-merge-queue)),
+`gstack-ship-queue` ([shared merge queue](#run-a-shared-merge-queue), [merge trains](#run-a-merge-train)),
 `gstack-evidence bundle|ancestor`. They share the exit table (`0` ok, `1`
 fail, `2` usage, `3` refused or needs a flag) and end every error line with a
 code from [troubleshooting.md](troubleshooting.md#queue-aware-ship-policy-restamp-tree-receipt-ship-receipt).
@@ -58,6 +58,7 @@ refuses the file (`POLICY_GSTACK_TOO_OLD`). `validate` ends with
 | `gate_command` | command or `null` | `null` | The repo's full pre-merge gate. `gstack-ship-queue gate-ahead` and `ready` print it for the caller to run (in the background or in CI); gstack never executes it. Needs `min_gstack_version`. |
 | `full_e2e` | `true` \| `false` | `false` | `true`: every merge needs a passing full-gate result bound to a tree equal to the merging one modulo stamps; `gstack-ship-queue ready`, `stamp` and `verify` refuse without one (`QUEUE_GATE_MISSING`): a gate-ahead record, or the lane's `--gate-exit 0 --gate-log <file>` from its run on the gated head. Needs `min_gstack_version`. |
 | `min_gstack_version` | version or `null` | `null` | The oldest gstack that may read the file; see the compatibility rule above. |
+| `train` | `{ gate_workflow, free_workflow, full_gate_check, record_artifact, max_size, fill_hours, screen_selection, trial_reservation_usd }` or `null` | `null` | Turns on [merge trains](#run-a-merge-train), read from the base revision only. Every field is required and an unknown field is `POLICY_INVALID`: `max_size` 1 to 6, `fill_hours` above 0 and at most 24, `screen_selection` `gstack-paid` \| `none`, `trial_reservation_usd` above 0 and at most 100. `null` keeps the per-PR queue exactly as it is. Needs `min_gstack_version`. |
 
 Containment, checked by `validate` and again at write time: paths and globs are
 repo-relative with no `..` segment, under 256 characters, at most 64 per list,
@@ -253,6 +254,188 @@ prints `merge_tree:`, `gated_tree:` and `gate:` lines. The last line is
 prints) only after every lane's gstack is at least that version, the crew's
 install floor (`GSTACK_MIN_REVISION`). A lane on an older gstack refuses the
 policy by name rather than reading it differently.
+
+<a id="run-a-merge-train"></a>
+## Run a merge train
+
+A merge train gates several READY PRs with one full gate instead of one gate
+each. The coordinator merges the pinned, unstamped PR heads in slot order onto
+main in a scratch worktree, records each prefix tree (T0 is main, Tk is the
+train head), runs the free tests and then one full gate on the train head, and
+merges the PRs one at a time, each only while main's tree equals the prefix
+the gate covered modulo stamps. A red train is bisected on its red cases only.
+
+The surface is off unless the base revision's `.gstack/ship-policy.json`
+declares a `train` block. Without one, `train …` and `verify --train` refuse
+with `QUEUE_TRAIN_OFF`, and `ready --pr <n>` prints exactly the per-PR READY
+block above (`--screen`, `--no-screen` and `--broad` are ignored with a
+warning on stderr). A block for gstack itself would read:
+
+```json
+"train": {
+  "gate_workflow": "evals.yml", "free_workflow": "free-tests.yml",
+  "full_gate_check": "gstack/full-gate", "record_artifact": "gstack-train-record",
+  "max_size": 5, "fill_hours": 3, "screen_selection": "gstack-paid",
+  "trial_reservation_usd": 1.5
+},
+"min_gstack_version": "<the version that introduced train>"
+```
+
+gstack's own policy does not carry it yet: trains go live for gstack only
+after the workflow side (the train-nonce record, the `cases` and
+`prefix_shas` inputs, the dispatched screen) has merged and one dry-run train
+of two already-merged heads has passed. `gate_workflow` is dispatched with
+`evals_all`, `expected_sha` and `nonce` (bisects add `cases` and
+`prefix_shas`, screens add `screen_pr`, `screen_merge_sha` and
+`screen_policy`). That run publishes `full_gate_check` as a check run on the
+train head and the train record as the `record_artifact` artifact only when
+its census is complete and green; gstack reads both and never writes a
+check. `screen_selection: gstack-paid` computes gstack's paid case selection
+for the screen recommendation; `none` leaves the choice to the lane.
+`trial_reservation_usd` is what the bisect reserves for a trial without cost
+data.
+
+Every command prints its lines, the coded error line on stderr, then
+`NEXT: <command>` and `GSTACK_RESULT: skill=ship-queue status=… run=<record>`.
+Records live under `$GSTACK_STATE_ROOT/ship-queue/` (`trains/<nonce>/train.json`
+with one attempt record per dispatch, `ready/` receipts and `freeze/`) and
+are mirrored to origin as git notes on `refs/notes/gstack-trains` before any
+remote effect, so a lost machine loses nothing: `train status` on a clean
+state root rebuilds them. `GSTACK_SHIP_QUEUE_NOW` pins the clock for tests.
+
+**1. Lane: READY with a screen choice.** Under a train policy READY needs an
+explicit choice:
+
+```bash
+gstack-ship-queue ready --pr 42                    # prints SCREEN: lines and the recommendation, refuses
+gstack-ship-queue ready --pr 42 --no-screen        # READY receipt; the PR rides unscreened
+gstack-ship-queue ready --pr 42 --screen [--broad] # dispatches one paid screen on the PR's merge SHA
+```
+
+Without a choice it prints the `SCREEN:` selection (with
+`screen_selection: gstack-paid`, the skill's own cases and `recommend
+--screen` or `--no-screen`: `--screen` when the screen selects a skill's own
+cases) and refuses with `READY_SCREEN_CHOICE_REQUIRED`. The price line says
+the dollar figure is pending the cost replay; until it lands, `SCREEN:` shows
+case counts and the recommendation only. A lane that already ran focused
+local cases says so in the READY block and may pass `--no-screen`. `--screen`
+dispatches `gate_workflow` with `screen_pr`, `screen_merge_sha` (the
+`refs/pull/<n>/merge` SHA) and `screen_policy` (`narrow`, or `broad` with
+`--broad`, today's full PR selection). The nonce key carries the purpose and
+the policy, so a repeat follows the same run and a broad screen never adopts
+a narrow one. The READY block gains `screen: …`, and the receipt is written
+locally and to the notes ref. `--dry-run` prints the dispatch without sending
+it.
+
+**2. Coordinator: build.** Name the pins exactly as READY reported them:
+
+```bash
+gstack-ship-queue train build --prs 41@<sha>,42@<sha>,43@<sha> --dry-run
+gstack-ship-queue train build --prs 41@<sha>,42@<sha>,43@<sha>
+```
+
+It prints `ORDER:` (the slot order to announce: screened PRs first in READY
+order, then unscreened; when `max_size` or more unscreened PRs wait they form
+their own train and `HELD:` lists them), one `PREFIX: T<i> <commit>
+tree=<tree>` per prefix and one `SLOT:` per PR. `--dry-run` adds the
+`ESTIMATE:` line and writes, pushes and dispatches nothing. Otherwise it
+writes `train.json`, pushes `train/<nonce>`, dispatches `free_workflow` there
+and waits (`--free-timeout <s>`, default 2700) for a green
+`workflow_dispatch` run on that exact SHA, then dispatches the full gate
+through eval-bg's nonce. A train under `max_size` waits until its oldest READY
+has waited `fill_hours` (`QUEUE_TRAIN_WAITING`); `--urgent` dispatches a
+one-PR train at once. The same pins on the same base return the live train
+instead of a second one; `train build --train <nonce>` resumes a train from
+its record. Refusals, all before any spend: `QUEUE_TRAIN_UNTRUSTED` (a fork
+head), `QUEUE_TRAIN_MOVED` (a head moved from its pin), `QUEUE_NOT_READY` (no
+READY receipt at that head), `QUEUE_TRAIN_CONFLICT` (the printed
+`QUEUE_TRAIN_CONFLICT: train <id> stopped at #<pr> (conflicts: <files>) after
+merging #<a>,#<b>; nothing dispatched, no branch pushed; fix: …` line names
+the build without that PR) and `QUEUE_TRAIN_FREE_RED` (free tests red,
+missing, cancelled or on another SHA). In a merge, version files take the
+prefix's side and the CHANGELOG merges by section, since the stamp at merge
+rewrites both.
+
+**3. Coordinator: status and verdict.**
+
+```bash
+gstack-ship-queue train status [--train <nonce>]
+gstack-ship-queue train verdict --train <nonce>
+```
+
+`status` never spends. When a dispatch was attempted but its run never showed
+up (`QUEUE_TRAIN_DISPATCH_UNKNOWN`), it lists the workflow's dispatch runs and
+either adopts the run carrying the nonce or marks the dispatch `absent`; only
+an absent dispatch is sent again, by `train build --train <nonce>`, under the
+same nonce. `verdict` reads the run, its record and the `full_gate_check`
+check: `GREEN` only for a complete census bound to the train nonce, head and
+tree; `QUEUE_TRAIN_PENDING` while it runs; `QUEUE_TRAIN_INCOMPLETE` for INFRA
+or INCOMPLETE panels, unbound, partial or cancelled shards, a slice killed
+before upload, or no record (never green); `QUEUE_TRAIN_RED` with the red
+cases.
+
+**4. A red train: bisect, then at most one rebuild.**
+
+```bash
+gstack-ship-queue train bisect --train <nonce> --spend-cap 5 --dry-run
+gstack-ship-queue train bisect --train <nonce> --spend-cap 5
+gstack-ship-queue train rebuild --train <nonce>
+```
+
+The bisect dispatches the red cases (`cases`) on every prefix T0..Tk
+(`prefix_shas`), one trial each, after checking every prefix is an ancestor
+of `train/<nonce>` (`QUEUE_TRAIN_PREFIX_INVALID`). It reserves every
+case×prefix trial (unknown costs at `trial_reservation_usd`) and launches only
+the prefixes that fit the cap (`QUEUE_TRAIN_BISECT_CAPPED`; completed prefixes
+are kept and a rerun with a higher cap runs only the rest). Rerun it to read
+the results. The pattern decides: `ATTRIBUTED #<pr>` only when monotone
+(green before, red from that PR on), and `NEXT:` builds the train without it;
+red on every prefix with T0 included is `QUEUE_TRAIN_RED_ON_MAIN` (fix forward
+on main first); anything else is `QUEUE_TRAIN_UNATTRIBUTED`. An all-green
+bisect earns exactly one unchanged rebuild (`train rebuild`, reporting both
+runs); a non-monotone pattern earns none and goes to a repair lane. Every
+other rebuild is `QUEUE_TRAIN_REBUILD_REFUSED`, and a second red stays red.
+An INFRA/INCOMPLETE-only census earns the single re-dispatch
+EVAL_POLICY.infraRedispatch allows: `train rebuild --train <nonce> --infra`.
+The rebuild-once rule lives in the train module beside that constant until
+EVAL_POLICY records it. Bisect results never turn a train green.
+
+**5. Coordinator: verify, merge, verify again.** For each slot in order:
+
+```bash
+gstack-ship-queue verify --pr 41 --train <nonce>   # MERGE_CONDITION: sha=<head>
+# merge #41 with that expected head; gstack-restamp stamps it at merge
+gstack-ship-queue verify --pr 41 --train <nonce>   # VERIFY_TRAIN: #41 merged; main's tree is T1 …
+```
+
+Before a merge, main's tree must equal the prefix before the PR modulo stamps
+and the PR must still be at its pin (stamps aside); after it, main's tree
+must equal the prefix after it. Anything else is `QUEUE_TRAIN_TREE_MISMATCH`
+(or `QUEUE_TRAIN_MOVED`). When nothing of the train has merged, that is a plain
+refusal: build a new train on current main. When earlier slots already
+merged, main holds a prefix no gate covered on its own, so verify freezes the
+queue: the freeze goes to local state and the notes ref first, then the full
+gate is dispatched on main's SHA at once (the backstop), and the
+`QUEUE_TRAIN_FROZEN:` line lists the merged PRs, main's tree and the backstop
+run. While frozen, ordinary trains and other trains' merges are refused
+(`QUEUE_TRAIN_FROZEN`). Admit one repair PR at its exact head:
+
+```bash
+gstack-ship-queue train build --repair --prs 44@<sha>
+```
+
+It runs the normal free tests, full gate and verification on main plus the
+repair. When verify confirms the repair merged, it prints `FREEZE: cleared`
+and `NEXT:` builds a train of the PRs still unmerged.
+
+**6. Clean up.** `gstack-ship-queue train prune [--train <nonce>] [--dry-run]`
+deletes the `train/<nonce>` branches of merged, superseded and dropped trains
+(`WOULD-DELETE:`, `DELETED:`, `GONE:`).
+
+**Escape hatches.** Remove the `train` block on the base branch to return
+every lane to the per-PR queue at once. `--urgent` ships one PR alone,
+`--no-screen` skips the paid screen, `--broad` widens it to today's selection,
+and `train build --prs <list without it>` drops a PR at any step.
 
 <a id="ship"></a>
 ## What `/ship` reads from it

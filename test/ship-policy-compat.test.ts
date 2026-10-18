@@ -9,12 +9,14 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { EXIT } from '../lib/headless-artifacts';
 import { DEFAULT_POLICY, POLICY_KEY_INTRODUCED, SHIP_QUEUE_KEYS_VERSION, validatePolicy } from '../lib/ship-policy';
+import { cmpVersion, parseVersion } from '../lib/version-source';
 import { BASE_POLICY, cleanup, makeFixtureRepo, restamp, runBin, type FixtureRepo } from './helpers/restamp-fixture';
 
 const repos: FixtureRepo[] = [];
 const fixture = (policy: Record<string, unknown>) => { const r = makeFixtureRepo({ policy }); repos.push(r); return r; };
 afterEach(() => { while (repos.length) cleanup(repos.pop()!); });
 
+const newestKeyVersion = Object.values(POLICY_KEY_INTRODUCED).reduce((a, b) => (cmpVersion(parseVersion(b)!, parseVersion(a)!) > 0 ? b : a));
 const codes = (raw: unknown, gstackVersion = '1.91.200.0') => validatePolicy(raw, { gstackVersion }).map(e => `${e.code}@${e.path}`);
 
 describe('policy compatibility floor', () => {
@@ -35,7 +37,7 @@ describe('policy compatibility floor', () => {
     expect(codes({ gate_command: 'x', min_gstack_version: SHIP_QUEUE_KEYS_VERSION }, '1.91.106.0')).toEqual(['POLICY_GSTACK_TOO_OLD@min_gstack_version']);
     const future = validatePolicy({ gate_reuse_requires: ['e2e'] }, { gstackVersion: '1.91.200.0' });
     expect(future.map(e => `${e.code}@${e.path}`)).toEqual(['POLICY_INVALID@gate_reuse_requires']);
-    expect(future[0]!.message).toContain(`this gstack reads keys introduced up to ${SHIP_QUEUE_KEYS_VERSION}`);
+    expect(future[0]!.message).toContain(`this gstack reads keys introduced up to ${newestKeyVersion}`);
     expect(codes({ min_gstack_version: 'soon' })).toEqual(['POLICY_INVALID@min_gstack_version']);
     expect(codes({ full_e2e: 'yes', min_gstack_version: SHIP_QUEUE_KEYS_VERSION })).toEqual(['POLICY_INVALID@full_e2e']);
   });

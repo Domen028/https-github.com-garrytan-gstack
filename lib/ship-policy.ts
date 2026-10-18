@@ -65,6 +65,28 @@ export interface ShipPolicy {
   full_e2e: boolean;
   /** The oldest gstack that may read this policy; a newer key set to a non-default value requires it. */
   min_gstack_version: string | null;
+  /** Merge trains in gstack-ship-queue (docs/ship-policy.md#run-a-merge-train); null keeps the per-PR queue. */
+  train: TrainPolicy | null;
+}
+
+/** The `train` block: the gate workflow trains dispatch and how its verdict is read. */
+export interface TrainPolicy {
+  /** Workflow file dispatched for the full gate and the bisect (it accepts the inputs in TRAIN_DISPATCH_INPUTS). */
+  gate_workflow: string;
+  /** Workflow file dispatched on train/<nonce> before the paid gate; its run must be green on the train head. */
+  free_workflow: string;
+  /** The check run the train's own gate run publishes on the train head when its census is complete and green. */
+  full_gate_check: string;
+  /** Artifact name of the train record (and the prefix of each bisect prefix's artifact). */
+  record_artifact: string;
+  /** Most PRs in one train. */
+  max_size: number;
+  /** A train under max_size dispatches once its oldest READY PR has waited this long. */
+  fill_hours: number;
+  /** How `ready` computes the screen's selection: gstack's paid selector, or not at all. */
+  screen_selection: 'gstack-paid' | 'none';
+  /** Bisect admission price of one case trial that has no recorded cost. */
+  trial_reservation_usd: number;
 }
 
 export const DEFAULT_POLICY: ShipPolicy = {
@@ -87,6 +109,7 @@ export const DEFAULT_POLICY: ShipPolicy = {
   gate_command: null,
   full_e2e: false,
   min_gstack_version: null,
+  train: null,
 };
 
 export type PolicyKey = Exclude<keyof ShipPolicy, '$schema'>;
@@ -112,6 +135,7 @@ export const POLICY_EXPLANATIONS: Record<PolicyKey, string> = {
   migrations: '{ dir, id }: the migration directory and a regex with one capture group for the number in a file name; `gstack-pregate regate` reports MIGRATION_COLLISION against the base branch and every open PR.',
   gate_command: 'The repo’s full pre-merge gate command. gstack-ship-queue gate-ahead and ready print it for the caller to run (in the background or in CI); gstack never executes it. null when the repo has none.',
   full_e2e: 'true: every merge needs a passing full-gate result (gstack-ship-queue gate-ahead --record, or the lane\'s --gate-exit 0 --gate-log on the gated head) bound to a tree equal to the merging one modulo stamps; ready, stamp and verify refuse without one (QUEUE_GATE_MISSING).',
+  train: '{ gate_workflow, free_workflow, full_gate_check, record_artifact, max_size, fill_hours, screen_selection, trial_reservation_usd } or null: turns on merge trains in gstack-ship-queue (train build|status|verdict|bisect|rebuild|prune, ready --screen|--no-screen, verify --train). null keeps today\'s per-PR queue unchanged.',
   min_gstack_version: 'The oldest gstack that may read this file. Any key newer than 1.91.98.0 set to a non-default value requires it at that key’s introducing version (validate prints each); a gstack older than it refuses the file (POLICY_GSTACK_TOO_OLD).',
 };
 
@@ -124,11 +148,13 @@ export const POLICY_EXPLANATIONS: Record<PolicyKey, string> = {
  */
 export const POLICY_COMPAT_FLOOR = '1.91.98.0';
 export const SHIP_QUEUE_KEYS_VERSION = '1.91.108.0';
+export const TRAIN_KEYS_VERSION = '1.91.136.0';
 export const POLICY_KEY_INTRODUCED: Record<PolicyKey, string> = {
   bump: '1.91.73.0', queue_mode: '1.91.73.0', release_tool: '1.91.73.0', release_outputs: '1.91.73.0', stamp_paths: '1.91.73.0',
   changelog: '1.91.73.0', mirror: '1.91.73.0', history: '1.91.73.0', preregistration_shas: '1.91.73.0', stamp_sensitive_gates: '1.91.73.0',
   pr_count: '1.91.73.0', maintainers: '1.91.73.0', stamp_files: '1.91.98.0', stamp_patterns: '1.91.98.0', restamp_command: '1.91.98.0',
   migrations: '1.91.98.0', gate_command: SHIP_QUEUE_KEYS_VERSION, full_e2e: SHIP_QUEUE_KEYS_VERSION, min_gstack_version: SHIP_QUEUE_KEYS_VERSION,
+  train: TRAIN_KEYS_VERSION,
 };
 
 const newer = (a: string, b: string): boolean => cmpVersion(parseVersion(a)!, parseVersion(b)!) > 0;
@@ -241,6 +267,28 @@ function migrationErrors(value: unknown, out: PolicyError[]): void {
   } catch (e: any) { out.push({ code: 'POLICY_INVALID', path: 'migrations.id', message: `not a valid regex: ${e.message}` }); }
 }
 
+const TRAIN_FIELDS: Record<keyof TrainPolicy, (v: unknown) => string | null> = {
+  gate_workflow: v => (typeof v === 'string' && /^[A-Za-z0-9_.-]{1,64}\.ya?ml$/.test(v) ? null : 'must be a workflow file name such as evals.yml'),
+  free_workflow: v => (typeof v === 'string' && /^[A-Za-z0-9_.-]{1,64}\.ya?ml$/.test(v) ? null : 'must be a workflow file name such as free-tests.yml'),
+  full_gate_check: v => (typeof v === 'string' && /^[A-Za-z0-9_./-]{1,64}$/.test(v) ? null : 'must be a check-run name ([A-Za-z0-9_./-]{1,64})'),
+  record_artifact: v => (typeof v === 'string' && /^[A-Za-z0-9_.-]{1,64}$/.test(v) ? null : 'must be an artifact name ([A-Za-z0-9_.-]{1,64})'),
+  max_size: v => (Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 6 ? null : 'must be an integer from 1 to 6'),
+  fill_hours: v => (typeof v === 'number' && v > 0 && v <= 24 ? null : 'must be a number of hours above 0 and at most 24'),
+  screen_selection: v => (v === 'gstack-paid' || v === 'none' ? null : 'must be gstack-paid | none'),
+  trial_reservation_usd: v => (typeof v === 'number' && v > 0 && v <= 100 ? null : 'must be dollars above 0 and at most 100'),
+};
+
+function trainErrors(value: unknown, out: PolicyError[]): void {
+  const t = value as Record<string, unknown> | null;
+  if (!t || typeof t !== 'object' || Array.isArray(t)) { out.push({ code: 'POLICY_INVALID', path: 'train', message: `must be { ${Object.keys(TRAIN_FIELDS).join(', ')} } or null` }); return; }
+  for (const k of Object.keys(t)) if (!(k in TRAIN_FIELDS)) out.push({ code: 'POLICY_INVALID', path: `train.${k}`, message: 'unknown key' });
+  for (const [k, check] of Object.entries(TRAIN_FIELDS)) {
+    if (!(k in t)) { out.push({ code: 'POLICY_INVALID', path: `train.${k}`, message: 'missing (every train field is required)' }); continue; }
+    const why = check(t[k]);
+    if (why) out.push({ code: 'POLICY_INVALID', path: `train.${k}`, message: `${JSON.stringify(t[k])} ${why}` });
+  }
+}
+
 /**
  * Schema and containment check of a parsed policy object. Unknown keys are
  * errors (a typo must not silently mean "default", and a key from a newer
@@ -282,6 +330,7 @@ export function validatePolicy(raw: unknown, opts: { gstackVersion?: string } = 
     else if (t.length > MAX_COMMAND || /[\0\r\n]/.test(t)) errors.push({ code: 'POLICY_CONTAINMENT', path: 'gate_command', message: `must be one line under ${MAX_COMMAND} characters` });
   }
   if ('full_e2e' in obj && typeof obj.full_e2e !== 'boolean') errors.push({ code: 'POLICY_INVALID', path: 'full_e2e', message: 'must be true or false' });
+  if ('train' in obj && obj.train !== null) trainErrors(obj.train, errors);
   if ('stamp_paths' in obj) listErrors('stamp_paths', obj.stamp_paths, errors, globError);
   for (const key of ['changelog', 'mirror'] as const) {
     if (!(key in obj) || obj[key] === null) continue;
