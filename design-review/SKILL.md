@@ -554,7 +554,7 @@ setopt +o nomatch 2>/dev/null || true  # zsh compat
 # Detect sub-frameworks
 [ -f Gemfile ] && grep -q "rails" Gemfile 2>/dev/null && echo "FRAMEWORK:rails"
 [ -f package.json ] && grep -q '"next"' package.json 2>/dev/null && echo "FRAMEWORK:nextjs"
-grep -qs 'sdk: *flutter' pubspec.yaml && echo "FRAMEWORK:flutter"
+grep -qsE '^ +sdk: *.?flutter' pubspec.yaml && echo "FRAMEWORK:flutter"
 # Test evidence: config files, declared scripts, AND test FILES (tested projects often lack a config)
 ls jest.config.* vitest.config.* playwright.config.* .rspec pytest.ini tox.ini phpunit.xml* 2>/dev/null
 [ -f package.json ] && grep -q '"test"[[:space:]]*:' package.json && echo "SCRIPT:package.json test"

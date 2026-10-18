@@ -288,7 +288,7 @@ TEST_FW=""
 { [ -f spec/spec_helper.rb ] || [ -f .rspec ]; } && TEST_FW="rspec"
 { [ -f pytest.ini ] || [ -f conftest.py ]; } && TEST_FW="pytest"
 [ -f go.mod ] && TEST_FW="go-test"
-[ -f pubspec.yaml ] && TEST_FW="dart-test" && grep -qs 'sdk: *flutter' pubspec.yaml && TEST_FW="flutter-test"
+[ -f pubspec.yaml ] && TEST_FW="dart-test" && grep -qsE '^ +sdk: *.?flutter' pubspec.yaml && TEST_FW="flutter-test"
 echo "TEST_FW: ${TEST_FW:-unknown}"
 ```
 

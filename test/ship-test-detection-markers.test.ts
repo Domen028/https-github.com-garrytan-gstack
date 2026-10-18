@@ -104,7 +104,8 @@ describe('/ship Step 4 detection is multi-ecosystem', () => {
     expect(flutter).toContain('FRAMEWORK:flutter');
     expect(testFileCount(flutter)).toBe(1);
 
-    const dart = detect({ 'pubspec.yaml': 'name: x\n', 'lib/x.dart': 'int x = 1;\n' });
+    // A commented-out Flutter dependency is not Flutter.
+    const dart = detect({ 'pubspec.yaml': 'name: x\n#  flutter:\n#    sdk: flutter\n', 'lib/x.dart': 'int x = 1;\n' });
     expect(dart).toContain('RUNTIME:dart');
     expect(dart).not.toContain('FRAMEWORK:flutter');
     expect(testFileCount(dart)).toBe(0);
@@ -141,7 +142,7 @@ describe('/ship Step 4 detection is multi-ecosystem', () => {
 });
 
 // Value: protects=review-army STACK/TEST_FW name Dart and tell flutter_test from dart test; fails_when=the pubspec.yaml lines
-//   are dropped or the Flutter grep matches any `sdk:` (environment.sdk); why_new=no free test runs the review-army
+//   are dropped or the Flutter grep matches any `sdk:` (environment.sdk), a comment, or misses a quoted value; why_new=no free test runs the review-army
 //   detection lines; seam=none; no_claim=specialist selection from these values (only the emitted lines run)
 describe('review-army stack detection names Dart and Flutter', () => {
   const block = generateReviewArmy({ host: 'claude', skillName: 'ship', tmplPath: 'ship/SKILL.md.tmpl', paths: HOST_PATHS.claude });
@@ -165,11 +166,12 @@ describe('review-army stack detection names Dart and Flutter', () => {
   }
 
   test('Flutter app, pure Dart package, and a Dart SDK constraint that is not Flutter', () => {
-    const flutter = stack({ 'pubspec.yaml': 'name: app\ndependencies:\n  flutter:\n    sdk: flutter\n' });
+    // Quoted `sdk: "flutter"` is the same YAML value.
+    const flutter = stack({ 'pubspec.yaml': 'name: app\ndependencies:\n  flutter:\n    sdk: "flutter"\n' });
     expect(flutter).toContain('STACK: dart');
     expect(flutter).toContain('TEST_FW: flutter-test');
 
-    const dart = stack({ 'pubspec.yaml': 'name: x\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n' });
+    const dart = stack({ 'pubspec.yaml': 'name: x\nenvironment:\n  sdk: ">=3.0.0 <4.0.0"\n#    sdk: flutter\n' });
     expect(dart).toContain('STACK: dart');
     expect(dart).toContain('TEST_FW: dart-test');
 
