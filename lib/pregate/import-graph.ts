@@ -83,7 +83,7 @@ export function dartPackages(repoRoot: string, files: Iterable<string>): Map<str
     if (path.posix.basename(f) !== 'pubspec.yaml') continue;
     const text = readRepoFile(repoRoot, f);
     if (text === null) continue;
-    const name = /^name:\s*['"]?([A-Za-z_][\w]*)/m.exec(text)?.[1];
+    const name = /^name:\s*['"]?([A-Za-z_][\w]*)/m.exec(text.replace(/^\uFEFF/, ''))?.[1];
     const root = path.posix.dirname(f);
     if (name) out.set(name, [...(out.get(name) ?? []), root === '.' ? '' : root]);
   }
@@ -108,10 +108,10 @@ function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fro
 /**
  * A run of directives from a line start: several may share a line (`import 'a'; import 'b';`), and one may span lines
  * (dart format indents the continuation of a conditional import). A body continues only onto an indented line that does not
- * start another directive, and is bounded, so a `;`-less directive cannot scan the file (linear time). Each directive is split
- * out by DART_DIRECTIVE.
+ * start another directive, or onto a whitespace-only line (a comment line inside the directive, once blanked), and is bounded,
+ * so a `;`-less directive cannot scan the file (linear time). Each directive is split out by DART_DIRECTIVE.
  */
-const DART_DIRECTIVE_RUN = /^[ \t]*(?:(?:library|import|export|part)\b(?:[^;\n]|\n(?=[ \t]+\S)(?![ \t]*(?:library|import|export|part)\b)){0,4000};[ \t]*)+/gm;
+const DART_DIRECTIVE_RUN = /^[ \t]*(?:(?:library|import|export|part)\b(?:[^;\n]|\n(?=[ \t]*\n|[ \t]+\S)(?![ \t]*(?:library|import|export|part)\b)){0,4000};[ \t]*)+/gm;
 const DART_DIRECTIVE = /(?:^|;)\s*(?:import|export|part)\b(?!\s+of\b)([^;]*)(?=;)/g;
 
 /** Dart source with line and block comments blanked to spaces (newlines kept, so line structure holds), quote-aware, in one linear pass. */

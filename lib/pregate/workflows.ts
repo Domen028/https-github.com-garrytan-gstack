@@ -25,7 +25,7 @@ export interface Lane {
   platform: Platform;
   /** Every `run:` step text, in order. */
   commands: string[];
-  /** Test file paths named literally in the run steps; empty when a step naming one has an unresolvable working-directory (the lane may run any test). */
+  /** Test file paths named literally in the run steps, repo-relative: resolved against the step's working-directory and any literal `cd`/`pushd` before them; empty when one is named from an unresolvable directory (the lane may run any test). */
   testFiles: string[];
   /** The `matrix:` value when it is a workflow expression, else null. */
   matrixExpression: string | null;
@@ -85,8 +85,43 @@ function resolveDir(dir: string | null): string | null {
   const n = path.posix.normalize(d).replace(/\/$/, '');
   return n === '.' ? '' : n === '..' || n.startsWith('../') ? null : n;
 }
-/** A command that changes directory (`cd`, `pushd`) no longer runs from the step's working directory. */
-const CHANGES_DIR = /(?:^|[\s;&|(])(?:cd|pushd)\s/;
+/** `cur` after a `cd`/`pushd` segment: a literal relative target joins it; a non-literal, absolute, bare or repo-escaping target (or an unknown `cur`) is null. */
+function changeDir(cur: string | null, target: string | undefined): string | null {
+  const t = (target ?? '').trim().replace(/^(['"])(.*)\1$/, '$2');
+  if (cur === null || !t || /[$`~*?[\]{}'"\\\s]/.test(t) || t.startsWith('-') || path.posix.isAbsolute(t)) return null;
+  const n = path.posix.normalize(path.posix.join(cur, t)).replace(/\/$/, '');
+  return n === '.' ? '' : n === '..' || n.startsWith('../') ? null : n;
+}
+/**
+ * The repo-relative test paths one run command names, walking its shell segments (split on `&&`, `||`, `;`, `|`, newlines) from
+ * `start` (null: unknown). `cd`/`pushd <literal>` moves the directory; any other directory change (`popd`, `cd "$X"`, a `cd` not
+ * leading its segment) makes it unknown for the rest of the command. A segment's paths resolve against the directory current at
+ * it; a path named while it is unknown, or escaping the repo, returns null (the lane may run any test). The package.json script a
+ * segment runs (one level deep, as expandScripts) is walked from the directory current at that segment.
+ */
+function commandTestFiles(command: string, start: string | null, scripts: Record<string, string> | null): string[] | null {
+  let cur = start;
+  const out: string[] = [];
+  for (const seg of command.split(/&&|\|\||[;|\n]/)) {
+    for (const m of seg.matchAll(TEST_FILE)) {
+      const joined = cur === null ? null : path.posix.normalize(path.posix.join(cur, m[1]!)).replace(/^\.\//, '');
+      if (joined === null || joined.startsWith('../')) return null;
+      out.push(joined);
+    }
+    if (scripts) {
+      for (const m of seg.matchAll(/\b(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?([A-Za-z0-9:_.-]+)/g)) {
+        if (!scripts[m[1]!]) continue;
+        const inner = commandTestFiles(scripts[m[1]!]!, cur, null);
+        if (inner === null) return null;
+        out.push(...inner);
+      }
+    }
+    const cd = /^\s*(?:cd|pushd)(?:\s+(.*))?$/.exec(seg);
+    if (cd) cur = changeDir(cur, cd[1]);
+    else if (/(?:^|[\s(){}])(?:cd|pushd|popd)(?=\s|$)/.test(seg)) cur = null;
+  }
+  return out;
+}
 function deepValues(blocks: Block[], key: string, out: string[] = []): string[] {
   for (const b of blocks) { if (b.key === key && b.value) out.push(b.value); deepValues(b.children, key, out); }
   return out;
@@ -118,16 +153,12 @@ export function parseWorkflow(file: string, text: string, platform: NodeJS.Platf
     const jobName = find(job.children, 'name')?.value ?? job.key;
     // A step's paths resolve against its working-directory, else the job's defaults, else the workflow's.
     const jobDir = defaultDir(job.children) ?? defaultDir(top);
-    // A step naming tests from an unresolvable directory leaves the lane's set unknown (empty: laneFileSet's may-run-anything path).
-    // A command that cds claims each path both under the directory and repo-relative: over-claiming widens, never drops, an obligation.
+    // Each run command is walked from the step's directory through its `cd`s (commandTestFiles). A test path named from an
+    // unresolvable directory leaves the lane's set unknown (empty: laneFileSet's may-run-anything path).
     let unresolved = false;
     const testFiles = [...new Set((find(job.children, 'steps')?.children ?? []).flatMap(step => {
       const dir = resolveDir(find([step, ...step.children], 'working-directory')?.value ?? jobDir);
-      return expandScripts(deepValues([step], 'run'), scripts).flatMap(c => [...c.matchAll(TEST_FILE)].flatMap(m => {
-        const joined = dir === null ? null : path.posix.normalize(path.posix.join(dir, m[1]!)).replace(/^\.\//, '');
-        if (joined === null || joined.startsWith('../')) { unresolved = true; return []; }
-        return dir && CHANGES_DIR.test(c) ? [joined, m[1]!] : [joined];
-      }));
+      return deepValues([step], 'run').flatMap(c => commandTestFiles(c, dir, scripts) ?? (unresolved = true, []));
     }))];
     let tier: LaneTier = 'unit';
     if (jobPlatform !== 'any' && jobPlatform !== here) tier = 'platform';

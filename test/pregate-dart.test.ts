@@ -134,6 +134,17 @@ describe('Dart import graph', () => {
     });
     const h = buildGraph(repo.work);
     for (const f of ['lib/base.dart', 'lib/native.dart', 'lib/web.dart']) expect(testsFor(h, f).tests).toEqual(['test/platform_test.dart']);
+    // Value: protects=a comment on its own line inside a multi-line conditional import (whitespace-only once blanked) does not end
+    //   the directive, so both URIs map; fails_when=the continuation only accepts an indented non-blank line and the whole directive
+    //   drops (base.dart and native.dart lose their dependent, failing open); why_new=the comment fixture kept comments at line ends;
+    //   seam=none; no_claim=the linear-time bound itself (measured, not asserted)
+    commit(repo, {
+      'lib/own_base.dart': 'int b() => 1;\n',
+      'lib/own_native.dart': 'int b() => 2;\n',
+      'test/own_line_test.dart': "import 'package:app/own_base.dart'\n    // Native implementation.\n\n    if (dart.library.io) 'package:app/own_native.dart';\nvoid main() {}\n",
+    });
+    const k = buildGraph(repo.work);
+    for (const f of ['lib/own_base.dart', 'lib/own_native.dart']) expect(testsFor(k, f).tests).toEqual(['test/own_line_test.dart']);
     expect(blankDartComments("var u = 'http://x'; // c;\n")).toBe("var u = 'http://x';      \n");
   });
 
@@ -216,6 +227,11 @@ describe('Dart import graph', () => {
     //   why_new=every fixture pubspec name was bare; seam=none; no_claim=a YAML parser
     write(repo.work, 'packages/q/pubspec.yaml', "name: 'quoted_pkg'\n");
     expect(dartPackages(repo.work, ['packages/q/pubspec.yaml']).get('quoted_pkg')).toEqual(['packages/q']);
+    // Value: protects=a pubspec saved with a leading BOM (Windows editors) still registers its package; fails_when=the BOM is not
+    //   stripped and `^name:` misses the first line, so the package's imports resolve nowhere (no lane, fail open); why_new=the BOM
+    //   fixture covered a Dart source, not a pubspec; seam=none; no_claim=other encodings (UTF-16)
+    write(repo.work, 'packages/b/pubspec.yaml', "\uFEFFname: bom_pkg\n");
+    expect(dartPackages(repo.work, ['packages/b/pubspec.yaml']).get('bom_pkg')).toEqual(['packages/b']);
     // Value: protects=readRepoFile refuses a file over its byte cap (a huge committed pubspec is not read into memory);
     //   fails_when=the size guard is dropped; why_new=only symlink and directory refusals were tested; seam=none (maxBytes is the
     //   production parameter); no_claim=a real multi-MiB file (a small cap stands in)
@@ -312,6 +328,14 @@ describe('Dart runner and summary (pure)', () => {
       ['name: core\ndev_dependencies:\n  flutter_test: {sdk: flutter}\n', 'flutter'],
       ['name: core\ndev_dependencies:\n  flutter_test: {path: x, sdk: "flutter"}\n', 'flutter'],
       ['name: core\nenvironment: {sdk: ">=3.0.0 <4.0.0"}\n', 'dart'],
+      // Value: protects=a quoted `sdk` key (legal YAML, JSON-ish flow) still picks flutter test, flow or block; fails_when=the key
+      //   must be bare and a Flutter package runs under `dart test` (a false lane failure); why_new=every fixture key was bare;
+      //   seam=none; no_claim=a YAML parser
+      ['name: core\ndev_dependencies:\n  flutter_test: {"sdk": flutter}\n', 'flutter'],
+      ["name: core\ndev_dependencies:\n  flutter_test: {path: x, 'sdk': flutter}\n", 'flutter'],
+      ['name: core\ndependencies:\n  flutter:\n    "sdk": flutter\n', 'flutter'],
+      ["name: core\ndependencies:\n  flutter:\n    'sdk': flutter\n", 'flutter'],
+      ['name: core\nenvironment:\n  "sdk": ">=3.0.0 <4.0.0"\n', 'dart'],
     ] as const) {
       write(repo.work, 'packages/core/pubspec.yaml', pubspec);
       expect(dartRunner(repo.work, 'packages/core', env)).toEqual({ runner: `${tool} test {files}` });
@@ -348,9 +372,12 @@ describe('Dart runner and summary (pure)', () => {
       '  quoted:', '    runs-on: ubuntu-24.04', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: "packages/core"',
       '  win:', '    runs-on: windows-latest', '    steps:', '      - run: dart test test/core_test.dart', '        working-directory: ${{ matrix.pkg }}',
       '      - run: dart test test/ui/drawer_widget_test.dart',
-      '  cd:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/app', '        run: |', '          cd ../..', '          bun test test/root.test.ts', '',
+      '  cd:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/app', '        run: |', '          cd ../..', '          bun test test/root.test.ts',
+      '  sib:', '    runs-on: windows-latest', '    steps:', '      - working-directory: packages/a', '        run: cd ../b; dart test test/core_test.dart',
+      '  sub:', '    runs-on: windows-latest', '    steps:', '      - working-directory: .', '        run: dart test test/first_test.dart && cd packages/app && flutter test test/x_test.dart',
+      '  var:', '    runs-on: windows-latest', '    steps:', '      - run: cd "$DIR" && dart test test/a_test.dart', '',
     ].join('\n');
-    const [step, job, top, cmt, abs, up, expr, quoted, win, cd] = parseWorkflow('w.yml', wf, 'darwin');
+    const [step, job, top, cmt, abs, up, expr, quoted, win, cd, sib, sub, varCd] = parseWorkflow('w.yml', wf, 'darwin');
     // Value: protects=a step naming tests from a working-directory that escapes the repo (`..`), is absolute or is a `${{ }}` expression
     //   leaves the lane's file set unknown, which laneFileSet treats as may-run-any-test, so a Windows lane still owes the selected
     //   packages/core/test/core_test.dart; fails_when=the bare path is recorded as repo-relative again and selectLanes drops the
@@ -361,11 +388,16 @@ describe('Dart runner and summary (pure)', () => {
     expect(quoted!.testFiles).toEqual(['packages/core/test/core_test.dart']);
     // A trailing YAML comment is not part of the directory.
     expect(cmt!.testFiles).toEqual(['packages/core/test/core_test.dart']);
-    // Value: protects=a run block that cds off its literal working-directory claims each path both under that directory and
-    //   repo-relative, so the Windows lane still owes test/root.test.ts; fails_when=the prefix is trusted across a `cd` (only
-    //   packages/app/test/root.test.ts is claimed and the obligation drops); why_new=no fixture changed directory inside a run block;
-    //   seam=none; no_claim=resolving the cd target
-    expect(cd!.testFiles).toEqual(['packages/app/test/root.test.ts', 'test/root.test.ts']);
+    // Value: protects=a literal `cd`/`pushd` inside a run command moves the directory later test paths resolve against (from the
+    //   working-directory or the repo root), a path named before the cd keeps the starting directory, and a non-literal cd target
+    //   leaves the lane's set unknown (may run any test); fails_when=the prefix is trusted across a `cd` (packages/app/test/root.test.ts
+    //   is claimed and the Windows obligation for test/root.test.ts drops), the cd is ignored, or `cd "$DIR"` is resolved as a
+    //   literal; why_new=the cd case claimed both the prefixed and the bare path; seam=none; no_claim=shell semantics beyond
+    //   segment-ordered cd/pushd (subshells, functions, popd targets)
+    expect(cd!.testFiles).toEqual(['test/root.test.ts']);
+    expect(sib!.testFiles).toEqual(['packages/b/test/core_test.dart']);
+    expect(sub!.testFiles).toEqual(['test/first_test.dart', 'packages/app/test/x_test.dart']);
+    expect(varCd!.testFiles).toEqual([]);
     expect(step!.testFiles).toEqual(['packages/core/test/core_test.dart', 'test/ui/drawer_widget_test.dart']);
     expect(step!.commands).toEqual(['dart test test/core_test.dart', 'dart test test/ui/drawer_widget_test.dart']);
     expect(job).toMatchObject({ tier: 'platform', testFiles: ['packages/core/test/core_test.dart'] });
