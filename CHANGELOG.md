@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.132.0] - 2026-10-18
 
 **On a machine under 8 cores, `gstack-pregate` clears its test tier on one Ubicloud VM in about 7 minutes for about $0.06, instead of running locally for an hour.** gstack's own `.gstack/pregate.json` now declares a remote gate, so a small machine records the local test tier as a `requires-remote` obligation and `gstack-pregate --stage tests --remote --spend-cap 2 --timeout 2700 --allow-repo-commands` clears it. All 1,280 free test files ran in 404 s (create 24 s, setup 72 s, tests 250 s) for $0.06; the same 798-file selection took 3,550 s locally on 4 cores. `gstack-next-version` also fetches open PRs' VERSION claims in parallel (8 PRs: 4,160 ms before, about 0.5 s now) and says so when it could not read one.
 
