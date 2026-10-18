@@ -72,6 +72,7 @@ function classifyFile(repoRoot: string, f: FileDiff, gated: string, current: str
   const changed = (rule: string, residual: string, line = f.hunks[0]?.at): FileVerdict => ({ path: f.path, rule, verdict: 'changed', residual, line });
   const stamp = (rule: string): FileVerdict => ({ path: f.path, rule, verdict: 'stamp' });
   if (f.binary) return changed('binary', 'binary content differs');
+  if (f.modeChanged) return changed('mode', 'file mode changed');
   if (f.status !== 'M') return changed('path', `${f.status === 'A' ? 'added' : f.status === 'D' ? 'deleted' : 'renamed'}`);
   if (policy.stamp_files.length && !matchesAny(policy.stamp_files, f.path)) return changed('stamp_files', 'not in the repo\'s stamp_files allowlist');
   const before = blob(repoRoot, gated, f.path);

@@ -183,7 +183,11 @@ function planVersions(o: RestampOptions, loaded: LoadedPolicy, policyLabel: stri
     try { q = JSON.parse(r.stdout ?? ''); } catch {}
     const usable = r.status === 0 && q && typeof q.version === 'string' && parseVersion(q.version) && (q.offline === false || q.fallback === 'git');
     newVersion = usable ? q.version : bumped(atBase.version, level);
-    claims = usable ? `read (claim-at-open; queue ${JSON.stringify(q.claimed ?? q.queue ?? [])})` : 'unverified (claim-at-open; gstack-next-version unusable, local arithmetic)';
+    const queue = JSON.stringify(q?.claimed ?? q?.queue ?? []);
+    const unknown = (Array.isArray(q?.unknown_claims) ? q.unknown_claims : []).map((n: unknown) => `#${n}`).join(', ') || 'some open PRs';
+    claims = !usable ? 'unverified (claim-at-open; gstack-next-version unusable, local arithmetic)'
+      : q.complete === false ? `incomplete (claim-at-open; the VERSION claims of PR ${unknown} are unknown, so ${q.version} is provisional and may collide; rerun, then ask the coordinator before stamping; queue ${queue})`
+      : `read (claim-at-open; queue ${queue})`;
   }
   // The branch's own tentative stamp: its VERSION when it moved past base; else nothing (mentions come from the lines it added).
   const branchStamp = oldVersion !== atBase.version ? oldVersion : null;
@@ -205,9 +209,13 @@ function allowedOutput(plan: Plan, root: string, rel: string): boolean {
 }
 
 interface Hunk { removed: string[]; added: string[]; at: number }
-export interface FileDiff { path: string; binary: boolean; hunks: Hunk[]; status: 'M' | 'A' | 'D' | 'R' }
+export interface FileDiff { path: string; binary: boolean; hunks: Hunk[]; status: 'M' | 'A' | 'D' | 'R'; modeChanged?: boolean }
 
-/** Parse `git diff --unified=0` into per-file hunks of removed/added lines (shared with lib/tree-receipt.ts). */
+/**
+ * Parse `git diff --unified=0` into per-file hunks of removed/added lines (shared with lib/tree-receipt.ts).
+ * File headers come only before a file's first hunk: inside a hunk every `-`/`+` line is content, so a
+ * body line that begins `--` or `++` (`---`/`+++` in the diff) is never dropped as a header.
+ */
 export function parseUnifiedDiff(text: string): FileDiff[] {
   const files: FileDiff[] = [];
   let cur: FileDiff | null = null;
@@ -221,11 +229,12 @@ export function parseUnifiedDiff(text: string): FileDiff[] {
     } else if (!cur) continue;
     else if (line.startsWith('new file mode')) cur.status = 'A';
     else if (line.startsWith('deleted file mode')) cur.status = 'D';
+    else if (!hunk && (line.startsWith('old mode ') || line.startsWith('new mode '))) cur.modeChanged = true;
     else if (line.startsWith('rename to ')) cur.status = 'R';
     else if (line.startsWith('Binary files')) cur.binary = true;
     else if (line.startsWith('@@')) { hunk = { removed: [], added: [], at: Number(/^@@ -\d+(?:,\d+)? \+(\d+)/.exec(line)?.[1] ?? 0) }; cur.hunks.push(hunk); }
-    else if (hunk && line.startsWith('-') && !line.startsWith('---')) hunk.removed.push(line.slice(1));
-    else if (hunk && line.startsWith('+') && !line.startsWith('+++')) hunk.added.push(line.slice(1));
+    else if (hunk && line.startsWith('-')) hunk.removed.push(line.slice(1));
+    else if (hunk && line.startsWith('+')) hunk.added.push(line.slice(1));
   }
   return files;
 }

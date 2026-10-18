@@ -132,6 +132,7 @@ describe('coordinator contract', () => {
   test('field wave CD: a lane runs pregate (and the sealed guard where configured) before done; the handoff carries the gstack trailer and the PREGATE: line after GSTACK_RESULT', () => {
     expect(COORDINATOR_CONTRACT).toContain('`gstack-pregate run --allow-repo-commands`');
     expect(COORDINATOR_CONTRACT).toContain('`gstack-pregate sealed` before any push or PR creation');
+    expect(COORDINATOR_CONTRACT).toContain('passes; `requires-remote` needs `--stage tests --remote --spend-cap <cap>`.');
     const handoff = COORDINATOR_CONTRACT.slice(COORDINATOR_CONTRACT.indexOf('Handoff format.'));
     const order = ['`GSTACK_RESULT` line', '`gstack: ok|fail <rev>` line', '`PREGATE:` line', 'gate summary'].map(t => handoff.indexOf(t));
     expect(order.every(i => i > 0)).toBe(true);
