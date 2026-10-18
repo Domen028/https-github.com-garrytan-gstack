@@ -21,6 +21,7 @@
  * never keys on `rateLimitType` (it is often null on a rejected call).
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
@@ -49,6 +50,8 @@ export interface CliJob { id: string; prompt: string; args?: string[] }
 export type CliJobStatus = 'ok' | 'error' | 'quota' | 'cancelled';
 export interface CliJobRecord {
   id: string;
+  /** jobKey(): resume skips an `ok` record only when the prompt and args are unchanged. */
+  key: string;
   status: CliJobStatus | 'skipped';
   rc: number | null;
   attempts: number;
@@ -123,6 +126,8 @@ function structuredQuota(o: Obj): string | null {
     if (node.error === 'rate_limit') return 'error=rate_limit';
     if (node.apiErrorStatus === 429 || node.api_error_status === 429) return 'api_error_status=429';
     if (isObj(node.quotaLimits) && node.quotaLimits.status === 'rejected') return 'quotaLimits.status=rejected';
+    // stream-json `rate_limit_event`; `allowed` and `allowed_warning` are not a stop.
+    if (isObj(node.rate_limit_info) && node.rate_limit_info.status === 'rejected') return 'rate_limit_info.status=rejected';
   }
   return null;
 }
@@ -137,7 +142,8 @@ const firstLine = (s: string) => s.trim().split('\n')[0]?.slice(0, 200) ?? '';
 export function classifyClaudeResult(rc: number | null, stdout: string, stderr: string, opts: { timedOut?: boolean } = {}): CliClassification {
   if (rc === EXIT_QUOTA_STOP) return { kind: 'quota', detail: `circuit_open (exit ${EXIT_QUOTA_STOP})` };
   const objects = parseObjects(stdout);
-  for (const o of objects) {
+  // A structured quota record counts on either stream, whatever the exit code.
+  for (const o of [...objects, ...parseObjects(stderr)]) {
     const hit = structuredQuota(o);
     if (hit) return { kind: 'quota', detail: `structured quota signal (${hit})` };
   }
@@ -205,20 +211,35 @@ export function resolveCommand(name: string, env: NodeJS.ProcessEnv): string | n
   return Bun.which(name, { PATH: env.PATH ?? env.Path ?? '' });
 }
 
-/** Ids whose latest record in an earlier run's cli-run.jsonl is `ok`. */
-export function completedIds(jsonl: string): Set<string> {
-  const latest = new Map<string, string>();
+/** What a job sends: a rerun with a changed prompt or args (a different model arm) is a different job. */
+export function jobKey(job: CliJob): string {
+  return createHash('sha256').update(JSON.stringify([job.prompt, job.args ?? []])).digest('hex').slice(0, 16);
+}
+
+/** `id\0key` for every job whose latest record in an earlier run's cli-run.jsonl is `ok` with the same key. */
+export function completedJobs(jsonl: string): Set<string> {
+  const latest = new Map<string, { status: string; key: unknown }>();
   if (!fs.existsSync(jsonl)) return new Set();
   for (const line of fs.readFileSync(jsonl, 'utf8').split('\n')) {
     if (!line.trim()) continue;
     try {
       const r: unknown = JSON.parse(line);
-      if (isObj(r) && typeof r.id === 'string' && typeof r.status === 'string') latest.set(r.id, r.status);
+      if (isObj(r) && typeof r.id === 'string' && typeof r.status === 'string') latest.set(r.id, { status: r.status, key: r.key });
     } catch {
       // An interrupted append leaves a partial tail line; that job simply reruns.
     }
   }
-  return new Set([...latest].filter(([, s]) => s === 'ok').map(([id]) => id));
+  return new Set([...latest].filter(([, r]) => r.status === 'ok' && typeof r.key === 'string').map(([id, r]) => `${id}\0${r.key}`));
+}
+
+/** Results and stderr tails are private: the directory is 0700 and every file 0600, also on resume. */
+function privateDir(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(dir, 0o700);
+}
+function privateWrite(file: string, text: string, append = false): void {
+  if (append) fs.appendFileSync(file, text, { mode: 0o600 }); else fs.writeFileSync(file, text, { mode: 0o600 });
+  fs.chmodSync(file, 0o600);
 }
 
 interface CallResult { rc: number | null; stdout: string; stderr: string; timedOut: boolean }
@@ -253,19 +274,25 @@ const tail = (s: string) => (s.length > TAIL_BYTES ? s.slice(-TAIL_BYTES) : s);
  * `<out>/cli-run-summary.json`.
  */
 export async function runCliBatch(opts: CliRunOptions): Promise<CliRunSummary> {
-  fs.mkdirSync(opts.out, { recursive: true });
+  privateDir(opts.out);
   const jsonl = path.join(opts.out, 'cli-run.jsonl');
   const { env, removed } = scrubBillingEnv(opts.env);
   const bin = resolveCommand(opts.claudeBin ?? 'claude', env);
   if (!bin) throw new Error(`${opts.claudeBin ?? 'claude'} is not on PATH; cli-run needs the claude CLI`);
-  const done = completedIds(jsonl);
+  const done = completedJobs(jsonl);
+  const keys = new Map(opts.jobs.map(j => [j.id, jobKey(j)]));
+  const isDone = (j: CliJob) => done.has(`${j.id}\0${keys.get(j.id)}`);
   const records = new Map<string, CliJobRecord>();
-  for (const j of opts.jobs) if (done.has(j.id)) records.set(j.id, { id: j.id, status: 'skipped', rc: null, attempts: 0 });
-  const pending = opts.jobs.filter(j => !done.has(j.id));
+  for (const j of opts.jobs) if (isDone(j)) records.set(j.id, { id: j.id, key: keys.get(j.id)!, status: 'skipped', rc: null, attempts: 0 });
+  const pending = opts.jobs.filter(j => !isDone(j));
   const retries = Math.max(0, Math.min(2, Math.floor(opts.retries)));
   const workers = Math.max(1, Math.floor(opts.workers));
   let next = 0; let stopped = false; let inFlight = 0; let maxInFlight = 0; let quotaDetail: string | undefined;
-  const finish = (r: CliJobRecord) => { records.set(r.id, r); fs.appendFileSync(jsonl, JSON.stringify(r) + '\n'); };
+  const finish = (r: Omit<CliJobRecord, 'key'>) => {
+    const rec: CliJobRecord = { ...r, key: keys.get(r.id)! };
+    records.set(r.id, rec);
+    privateWrite(jsonl, JSON.stringify(rec) + '\n', true);
+  };
 
   const worker = async () => {
     while (!stopped && next < pending.length) {
@@ -298,7 +325,7 @@ export async function runCliBatch(opts: CliRunOptions): Promise<CliRunSummary> {
     ...(quotaDetail ? { quota_detail: quotaDetail } : {}),
     jobs,
   };
-  fs.writeFileSync(path.join(opts.out, 'cli-run-summary.json'), JSON.stringify(summary, null, 2) + '\n');
+  privateWrite(path.join(opts.out, 'cli-run-summary.json'), JSON.stringify(summary, null, 2) + '\n');
   return summary;
 }
 

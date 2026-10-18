@@ -150,6 +150,17 @@ describe('classifyClaudeResult', () => {
     expect(classifyClaudeResult(1, '', 'Error: 429 Too Many Requests').kind).toBe('quota');
   });
 
+  test('a structured signal counts on stderr and in a stream-json rate_limit_event, even at exit 0', () => {
+    const rejected = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', rateLimitType: null } });
+    const done = JSON.stringify({ type: 'result', is_error: false, result: 'partial' });
+    expect(classifyClaudeResult(0, `${rejected}\n${done}`, '')).toMatchObject({ kind: 'quota' });
+    expect(classifyClaudeResult(1, '', JSON.stringify({ quotaLimits: { status: 'rejected' } }))).toMatchObject({ kind: 'quota' });
+    expect(classifyClaudeResult(0, done, JSON.stringify({ error: 'rate_limit' }))).toMatchObject({ kind: 'quota' });
+    // A warning is not a stop: the call finished.
+    const warning = JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning' } });
+    expect(classifyClaudeResult(0, `${warning}\n${done}`, '')).toEqual({ kind: 'ok', detail: 'ok', result: 'partial' });
+  });
+
   test('an answer that mentions "rate limit" is ok; garbage and generic failures are errors, never quota', () => {
     expect(classifyClaudeResult(0, JSON.stringify({ type: 'result', is_error: false, result: 'Add a rate limit of 429 per hour; users hit your usage limit page.' }), '')).toEqual({ kind: 'ok', detail: 'ok', result: 'Add a rate limit of 429 per hour; users hit your usage limit page.' });
     expect(classifyClaudeResult(0, 'not json at all', '')).toEqual({ kind: 'error', detail: 'unparseable output' });
@@ -237,10 +248,12 @@ describe('cli-run pool and retries', () => {
     const f = fixture();
     f.writeJobs(ids(2));
     const value = 'gstack-test-billing-value-41b7';
-    const r = run(f, ['--class', 'standard', '--workers', '1', '--json'], inBatch(f, { ANTHROPIC_API_KEY: value, CLAUDE_CODE_USE_BEDROCK: '1' }));
+    const all = { ANTHROPIC_API_KEY: value, ANTHROPIC_AUTH_TOKEN: value, CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_USE_VERTEX: '1', CLAUDE_CODE_USE_FOUNDRY: '1' };
+    const r = run(f, ['--class', 'standard', '--workers', '1', '--json'], inBatch(f, all));
     expect(r.rc).toBe(0);
     for (const c of starts(f)) expect(c.billing).toEqual([]);
-    expect(r.summary.removed_env.sort()).toEqual(['ANTHROPIC_API_KEY', 'CLAUDE_CODE_USE_BEDROCK']);
+    for (const c of f.helperCalls()) expect(c.billing).toEqual([]);
+    expect(r.summary.removed_env.sort()).toEqual(Object.keys(all).sort());
     const files = fs.readdirSync(f.out).map(n => fs.readFileSync(path.join(f.out, n), 'utf8'));
     for (const text of [r.stdout, r.stderr, ...files]) expect(text).not.toContain(value);
   });
@@ -259,6 +272,20 @@ describe('cli-run pool and retries', () => {
     expect(starts(f).map(c => c.prompt)).toEqual(['job-03', 'job-04', 'job-05', 'job-06']);
     expect(second.summary).toMatchObject({ status: 'complete', ok: 4, skipped: 2 });
     expect(second.stdout).toContain('EVAL_CLI_JOB: id=job-01 status=skipped attempts=0');
+  });
+
+  test('a rerun with a changed prompt or args reruns that job; results are private', () => {
+    const f = fixture();
+    const write = (model: string) => fs.writeFileSync(f.jobs, ['job-01', 'job-02'].map(id => JSON.stringify({ id, prompt: id, args: ['--model', id === 'job-02' ? model : 'a'] })).join('\n') + '\n');
+    write('a');
+    expect(run(f, ['--class', 'standard', '--workers', '1'], inBatch(f)).rc).toBe(0);
+    fs.rmSync(path.join(f.dir, 'calls.jsonl'));
+    write('b');
+    const second = run(f, ['--class', 'standard', '--workers', '1'], inBatch(f));
+    expect(second.summary).toMatchObject({ status: 'complete', ok: 1, skipped: 1 });
+    expect(starts(f).map(c => [c.prompt, c.argv!.at(-1)])).toEqual([['job-02', 'b']]);
+    expect(fs.statSync(f.out).mode & 0o777).toBe(0o700);
+    for (const n of fs.readdirSync(f.out)) expect(fs.statSync(path.join(f.out, n)).mode & 0o777).toBe(0o600);
   });
 });
 
@@ -363,6 +390,8 @@ describe('/eval-plan skill template', () => {
     expectTokens(tmpl, ['gstack-eval-plan cli-run', 'EVAL_QUOTA_STOP', 'EVAL_BATCH_HELPER_MISSING'], 'eval-plan/SKILL.md.tmpl');
     expectMentions(between(tmpl, '## Boundaries', '## Step 1'), [['quota', 'no retry', 'api key', 'fallback']], 'eval-plan Boundaries');
     expectTokens(between(tmpl, '## Step 3', '## Step 4'), ['cli-run --jobs <jobs.jsonl> --out <outdir> --scope smoke'], 'eval-plan Step 3');
+    // The API-funded route is unchanged: those attempts keep the project's own command.
+    expectMentions(between(tmpl, '## Step 3', '## Step 4'), [['api-funded', "project's own command"]], 'eval-plan Step 3');
     expectTokens(between(tmpl, '## Step 4', '## Tier 3'), ['--scope full --class <standard|fable>', 'status=quota_stopped'], 'eval-plan Step 4');
   });
 });
