@@ -165,7 +165,7 @@ export const RESULT_CODES = {
   // C-stamp (plan C1, C2, C3, C5, C7): ship policy, restamp, tree receipt, ship receipt.
   POLICY_SOURCE_UNAVAILABLE: {
     anchor: 'policy-source-unavailable',
-    summary: 'policy source unavailable: origin/<base> is not a resolvable commit, so the reviewed .gstack/ship-policy.json cannot be read',
+    summary: 'policy source unavailable: origin/<base> is not a resolvable commit, or a pin file committed on it cannot be read, so the reviewed .gstack/ship-policy.json (or .gstack/pregate.json) cannot be read',
     fix: 'git fetch origin <base> --depth=1 (the working-tree copy is never used silently)',
   },
   POLICY_INVALID: {
