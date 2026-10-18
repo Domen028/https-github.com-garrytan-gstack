@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.91.137.0] - 2026-10-18
+
+**`scripts/gate-cost-replay.ts` measures what the paid PR gate costs, and what each selection or merge-train policy would have cost, from recorded artifacts and for free.** On the nine full gates of Oct 17 and 18 it reproduces GSTA-49's measurement: $93.14 recorded per gate, 97.1% of it Fable 5.1 (the model under test), 49.8% cache writes and 40.3% output. Over the 92 squash merges of Oct 3 to 18, today's selector averages $78.67 per merged PR on the $106.19 full-gate scale, R4's exercised-map shadow $64.27, and the screening rule $45.17 (screen-provisional). This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
+
+### Added
+- **`bun run scripts/gate-cost-replay.ts --runs <ids> [--since/--until | --prs] [--json]`.** It downloads the runs' `paid-slice-*` and `trial-outcomes` artifacts read-only with `gh` into `.context/gate-cost-cache` once, then prints recorded $ per gate by model and by token class (priced through `lib/pricing.ts`), a per-case mean cost table, and each merged PR's selection cost under today's selector, R4's shadow and the screening rule. A case whose runs record no cost (the PTY sessions) is estimated from its duration and marked estimated.
+- **Screening figures print as `screen-provisional`.** The rule's preamble detector is a line-commonality heuristic, not T2's hunk classifier, so the figures stay heuristic until T2 lands. A `package.json` change that only moves the version is neither selected nor a canary trigger, and all 24 judges always count.
+- **A seeded merge-train model.** Every merged PR lands in a train. PRs carry defects at the screened (6%) or unscreened (25%) rate, gates flake at 10% or 15%, each red pays a $6 bisect, a culprit is dropped and requeued, and an unattributed red gets one rebuild. It reports $ per week and per merged PR against $9,950 and $8,400 a week, plus screen spend, trains, gate attempts, bisects, rebuilds, stalls and red shares, for screening every PR, 80%, half, the cheapest or the most expensive half, or none. It uses CPython's Mersenne Twister, so seed 1 reproduces the measurement's sim.py exactly (trains of 5, 15% outside reds: $3,403, $2,672 and $1,986 a week for all, half and none).
+- Logic lives in `lib/gate-cost.ts`; the command is documented in docs/TESTING_INTERNALS.md#replay-gate-cost and CONTRIBUTING's "Which command do I run?".
+
+### If you…
+- **…want current numbers:** run `bun run scripts/gate-cost-replay.ts --runs <full-gate run ids> --since <date> --until <date>`. A shallow checkout tells you which `git fetch --shallow-since` to run first.
+
 ## [1.91.136.0] - 2026-10-18
 
 **/cso release qualification counts a tested claim as false only when trusted evidence could have certified it.** In the second paid runtime qualification, the falsely-tested gate counted 33 claims. 12 of them were on the evaluator's own fixture instrumentation and 2 were on real incidental issues, which only the seeded repair verification could ever certify. Garry chose option 1.
