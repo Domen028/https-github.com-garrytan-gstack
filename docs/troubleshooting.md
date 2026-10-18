@@ -2354,7 +2354,10 @@ file is described in [docs/ship-policy.md](ship-policy.md); the queue flow in
 **Meaning.** The policy is read from the committed copy on `origin/<base>`,
 and that ref does not resolve here (a shallow or detached gate checkout, or a
 fetch that never happened). The tool exits 3 and never falls back to the
-working-tree file silently.
+working-tree file silently. For `gstack-pregate` the same refusal covers a base
+`.gstack/pregate.json` git cannot read (a timeout, an oversized blob, a missing
+or corrupt object) that `git ls-tree` cannot confirm is absent; it never falls
+through to the user-owned file.
 
 **Fix.** `git fetch origin <base> --depth=1`, then rerun. To run against the
 branch's own file deliberately, pass `--policy-from head --allow-repo-commands`;
@@ -2812,7 +2815,7 @@ repository's lockfile), then rerun `gstack-regen check` or the pre-gate.
 that escapes the repository, a runner without `{files}`, or `secrets` in `warn`.
 The user-owned `<state root>/projects/<slug>/pregate.json` also refuses when it
 sets `sealed` or `price_file` (both are read only from the base branch's copy)
-or exists but cannot be read.
+or exists but cannot be read (a dangling symlink on its path counts).
 
 **Fix.** `gstack-pregate validate`. `secrets` and required-lane obligations
 cannot be downgraded; every other check id in `warn` is honoured only from the
@@ -2859,7 +2862,7 @@ test. An unmapped source or code file still fails. A file under a test
 directory is not this empty lane.
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
-for files with no behaviour) under `dependencies` in `.gstack/pregate.json`.
+for files with no behaviour) under `dependencies` in `.gstack/pregate.json` (or the user-owned file the message names).
 Other non-Markdown documentation goes in `empty_lanes` on the base branch.
 `--explain` prints every mapping and why. For a file with no lane it also prints the import
 specifiers in test files that resolved to no repo file (for example a
@@ -2892,7 +2895,7 @@ keep the tree still, then rerun.
 
 **Meaning.** A test command the lanes check (or a guard, or the `--remote`
 gate) launched wrote nothing to its log for the stall timeout (default 300 s,
-`stall_timeout_s` in the base branch's `.gstack/pregate.json`, or
+`stall_timeout_s` in the base branch's `.gstack/pregate.json` or the user-owned file, or
 `--stall-timeout`). pregate killed its process group and names the last test
 file started. The check is incomplete, never pass.
 
@@ -3149,8 +3152,9 @@ next `./setup` prints no CRLF warning.
 <a id="pregate-guard-failed"></a>
 ### `PREGATE_GUARD_FAILED`
 
-**Meaning.** A guard from the base branch's `.gstack/pregate.json` (a repo
-command such as a serial-test manifest check or a CLI golden test) matched a
+**Meaning.** A guard (a repo command such as a serial-test manifest check or a
+CLI golden test) from the base branch's `.gstack/pregate.json`, or from the
+user-owned file when the base carries none, matched a
 file the branch touched and exited non-zero. Guards cover what the import graph
 cannot see: manifests, subprocess goldens, registries. They cannot be
 downgraded to warn.
