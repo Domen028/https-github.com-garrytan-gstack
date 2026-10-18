@@ -610,6 +610,221 @@ describe('gstack-brain-sync per-file hold', () => {
     expect(spoolFiles()).toHaveLength(3);
   }, 120_000);
 
+  test('successful add without an index entry keeps the queue and refuses publication', () => {
+    init();
+    write(CLEAN, '# queued plan\n');
+    const before = git(['rev-parse', 'HEAD']).stdout;
+    const shim = gitShim('case " $* " in *" add "*) exit 0;; esac');
+    expect(drain(shim.env).status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(statusJson().message).toContain('staged artifact validation refused');
+    expect(spoolText()).toContain(CLEAN);
+    expect(git(['rev-parse', 'HEAD']).stdout).toBe(before);
+    expect(remoteFiles()).not.toContain(CLEAN);
+  });
+
+  test('assume-unchanged cannot silently acknowledge stale indexed content', () => {
+    init();
+    write(CLEAN, '# first version\n');
+    drain();
+    expect(git(['update-index', '--assume-unchanged', CLEAN]).status).toBe(0);
+    write(CLEAN, '# second version\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(spoolText()).toContain(CLEAN);
+    expect(remoteShow(CLEAN).stdout).toBe('# first version\n');
+  });
+
+  test('unrelated staged entries are preserved and never included in a sync commit', () => {
+    init();
+    write(CLEAN, '# queued plan\n');
+    const extra = 'projects/p/ceo-plans/manual.md';
+    write(extra, '# manually staged\n', false);
+    expect(git(['add', '-f', '--', extra]).status).toBe(0);
+    const result = drain();
+    expect(result.status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(spoolText()).toContain(CLEAN);
+    expect(staged()).toContain(extra);
+    expect(staged()).toContain(CLEAN);
+    expect(remoteFiles()).not.toContain(extra);
+    expect(remoteFiles()).not.toContain(CLEAN);
+  });
+
+  test('staged content verification respects Git clean conversion', () => {
+    init();
+    fs.writeFileSync(path.join(tmpHome, '.gitattributes'), '*.md text eol=lf\n');
+    write(CLEAN, '# CRLF plan\r\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('ok');
+    expect(remoteShow(CLEAN).stdout).toBe('# CRLF plan\n');
+    expect(spoolFiles()).toHaveLength(0);
+  });
+
+  function seedIndexedPaths(paths: string[]) {
+    const oid = spawnSync('git', ['-C', tmpHome, 'hash-object', '-w', '--stdin'], {
+      input: '# historical artifact\n', encoding: 'utf-8', timeout: 30_000,
+    });
+    expect(oid.status).toBe(0);
+    for (const p of paths) {
+      expect(git(['update-index', '--add', '--cacheinfo', `100644,${oid.stdout.trim()},${p}`]).status).toBe(0);
+    }
+    expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'historical paths']).status).toBe(0);
+    expect(git(['push', '-q', 'origin', 'HEAD']).status).toBe(0);
+  }
+
+  for (const [oldPath, newPath] of [
+    ['projects/P/ceo-plans/old.md', CLEAN],
+    ['projects/p/ceo-plans/Foo/old.md', 'projects/p/ceo-plans/foo/new.md'],
+    ['projects/Straße/ceo-plans/old.md', 'projects/STRASSE/ceo-plans/new.md'],
+  ]) {
+    test(`a new casefold prefix alias is held, never staged: ${oldPath}`, () => {
+      init();
+      // Create the historical tree directly so this works on either a case-
+      // sensitive or insensitive host, without materializing conflicting dirs.
+      seedIndexedPaths([oldPath]);
+      expect(git(['config', 'core.ignorecase', 'false']).status).toBe(0);
+      write(newPath, '# queued plan\n');
+      const before = git(['rev-parse', 'HEAD']).stdout;
+      expect(drain().status).toBe(0);
+      const s = statusJson();
+      expect(s.status).toBe('collision');
+      expect(s.case_held).toBe(1);
+      expect(spoolText()).toContain(newPath);
+      expect(git(['rev-parse', 'HEAD']).stdout).toBe(before);
+      expect(remoteFiles()).not.toContain(newPath);
+      expect(staged()).toBe('');
+    });
+  }
+
+  test('an unchanged historical collision does not block an unrelated artifact', () => {
+    init();
+    seedIndexedPaths(['projects/OLD/ceo-plans/a.md', 'projects/old/ceo-plans/b.md']);
+    write(CLEAN, '# independent plan\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('ok');
+    expect(statusJson().case_held).toBe(0);
+    expect(statusJson().case_names).toBe('OLD,old');
+    expect(remoteFiles()).toContain(CLEAN);
+    expect(spoolFiles()).toHaveLength(0);
+  });
+
+  // #3220: two spellings of one project are both tracked (a case-sensitive
+  // producer committed both). A write to either is held instead of staged, so
+  // a case-insensitive checkout cannot record it under the other spelling and
+  // report ok; every other file still syncs.
+  const WS_UPPER = 'projects/Example_Workspace/learnings.jsonl';
+  const WS_LOWER = 'projects/Example_workspace/learnings.jsonl';
+  test('#3220: a write into a tracked case-colliding project is held; the rest syncs and nothing reports success', () => {
+    init();
+    seedIndexedPaths([WS_UPPER, WS_LOWER]);
+    write(WS_LOWER, '{"key":"c","insight":"new on mac"}\n');
+    write(CLEAN, '# independent plan\n');
+    const result = drain();
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain('differs only by letter case (Example_Workspace,Example_workspace)');
+    expect(remoteFiles()).toContain(CLEAN);
+    expect(remoteShow(WS_LOWER).stdout).toBe('# historical artifact\n');
+    expect(staged()).toBe('');
+    expect(spoolText()).toContain(WS_LOWER);
+    expect(spoolText()).not.toContain(CLEAN);
+    const s = statusJson();
+    expect(s.status).toBe('collision');
+    expect(s.case_held).toBe(1);
+    expect(s.case_names).toBe('Example_Workspace,Example_workspace');
+    expect(s.message).toContain(WS_LOWER);
+    expect(s.message).toContain('docs/troubleshooting.md#artifact-case-collision');
+    expect(run(['gstack-brain-sync', '--attention']).stdout.trim()).toBe(
+      `ARTIFACTS_SYNC: attention: case-collision held=1 names=Example_Workspace,Example_workspace. Artifact paths differ only by letter case, which a Mac or Windows disk stores as one file; sync holds 1 queued file(s) under them and syncs everything else. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision. See the paths: ${SELF} --status`,
+    );
+    // Held, not dropped: the next drain holds it again and still never says ok.
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('collision');
+    expect(spoolText()).toContain(WS_LOWER);
+  });
+
+  test('publish-removals refuses to push a retained commit that adds a case alias', () => {
+    init();
+    const victim = 'projects/other/ceo-plans/remove.md';
+    seedIndexedPaths(['projects/P/ceo-plans/old.md', victim]);
+    write('projects/P/ceo-plans/old.md', '# historical artifact\n', false);
+    const alias = 'projects/p/ceo-plans/local.md';
+    write(alias, '# unsafe local alias\n', false);
+    expect(git(['add', '-f', '--', alias]).status).toBe(0);
+    expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'retained local alias']).status).toBe(0);
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(run(['gstack-brain-sync', '--publish-removals', '--yes']).status).toBe(1);
+    expect(remoteFiles()).not.toContain(alias);
+    expect(remoteFiles()).toContain(victim);
+  });
+
+  test('the cached outgoing verdict is re-checked when the remote baseline moves', () => {
+    init();
+    const initial = git(['rev-parse', 'HEAD']).stdout.trim();
+    seedIndexedPaths(['projects/MyApp/ceo-plans/a.md', 'projects/myapp/ceo-plans/b.md']);
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).not.toBe('error');
+    expect(git(['--git-dir=' + bareRemote, 'update-ref', 'refs/heads/main', initial]).status).toBe(0);
+    expect(git(['fetch', '-q', 'origin']).status).toBe(0);
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(statusJson().case_names).toBe('MyApp,myapp');
+  });
+
+  test('a tracked spelling keeps syncing while only the new case alias is held', () => {
+    init();
+    seedIndexedPaths(['projects/MyApp/ceo-plans/a.md']);
+    write('projects/MyApp/ceo-plans/a.md', '# updated\n');
+    write('projects/myapp/ceo-plans/b.md', '# other project\n');
+    expect(drain().status).toBe(0);
+    expect(remoteShow('projects/MyApp/ceo-plans/a.md').stdout).toBe('# updated\n');
+    expect(remoteFiles()).not.toContain('projects/myapp/ceo-plans/b.md');
+    const s = statusJson();
+    expect(s.status).toBe('collision');
+    expect(s.case_held).toBe(1);
+    expect(s.case_names).toBe('MyApp,myapp');
+    expect(spoolText()).toContain('projects/myapp/ceo-plans/b.md');
+  });
+
+  test('without a case collision the status carries no case fields and skill start no case line', () => {
+    init();
+    write(CLEAN, '# a plan\n');
+    expect(drain().status).toBe(0);
+    const s = statusJson();
+    expect(s.status).toBe('ok');
+    expect(s.case_held).toBe(0);
+    expect(s.case_names).toBe('');
+    expect(run(['gstack-brain-sync', '--attention']).stdout).toBe('');
+  });
+
+  test('a retry merge introducing casefold aliases stays local and keeps the queue', () => {
+    init();
+    const peer = fs.mkdtempSync(path.join(tmpHome, 'peer-'));
+    expect(git(['clone', '-q', bareRemote, peer]).status).toBe(0);
+    const peerPath = 'projects/P/ceo-plans/remote.md';
+    fs.mkdirSync(path.dirname(path.join(peer, peerPath)), { recursive: true });
+    fs.writeFileSync(path.join(peer, peerPath), '# remote plan\n');
+    expect(git(['add', '-f', '--', peerPath], peer).status).toBe(0);
+    expect(git(['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.com', 'commit', '-qm', 'remote plan'], peer).status).toBe(0);
+    expect(git(['push', '-q', 'origin', 'HEAD'], peer).status).toBe(0);
+    expect(git(['config', 'core.ignorecase', 'false']).status).toBe(0);
+    // The retry merge commits with the ambient identity; a CI runner has none.
+    expect(git(['config', 'user.name', 'fixture']).status).toBe(0);
+    expect(git(['config', 'user.email', 'fixture@example.com']).status).toBe(0);
+    write(CLEAN, '# local plan\n');
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(statusJson().case_names).toBe('P,p');
+    expect(spoolText()).toContain(CLEAN);
+    expect(remoteFiles()).toContain(peerPath);
+    expect(remoteFiles()).not.toContain(CLEAN);
+    // A following empty/ordinary retry must not auto-push the retained merge.
+    expect(drain().status).toBe(0);
+    expect(statusJson().status).toBe('error');
+    expect(remoteFiles()).not.toContain(CLEAN);
+  });
+
   test('a git add failure is reported, never swallowed', () => {
     if (!canRevokeWrites()) return; // chmod is advisory here (win32, root)
     init();

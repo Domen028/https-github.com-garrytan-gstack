@@ -30,7 +30,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { runSkillTest, type SkillTestResult } from './helpers/session-runner';
-import { asideDriveOptions } from './helpers/third-party-actions';
+import { asideDownloadPitch, asideDriveOptions } from './helpers/third-party-actions';
 import { resolveEvalModel } from '../lib/eval-model';
 import {
   ROOT, describeIfSelected, testIfSelected, createEvalCollector,
@@ -38,8 +38,6 @@ import {
 } from './helpers/e2e-helpers';
 
 const evalCollector = createEvalCollector('e2e-third-party-actions');
-const asideDownloadPitch = /(?:^|[.!?;:]\s*|\n)\s*(?:[>*-]\s*)*["“]?download (?:it|Aside(?: \(macOS 15\+\))?) at aside\.com\b/im;
-
 /** Preserve one terminal attempt after fixture setup, runner, assertions and cleanup. */
 async function recordAttempt(name: string, body: (run: typeof runSkillTest) => Promise<void>): Promise<void> {
   const started = Date.now();
