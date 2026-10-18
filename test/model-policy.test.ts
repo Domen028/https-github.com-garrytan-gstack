@@ -20,7 +20,7 @@ import {
   validatePolicyValue,
   type ModelSelection,
 } from '../lib/model-policy';
-import { CLAUDE_FRONTIER_EVAL_MODEL } from '../lib/eval-model';
+import { CLAUDE_CAPTURE_EVAL_MODEL, CLAUDE_JUDGE_EVAL_MODEL } from '../lib/eval-model';
 import { CODEX_RUNTIME_MODEL_PATTERN } from '../scripts/resolve-codex-generation-model';
 import { CODEX_FRONTIER_MODEL } from '../scripts/resolvers/constants';
 
@@ -99,7 +99,8 @@ describe('model catalog', () => {
   });
 
   test('eval rulers and the no-role Codex pattern stay independent of the catalog', () => {
-    expect(CLAUDE_FRONTIER_EVAL_MODEL).toBe('claude-fable-5-1');
+    expect(CLAUDE_CAPTURE_EVAL_MODEL).toBe('claude-opus-5-5');
+    expect(CLAUDE_JUDGE_EVAL_MODEL).toBe('claude-fable-5-1');
     expect(CODEX_FRONTIER_MODEL).toBe('gpt-6-astra');
     for (const file of ['lib/eval-model.ts', 'scripts/resolvers/constants.ts']) {
       expect(fs.readFileSync(path.join(ROOT, file), 'utf-8')).not.toMatch(/from\s+['"][^'"]*model-(catalog|policy)/);
