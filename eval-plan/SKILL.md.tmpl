@@ -137,8 +137,8 @@ anything else (`EVAL_DRY_RUN_FAILED`).
 shared with any concurrent worker. Run each `PILOT_ATTEMPT:` through the project's own
 eval command, then settle it with the actual cost from the provider's usage field, or
 `unknown` when the call was seat-metered or CLI-metered. A subscription (CLI-metered) attempt
-runs through `cli-run --scope smoke`: write one `{"id": "<attempt-id>", "prompt": "..."}` line
-per attempt into a jobs file with your file-write tool, run it, then settle each attempt
+runs through `cli-run --scope smoke`: write one `{"id": "<attempt-id>", "prompt": "...", "args": ["--model", "<arm>"]}`
+line per attempt into a jobs file with your file-write tool, run it, then settle each attempt
 `unknown`. API-funded attempts keep the project's own command.
 
 ```bash
