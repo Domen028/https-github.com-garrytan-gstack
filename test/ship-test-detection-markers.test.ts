@@ -20,23 +20,23 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { generateTestBootstrap } from '../scripts/resolvers/testing';
+import { generateTestBootstrap, generateTestCoverageAuditShip } from '../scripts/resolvers/testing';
 import { generateReviewArmy } from '../scripts/resolvers/review-army';
 import { HOST_PATHS } from '../scripts/resolvers/types';
 
 const section = generateTestBootstrap({} as never);
 
 /** The detection block the skill tells the agent to run (first bash fence). */
-function detectionScript(): string {
-  const open = section.indexOf('```bash\n');
+function detectionScript(from: string = section): string {
+  const open = from.indexOf('```bash\n');
   expect(open).toBeGreaterThan(-1);
   const start = open + '```bash\n'.length;
-  const end = section.indexOf('```', start);
-  return section.slice(start, end);
+  const end = from.indexOf('```', start);
+  return from.slice(start, end);
 }
 
 /** Run the detection block in a throwaway git repo laid out by `files`. */
-function detect(files: Record<string, string>): string {
+function detect(files: Record<string, string>, script: string = detectionScript()): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ship-detect-'));
   try {
     for (const [rel, body] of Object.entries(files)) {
@@ -44,15 +44,15 @@ function detect(files: Record<string, string>): string {
       fs.mkdirSync(path.dirname(abs), { recursive: true });
       fs.writeFileSync(abs, body);
     }
-    const script = path.join(dir, '.detect.sh');
-    fs.writeFileSync(script, detectionScript());
+    const scriptPath = path.join(dir, '.detect.sh');
+    fs.writeFileSync(scriptPath, script);
     const git = (...args: string[]) => execFileSync('git', args, { timeout: 30_000, cwd: dir });
     git('init', '-q', '.');
     git('add', '-A');
     git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'fixture');
     // The block's last line is a `[ -f marker ] && echo`, so a clean project
     // exits 1 by design — read stdout, don't trust the status.
-    return execFileSync('bash', [script], { timeout: 30_000, cwd: dir, encoding: 'utf-8' });
+    return execFileSync('bash', [scriptPath], { timeout: 30_000, cwd: dir, encoding: 'utf-8' });
   } catch (err: unknown) {
     const e = err as { stdout?: string };
     if (typeof e.stdout === 'string') return e.stdout;
@@ -108,6 +108,17 @@ describe('/ship Step 4 detection is multi-ecosystem', () => {
     expect(dart).toContain('RUNTIME:dart');
     expect(dart).not.toContain('FRAMEWORK:flutter');
     expect(testFileCount(dart)).toBe(0);
+  });
+
+  // Value: protects=the Step 7 coverage audit sees a Dart project and its *_test.dart files, like bootstrap does;
+  //   fails_when=the coverage-audit block drops RUNTIME:dart or `dart` from its _test regex; why_new=only the
+  //   bootstrap block was run; seam=none; no_claim=none beyond protects
+  test('the Step 7 coverage-audit detection block agrees with bootstrap on Dart', () => {
+    const audit = generateTestCoverageAuditShip({ host: 'claude', skillName: 'ship', tmplPath: 'ship/SKILL.md.tmpl', paths: HOST_PATHS.claude } as never);
+    const block = audit.slice(audit.indexOf('Test Framework Detection'));
+    const out = detect({ 'pubspec.yaml': 'name: x\n', 'lib/src/theme_test.dart': 'void main() {}\n' }, detectionScript(block));
+    expect(out).toContain('RUNTIME:dart');
+    expect(testFileCount(out)).toBe(1);
   });
 
   test('a genuinely untested project reports no test evidence', () => {

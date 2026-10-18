@@ -106,7 +106,8 @@ for f in ${FILES_LIST[@]+"${FILES_LIST[@]}"}; do
     *.html) m_frontend=true ;;
     # Dart: the extension cannot tell a Flutter widget from a repository or a
     # pure-Dart server, so it is BOTH frontend and backend (BACKEND set below).
-    # A skipped reviewer is invisible; an extra one is a cheap pass.
+    # A skipped reviewer is invisible; an extra one (design-lite included) is a
+    # visible pass that costs a review.
     *.dart) m_frontend=true ;;
     tailwind.config.*|postcss.config.*) m_frontend=true ;;
     app/views/*|*/components/*|styles/*|css/*|app/assets/stylesheets/*) m_frontend=true ;;
