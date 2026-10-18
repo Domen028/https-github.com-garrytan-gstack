@@ -25,6 +25,7 @@ import { HOST_PATHS } from './resolvers/types';
 import { RESOLVERS } from './resolvers/index';
 import { rewriteCarvedSectionRefs, SKILL_BYTE_CEILING, usesLazySections } from './resolvers/sections';
 import { insertRuntimePreludes } from './resolvers/runtime-root';
+import { extractVoiceTriggers } from './resolvers/voice-triggers';
 import { ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
 import type { HostConfig } from './host-config';
 
@@ -210,30 +211,6 @@ function rewriteSectionBase(content: string, linkRoot: string | null): string {
 // ─── Voice Trigger Processing ────────────────────────────────
 
 /**
- * Extract voice-triggers YAML list from frontmatter.
- * Returns an array of trigger strings, or [] if no voice-triggers field.
- */
-function extractVoiceTriggers(content: string): string[] {
-  const fmStart = content.indexOf('---\n');
-  if (fmStart !== 0) return [];
-  const fmEnd = content.indexOf('\n---', fmStart + 4);
-  if (fmEnd === -1) return [];
-  const frontmatter = content.slice(fmStart + 4, fmEnd);
-
-  const triggers: string[] = [];
-  let inVoice = false;
-  for (const line of frontmatter.split('\n')) {
-    if (/^voice-triggers:/.test(line)) { inVoice = true; continue; }
-    if (inVoice) {
-      const m = line.match(/^\s+-\s+"(.+)"$/);
-      if (m) triggers.push(m[1]);
-      else if (!/^\s/.test(line)) break;
-    }
-  }
-  return triggers;
-}
-
-/**
  * Preprocess voice triggers: fold voice-triggers YAML field into description,
  * then strip the field from frontmatter. Must run BEFORE transformFrontmatter
  * and extractNameAndDescription so all hosts see the updated description.
@@ -273,7 +250,8 @@ export { extractVoiceTriggers, processVoiceTriggers };
 // into a one-line catalog entry (lead sentence + "(gstack)") that stays in
 // the frontmatter and drops the routing/voice prose. The body is not a home
 // for it: Claude Code loads a skill body only after the skill is invoked, so
-// routing text there can no longer route anything.
+// routing text there can no longer route anything. Voice triggers live on in
+// the root router's routing block ({{VOICE_TRIGGER_ROUTING}}).
 //
 // Opt-out: `--catalog-mode=full` keeps v1.44 behavior (no trim, full
 // description in frontmatter). Use when debugging routing regressions or

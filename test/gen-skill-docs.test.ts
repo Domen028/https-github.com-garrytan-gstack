@@ -4451,6 +4451,21 @@ describe('voice-triggers processing', () => {
     expect(content).toContain('Voice triggers (speech-to-text aliases):');
   });
 
+  test('Claude root router routes every skill voice trigger the catalog trim drops', () => {
+    const routing = between(fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8'), '**Routing rules', '**Route only to skills');
+    const skills = fs.readdirSync(ROOT).filter(d => fs.existsSync(path.join(ROOT, d, 'SKILL.md.tmpl')));
+    let routed = 0;
+    for (const skill of skills) {
+      const triggers = extractVoiceTriggers(fs.readFileSync(path.join(ROOT, skill, 'SKILL.md.tmpl'), 'utf-8').replace(/\r\n/g, '\n'));
+      if (triggers.length === 0) continue;
+      const line = routing.split('\n').find(l => l.endsWith(`→ invoke \`/${skill}\``) && l.startsWith('- Voice trigger '));
+      expect(line, skill).toBeDefined();
+      for (const t of triggers) expect(line, skill).toContain(`"${t}"`);
+      routed++;
+    }
+    expect(routed).toBeGreaterThan(0);
+  });
+
   test('generated CSO SKILL.md does NOT contain raw voice-triggers field', () => {
     const content = fs.readFileSync(path.join(ROOT, 'cso', 'SKILL.md'), 'utf-8');
     const fmEnd = content.indexOf('\n---', 4);
