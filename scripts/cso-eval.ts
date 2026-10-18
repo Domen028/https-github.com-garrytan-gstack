@@ -118,6 +118,13 @@ export interface EvalFinding {
     recheck: Outcome;
     recheckEvidenceHash?: string;
   };
+  /**
+   * Written only by the independent evaluator, for a tested claim on an `incidental` finding: the result of
+   * replaying the helper's signed repair bundle for that finding against the trusted source. `passed` (with the
+   * replay's evidence hash) certifies the claim; `failed` or `missing` (no bound bundle) leaves it falsely tested.
+   * It never counts toward recall, repair or held-out rates, which need the seeded issue.
+   */
+  trustedReplay?: { result: 'passed' | 'failed' | 'missing'; replayEvidenceHash?: string };
 }
 export interface EvalResult {
   cellId: string; sourceHash: string; skillHash: string; model: string; host: string; budgetSeconds: number;
@@ -647,7 +654,7 @@ function validateResult(result: EvalResult, cell: EvalCell, corpus: EvalCorpusMa
   if (result.recheckEvidenceHash !== undefined && !HEX.test(result.recheckEvidenceHash)) throw new Error('INVALID_RECHECK_EVIDENCE');
   if (result.usage && (result.usage.source !== 'host' || (result.usage.tokens !== undefined && !validNumber(result.usage.tokens)) || (result.usage.costUSD !== undefined && !validNumber(result.usage.costUSD)))) throw new Error('INVALID_EVAL_USAGE');
   if (result.producerReceiptHash !== undefined && !HEX.test(result.producerReceiptHash)) throw new Error('INVALID_PRODUCER_RECEIPT_PROVENANCE');
-  const ids = new Set<string>(), repairEvidence = new Set<string>(), recheckEvidence = new Set<string>();
+  const ids = new Set<string>(), repairEvidence = new Set<string>(), recheckEvidence = new Set<string>(), replayEvidence = new Set<string>();
   for (const finding of result.findings) {
     if (!finding.id || ids.has(finding.id) || !['supported', 'hypothesis', 'legacy_review'].includes(finding.evidence) || !['correct', 'incidental', 'instrumentation', 'incorrect', 'unadjudicated'].includes(finding.judgment) || typeof finding.claimedTested !== 'boolean') throw new Error('INVALID_FINDING_JUDGMENT');
     ids.add(finding.id);
@@ -674,6 +681,17 @@ function validateResult(result: EvalResult, cell: EvalCell, corpus: EvalCorpusMa
       if (typeof recheckHash === 'string') {
         if (recheckEvidence.has(recheckHash)) throw new Error('DUPLICATE_TRUSTED_RECHECK_BINDING');
         recheckEvidence.add(recheckHash);
+      }
+    }
+    if (finding.trustedReplay !== undefined) {
+      const replay = finding.trustedReplay as Record<string, unknown>, hash = replay?.replayEvidenceHash;
+      if (!replay || typeof replay !== 'object' || Array.isArray(replay) || Object.keys(replay).some(key => key !== 'result' && key !== 'replayEvidenceHash') ||
+        !['passed', 'failed', 'missing'].includes(String(replay.result)) || finding.judgment !== 'incidental' || !finding.claimedTested ||
+        (replay.result === 'passed') !== (typeof hash === 'string' && HEX.test(hash)) || (replay.result !== 'passed' && hash !== undefined))
+        throw new Error('INVALID_TRUSTED_REPLAY');
+      if (typeof hash === 'string') {
+        if (replayEvidence.has(hash)) throw new Error('DUPLICATE_TRUSTED_REPLAY_BINDING');
+        replayEvidence.add(hash);
       }
     }
   }
@@ -728,6 +746,14 @@ function validatedResults(matrix: EvalMatrix, observations: EvalResult[], corpus
 const eligibleFinding = (cell: EvalCell, finding: EvalFinding) => finding.evidence === 'supported' || (cell.version === 'v2' && finding.evidence === 'legacy_review');
 const foundSeededIssue = (cell: EvalCell, result: EvalResult | undefined) => result?.reportFinished === true &&
   result.findings.some(finding => eligibleFinding(cell, finding) && finding.judgment === 'correct');
+/**
+ * A tested claim is false unless trusted evidence certifies it: the seeded repair's held-out verification, or, for an
+ * `incidental` finding, a passing replay of the helper's signed bundle. Claims on declared instrumentation count in
+ * neither direction (Garry, 2026-10-18, option 1), the same way precision leaves them out.
+ */
+const falselyTested = (cell: EvalCell, result: EvalResult, finding: EvalFinding, corpus: EvalCorpusManifest) =>
+  finding.claimedTested && finding.judgment !== 'instrumentation' && !trustedFindingVerification(cell, result, finding, 'repair', corpus) &&
+  !(finding.judgment === 'incidental' && finding.trustedReplay?.result === 'passed');
 const isHighCritical = (corpus: EvalCorpusManifest, caseId: string) => ['critical', 'high'].includes(corpus.cases.find(fixture => fixture.id === caseId)!.severity);
 
 /** High/critical recall of a pre-registered external baseline, after proving it binds to this release matrix. */
@@ -765,7 +791,7 @@ export function scoreEval(matrix: EvalMatrix, observations: EvalResult[], qualif
     const tokens = completed.flatMap(result => result.usage?.tokens === undefined ? [] : [result.usage.tokens]);
     const falseTested = selected.reduce((count, cell) => {
       const result = results.get(cell.id); if (!result) return count;
-      return count + result.findings.filter(finding => finding.claimedTested && !trustedFindingVerification(cell, result, finding, 'repair', corpus)).length;
+      return count + result.findings.filter(finding => falselyTested(cell, result, finding, corpus)).length;
     }, 0);
     groups.push({ version, mode, cells: selected.length, submitted: completed.length, missing: selected.length - completed.length,
       reports: rate(completed.filter(result => result.reportPresent && result.reportComplete).length, selected.length), finishedReports: rate(completed.filter(result => result.reportFinished).length, selected.length), precision: rate(correct, reported), recall: rate(expected.filter(found).length, expected.length), highCriticalRecall: rate(highCritical.filter(found).length, highCritical.length),

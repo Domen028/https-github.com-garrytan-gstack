@@ -348,6 +348,66 @@ describe('CSO matched evaluation accounting', () => {
     result.findings[1].trustedVerification = structuredClone(result.findings[0].trustedVerification);
     expect(() => scoreEval(matrix, results, qualification)).toThrow('DUPLICATE_TRUSTED_REPAIR_BINDING');
   });
+  test('tested claims on declared instrumentation count in neither direction; an incidental claim needs a passing replay of its signed bundle', () => {
+    const key = (seed: string) => createHash('sha256').update(seed).digest('hex');
+    const vulnerable = matrix.cells.find(item => item.version === 'v3' && item.mode === 'comprehensive' && item.variant === 'vulnerable')!;
+    const fixed = matrix.cells.find(item => item.version === 'v3' && item.mode === 'comprehensive' && item.variant === 'fixed')!;
+    const daily = matrix.cells.find(item => item.version === 'v3' && item.mode === 'daily' && item.variant === 'fixed')!;
+    const score = (edit: (byId: Map<string, EvalResult>) => void) => {
+      const results = matrix.cells.map(syntheticResult), byId = new Map(results.map(result => [result.cellId, result]));
+      edit(byId);
+      return scoreEval(matrix, results, qualification);
+    };
+    const clean = score(() => {});
+    expect(clean.gates.zeroFalselyTestedRepairs).toBe('pass');
+    const incidental = (id: string, replay?: EvalFinding['trustedReplay']): EvalFinding => ({ id, evidence: 'supported', claimedTested: true, judgment: 'incidental', incidentalKey: key(id), ...(replay ? { trustedReplay: replay } : {}) });
+
+    const instrumented = score(byId => {
+      byId.get(fixed.id)!.findings.push({ id: 'canary-claim', evidence: 'supported', claimedTested: true, judgment: 'instrumentation' });
+      byId.get(daily.id)!.findings.push({ id: 'probe-claim', evidence: 'supported', claimedTested: true, judgment: 'instrumentation' });
+    });
+    expect(group(instrumented, 'v3', 'comprehensive').falseTested).toBe(0); expect(group(instrumented, 'v3', 'daily').falseTested).toBe(0);
+    expect(instrumented.gates.zeroFalselyTestedRepairs).toBe('pass');
+
+    const instrumentationOnly = score(byId => {
+      const result = byId.get(vulnerable.id)!, binding = result.findings[0].trustedVerification!;
+      result.findings = [{ id: 'canary-claim', evidence: 'supported', claimedTested: true, judgment: 'instrumentation', trustedVerification: structuredClone(binding) }];
+    });
+    const empty = score(byId => { byId.get(vulnerable.id)!.findings = []; }), baseline = group(clean, 'v3', 'comprehensive');
+    const sameAsNoFinding = (scored: ReturnType<typeof scoreEval>) => {
+      const actual = group(scored, 'v3', 'comprehensive'), none = group(empty, 'v3', 'comprehensive');
+      expect(actual.falseTested).toBe(0);
+      expect([actual.recall, actual.highCriticalRecall, actual.repair, actual.recheck]).toEqual([none.recall, none.highCriticalRecall, none.repair, none.recheck]);
+      expect(scored.perStack).toEqual(empty.perStack);
+      expect(actual.recall.numerator).toBe(baseline.recall.numerator - 1);
+      expect(actual.repair.numerator).toBe(baseline.repair.numerator - 1);
+    };
+    sameAsNoFinding(instrumentationOnly);
+
+    for (const [replay, expected] of [[undefined, 1], [{ result: 'missing' }, 1], [{ result: 'failed' }, 1], [{ result: 'passed', replayEvidenceHash: key('replay') }, 0]] as const) {
+      const scored = score(byId => byId.get(fixed.id)!.findings.push(incidental('jwt-claim', replay as EvalFinding['trustedReplay'])));
+      expect(group(scored, 'v3', 'comprehensive').falseTested).toBe(expected);
+      expect(scored.gates.zeroFalselyTestedRepairs).toBe(expected ? 'fail' : 'pass');
+    }
+    const replayedOnly = score(byId => { byId.get(vulnerable.id)!.findings = [incidental('admin-claim', { result: 'passed', replayEvidenceHash: key('admin') })]; });
+    sameAsNoFinding(replayedOnly);
+
+    const passed = { result: 'passed', replayEvidenceHash: key('r') } as const;
+    for (const bad of [
+      { id: 'on-correct', evidence: 'supported', claimedTested: true, judgment: 'correct', matchedCaseId: vulnerable.caseId, trustedReplay: passed },
+      { id: 'on-instrumentation', evidence: 'supported', claimedTested: true, judgment: 'instrumentation', trustedReplay: passed },
+      { id: 'on-incorrect', evidence: 'supported', claimedTested: true, judgment: 'incorrect', trustedReplay: { result: 'failed' } },
+      { ...incidental('unclaimed', passed), claimedTested: false },
+      incidental('no-hash', { result: 'passed' } as EvalFinding['trustedReplay']),
+      incidental('failed-hash', { result: 'failed', replayEvidenceHash: key('f') } as EvalFinding['trustedReplay']),
+      incidental('short-hash', { result: 'passed', replayEvidenceHash: 'abc' }),
+      incidental('extra-key', { ...passed, repair: 'passed' } as EvalFinding['trustedReplay']),
+      incidental('bad-result', { result: 'skipped' } as unknown as EvalFinding['trustedReplay']),
+    ] as EvalFinding[]) {
+      expect(() => score(byId => byId.get(vulnerable.id)!.findings.push(bad))).toThrow('INVALID_TRUSTED_REPLAY');
+    }
+    expect(() => score(byId => byId.get(fixed.id)!.findings.push(incidental('one', passed), incidental('two', passed)))).toThrow('DUPLICATE_TRUSTED_REPLAY_BINDING');
+  });
   test('per-stack held-out repair requires the matching supported discovery', () => {
     const results = matrix.cells.map(syntheticResult);
     for (let index = 0; index < matrix.cells.length; index++) {
@@ -1156,7 +1216,10 @@ describe('CSO matched producer orchestration', () => {
     while (!walletShaped) { const id = randomHex(16); if (redact(id) !== id) walletShaped = id; }
     expect(redact(runId)).not.toBe(runId);
     const repo = 'e'.repeat(24);
+    let closure = '';
+    while (!closure) { const name = `${randomHex(32)}-before-${randomHex(8)}.json`; if (redact(name) !== name) closure = name; }
     const accepted = [`${repo}/${runId}/report.json`, `${repo}/${runId}/reviews/${walletShaped}.json`, `${repo}/${runId}/scanner-outcomes/gitleaks-${randomHex(8)}-${randomHex(8)}.json`,
+      `${repo}/${runId}/dependency-closures/${closure}`, `${repo}/${runId}/dependency-closures/${closure.replace('-before-', '-after-')}`,
       `${repo}/${runId}/snapshot/test/fixtures/cso-canary-token.txt`, 'public-cache/osv/index.json'];
     for (const path of accepted) expect(() => assertProducerArtifactPath(path)).not.toThrow();
     for (const [path, message] of [
@@ -1164,6 +1227,7 @@ describe('CSO matched producer orchestration', () => {
       [`${repo}/report.json`, 'INVALID_PRODUCER_ARTIFACTS: an artifact lies outside'],
       [`${repo}/${runId}/bad name.json`, 'INVALID_PRODUCER_ARTIFACTS: an artifact path has a component outside'],
     ] as const) expect(() => assertProducerArtifactPath(path)).toThrow(message);
+    expect(() => assertProducerArtifactPath(`${repo}/${runId}/dependency-closures/${closure.replace('-before-', '-during-')}`)).toThrow('looks like a secret');
     const planted = `sk-ant-api03-${randomHex(24)}`;
     expect(redact(planted)).not.toBe(planted);
     let failure: unknown;

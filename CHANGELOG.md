@@ -1,5 +1,59 @@
 # Changelog
 
+## [1.91.139.0] - 2026-10-18
+
+**The docs-sync fixture's declared Git interface now includes read-only `git describe`, so `ship-docsync-store` no longer goes red when the /document-release child checks for release tags.** PR #3272's gate run 39153452209 failed that case on one command, `git describe --tags --always`, which the observer did not list. A focused paid rerun of `ship-docsync-store` on this tree passed ($3.83); the child ran the same command twice and the observer accepted it.
+
+### Changed
+- **Accepted:** `git describe` with any of `--tags`, `--always`, `--abbrev=<n>` and `--exact-match`, plus at most one literal revision. The observer prose that parents pass to children lists the same forms, so the code allowlist and the prompt agree.
+- **Still refused:** `--dirty` and `--broken`, which take `index.lock` and rewrite `.git/index` (seen under strace on git 2.55), plus `--contains`, `--all`, any other flag, a second revision, redirection and composition. Write-capable Git commands such as `git tag` and `git update-index` stay outside the interface.
+- **Gate integrity:** this widens one observer allowlist (`test/helpers/docsync-observer.ts`) and tightens nothing. Free regressions cover all 36 Bash commands of the captured run and run each accepted form against a tagged fixture with an out-of-date file timestamp, checking that the repository and the raw index bytes don't change. Negative controls show that `git describe --dirty` really rewrites the index.
+
+## [1.91.138.0] - 2026-10-18
+
+**`scripts/gate-cost-replay.ts --history` replays PR gates' red runs and READY times, so the merge-train plan's two estimates are measured instead of assumed.** Over Oct 3 to 18 (505 E2E Evals runs, 92 merged PRs), the screen-provisional rule run on each failing head's diff from its tested base would have missed the PR-caused red on 2 of the 13 PRs that had one (#3036, #3121): 2 of 72 paid-relevant PRs (2.8%), against the plan's 6% estimate. 13 of 92 merged PRs had a PR-caused red, matching the plan's figure. Replaying READY arrivals through trains of 5 with a 3-hour fill limit, the realized train averages about 2.3 PRs, so trains make 22 to 29 gate attempts a week rather than the 12 to 20 the train model assumed, and READY-to-merge p90 runs 5 to 8 hours. This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
+
+### Added
+- **Red attribution as code.** Each failed case of a red PR-gate run is PR-caused or outside by GSTA-47's rule: a transcript diagnosis, red in another PR within 72 hours, the next gated run's own diff, or whether the push to it changed the case's inputs. It reproduces all 22 of GSTA-47's PR-caused runs and the same 13 PRs.
+- **The red-head replay.** Every PR-caused red case is checked against the screen-provisional rule on the failing head (not the merged squash), diffed from the base its run tested (the tested merge commit's first parent). The canary set is fixed in code before any replay (`SCREEN_CANARY_CASES`, one gate case per preamble-dependent surface) and is provisional until T2 lands. The report also lists misses with an empty canary set: here it made no difference, and 22 of the 28 red cases were caught only because the failing head changed a harness global, which makes the screen the full gate.
+- **The READY-arrival replay.** READY is approximated by the first time the merged own diff (modulo main merges and stamps) had green Free Tests and E2E Evals before the merge; READY reports are not machine-readable. Arrivals then run through the train policy (screened PRs first, unscreened in their own train once 5 wait, 45 minutes a gate and a bisect, the train model's red and rebuild rules), reporting occupancy, rebuilds and READY-to-merge p50/p90 beside today's (p50 0.1 h, p90 3.3 h).
+- Logic lives in `lib/gate-cost-history.ts`; the CLI reads runs, PRs and `report-verdict`/`trial-outcomes` artifacts read-only with `gh`, cached, and fetches old PR heads by SHA.
+
+### If you…
+- **…want current numbers:** run `bun run scripts/gate-cost-replay.ts --runs <full-gate run ids> --since <date> --until <date> --history`. A cold run downloads the full gates once (about 9 minutes); a cached rerun takes about a minute.
+
+## [1.91.137.0] - 2026-10-18
+
+**`scripts/gate-cost-replay.ts` measures what the paid PR gate costs, and what each selection or merge-train policy would have cost, from recorded artifacts and for free.** On the nine full gates of Oct 17 and 18 it reproduces GSTA-49's measurement: $93.14 recorded per gate, 97.1% of it Fable 5.1 (the model under test), 49.8% cache writes and 40.3% output. Over the 92 squash merges of Oct 3 to 18, today's selector averages $78.67 per merged PR on the $106.19 full-gate scale, R4's exercised-map shadow $64.27, and the screening rule $45.17 (screen-provisional). This is lane T0 of the plan to cut the paid gate bill about 4x; nothing changes what any gate runs.
+
+### Added
+- **`bun run scripts/gate-cost-replay.ts --runs <ids> [--since/--until | --prs] [--json]`.** It downloads the runs' `paid-slice-*` and `trial-outcomes` artifacts read-only with `gh` into `.context/gate-cost-cache` once, then prints recorded $ per gate by model and by token class (priced through `lib/pricing.ts`), a per-case mean cost table, and each merged PR's selection cost under today's selector, R4's shadow and the screening rule. A case whose runs record no cost (the PTY sessions) is estimated from its duration and marked estimated.
+- **Screening figures print as `screen-provisional`.** The rule's preamble detector is a line-commonality heuristic, not T2's hunk classifier, so the figures stay heuristic until T2 lands. A `package.json` change that only moves the version is neither selected nor a canary trigger, and all 24 judges always count.
+- **A seeded merge-train model.** Every merged PR lands in a train. PRs carry defects at the screened (6%) or unscreened (25%) rate, gates flake at 10% or 15%, each red pays a $6 bisect, a culprit is dropped and requeued, and an unattributed red gets one rebuild. It reports $ per week and per merged PR against $9,950 and $8,400 a week, plus screen spend, trains, gate attempts, bisects, rebuilds, stalls and red shares, for screening every PR, 80%, half, the cheapest or the most expensive half, or none. It uses CPython's Mersenne Twister, so seed 1 reproduces the measurement's sim.py exactly (trains of 5, 15% outside reds: $3,403, $2,672 and $1,986 a week for all, half and none).
+- Logic lives in `lib/gate-cost.ts`; the command is documented in docs/TESTING_INTERNALS.md#replay-gate-cost and CONTRIBUTING's "Which command do I run?".
+
+### If you…
+- **…want current numbers:** run `bun run scripts/gate-cost-replay.ts --runs <full-gate run ids> --since <date> --until <date>`. A shallow checkout tells you which `git fetch --shallow-since` to run first.
+
+## [1.91.136.0] - 2026-10-18
+
+**/cso release qualification counts a tested claim as false only when trusted evidence could have certified it.** In the second paid runtime qualification, the falsely-tested gate counted 33 claims. 12 of them were on the evaluator's own fixture instrumentation and 2 were on real incidental issues, which only the seeded repair verification could ever certify. Garry chose option 1.
+
+### Changed
+- **Tested claims on declared instrumentation count in neither direction.** A finding the evaluator marks `instrumentation` is never falsely tested and never certified, the same way precision leaves it out.
+- **A tested claim on an incidental finding needs a passing replay.** The evaluator replays the helper's signed repair bundle for that finding against the trusted source and records `trustedReplay`. Only `passed` with a 64-hex `replayEvidenceHash` certifies the claim. `failed` or `missing` (no bound bundle) leaves it falsely tested.
+- **Recall, repair, held-out repair, the v2 baseline and every threshold are unchanged.** Those still need the seeded issue and the judge's own held-out verification. Validation rejects `trustedReplay` on any judgment other than a claimed `incidental`, a malformed or reused hash, and unknown fields.
+
+### If you…
+- **…write an evaluator for `cso-eval.ts`:** write `trustedReplay` only on claimed `incidental` findings, with `result` `passed`, `failed` or `missing`, and `replayEvidenceHash` on `passed` only.
+
+## [1.91.135.0] - 2026-10-18
+
+**/cso evaluation cells that run a repair no longer fail on the helper's own file names.** In the second paid runtime qualification, one comprehensive Rails cell failed with REDACTION_FAILED. Once a repair ran, the helper retained dependency closures as `<finding id>-before-<plan hash>.json`. The producer's artifact inventory checks each path component, and this name didn't match any known helper-ID shape. So the secret redactor read the 64-character hex finding ID as a credential and failed the whole cell.
+
+### Fixed
+- **The eval producer recognizes dependency-closure file names.** `<64-hex finding id>-before|after-<16-hex>.json` is now a helper-ID shape, like run IDs and scanner-outcome names. Any other word in that position still goes through the redactor, and a test pins both cases.
+
 ## [1.91.134.0] - 2026-10-18
 
 **The paid PR gate now starts only after a PR head's free tests pass and the PR has been quiet for 10 minutes, and a head whose own diff already passed the gate reuses that verdict instead of paying again.** Re-measured over Oct 3 to 17 (505 runs, $21,449) with GSTA-47's scripts: the readiness wait alone would have saved $2,986 (about $1,380 a week), and verdict reuse up to $601 more (restamp-only $97, main moved $504). Together that is up to $3,587, about $1,660 a week; how much of the main-moved share survives the selection check is between $146 and $390 of the $601 by approximation. The same heads still get the same selection and verdict rules; only the start time moves. The PR receipt store, which never restored once, now does.
