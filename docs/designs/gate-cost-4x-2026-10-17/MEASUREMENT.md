@@ -69,37 +69,32 @@ By file: ship-docsync $19.4, qa-callers $10.1, shared-libs-paths $9.2, shared-li
 
 ## 4. How many cases a PR's diff really touches
 
-| selection for the 92 merged PRs (final squash diff) | mean cases | median cases | mean $ per gate | PRs selecting ≥90% of the gate |
+Replays of the 92 squash-merged PRs since 2026-10-03 through selectors on fd13cf2, on the $106 full-gate scale (recorded $93 plus the estimated unrecorded PTY cost):
+
+| selection | mean $ per merged PR | median $ | mean cases | PRs selecting ≥90% of the gate |
 |---|---|---|---|---|
-| today's selector | 80 | 108 | 69 | 67 |
-| direct dependencies only (no hub files) | 31.5 | 9.5 | 27 | 12 |
-| direct + a $12 canary set whenever a hub file changed | | | 33.5 (median 15.6) | |
+| today's selector | 78.5 | 106.0 | 80 | 67 |
+| R4 exercised-map shadow (already computed on every PR) | 63.1 | 103.0 | 64 | n/a |
+| declared touchfiles + harness globals only; SKILL.md files whose changed lines are shared by ≥60% of the changed SKILL.md files count as a preamble change; preamble, resolver and full-gate files add a $12 canary set; judges always (`.context/gatecost-l3.ts`, a heuristic stand-in for a hunk classifier) | 47.9 | 21.6 | 36 | 23 |
+| proxy used in revision 1 (hub files deleted from the diff) | 30.9 | 13.4 | 31.5 | 12 |
 
-222 changed files in the window each select ≥90% of the gate by themselves; 643 tracked files do. The coupling is the derived reference walk in scripts/pr-dependencies.ts, which follows every textual mention transitively. Representative chains (`trace`):
+The proxy overstated the saving; the plan uses the exact replays.
 
-- `cso/sections/audit-phases.md > scripts/gen-skill-docs.ts > lib/doctor-components.ts > lib/result-codes.ts` (the build-time generator's whole import closure becomes a runtime input of every case).
-- `qa/SKILL.md.tmpl > bin/gstack-upgrade > bin/gstack-capy-install > bin/gstack-doctor-components.sh > bin/gstack-pregate > lib/pregate/workflows.ts > scripts/test-free-shards.ts > ...` (the preamble's bins mention other bins in help text and rare branches).
-- `browse/src/terminal-agent.ts > browse/src/server.ts > bin/gstack-config > bin/gstack-models > lib/model-policy-cli.ts > bin/gstack-eval-plan > ...`.
-- `test/skill-e2e-cso.test.ts > test/helpers/e2e-helpers.ts > scripts/test-paid-shards.ts > scripts/lib/paid-report.ts > scripts/eval-flake-rank.ts > scripts/test-free-shards.ts > scripts/lib/windows-curation.ts`.
+643 tracked files each select ≥90% of the gate through scripts/pr-dependencies.ts's transitive reference walk. Representative chains (`trace`): `cso/sections/audit-phases.md > scripts/gen-skill-docs.ts > lib/doctor-components.ts > lib/result-codes.ts`; `qa/SKILL.md.tmpl > bin/gstack-upgrade > bin/gstack-capy-install > bin/gstack-doctor-components.sh > bin/gstack-pregate > lib/pregate/workflows.ts > scripts/test-free-shards.ts`; `browse/src/terminal-agent.ts > browse/src/server.ts > bin/gstack-config > bin/gstack-models > ...`. Stopping the walk at the generator, the harness global set and the 13 preamble bins moved the mean 2%: the graph is one connected component. Preamble edits also regenerate every SKILL.md, so the preamble is a genuine input of every case unless a change is proven to be confined to the shared block.
 
-Graph surgery does not fix it. Stopping the walk at gen-skill-docs.ts, at the harness's global set and at the 13 preamble bins together moved the mean from $78.5 to $77.0 (same scale), because the graph is one connected component and another path always remains. The exercised-command map (R4) is the precise fix but is not ready (GSTA-47: activation no earlier than about Oct 31). What does work is a depth limit: a PR tier that selects by a case's direct inputs and leaves the transitive closure to a full gate that runs per merge batch.
+PR-caused reds in the window (bucket b, 40 case results): the touchfile-only rule selects 29 on the merged diff; the 11 it misses are 7 judges (always run) and 4 e2e results (plan-mode-no-op on #3059 and #3017, office-hours-auto-mode on #3077, design-review-plugin-handoff on #3121). Of 76 outside-red results, it selects 35.
 
-**Coverage check on history.** Of the 40 PR-caused red results in the window (bucket b), a direct-only tier selects 29. The 11 it misses are 7 judges (all 24 judges cost $1.44, so the plan always runs them) and 4 e2e results: plan-mode-no-op (#3059, #3017), office-hours-auto-mode (#3077) and design-review-plugin-handoff (#3121). Those four would be caught by the batch full gate. Of 76 outside-red results (flakes and main defects), the direct tier still selects 35, so PRs would see 54% fewer false reds.
+## 5. Spend model
 
-## 5. Spend model (dollars a week)
+One cohort: the 92 merged PRs (72 select any paid case today), 15.1 days, scaled to a week. Screening cost is the replayed touchfile-rule cost per paid-relevant PR, ×1.3 for repair re-screens. A train's full gate is $93.14; a red train costs a bisect (about $6) and a rebuild. Screened PRs cause a train red 6% of the time, unscreened 25% (assumption); outside reds 10% to 15% per full gate after #3260.
 
-Replayed over GSTA-47's 15.1-day window (91 merged PRs, 65 paid anything). "Gates per PR" counts one ready gate, plus one re-gate per PR-caused red, plus outside reds scaled by the tier's exposure and by #3260's fixes (60% of outside-red spend remains).
-
-| step | $ / week | multiple of $9,950 |
-|---|---|---|
-| today | 9,950 | 1.0x |
-| GSTA-48 in flight: R1 readiness-gated dispatch, R2 reuse across main moves and restamps | ~7,000 | 1.4x |
-| + on-demand ready gate (paid gate only when the lane marks the PR ready; 1.58 gates per paying PR) | ~5,050 | 2.0x |
-| + direct-dependency PR tier and a full gate per merge batch of 5 ($786) | ~3,400 | 2.9x |
-| + per-case receipt reuse keyed on direct inputs (a re-gate reruns about 30% of the tier) | ~2,550 | 3.9x |
-| + shared first-request prompt prefix (−4%) | ~2,450 | 4.1x |
-
-Batch size moves the result by about $130 a week per step: a full gate per 4 merges is $983, per 6 merges $655, nightly-only $652. The honest range for the full combination is **3.6x to 4.1x**; it reaches 4x only with the ready-gate discipline and the receipt reuse both working.
+| policy | $ / week | multiple of $9,950 | trains that go red |
+|---|---|---|---|
+| GSTA-48 only (R1, R2) | ~7,000 | 1.4x | n/a |
+| every PR screened once, trains of 5 | ~3,060 to 3,100 | 3.2x | 34% to 38% |
+| every PR screened once, trains of 6 | ~2,940 to 2,970 | 3.4x | 38% to 41% |
+| half the PRs screened, trains of 5 | ~2,160 to 2,200 | 4.5x | 61% to 63% |
+| no paid screening, trains of 5 | ~1,190 to 1,230 | 8x | ~80% |
 
 ## 6. Levers not recommended (with numbers)
 
