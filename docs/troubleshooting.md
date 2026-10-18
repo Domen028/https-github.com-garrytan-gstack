@@ -2880,7 +2880,8 @@ pass and blocks publication.
 
 **Fix.** Pass `--allow-repo-commands`, install the tool (for a Dart package the
 message names `not on PATH: dart` or `flutter`; fvm also works when the repo pins
-it), raise `--timeout`, or keep the tree still, then rerun.
+it), commit the `pubspec.yaml` of a Dart package the message says has none (or
+declare `runner`), raise `--timeout`, or keep the tree still, then rerun.
 
 <a id="pregate-stalled"></a>
 ### `PREGATE_STALLED`
