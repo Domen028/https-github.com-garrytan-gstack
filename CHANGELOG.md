@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.91.128.0] - 2026-10-18
+
+**The two free-suite duration seeds now refresh themselves weekly.** The shard packers read a Linux and a Windows duration seed, and both went stale as test files came and went. They were refreshed by hand twice this week. A new weekly workflow records both seeds and opens one seed-refresh PR when either seed's file set changes. That PR goes through the normal review.
+
+### Added
+- **`free-durations-record.yml`** runs Mondays at 04:00 UTC, before test-health, and on dispatch. It records the Linux seed on `ubicloud-standard-8`, the free-suite shard runner, and the Windows seed through `windows-free-tests.yml`'s `record_durations` path (now also callable with `workflow_call`). When either seed adds or drops a file, it opens or refreshes one PR on `bot/free-duration-seeds` and runs the free lanes on it. The PR body states the seed-ratchet result and names every file that failed while recording.
+- **Guards:** the bot never edits `scripts/free-test-seed-allowlist.json`. While the open seed PR holds any commit besides the bot's own refresh, later runs leave it alone. Only runs on `main` publish, and `open_pr=false` records and reports only. An interrupted recording, or more than 5 red files on either OS, proposes nothing.
+
+### Fixed
+- **An interrupted manual Windows recording no longer uploads the unchanged committed seed** under the Windows seed name.
+
 ## [1.91.127.0] - 2026-10-17
 
 **The paid PR gate stops failing on its own fixtures.** A 132-verdict PR gate was fully green only about a quarter of the time. Every red verdict since #3231 was diagnosed from its transcript and replayed through the real detector. This release fixes the remaining causes where they start: fixture actors that broke the production protocol, detectors that misread a correct run, and skill prompts that left the agent guessing. No threshold, trial count, case kind or quarantine changed.
