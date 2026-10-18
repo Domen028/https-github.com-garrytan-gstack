@@ -208,7 +208,8 @@ export type ConfigLoad = { config: PregateConfig; errors: ConfigError[]; present
 
 function git(cwd: string, args: string[]): { ok: boolean; out: string } {
   const r = spawnSync('git', args, { cwd, encoding: 'utf8', timeout: 30_000 });
-  return { ok: r.status === 0, out: (r.stdout ?? '').trim() };
+  // r.error covers ENOBUFS, where stdout is cut at the buffer limit even with status 0.
+  return { ok: r.status === 0 && !r.error, out: (r.stdout ?? '').trim() };
 }
 
 export function loadConfigFromBase(repoRoot: string, base: string, knownChecks: readonly string[] = []): ConfigLoad {
@@ -216,7 +217,11 @@ export function loadConfigFromBase(repoRoot: string, base: string, knownChecks: 
   const sha = git(repoRoot, ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`]);
   if (!sha.ok || !sha.out) return { unavailable: true, base: base.replace(/^origin\//, ''), detail: `${ref} is not a resolvable commit` };
   const show = git(repoRoot, ['show', `${sha.out}:${PREGATE_CONFIG_PATH}`]);
-  if (!show.ok) return { config: DEFAULT_CONFIG, errors: [], present: false, label: `${ref}@${sha.out.slice(0, 12)} (no ${PREGATE_CONFIG_PATH})`, kind: 'none' };
+  if (!show.ok) {
+    // Absent only when git says so: a timeout, an oversized blob or a corrupt object must refuse, not hand the run to the user file.
+    if (git(repoRoot, ['cat-file', '-e', `${sha.out}:${PREGATE_CONFIG_PATH}`]).ok) return { unavailable: true, base: base.replace(/^origin\//, ''), detail: `${ref}:${PREGATE_CONFIG_PATH} exists but git show could not read it` };
+    return { config: DEFAULT_CONFIG, errors: [], present: false, label: `${ref}@${sha.out.slice(0, 12)} (no ${PREGATE_CONFIG_PATH})`, kind: 'none' };
+  }
   return { ...parseConfig(show.out, knownChecks), present: true, label: `${ref}@${sha.out.slice(0, 12)}:${PREGATE_CONFIG_PATH}`, kind: 'base' };
 }
 
@@ -230,7 +235,8 @@ export function loadConfigFromHead(repoRoot: string, knownChecks: readonly strin
 export function loadConfigFromUser(file: string, knownChecks: readonly string[] = []): ConfigLoad | null {
   let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    // A dangling symlink is a policy the user meant to have, not an absent one.
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) return null;
     // An unreadable policy must refuse, never fall back to defaults (its guards would silently vanish).
     return { ...parseConfig('{}', knownChecks), errors: [{ code: 'PREGATE_CONFIG_INVALID', path: file, message: `cannot read the user-owned policy: ${(e as Error).message}` }], present: true, label: `user ${file}`, kind: 'user' };
   }

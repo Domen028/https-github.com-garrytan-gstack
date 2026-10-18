@@ -49,7 +49,7 @@ describe('pregate.json local', () => {
 describe('loadConfigFromUser', () => {
   // Value: protects=a missing user file falls back (null) while any other read error refuses at the file's path, never defaults;
   //   fails_when=every read error is treated as absent and the user's guards silently vanish; why_new=the loader is new; seam=none;
-  //   no_claim=EACCES specifically (a directory stands in for an unreadable file)
+  //   no_claim=EACCES specifically (a directory, and a dangling symlink, stand in for an unreadable file)
   test('ENOENT is null; an unreadable file refuses at its path', () => {
     const { userPolicy } = setup();
     expect(loadConfigFromUser(userPolicy)).toBeNull();
@@ -57,8 +57,12 @@ describe('loadConfigFromUser', () => {
     const load = loadConfigFromUser(userPolicy);
     expect(load && 'errors' in load ? load.errors.map(e => [e.code, e.path]) : null).toEqual([['PREGATE_CONFIG_INVALID', userPolicy]]);
     expect(load && 'kind' in load ? [load.kind, load.label] : null).toEqual(['user', `user ${userPolicy}`]);
-    // Malformed JSON reaches the sealed/price_file probe too; it must still come back as a refusal, never a throw.
     fs.rmSync(userPolicy, { recursive: true });
+    fs.symlinkSync(path.join(path.dirname(userPolicy), 'not-yet-cloned.json'), userPolicy);
+    const dangling = loadConfigFromUser(userPolicy);
+    expect(dangling && 'errors' in dangling ? dangling.errors.map(e => [e.code, e.path]) : null).toEqual([['PREGATE_CONFIG_INVALID', userPolicy]]);
+    fs.unlinkSync(userPolicy);
+    // Malformed JSON reaches the sealed/price_file probe too; it must still come back as a refusal, never a throw.
     fs.writeFileSync(userPolicy, '{"local": [');
     const bad = loadConfigFromUser(userPolicy);
     expect(bad && 'errors' in bad ? bad.errors.map(e => e.message.startsWith('not valid JSON')) : null).toEqual([true]);
@@ -229,6 +233,21 @@ describe('gstack-pregate with a user-owned policy', () => {
       expect(loaded.ctx.configLabel).not.toStartWith('user ');
       expect(loaded.ctx.explain).toContain(`user policy: ${file} ignored (${why}${why === 'inside the repository' ? '; a PR could supply it' : ''})`);
     }
+  }, 60_000);
+
+  // Value: protects=a base copy that exists but git show cannot read (here over spawnSync's 1 MB buffer) refuses instead of
+  //   letting the user file replace it; fails_when=every git show failure is read as "no base copy" and the unreviewed user
+  //   file governs a repo that commits its policy; why_new=the user-file fallback is new; seam=none; no_claim=timeouts and
+  //   corrupt objects (same branch, not separately driven)
+  test('a base copy git show cannot read refuses rather than reading the user file', () => {
+    const repo = makeFixtureRepo({ pregate: null, baseFiles: { '.gstack/pregate.json': `{"runner": "node --test {files}"${' '.repeat(1_200_000)}}\n` } });
+    repos.push(repo);
+    commit(repo, { 'lib/util.js': 'exports.add = (a, b) => b + a;\n' });
+    const userPolicy = path.join(repo.home, 'projects', SLUG, 'pregate.json');
+    fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    const loaded = buildContext({ repoRoot: repo.work, base: 'main', policyFrom: 'base', allowRepoCommands: false, env: { ...process.env, ...repo.env }, progress: () => {}, cores: 16, testBackend: 'local', userConfigPath: userPolicy });
+    expect('refused' in loaded ? [loaded.refused.code, loaded.refused.message] : null).toEqual(['POLICY_SOURCE_UNAVAILABLE', 'origin/main:.gstack/pregate.json exists but git show could not read it']);
   }, 60_000);
 
   // Value: protects=the containment check sees through a symlinked state root and does not mistake an in-repo `..name`
