@@ -218,8 +218,9 @@ export function loadConfigFromBase(repoRoot: string, base: string, knownChecks: 
   if (!sha.ok || !sha.out) return { unavailable: true, base: base.replace(/^origin\//, ''), detail: `${ref} is not a resolvable commit` };
   const show = git(repoRoot, ['show', `${sha.out}:${PREGATE_CONFIG_PATH}`]);
   if (!show.ok) {
-    // Absent only when git says so: a timeout, an oversized blob or a corrupt object must refuse, not hand the run to the user file.
-    if (git(repoRoot, ['cat-file', '-e', `${sha.out}:${PREGATE_CONFIG_PATH}`]).ok) return { unavailable: true, base: base.replace(/^origin\//, ''), detail: `${ref}:${PREGATE_CONFIG_PATH} exists but git show could not read it` };
+    // Absent only when the tree says so: a timeout, an oversized blob or a missing/corrupt object must refuse, not hand the run to the user file.
+    const entry = git(repoRoot, ['ls-tree', '--name-only', sha.out, '--', PREGATE_CONFIG_PATH]);
+    if (!entry.ok || entry.out) return { unavailable: true, base: base.replace(/^origin\//, ''), detail: `${ref}:${PREGATE_CONFIG_PATH} could not be read and git cannot confirm it is absent` };
     return { config: DEFAULT_CONFIG, errors: [], present: false, label: `${ref}@${sha.out.slice(0, 12)} (no ${PREGATE_CONFIG_PATH})`, kind: 'none' };
   }
   return { ...parseConfig(show.out, knownChecks), present: true, label: `${ref}@${sha.out.slice(0, 12)}:${PREGATE_CONFIG_PATH}`, kind: 'base' };
@@ -231,12 +232,19 @@ export function loadConfigFromHead(repoRoot: string, knownChecks: readonly strin
   return { ...parseConfig(fs.readFileSync(file, 'utf8'), knownChecks), present: true, label: `head (unreviewed) ${PREGATE_CONFIG_PATH}`, kind: 'head' };
 }
 
+/** A symlink to nothing on the way to `file` (a dotfiles link not yet cloned): a policy the user meant to have, not an absent one. */
+function danglingLink(file: string): boolean {
+  for (let p = file; path.dirname(p) !== p; p = path.dirname(p)) {
+    try { if (fs.lstatSync(p, { throwIfNoEntry: false })?.isSymbolicLink() && !fs.existsSync(p)) return true; } catch { return true; }
+  }
+  return false;
+}
+
 /** The user-owned copy for a repo that keeps `.gstack/` out of git; the caller consults it only when the base has none. */
 export function loadConfigFromUser(file: string, knownChecks: readonly string[] = []): ConfigLoad | null {
   let text: string;
   try { text = fs.readFileSync(file, 'utf8'); } catch (e) {
-    // A dangling symlink is a policy the user meant to have, not an absent one.
-    if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !fs.lstatSync(file, { throwIfNoEntry: false })?.isSymbolicLink()) return null;
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT' && !danglingLink(file)) return null;
     // An unreadable policy must refuse, never fall back to defaults (its guards would silently vanish).
     return { ...parseConfig('{}', knownChecks), errors: [{ code: 'PREGATE_CONFIG_INVALID', path: file, message: `cannot read the user-owned policy: ${(e as Error).message}` }], present: true, label: `user ${file}`, kind: 'user' };
   }

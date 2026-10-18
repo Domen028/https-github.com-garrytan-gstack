@@ -32,6 +32,15 @@ function setup(): { repo: FixtureRepo; userPolicy: string; run: (extra?: string[
   const run = (extra: string[] = []) => runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests', ...extra], { GSTACK_PROJECT_SLUG: SLUG });
   return { repo, userPolicy, run };
 }
+/** setup() with a base that commits `.gstack/pregate.json` (raw text, or a policy object). */
+function setupWithBase(base: string | Record<string, unknown>): { repo: FixtureRepo; userPolicy: string } {
+  const repo = makeFixtureRepo({ pregate: null, baseFiles: { '.gstack/pregate.json': typeof base === 'string' ? base : JSON.stringify(base) } });
+  repos.push(repo);
+  commit(repo, { 'lib/util.js': 'exports.add = (a, b) => b + a;\n' });
+  const userPolicy = path.join(repo.home, 'projects', SLUG, 'pregate.json');
+  fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+  return { repo, userPolicy };
+}
 const writePolicy = (file: string, policy: Record<string, unknown>) => fs.writeFileSync(file, JSON.stringify({ runner: 'node --test {files}', ...policy }));
 
 describe('pregate.json local', () => {
@@ -62,6 +71,13 @@ describe('loadConfigFromUser', () => {
     const dangling = loadConfigFromUser(userPolicy);
     expect(dangling && 'errors' in dangling ? dangling.errors.map(e => [e.code, e.path]) : null).toEqual([['PREGATE_CONFIG_INVALID', userPolicy]]);
     fs.unlinkSync(userPolicy);
+    // A dangling link one level up (the project directory) is the same intent.
+    const dir = path.dirname(userPolicy);
+    fs.rmSync(dir, { recursive: true });
+    fs.symlinkSync(path.join(path.dirname(dir), 'not-yet-cloned'), dir);
+    expect(loadConfigFromUser(userPolicy)).not.toBeNull();
+    fs.unlinkSync(dir);
+    fs.mkdirSync(dir);
     // Malformed JSON reaches the sealed/price_file probe too; it must still come back as a refusal, never a throw.
     fs.writeFileSync(userPolicy, '{"local": [');
     const bad = loadConfigFromUser(userPolicy);
@@ -235,19 +251,26 @@ describe('gstack-pregate with a user-owned policy', () => {
     }
   }, 60_000);
 
-  // Value: protects=a base copy that exists but git show cannot read (here over spawnSync's 1 MB buffer) refuses instead of
-  //   letting the user file replace it; fails_when=every git show failure is read as "no base copy" and the unreviewed user
-  //   file governs a repo that commits its policy; why_new=the user-file fallback is new; seam=none; no_claim=timeouts and
-  //   corrupt objects (same branch, not separately driven)
+  // Value: protects=a base copy that exists but git show cannot read (over spawnSync's 1 MB buffer, or its blob missing)
+  //   refuses instead of letting the user file replace it; fails_when=a git show failure is read as "no base copy" and the
+  //   unreviewed user file governs a repo that commits its policy; why_new=the user-file fallback is new; seam=none;
+  //   no_claim=timeouts (they take the same failure branch)
   test('a base copy git show cannot read refuses rather than reading the user file', () => {
-    const repo = makeFixtureRepo({ pregate: null, baseFiles: { '.gstack/pregate.json': `{"runner": "node --test {files}"${' '.repeat(1_200_000)}}\n` } });
-    repos.push(repo);
-    commit(repo, { 'lib/util.js': 'exports.add = (a, b) => b + a;\n' });
-    const userPolicy = path.join(repo.home, 'projects', SLUG, 'pregate.json');
-    fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+    const { repo, userPolicy } = setupWithBase(`{"runner": "node --test {files}"${' '.repeat(1_200_000)}}\n`);
     writePolicy(userPolicy, { local: LOCAL_ALL });
     const loaded = buildContext({ repoRoot: repo.work, base: 'main', policyFrom: 'base', allowRepoCommands: false, env: { ...process.env, ...repo.env }, progress: () => {}, cores: 16, testBackend: 'local', userConfigPath: userPolicy });
-    expect('refused' in loaded ? [loaded.refused.code, loaded.refused.message] : null).toEqual(['POLICY_SOURCE_UNAVAILABLE', 'origin/main:.gstack/pregate.json exists but git show could not read it']);
+    expect('refused' in loaded ? [loaded.refused.code, loaded.refused.message] : null).toEqual(['POLICY_SOURCE_UNAVAILABLE', 'origin/main:.gstack/pregate.json could not be read and git cannot confirm it is absent']);
+  }, 60_000);
+
+  // Value: protects=absence is decided from the tree, not the blob; fails_when=cat-file -e (a blob check) stands in for absence
+  //   and a missing or corrupt blob lets the user file govern; why_new=the fallback is new; seam=none; no_claim=partial clones
+  test('a base copy whose blob is missing refuses rather than reading the user file', () => {
+    const { repo, userPolicy } = setupWithBase({ runner: 'node --test {files}' });
+    const blob = repo.git('rev-parse', 'origin/main:.gstack/pregate.json');
+    fs.rmSync(path.join(repo.work, '.git', 'objects', blob.slice(0, 2), blob.slice(2)));
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    const loaded = buildContext({ repoRoot: repo.work, base: 'main', policyFrom: 'base', allowRepoCommands: false, env: { ...process.env, ...repo.env }, progress: () => {}, cores: 16, testBackend: 'local', userConfigPath: userPolicy });
+    expect('refused' in loaded ? loaded.refused.code : null).toBe('POLICY_SOURCE_UNAVAILABLE');
   }, 60_000);
 
   // Value: protects=the containment check sees through a symlinked state root and does not mistake an in-repo `..name`
