@@ -13,6 +13,7 @@
 
 ### Fixed
 - **The tree receipt no longer drops diff lines that start with `--` or `++`.** Its unified-diff parser treated `---`/`+++` inside a hunk as file headers, so a release-output line beginning `++` or `--` could pass as a stamp. It now reads headers only before a file's first hunk, and a file mode change is never a stamp.
+- **`autoplan-guard-pty` no longer stalls at the phase boundary.** Its scripted actor (haiku) published Phase 1, printed "Phase 1 complete." and ended its turn, so the case idled to its 480 s deadline with 2 of 4 guarded allows. This is the 489 s red seen on #3190, #3258, #3260 and this PR's stamped gate (run 39099195754). The script now runs steps 1 to 11 in one continuous run, and says the Phase 1 line is a boundary, not the end. The publication and the Phase 2 entry stay in separate messages. The case also stops waiting as soon as the actor ends its turn there, and names the cause `PHASE_BOUNDARY_STOP`.
 
 ### If you…
 - **…want a restamp to reuse its gate:** put the CHANGELOG entry in the gated push (under `## [Unreleased]` or the tentative version), so the stamp only re-heads it.
