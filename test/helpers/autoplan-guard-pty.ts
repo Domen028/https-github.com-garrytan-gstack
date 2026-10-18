@@ -37,6 +37,9 @@ export interface GuardSession {
   cleanup(): void;
 }
 
+/** The close packet Read (step 6) came after the CEO reviewer's completion notice, so it ran in the notice's new turn. */
+export const closePacketReadAfterNotice = (afterNotice: string[]): boolean => afterNotice.some(c => /^Read .*close-packet\.md$/.test(c));
+
 export function prepareGuardSession(apiKey: string | undefined): GuardSession {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ap-guard-pty-')));
   const home = path.join(base, 'home'), config = path.join(home, '.claude'), project = path.join(base, 'project');
@@ -78,8 +81,10 @@ console.log(close);
     `4. Run this Bash command alone: cat "${path.join(artifacts, 'dispatch-ceo.txt')}"`,
     '5. Call the Agent tool once with these inputs: prompt = the exact, complete output of step 4 (every line, unchanged), ' +
       'description "CEO review", subagent_type "general-purpose", and run_in_background false. Include run_in_background even ' +
-      'if the tool schema lacks it. If the agent runs in the background, end your turn and wait for its completion notification.',
-    '6. Read the file whose path step 3 printed, completely (no offset or limit).',
+      'if the tool schema lacks it. If its result says the agent is running in the background, end your turn at once with no ' +
+      'further tool call; the completion notification starts your next turn.',
+    '6. Only after the CEO review agent has finished (in the turn its completion notification starts, when it ran in the ' +
+      'background), Read the file whose path step 3 printed, completely (no offset or limit).',
     '7. In one message, write exactly this line as your own text: **Phase 1 complete.** and make exactly one tool call in that ' +
       'same message: the Bash command `true autoplan-published ceo`.',
     `8. In your next assistant message, without waiting for any user input, Read the file ${path.join(sections, 'design-phase.md')} with offset 1 and limit 20.`,

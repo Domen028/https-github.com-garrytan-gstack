@@ -90,8 +90,11 @@ On machine B:
 gstack-brain-sync --status
 ```
 
-Shows: the status (`ok`, `idle`, `held`, `blocked`, `push_failed`,
-`error`), files held back by the secret scan with their fixes, the
+Shows: the status (`ok`, `idle`, `held`, `collision`, `blocked`,
+`push_failed`, `error`), files held back by the secret scan with their
+fixes, files held because their path differs only by letter case from
+another path (`case_held`, `case_names`; see
+[troubleshooting](troubleshooting.md#artifact-case-collision)), the
 `drainable` count, the last sync and push times, pending queue depth, and
 the current privacy mode.
 

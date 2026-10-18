@@ -70,6 +70,37 @@ describe('gstack-state-matrix detect', () => {
   });
 });
 
+describe('gstack-state-matrix outfile', () => {
+  test('each call prints a new empty private file under an excluded .gstack/tmp, so a rerun never checks or commits the last output', () => {
+    const r = repo();
+    const sub = path.join(r.work, 'src');
+    fs.mkdirSync(sub, { recursive: true });
+    const first = run(sub, ['outfile']);
+    expect(first.status).toBe(EXIT.ok);
+    const a = first.out.trim();
+    fs.writeFileSync(a, 'previous run output\n');
+    const b = run(r.work, ['outfile']).out.trim();
+    const tmp = path.join(fs.realpathSync(r.work), '.gstack', 'tmp');
+    for (const file of [a, b]) expect(path.dirname(fs.realpathSync(file))).toBe(tmp);
+    expect(b).not.toBe(a);
+    expect(fs.readFileSync(b, 'utf8')).toBe('');
+    expect(fs.statSync(b).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(tmp).mode & 0o777).toBe(0o700);
+    const exclude = fs.readFileSync(path.join(r.work, '.git', 'info', 'exclude'), 'utf8');
+    expect(exclude.split('\n').filter(l => l === '/.gstack/tmp/')).toHaveLength(1);
+    expect(spawnSync('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: r.work, encoding: 'utf8', timeout: 30_000 }).stdout).not.toContain('.gstack');
+  });
+
+  test('outside a git repository it refuses with a usage exit and prints no path', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sm-outfile-'));
+    try {
+      const r = run(dir, ['outfile']);
+      expect(r.status).toBe(EXIT.usage);
+      expect(r.out).toBe('');
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  });
+});
+
 describe('gstack-state-matrix check on the captured #6792 review', () => {
   test('the capture passes: every kind × action has a row, real tests, and each untested cell is CRITICAL; the destructive cells are named', () => {
     const r = repo();

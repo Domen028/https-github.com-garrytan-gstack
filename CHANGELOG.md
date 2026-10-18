@@ -1,5 +1,56 @@
 # Changelog
 
+## [1.91.127.0] - 2026-10-17
+
+**The paid PR gate stops failing on its own fixtures.** A 132-verdict PR gate was fully green only about a quarter of the time. Every red verdict since #3231 was diagnosed from its transcript and replayed through the real detector. This release fixes the remaining causes where they start: fixture actors that broke the production protocol, detectors that misread a correct run, and skill prompts that left the agent guessing. No threshold, trial count, case kind or quarantine changed.
+
+### Fixed
+- **The State Machines specialist runs when its detector fails.** The /review and /ship scope block now runs `gstack-state-matrix detect` itself and uses its output only on exit 0. A failure prints `SCOPE_STATE_MACHINE=unknown` with the detector's stderr, and unknown dispatches the specialist. Its output reaches `gstack-state-matrix check` as a file the agent writes, never as text in a shell command.
+- **Consent options are lettered B, C and D when Aside is absent**, matching the question's answer keys.
+- **Plan-reality tier 1 rows are never n/a.** A run no longer loops repairing `deferred-asks n/a` past its deadline.
+- **/qa's exploratory stop rule needs one probe per documented input rule of each field.** Each probe breaks only its rule and satisfies every other, so a value that breaks two rules covers neither. Rules left uncovered at the probe or time cap go to limits. After a fix, every earlier capture is superseded: rerun each one the verdict relies on, or report it as open.
+- **`gstack-docs-candidate snapshot --help` and `compare --help` exit 0** before any side effect, and a compare reject names the path, each bad field and a fix that never re-snapshots over the pre-audit baseline.
+- **The docsync fault actor uses the production candidate protocol.** It writes candidates through the installed snapshot, and a failed snapshot reports a stable reason with one retry under a fresh audit id.
+- **The required-probe reminder counts only captures after the last source edit** when the caller declares `GSTACK_QA_REQUIRED_AFTER_EDIT`. Pre-repair captures no longer look like post-repair coverage. Without the declaration nothing changes.
+- **Webhook fix evals reserve the post-repair reruns first** inside the unchanged 12-capture ceiling.
+- **The autoplan guard eval's actor waits for the reviewer.** It ends its turn after a background dispatch and reads the close packet only after the reviewer finishes; before, the haiku actor sometimes read it early and failed the case on ordering alone.
+- **The shim-dom scan check resolves the command's own `_REPORT`/`_RUN`**, so a correct scan is no longer a red.
+- **PTY failure dumps show the last non-blank screen**, and visible text no longer carries cursor show/hide escapes.
+- **Windows budgets:** the nested review-army and answer-invalidation tests get explicit 30-45 s timeouts instead of Bun's 5 s default.
+
+### Changed
+- **HARNESS_VERSION is 5.** The PTY `stripAnsi` change can change pattern matches, so every case starts a new pass-rate series.
+- **The qa-callers fixture prompt binds paths instead of teaching helper syntax**, and points to the QA section for every form.
+
+### If you…
+- **…write a caller for `gstack-qa-evidence`:** set `GSTACK_QA_REQUIRED_AFTER_EDIT={"paths":[absolute paths],"since":ISO}` when your required probes must run after a repair.
+
+## [1.91.126.0] - 2026-10-17
+
+**Artifacts sync stops saying "ok" when two project folders differ only by letter case.** When the artifacts repo tracks two spellings of one project, such as `projects/MyApp/` and `projects/myapp/`, a Mac or Windows disk stores them as one file. Git there staged each write under the other spelling and the sync reported `ok`. One spelling then stayed modified forever, and other machines read the wrong bucket (#3220). This lands the detector from Kkkkkuro's #3223 and #3245, with credit, and holds those files instead of halting the whole sync.
+
+### Fixed
+- **Case-colliding paths are held, not staged.** A queued file whose path differs only by letter case (NFC plus casefold, at any folder level) from another path in the repo or the batch stays queued and is never staged. Everything else keeps syncing, and the status is `collision`, never `ok`. When one spelling is already tracked, it keeps syncing and only the new alias waits.
+- **Sync verifies what `git add` staged and what a push would publish** (Kkkkkuro, #3245). Paths or bytes that never reached the index keep the queue. A local commit or retry merge that would add a new case alias to the remote stays local, and that check now covers `--publish-removals` too.
+
+### Added
+- **One skill-start line names the collision and the repair:** `ARTIFACTS_SYNC: attention: case-collision held=<N> names=<names>. ...`, with the manual repair at `docs/troubleshooting.md#artifact-case-collision`. `gstack-doctor` warns the same way. Slug resolution and skill start are unchanged and never stop over this.
+
+### If you…
+- **…see the case-collision line:** keep one spelling with the repair steps in the troubleshooting doc. Nothing is merged or renamed automatically.
+
+## [1.91.125.0] - 2026-10-17
+
+**/cso release qualification measures precision on the application, not on the evaluator's own test rigging.** In the first paid runtime qualification, the daily precision gate failed on every stack (8/34 to 8/49). 116 of the 132 findings counted as false positives pointed at instrumentation the evaluator plants in each fixture: canary credentials and the egress probe route. Most of the other 16 were real issues the fixtures happen to contain. Garry chose to keep the 0.95 bar and fix what it counts.
+
+### Changed
+- **Daily precision leaves out findings on declared fixture instrumentation.** The trusted evaluator marks them `instrumentation`, and they count in neither term.
+- **A confirmed real issue counts as a true positive.** When a unanimous judge panel confirms a non-seeded finding is a real issue in that source, the evaluator marks it `incidental` with an opaque key. Each distinct key adds one true positive per cell, so restating it never inflates precision. It never counts toward recall.
+- **Recall, the v2 baseline and every threshold are unchanged.** Validation rejects either new judgment on a hypothesis or with a seeded match, and rejects a missing or malformed key.
+
+### If you…
+- **…write an evaluator for `cso-eval.ts`:** `incidental` needs a 64-hex `incidentalKey`, and no other judgment may carry one.
+
 ## [1.91.124.0] - 2026-10-17
 
 **/cso runs finish on time.** In the first paid runtime qualification, one comprehensive run submitted its findings ten minutes in, kept working for another 25 minutes without calling the helper, and was killed before it called `finish`. Its report was never finished, so the cold-start gate scored 63/64. The agent had no clock to follow.
