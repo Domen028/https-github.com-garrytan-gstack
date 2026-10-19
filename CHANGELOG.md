@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.145.0] - 2026-10-19
 
 **The qa-only deadline fixture accepts pure local reads, so `qa-only-no-fix` no longer fails when the agent checks a skill file with `wc -l …; ls …`.** Opus 5.5's first Bash call in TM1's focused `qa-only-no-fix` run at e03bfeb was `wc -l qa-only/SKILL.md; ls qa-only qa-only/sections qa/sections qa/templates`. The fixture's narrow list rejected it with `QA deadline: unsupported outer shell composition`, though it only read inside the fixture. The fixture now opts into the shared read-only grammar from 1.91.143.0, as the docs-sync fixture did. A focused Opus run with the opt-in then failed on one more read, `ls; ls qa/templates; cat TODOS.md 2>/dev/null | head -20`, so the grammar now also lets a read discard or merge its stderr. PR #3272's Opus gate (run 39217387697) then failed the case after the agent stopped the browser inside the guard with `"$B" stop`, which the checkpoint rule counted as a third probe. This PR's own gate (run 39223031058) failed `ship-docsync-current` after Opus called the docs candidate helper at a path that does not exist, got exit 127, and reran the same command at the declared path.
 
