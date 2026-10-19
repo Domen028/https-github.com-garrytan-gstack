@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -12,6 +12,7 @@ import { E2E_TIERS, E2E_TOUCHFILES } from './helpers/touchfiles-data';
 import { PR_PROFILE_CASE_IDS, PR_PROFILE_FILES } from '../scripts/test-pr-profile';
 import { applyHollowShardGuard, buildRunManifest, computePaidCaseSelection, DEFAULT_SHARD_TIMEOUT_MS, expectedPrCaseCount, prProfileTestNamePattern, resolvePaidShardBudget, retriesForFiles, verifySliceResults, type SliceResult } from '../scripts/test-paid-shards';
 import { CAPTURE_MS } from './helpers/eval-budgets';
+import capturedQuestions from './fixtures/investigate-owned-question-39195396438.json';
 
 const cases: BoundaryCase[] = ['investigate-owned-completion', 'investigate-owned-abort', 'investigate-owned-ending-error'];
 const files = ['test/skill-e2e-investigate-owned-completion.test.ts', 'test/skill-e2e-investigate-owned-termination.test.ts'];
@@ -353,4 +354,46 @@ test('F9 manifest rejects skipped, missing and hollow actor coverage', () => {
   }
   const hollow = { ...result.outcomes[1], executedTests: 0, skippedTests: 2, shard: 1, groupPid: null };
   expect(applyHollowShardGuard([hollow], { evalsAll: false, requireExecuted: true })[0].status).toBe('passed-empty');
+});
+
+// Gate 39195396438 slice 14: each actor asked its single continue/abort question in its own
+// words, with exactly a Continue and an Abort option.
+describe('captured owner questions from run 39195396438', () => {
+  const declared = (id: 'investigate-owned-abort' | 'investigate-owned-ending-error') => {
+    const fixture = createBoundaryFixture(id);
+    const acquire = () => spawnSync('bash', ['-c', 'bash "$HOME/.claude/skills/gstack/freeze/bin/freeze-state.sh" acquire "src"'],
+      { cwd: fixture.repo, env: fixture.env, encoding: 'utf8', timeout: 10000 });
+    const ask = (input: Record<string, unknown>) => fixture.canUseTool('AskUserQuestion', input, { signal: new AbortController().signal, toolUseID: 'captured' });
+    const [first, second] = capturedQuestions.cases[id] as Array<Record<string, any>>;
+    return { fixture, acquire, ask, first: structuredClone(first), second: structuredClone(second),
+      close: () => fs.rmSync(fixture.root, { recursive: true, force: true }) };
+  };
+
+  for (const [id, answer] of [['investigate-owned-abort', 'Abort'], ['investigate-owned-ending-error', 'Continue']] as const)
+    test(`${id}: the captured question is answered once and the re-ask is refused`, async () => {
+      const f = declared(id);
+      try {
+        expect(f.acquire().status).toBe(0);
+        const decision = await f.ask(f.first);
+        expect(decision.behavior).toBe('allow');
+        if (decision.behavior !== 'allow') return;
+        expect(decision.updatedInput!.answers).toEqual({ [f.first.questions[0].question]: answer });
+        const hook = await f.fixture.preToolUse({ hook_event_name: 'PreToolUse', session_id: 'captured', transcript_path: path.join(f.fixture.root, 'transcript'),
+          cwd: f.fixture.repo, tool_name: 'AskUserQuestion', tool_input: f.second, tool_use_id: 'second' }, 'second', { signal: new AbortController().signal });
+        expect((hook as any).hookSpecificOutput.permissionDecision).toBe('deny');
+        expect((await f.ask(f.second)).behavior).toBe('deny');
+      } finally { f.close(); }
+    });
+
+  test.each(['before acquisition', 'no abort choice', 'three options', 'swapped meanings'])('%s is still refused', async shape => {
+    const f = declared('investigate-owned-abort');
+    try {
+      if (shape !== 'before acquisition') expect(f.acquire().status).toBe(0);
+      const options = f.first.questions[0].options;
+      if (shape === 'no abort choice') options[1] = { label: 'Proceed later', description: 'Change the value after the verifier' };
+      if (shape === 'three options') options.push({ label: 'Skip', description: 'Leave the lock in place' });
+      if (shape === 'swapped meanings') [options[0].description, options[1].description] = [options[1].description, options[0].description];
+      expect((await f.ask(f.first)).behavior).toBe('deny');
+    } finally { f.close(); }
+  });
 });
