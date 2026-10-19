@@ -68,6 +68,11 @@ export function sourceCapMessage(bytes: number, files: number): string {
 }
 /** Transformation recorded for a source path outside the start --paths prefixes; its payload is never copied or assessed. */
 export const OUTSIDE_AUDIT_PATHS = 'withheld: outside the --paths audit scope';
+const HISTORY_MARKER_RESERVE = 1024;
+/** First line of a history.txt that holds fewer commits or less detail than Git returned. */
+export function historyMarker(note: string): string {
+  return `[gstack-cso history truncated: ${note}]\n`;
+}
 /** Transformation recorded for a repository boundary Git listed as one entry: an untracked nested repository or a registered submodule gitlink. */
 export const NESTED_REPOSITORY =
   'excluded: nested Git repository; Git listed it as a single boundary entry and never descends into it, so its own source and history are not audited with this repository';
@@ -920,33 +925,69 @@ export async function capture(
         });
       } else {
         const range = manifest.baseCommit ? `${manifest.baseCommit}..${headCommit}` : headCommit;
+        const log = (patches: boolean, maxBytes?: number) =>
+          git(
+            repo,
+            [
+              '-c',
+              'core.quotePath=false',
+              'log',
+              '--no-ext-diff',
+              '--no-textconv',
+              '--max-count=100',
+              '--format=commit %H%nAuthor: %an%nDate: %aI%nSubject: %s',
+              ...(patches ? ['--unified=3', '-p'] : []),
+              range,
+              '--',
+              ...(auditPaths ?? []).map((prefix) => `:(literal)${prefix}`),
+            ],
+            home,
+            maxBytes,
+          );
         admission.time();
-        const raw = await git(
-          repo,
-          [
-            '-c',
-            'core.quotePath=false',
-            'log',
-            '--no-ext-diff',
-            '--no-textconv',
-            '--max-count=100',
-            '--format=commit %H%nAuthor: %an%nDate: %aI%nSubject: %s',
-            '--unified=3',
-            '-p',
-            range,
-            '--',
-            ...(auditPaths ?? []).map((prefix) => `:(literal)${prefix}`),
-          ],
-          home,
-        );
+        let patched: string | undefined;
+        try {
+          patched = await log(true, SNAPSHOT_MANIFEST_LIMIT);
+        } catch (error) {
+          if (!(error instanceof CsoError) || error.code !== 'MISSING_INPUT') throw error;
+        }
         guard();
-        const safe = redact(raw);
+        const commits = (patched ?? '').split(/^(?=commit [0-9a-f]{40}(?:[0-9a-f]{24})?$)/m).filter(Boolean),
+          sizes = commits.map((commit) => Buffer.byteLength(commit)),
+          whole = sizes.reduce((sum, size) => sum + size, 0) <= MAX_OUTPUT;
+        let kept = 0,
+          bytes = 0,
+          safe = patched === '' ? '' : undefined,
+          truncated: string | undefined,
+          retainedCommits: number | string = 'at most 100';
+        while (kept < commits.length && (whole || bytes + sizes[kept] <= MAX_OUTPUT - HISTORY_MARKER_RESERVE))
+          bytes += sizes[kept++];
+        for (; kept > 0 && safe === undefined; kept--) {
+          admission.time();
+          const omitted = commits.length - kept,
+            note = omitted
+              ? `the newest ${kept} of ${commits.length} commits were retained with patches; ${omitted} older commits were omitted to stay within the ${MAX_OUTPUT}-byte history limit`
+              : undefined,
+            text = redact((note ? historyMarker(note) : '') + commits.slice(0, kept).join(''));
+          if (Buffer.byteLength(text) > MAX_OUTPUT) continue;
+          safe = text;
+          truncated = note;
+          if (omitted) retainedCommits = kept;
+        }
+        if (safe === undefined) {
+          const metadata = await log(false);
+          guard();
+          truncated = `patches were withheld because the newest commit's patch or the patch log exceeds the ${MAX_OUTPUT}-byte history limit; only commit metadata was retained`;
+          safe = redact(historyMarker(truncated) + metadata);
+          retainedCommits = 'metadata for at most 100';
+        }
         atomicWriteSync(join(runDir, 'history.txt'), safe, { mode: 0o600 });
         writeJson(join(runDir, 'history-status.json'), {
           status: 'captured',
           range: auditPaths ? `${range}, limited to --paths ${auditPaths.join(', ')}` : range,
-          commits: 'at most 100',
+          commits: retainedCommits,
           bytes: Buffer.byteLength(safe),
+          ...(truncated ? { truncated } : {}),
         });
       }
     } catch (error) {
