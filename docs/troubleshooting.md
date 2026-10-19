@@ -173,10 +173,10 @@ the readiness dashboard and the PR body, and never count it as a pass.
   A reply whose last `Verdict:` line says `not ready` but carries no readable
   severity prints `FINDINGS: unspecified` and exits 3 like a blocking finding.
 - **No findings.** A review with no tag and no label is `clean` only when its
-  conclusion says so: the last sentence, or the `because` clause of its
-  `Recommendation:` line, opens with `NO_FINDINGS`, "No issues found", "I
+  conclusion says so: the last sentence (or its last ", and" clause), or the
+  `because` clause of its `Recommendation:` line, opens with `NO_FINDINGS`, "No issues found", "I
   found no actionable regressions" or "I did not find any bugs", with no
-  "but", "however", "except" or "other than". When other prose comes first, a
+  "but", "however", "except", "other than" or "elsewhere". When other prose comes first, a
   conclusion scoped to one place ("No issues in the parser.") must name the
   change as a whole ("in this change", "in the staged changes"). A "no issues"
   phrase anywhere else in the reply does not count. Otherwise the review is

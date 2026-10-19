@@ -144,13 +144,13 @@ function severityWords(text: string): Severity[] {
 const FINDING_NOUN = '(?:(?:actionable|significant|new|concrete)\\s+)?(?:bugs?|issues?|findings?|problems?|regressions?|defects?)\\b';
 const NO_FINDINGS = new RegExp(`^(?:(?:overall|in summary|in short|summary|conclusion|result)[,:]?\\s+)?(?:NO_?FINDINGS\\b|(?:(?:i|we)\\s+(?:found|see|saw|identified)\\s+|there\\s+(?:are|were|is)\\s+)?no\\s+${FINDING_NOUN}|(?:i|we)\\s+(?:did not|didn't|could not|couldn't|cannot|can't)\\s+(?:find|identify|see)\\s+any\\s+${FINDING_NOUN})`, 'i');
 /** A contrast or exception qualifies the claim, so the sentence does not conclude that nothing was found. */
-const NO_FINDINGS_EXCEPTION = /\b(?:but|however|although|though|yet|except|excluding|unless|only|apart from|aside from|other than|besides|beyond)\b/i;
+const NO_FINDINGS_EXCEPTION = /\b(?:but|however|although|though|yet|except|excluding|unless|only|apart from|aside from|other than|besides|beyond|elsewhere|otherwise)\b/i;
 const SCOPED = /^\s*(?:(?:were|was|have been|has been)\s+)?(?:found\s+|identified\s+|detected\s+)?(?:in|inside|within|for|with|across|on|from|of|to|among|throughout)\b/i;
 const WHOLE_CHANGE = /\b(?:chang(?:e|es|ed)|diffs?|patch(?:es)?|staged|unstaged|untracked|branch|commits?|pull request|PR)\b/i;
 
 /**
- * The review's conclusion says it found nothing: its last prose sentence
- * (wrapped lines joined) or the because-clause of its Recommendation line is an
+ * The review's conclusion says it found nothing: its last prose sentence or
+ * ", and" clause (wrapped lines joined) or the because-clause of its Recommendation line is an
  * unqualified no-findings statement. When other prose precedes it, a
  * conclusion scoped to one place ("No issues in the parser.") says nothing
  * about the rest, so its scope must name the change as a whole.
@@ -165,7 +165,7 @@ function concludesNoFindings(code: string): boolean {
     } else if (/^[\t ]*#{1,6}[\t ]/.test(line)) prose += `\n${text}\n`;
     else prose += /^[\t ]*[-+*][\t ]/.test(line) || prose.endsWith('\n') || /[.!?;:]$/.test(prose) ? `\n${text}` : ` ${text}`;
   }
-  const sentences = prose.split(/(?<=[.!?;])\s+|\n/).map(sentence => sentence.trim()).filter(Boolean);
+  const sentences = prose.split(/(?<=[.!?;])\s+|\n|,\s+and\s+/i).map(sentence => sentence.trim()).filter(Boolean);
   const total = sentences.length + (because ? 1 : 0);
   return [sentences.at(-1), because].some(conclusion => {
     const statement = conclusion?.match(NO_FINDINGS)?.[0];

@@ -80,7 +80,10 @@ describe('a no-findings statement counts only as the reply\'s conclusion (#3294)
   test('clean conclusions, with the added regressions/defects vocabulary and the requested marker formatted', () => {
     for (const text of ['No regressions found.', 'I did not find any defects.', 'There are no actionable regressions.',
       'NO_FINDINGS', '**NO_FINDINGS**', '`NO_FINDINGS`', '- NO_FINDINGS',
-      `The change adds a retry cap and its tests.\n${REPORTER}`, 'Reviewed the retry helper.\n\nNo issues found in this change.']) {
+      `The change adds a retry cap and its tests.\n${REPORTER}`, 'Reviewed the retry helper.\n\nNo issues found in this change.',
+      // Clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol.
+      'The change validates the retry limit before execution. No actionable regression was found.',
+      'The change validates `max` before retrying. No affected callers or tests are present in the repository, and no actionable regression is evident.']) {
       expect({ text, verdict: classifyOutsideReview({ text, gate: 'structured' }).verdict }).toEqual({ text, verdict: 'clean' });
     }
   });
@@ -96,6 +99,8 @@ describe('a no-findings statement counts only as the reply\'s conclusion (#3294)
       `${FINDING}\nI found no issues other than the fallback path.`,
       `${FINDING}\nNo other issues.`,
       'No issues found, except that the fallback path now swallows ENOENT.',
+      'No issues in the parser, and the fallback path now swallows ENOENT.',
+      'The fallback path now swallows ENOENT, and no issues elsewhere.',
       'The diff adds a NO_FINDINGS check, but the regex misses lowercase input.',
       `${FINDING}\n\`\`\`\nNo issues found.\n\`\`\``,
     ]) {
