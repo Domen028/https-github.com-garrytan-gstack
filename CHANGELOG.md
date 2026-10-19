@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.159.0] - 2026-10-19
 
 **Security: the repository gstack runs in can no longer configure gstack's own programs.** Bun loads `.env`, `.env.local` and `.env.<NODE_ENV>` from the directory it starts in. It also runs any `preload` that a `bunfig.toml` there names, before the program's first line. gstack runs inside the repository it audits, so a committed or branch `.env` could set `GSTACK_STATE_ROOT`, `GSTACK_PROJECT_SLUG`, `GSTACK_CLAUDE_BIN` (an attacker-chosen binary then ran as "claude"), `GSTACK_SPEND_CAP_USD` or a provider base URL for every gstack bin, hook and skill step. A `bunfig.toml` preload ran arbitrary code in all of them. Every Bun that gstack starts now passes `--no-env-file` and an empty `--config`. Your shell environment works exactly as before. Found in review by GSTA-54.
 
