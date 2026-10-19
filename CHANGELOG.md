@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+**The free-suite duration seeds are current again.** This is the first refresh from the weekly recorder. It adds 14 Linux and 6 Windows test files that the shard packers had been placing at the 99th-percentile estimate.
+
+### Changed
+- **Seed allowlist:** `test/brain-sync.test.ts` (89 s) and `test/setup-codex-scope.test.ts` (64 s) are allowlisted with the existing split todo. `test/host-renders-prune.test.ts` (now 57 s) leaves the allowlist.
+
 ## [1.91.143.0] - 2026-10-18
 
 **Paid-eval fixtures can share one read-only Bash grammar, and the docs-sync fixture uses it, so a pure read inside the fixture no longer fails a case just because the model joined or piped it.** In four Opus gates, docs-sync and qa-only cases went red on commands like `wc -l <SKILL.md>`, `ls -la …/*` and `cat a; echo ----; cat b`. Each was a harmless read inside the fixture, but each fixture's hand-kept allowlist rejected it. `test/helpers/read-only-commands.ts` decides once whether a command line only reads inside a fixture root. Fixtures whose contract is about which reads happen keep their narrow lists. On this tree the PR gate's 13 docs-sync cases all pass on Fable 5.1 ($20.62).
