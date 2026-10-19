@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.145.0] - 2026-10-19
+## [1.91.146.0] - 2026-10-19
 
 **`gstack-ship-queue` can run merge trains: several READY PRs share one full gate, merge one by one only while main's tree matches the prefix that gate tested, and a red train is bisected on its red cases alone.** The surface is off unless the base revision's `.gstack/ship-policy.json` declares a `train` block. Without one, `ready --pr <n>` prints exactly the block it prints today. gstack's own policy does not turn trains on yet: that waits for the workflow side (the train-nonce record, the `cases` and `prefix_shas` inputs and the dispatched screen) and one dry-run train. Walkthrough: [docs/ship-policy.md#run-a-merge-train](docs/ship-policy.md#run-a-merge-train). Plan GSTA-49, lane T1.
 
@@ -10,7 +10,7 @@
 - **`train bisect --spend-cap <usd>`** runs only the red cases on every prefix, after an ancestry check against `train/<nonce>`. It reserves every case×prefix trial, launches what fits the cap and resumes without repeating a prefix. `ATTRIBUTED #<pr>` is reported only for a monotone pattern, and red on every prefix with T0 included is red on main. An all-green bisect earns exactly one unchanged `train rebuild`, with both runs reported. An INFRA/INCOMPLETE-only census earns the single re-dispatch `EVAL_POLICY.infraRedispatch` allows (`--infra`). A second red stays red.
 - **`verify --pr <n> --train <nonce>`** prints `MERGE_CONDITION` only when main's tree equals the prefix before the PR modulo stamps and the PR is still at its pin, and confirms each merge against the prefix after it. When a train stops partway after earlier slots merged, the queue freezes. The freeze is recorded locally and on the notes ref first, then the backstop gate runs on main's SHA. One `train build --repair` PR is admitted, and verify clears the freeze when it lands.
 - **`ready --screen [--broad] | --no-screen`** under a train policy. Without a choice, `ready` prints the screen selection and recommendation, then refuses. `--screen` dispatches one screen on the PR's merge SHA with `screen_pr`, `screen_merge_sha` and `screen_policy`. Dollar figures arrive with the cost replay. **`train prune`** deletes the branches of merged, superseded and dropped trains.
-- **The `train` policy key** (introduced in 1.91.145.0; needs `min_gstack_version`) and 18 result codes with troubleshooting anchors: `QUEUE_TRAIN_*` and `READY_SCREEN_CHOICE_REQUIRED`.
+- **The `train` policy key** (introduced in 1.91.146.0; needs `min_gstack_version`) and 18 result codes with troubleshooting anchors: `QUEUE_TRAIN_*` and `READY_SCREEN_CHOICE_REQUIRED`.
 
 ### Changed
 - **eval-bg's nonce key** can carry a purpose (screen, train, bisect, backstop) and a screen policy, so a broad screen never adopts a narrow run and a train never adopts a bisect. Plain lane keys are unchanged. Every dispatch input name now lives in `DISPATCH_INPUTS`.
