@@ -12,6 +12,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import type { CodexTokenUsage } from './codex-session-runner';
 
 export const SESSION_LEDGER_FILE = 'session-ledger.jsonl';
 export const SESSION_EVIDENCE_MAX = 200;
@@ -48,6 +49,10 @@ export interface SessionLedgerRow {
   liveness?: LivenessSummary;
   /** Whether the runner captured this session's billing (a terminal result with total_cost_usd). */
   billed?: boolean;
+  /** Codex sessions: the model, its billed cost and token classes. */
+  model?: string;
+  cost_usd?: number;
+  tokens?: CodexTokenUsage;
 }
 
 /** One line, control characters stripped, mentions neutralized, capped. */

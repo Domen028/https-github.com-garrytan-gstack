@@ -65,7 +65,7 @@ describe('SDK overlay measurements', () => {
 });
 
 describe('correctness versus efficacy', () => {
-  describe.each(['claude-opus-4-7', 'claude-sonnet-4-6'])('dedicated-tool gate for %s', (model) => {
+  describe.each(['claude-opus-5-5', 'claude-sonnet-5-5'])('dedicated-tool gate for %s', (model) => {
     const f = { ...OVERLAY_FIXTURES.find(f => f.metricName === 'bash_tool_calls' && f.model === model)!, trials: 3 };
     // Contract v4: a trial whose final JSON fails the fixture's verify is a valid
     // measurement with a wrong answer, not an invalid measurement.
@@ -276,9 +276,8 @@ describe('literal fixture task correctness', () => {
     expect(OVERLAY_FIXTURES).toHaveLength(5);
     expect(OVERLAY_FIXTURES.some((f) => f.id.includes('fanout') || f.comparison?.unsupportedHypothesis)).toBe(false);
     expect(OVERLAY_FIXTURES.every((f) => f.trials === 10 && f.comparison)).toBe(true);
-    expect(OVERLAY_FIXTURES.filter((f) => f.model === 'claude-opus-4-7')).toHaveLength(3);
-    expect(OVERLAY_FIXTURES.filter((f) => f.model === 'claude-sonnet-4-6')).toHaveLength(1);
-    expect(OVERLAY_FIXTURES.filter((f) => f.model === 'claude-opus-5-5')).toHaveLength(1);
+    expect(OVERLAY_FIXTURES.filter((f) => f.model === 'claude-opus-5-5')).toHaveLength(4);
+    expect(OVERLAY_FIXTURES.filter((f) => f.model === 'claude-sonnet-5-5')).toHaveLength(1);
   });
 });
 

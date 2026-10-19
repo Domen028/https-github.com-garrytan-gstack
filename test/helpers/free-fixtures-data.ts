@@ -54,6 +54,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/claude-agent-payload-2.1.292.json': ['test/autoplan-publication-payload.test.ts', 'test/autoplan-schema-canary-compare.test.ts'],
   'test/fixtures/claude-native-journal-roots-2.1.284.json': ['test/autoplan-publication-hook.test.ts', 'test/plan-count-transcript.test.ts'],
   'test/fixtures/codex-boundary-commands.json': ['test/codex-boundary-evidence.test.ts'],
+  'test/fixtures/codex-host/**': ['test/codex-host.test.ts'],
   'test/fixtures/codex-review-sandbox-unavailable-37158847998.json': ['test/outside-voice-evidence.test.ts'],
   'test/fixtures/codex-review/**': ['test/codex-hardening.test.ts', 'test/outside-review-severity.test.ts', 'test/outside-voice-evidence.test.ts', 'test/skill-validation.test.ts'],
   'test/fixtures/codex-sandbox/**': ['test/codex-eval-recording.test.ts', 'test/codex-model-probe.test.ts', 'test/outside-review-result.test.ts', 'test/outside-voice-invocation.test.ts'],

@@ -113,7 +113,8 @@ describe('paid CI coordination stays off the eval image', () => {
         // A confirmed verdict reuse (R2a/R2) is the one PR run that executes no slice.
         expect(executor.if).toBe("${{ !cancelled() && needs.build-image.result == 'success' && needs.plan-slices.result == 'success' && needs.plan-slices.outputs.gate_reuse != 'true' }}");
       } else {
-        expect(executor.if).toBeUndefined();
+        // A census-only run (monthly cron or census_arms dispatch) executes no periodic slice.
+        expect(executor.if).toBe("${{ needs.plan-slices.outputs.periodic_lane == 'true' }}");
       }
       expect(executor.steps.some(step => step.run === 'bun run build')).toBe(true);
       expect(executor.steps.some(step => step.uses === './.github/actions/restore-deps')).toBe(true);

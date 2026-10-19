@@ -17,6 +17,7 @@ import { E2E_KINDS } from '../../test/helpers/touchfiles-data';
 import { manualReviewProblem } from '../../test/helpers/cookie-workflow-manual-review';
 import { writeNegativeReceipt, writePanelReceipt } from '../e2e-shard-reuse';
 import { E2E_TOUCHFILES, E2E_TIERS, LLM_JUDGE_TOUCHFILES } from '../../test/helpers/touchfiles';
+import { type EvalHost, hostSkipReason } from '../../test/helpers/e2e-hosts';
 import { CASE_TEST_NAMES, type CaseTrialPlan, caseTestNamePattern, caseTrialPlan, fileCaseRegistration, shardCaseId, shardFile, trialShardKey } from './paid-cases';
 import { type ManifestEntry, PAID_TEST_DURATIONS_FILE, type PaidRunManifest, type SliceResult, collectorOutcomeCounts, formatProfileCoverage, loadPaidTestDurations, mergePaidTestDurations, parseRunManifest, trialPanelKey, verifySliceResults, writePaidTestDurations } from './paid-plan';
 import { DEFAULT_JOBS, type PaidCaseSelection, type PaidTier, ROOT, type ShardTrialRecord } from './paid-types';
@@ -170,6 +171,8 @@ export interface JUnitShardContext {
   selection?: PaidCaseSelection;
   /** Ids this file shard leaves to their isolated trial shards. */
   excludeCases?: readonly string[];
+  /** The run's agent host (manifest.host); absent means claude. */
+  host?: EvalHost;
 }
 
 export const DESELECTION_REASONS = {
@@ -205,6 +208,8 @@ export function attributeJUnitCase(tc: JUnitCase, ctx: JUnitShardContext,
   const tier = tiers[id];
   if (tier !== undefined && tier !== ctx.tier) return { kind: 'deselected', reason: `${tier}-tier case (this lane runs ${ctx.tier})` };
   if (ctx.excludeCases?.includes(id)) return { kind: 'deselected', reason: DESELECTION_REASONS.isolated };
+  const hostReason = hostSkipReason(id, ctx.host ?? 'claude');
+  if (hostReason) return { kind: 'deselected', reason: hostReason };
   const pool = tier !== undefined ? ctx.selection?.e2e : Object.hasOwn(LLM_JUDGE_TOUCHFILES, id) ? ctx.selection?.judges : null;
   if (pool && !pool.includes(id)) return { kind: 'deselected', reason: DESELECTION_REASONS.selection };
   return { kind: 'case', id };
@@ -241,7 +246,7 @@ export const CENSUS_RED_GUIDE = 'docs/evals/census-red.md';
 
 export function sliceArtifactName(root: string, slice: number, attempt: number): string {
   const name = path.basename(root);
-  return /^(?:paid-slice|gate-census)-\d+-a\d+$/.test(name) ? name : `slice ${slice} attempt ${attempt}`;
+  return /^(?:paid-slice|gate-census)-\d+-a\d+(?:-[a-z0-9-]+)?$/.test(name) ? name : `slice ${slice} attempt ${attempt}`;
 }
 
 export function junitCensus(manifest: PaidRunManifest, artifacts: ReportArtifact[], recordsByShard: Map<string, any[]>,
@@ -254,7 +259,7 @@ export function junitCensus(manifest: PaidRunManifest, artifacts: ReportArtifact
       if (outcome.trial || outcome.files.length !== 1) continue;
       let xml = '';
       try { xml = fs.readFileSync(path.join(root, 'shards', shardSlug([key]), 'junit.xml'), 'utf8'); } catch { continue; }
-      const ctx: JUnitShardContext = { key, tier: manifest.tier, selection: manifest.selection, excludeCases: entries.get(key)?.excludeCases };
+      const ctx: JUnitShardContext = { key, tier: manifest.tier, selection: manifest.selection, excludeCases: entries.get(key)?.excludeCases, host: manifest.host };
       const byCase = new Map<string, JUnitCase[]>();
       const reasons = new Map<string, number>();
       for (const tc of parseJUnitCases(xml)) {
@@ -530,7 +535,7 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
   const results = artifacts.filter(a => (a.result.attempt ?? 1) === primary).map(a => a.result);
   const verdict = verifySliceResults(manifest, results);
   const planned = manifest.entries.filter((e) => e.status === 'planned').length;
-  const lane = `${manifest.tier}/${manifest.profile ?? 'full'}${manifest.evalsAll ? ' census' : ''}`;
+  const lane = `${manifest.tier}/${manifest.profile ?? 'full'}${manifest.evalsAll ? ' census' : ''}${manifest.host ? ` on ${manifest.host}` : ''}`;
   console.log(`[test:paid] report: ${results.length}/${manifest.sliceCount} slices, ${planned} planned shards, tier=${manifest.tier}, attempt ${primary}${attempts.length > 1 ? ` (later attempts ${attempts.slice(1).join(', ')} reported, never replacing it)` : ''}`);
   for (const line of formatProfileCoverage(manifest)) console.log(line);
   for (const result of [...results].sort((a, b) => a.sliceIndex - b.sliceIndex)) {

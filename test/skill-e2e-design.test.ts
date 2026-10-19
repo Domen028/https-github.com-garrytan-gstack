@@ -124,7 +124,7 @@ Write DESIGN.md and CLAUDE.md (or update it) in the working directory.`,
       timeout: CAPTURE_LONG_MS,
       testName: 'design-consultation-core',
       runId,
-      model: 'claude-opus-4-7',
+      model: resolveEvalModel('capture'),
     });
 
     logCost('/design-consultation core', result);
@@ -298,7 +298,7 @@ Run Phase 0's DESIGN.md format check exactly as written (the gstack bin director
       timeout: CAPTURE_LONG_MS,
       testName: 'design-consultation-existing',
       runId,
-      model: 'claude-opus-4-7',
+      model: resolveEvalModel('capture'),
     });
 
     logCost('/design-consultation existing', result);
