@@ -16,7 +16,7 @@ import * as path from 'path';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const PLAN_ARG = '${_PLAN_MODE_ARG:+"$_PLAN_MODE_ARG"}';
-const GENERATOR = /(?:\bbun|\bbun_cmd|_gstack_render_bun) run (?:gen:skill-docs(?::user)?|scripts\/gen-skill-docs\.ts) --[a-z]/;
+const GENERATOR = /(?:\bbun(?: --no-env-file --config=\/dev\/null)?|\bbun_cmd|_gstack_render_bun) run (?:gen:skill-docs(?::user)?|scripts\/gen-skill-docs\.ts) --[a-z]/;
 const CONFIG_READ = '[ "$("$GSTACK_CONFIG" get plan_mode_preamble 2>/dev/null || true)" != off ] || _PLAN_MODE_ARG="--plan-mode=off"';
 
 /** Generator invocations in a file: not comments, and not echoed or logged instructions. */
