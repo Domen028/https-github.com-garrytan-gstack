@@ -1,21 +1,9 @@
 /**
- * The HydraDB boundary for task memory: hosted API v2 at the fixed origin
- * https://api.hydradb.com, which no environment variable or config changes.
- * Wire shapes stay private to this file.
- *
  * Every request, in order: re-check that the caller's grant is still the
  * current one for this destination, scan the exact body bytes for credential
  * shapes, write an egress receipt (fail-closed: no receipt, no send), then
  * send with redirects refused and a deadline. The API key travels only in
  * the Authorization header.
- *
- * Procedures are stored as `type=memory` items with `infer=false` and
- * `is_markdown=true`: HydraDB keeps the locally derived Markdown verbatim and
- * never re-derives or rewords what was observed. Recall admits a returned
- * chunk only when its own metadata (or its source's, from /context/list)
- * names this repository's scope, then renders the admitted chunks alone with
- * the SDK's buildString. Graph paths, related context and the server-built
- * prompt are dropped before rendering.
  */
 import { randomBytes } from 'node:crypto';
 import { buildString } from '@hydradb/sdk/helpers';
@@ -30,9 +18,7 @@ export const SCHEMA = 1;
 export interface Send {
   readonly key: string;
   readonly capability: Capability;
-  /** The grant in force when the work started; consent is the grant's generation. */
   readonly grant: Pick<Grant, 'generation'>;
-  /** Re-read immediately before each receipt; false refuses the send. */
   readonly stillAllowed: () => boolean;
 }
 
@@ -73,7 +59,6 @@ const utf8 = (s: string) => new TextEncoder().encode(s);
 
 const json = (value: unknown): Body => ({ bytes: utf8(JSON.stringify(value)), contentType: 'application/json' });
 
-/** multipart/form-data built here, so the receipt and the scan see exactly the bytes sent. */
 function multipart(fields: Record<string, string>): Body {
   const boundary = `gstack-task-memory-${randomBytes(12).toString('hex')}`;
   const parts = Object.entries(fields).map(([name, value]) =>
@@ -83,7 +68,6 @@ function multipart(fields: Record<string, string>): Body {
 
 const retryableStatus = (status: number, code: unknown) => status === 429 || status >= 500 || (status === 422 && code === 'TENANT_INFRA_NOT_READY');
 
-/** One receipted request. Never throws; the caller decides what each outcome means. */
 async function request(send: Send, method: string, route: string, payloadClass: string, timeoutMs: number,
   body?: Body): Promise<HydraResult<unknown>> {
   if (!send.stillAllowed()) return { kind: 'refused', reason: 'consent' };
@@ -102,7 +86,7 @@ async function request(send: Send, method: string, route: string, payloadClass: 
     return { kind: 'refused', reason: 'receipt' };
   }
   const outcome = await dispatch(send.key, method, route, timeoutMs, body);
-  try { writeOutcome({ receipt, status: outcome.kind === 'ok' ? 'ok' : outcome.kind === 'http' ? outcome.status : outcome.kind, lockBudgetMs: 200 }); } catch { /* bookkeeping only */ }
+  try { writeOutcome({ receipt, status: outcome.kind === 'ok' ? 'ok' : outcome.kind === 'http' ? outcome.status : outcome.kind, lockBudgetMs: 200 }); } catch {}
   return outcome;
 }
 
@@ -128,7 +112,6 @@ async function dispatch(key: string, method: string, route: string, timeoutMs: n
 
 const map = <A, B>(r: HydraResult<A>, f: (a: A) => B): HydraResult<B> => r.kind === 'ok' ? { kind: 'ok', value: f(r.value) } : r;
 
-/** Create the database (an existing one is reused) and report whether it takes writes yet. */
 export async function ensureDatabase(send: Send, database: string, waitMs: number): Promise<HydraResult<'ready' | 'provisioning'>> {
   const created = await request(send, 'POST', '/databases', 'database-create', 15_000, json({ database }));
   if (created.kind === 'http' && created.status !== 409) return created;
@@ -144,7 +127,6 @@ export async function ensureDatabase(send: Send, database: string, waitMs: numbe
   }
 }
 
-/** Upsert procedures under their stable ids. Resolves to the ids HydraDB accepted (queued, not yet searchable). */
 export async function ingest(send: Send, dest: Destination, scope: ScopeId, items: readonly MemoryItem[], timeoutMs: number): Promise<HydraResult<Set<DocId>>> {
   const memories = items.map(item => ({
     id: item.docId, title: item.title, text: item.markdown, is_markdown: true, infer: false,
@@ -174,7 +156,6 @@ export async function indexing(send: Send, dest: Destination, ids: readonly DocI
   });
 }
 
-/** Delete procedures by id. An id that is already gone counts as removed. */
 export async function remove(send: Send, dest: Destination, ids: readonly DocId[], timeoutMs: number): Promise<HydraResult<Set<DocId>>> {
   const result = await request(send, 'DELETE', '/context', 'procedure-ids', timeoutMs,
     json({ database: dest.database, collection: dest.collection, type: 'memory', ids }));
@@ -189,11 +170,6 @@ function scoped(metadata: Wire | null, scope: ScopeId): boolean {
   return metadata !== null && metadata.tm_scope === scope && Number(metadata.tm_schema) === SCHEMA;
 }
 
-/**
- * Query this repository's collection and admit only chunks whose metadata
- * proves this scope. `excluded` holds ids retracted locally. Metadata missing
- * from the query response is looked up once through /context/list.
- */
 export async function recall(send: Send, dest: Destination, scope: ScopeId, query: string, mode: Mode, excluded: ReadonlySet<DocId>,
   deadline: number): Promise<HydraResult<RecalledProcedure[]>> {
   const result = await request(send, 'POST', '/query', 'prompt-derived-query', deadline - Date.now(), json({
@@ -227,7 +203,6 @@ export async function recall(send: Send, dest: Destination, scope: ScopeId, quer
   };
 }
 
-/** SDK Markdown for admitted procedures only: no graph, related context or server-built prompt. */
 export function renderRecalled(items: readonly RecalledProcedure[]): string {
   return buildString({
     chunks: items.map(item => ({

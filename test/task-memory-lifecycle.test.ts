@@ -1,9 +1,3 @@
-/**
- * bin/gstack-task-memory lifecycle against an owned HOME and settings.json:
- * key custody, refusals that leave nothing enabled, two-repository teardown,
- * foreign hooks left alone, and hook healing and sweeps by ownership. The
- * loopback fake HydraDB answers the enable-time database calls. Free tier.
- */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';

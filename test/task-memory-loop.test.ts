@@ -1,10 +1,3 @@
-/**
- * HydraDB task memory end to end through the native surfaces: the real
- * `gstack-task-memory` CLI, the hooks it registers in an owned settings.json,
- * native Claude Code journals whose edits and test runs really happen in a
- * fixture repository, and a loopback fake HydraDB reached through a
- * test-only preload. Free tier; no real HydraDB call and no model.
- */
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -48,7 +41,6 @@ const receipts = () => {
 const prompt = (text: string, cwd = repo, env: Record<string, string> = {}) =>
   runRegisteredHook(home, 'UserPromptSubmit', { session_id: 'next-session', cwd, prompt: text, hook_event_name: 'UserPromptSubmit' }, env);
 
-/** One verified task: a real edit, then a real passing `bun test`. */
 function verifiedTask(session = nativeSession(home, repo)) {
   session.prompt('Fix the add helper so it handles negative numbers');
   session.edit('src/math.ts', 'a + b', 'Number(a) + Number(b)');
@@ -104,7 +96,6 @@ describe('the loop: enable, Stop capture, next-prompt recall', () => {
   }, 60_000);
 });
 
-/** Run the registered Stop hook and wait for its detached worker to finish. */
 async function stopAndSettle(session: ReturnType<typeof nativeSession>, env: Record<string, string> = {}) {
   const stop = await runRegisteredHook(home, 'Stop', session.stop, env);
   expect(stop.status).toBe(0);

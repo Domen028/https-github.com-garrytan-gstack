@@ -1,20 +1,3 @@
-/**
- * Task-memory local state, the one owner of everything the loop decides
- * locally: repository scope, per-repository consent grants, credential
- * custody, retrieval mode and per-procedure delivery records. All of it lives
- * under `<state root>/task-memory/` (directories 0700, files 0600):
- *
- *   hydradb.key                 the API key when it was entered, not read from HYDRA_DB_API_KEY
- *   settings.json               { mode: fast | thinking }
- *   repos/<scope>.json          one grant per repository (capture, recall, destination, generation)
- *   delivery/<scope>/<doc>.json one record per procedure: pending -> queued -> indexed, or retracting -> retracted
- *   locks/                      manage.lock (grants, key, mode) and one lock per session
- *
- * Scope is the full sha256 of the canonical origin remote: every clone and
- * worktree of a repository shares it, forks and other hosts never do. A grant
- * carries a fresh generation on every enable, so work recorded under an older
- * grant can never be sent under a newer one.
- */
 import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -34,9 +17,7 @@ export const API_KEY_ENV = 'HYDRA_DB_API_KEY';
 
 export interface RepoScope {
   readonly id: ScopeId;
-  /** Realpath of the worktree root; local only, never sent. */
   readonly root: string;
-  /** Canonical origin, shown by status; never sent (the scope id is). */
   readonly remote: string;
   readonly originUrl: string;
 }
@@ -54,7 +35,6 @@ export interface Grant {
   readonly capture: boolean;
   readonly recall: boolean;
   readonly generation: string;
-  /** Episodes that started before this instant are never captured: no backfill, no resurrection. */
   readonly grantedAt: string;
 }
 
@@ -125,7 +105,6 @@ function git(cwd: string, args: string[], timeoutMs: number) {
   return spawnSync('git', ['-C', cwd, ...args], { encoding: 'utf8', timeout: Math.max(1, timeoutMs), env: gitEnv(), maxBuffer: GIT_MAX_BUFFER });
 }
 
-/** The repository containing `cwd` and its scope, from the canonical origin remote. A repository without a hosted origin has no scope. */
 export function resolveScope(cwd: string, timeoutMs: number): ScopeResult {
   const top = git(cwd, ['rev-parse', '--show-toplevel'], timeoutMs);
   if (top.error) return { kind: 'none', reason: 'git-error' };
@@ -141,11 +120,6 @@ export function resolveScope(cwd: string, timeoutMs: number): ScopeResult {
   return { kind: 'ok', scope: { id: sha256(canonical.canonical) as ScopeId, root, remote: canonical.canonical, originUrl: url } };
 }
 
-/**
- * The repository trust policy's veto. `deny` blocks both directions,
- * `read-only` blocks capture (repository content leaving) but not recall,
- * and an unreadable policy blocks both.
- */
 export function policyAllows(scope: RepoScope, capability: Capability, timeoutMs: number): boolean {
   const policy = repoPolicyTier(scope.originUrl, process.env, timeoutMs);
   if (policy.error || policy.tier === 'deny') return false;
@@ -163,7 +137,6 @@ function parseGrant(value: unknown, scope: ScopeId): Grant | null {
     recall: g.recall, generation: g.generation, grantedAt: g.grantedAt };
 }
 
-/** This repository's grant; a missing or malformed file is no grant. */
 export function readGrant(scope: ScopeId): Grant | null {
   return parseGrant(readJson(grantPath(scope)), scope);
 }
@@ -182,13 +155,11 @@ export function hasAnyGrant(): boolean {
   try { return fs.readdirSync(path.join(stateDir(), 'repos')).some(n => n.endsWith('.json')); } catch { return false; }
 }
 
-/** A grant with a fresh generation, not yet in force. */
 export function newGrant(scope: RepoScope, opts: { database: string; capture: boolean; recall: boolean }): Grant {
   return { schema: 1, scope: scope.id, remote: scope.remote, database: opts.database, collection: collectionFor(scope.id),
     capture: opts.capture, recall: opts.recall, generation: randomBytes(16).toString('hex'), grantedAt: new Date().toISOString() };
 }
 
-/** Put a grant in force, replacing any earlier one for its repository. Callers hold the manage lock. */
 export function saveGrant(grant: Grant): void {
   writePrivate(grantPath(grant.scope), `${JSON.stringify(grant, null, 2)}\n`);
 }
@@ -197,18 +168,12 @@ export function removeGrant(scope: ScopeId): boolean {
   try { fs.unlinkSync(grantPath(scope)); return true; } catch { return false; }
 }
 
-/** The grant still in force for this capability, destination and generation; checked before every outbound request. */
 export function grantStillCurrent(held: Grant, capability: Capability): boolean {
   const now = readGrant(held.scope);
   return now !== null && now[capability] && now.generation === held.generation &&
     now.database === held.database && now.collection === held.collection;
 }
 
-/**
- * HYDRA_DB_API_KEY wins. Otherwise the key file, which must be a regular
- * file owned by this user with no group or world access; anything looser is
- * refused rather than used.
- */
 export function resolveCredential(env: NodeJS.ProcessEnv = process.env): Credential {
   const fromEnv = env[API_KEY_ENV]?.trim();
   if (fromEnv) return { kind: 'ok', key: fromEnv, source: 'env' };
@@ -266,7 +231,6 @@ export function listDeliveries(scope: ScopeId): Delivery[] {
   });
 }
 
-/** Replace one procedure's record. Only the holder of that session's lock writes it. */
 export function writeDelivery(record: Omit<Delivery, 'updatedAt'>): Delivery {
   const full: Delivery = { ...record, updatedAt: new Date().toISOString() };
   writePrivate(path.join(deliveryDir(record.scope), `${record.docId}.json`), `${JSON.stringify(full)}\n`);
@@ -284,23 +248,18 @@ function tryLock(file: string, ttlMs: number): boolean {
     try { fs.writeFileSync(file, `${process.pid}\n`, { flag: 'wx', mode: 0o600 }); return true; } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       let fresh = false;
-      try { fresh = Date.now() - fs.statSync(file).mtimeMs < ttlMs; } catch { /* released meanwhile; retry */ }
+      try { fresh = Date.now() - fs.statSync(file).mtimeMs < ttlMs; } catch {}
       if (fresh) return false;
-      try { fs.unlinkSync(file); } catch { /* another process took it over first */ }
+      try { fs.unlinkSync(file); } catch {}
     }
   }
   return false;
 }
 
 function release(file: string): void {
-  try { if (fs.readFileSync(file, 'utf8').trim() === String(process.pid)) fs.unlinkSync(file); } catch { /* already gone */ }
+  try { if (fs.readFileSync(file, 'utf8').trim() === String(process.pid)) fs.unlinkSync(file); } catch {}
 }
 
-/**
- * Run `fn` holding one named lock, or return 'busy'. A lock older than
- * `ttlMs` belongs to a dead holder and is taken over. `waitMs` polls before
- * giving up.
- */
 export async function withLock<T>(name: string, opts: { ttlMs: number; waitMs: number }, fn: () => Promise<T> | T): Promise<T | 'busy'> {
   const file = lockFile(name);
   const deadline = Date.now() + opts.waitMs;

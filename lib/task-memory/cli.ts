@@ -1,14 +1,3 @@
-/**
- * gstack-task-memory: enable | disable | status | mode | flush for HydraDB
- * task memory, run from inside the repository it applies to.
- *
- * enable asks for consent per capability, takes the API key from
- * HYDRA_DB_API_KEY, the existing key file, `--key-stdin` or a hidden prompt
- * (never argv), provisions the database, registers both hooks at the stable
- * install, and writes the repository's grant last, so a failed step never
- * leaves consent in force. disable revokes this repository's grant first and
- * removes the hooks only when no other repository still holds one.
- */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -74,7 +63,6 @@ function scopeHere(): RepoScope {
   return refuse(`${why[resolved.reason]}; task memory needs a hosted origin to scope procedures to one repository`);
 }
 
-/** The stable install hooks are registered at (bin/gstack-claude-root.sh), never this tree's own path. */
 function canonicalRoot(): string {
   const r = spawnSync('bash', ['-c', '. "$1" && gstack_canonical_claude_root', '_', path.join(ROOT, 'bin', 'gstack-claude-root.sh')],
     { encoding: 'utf8', timeout: 5_000 });
@@ -88,7 +76,6 @@ function settingsHook(root: string, args: string[]) {
   return spawnSync(bin, args, { encoding: 'utf8', timeout: 30_000 });
 }
 
-/** The stable install must carry these hooks at this version, or the registered command would run other code. */
 function compatibleInstall(root: string): void {
   for (const hook of HOOKS) {
     if (!fs.existsSync(path.join(root, hook.rel)) || !fs.existsSync(path.join(root, `${hook.rel}.ts`)))

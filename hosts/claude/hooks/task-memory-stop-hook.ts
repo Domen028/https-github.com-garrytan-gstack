@@ -1,13 +1,4 @@
 #!/usr/bin/env bun
-/**
- * task-memory-stop-hook: on Stop, hand the session to a detached worker that
- * captures its verified task procedures into HydraDB task memory. Logic
- * lives in lib/task-memory/loop.ts (captureSession). Stop is a chance to
- * capture, not evidence that any task succeeded.
- *
- * The foreground hook reads no transcript and makes no network call: it
- * checks that some repository granted capture, spawns `--worker`, and exits 0.
- */
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { CAPTURE_DEADLINE_MS, captureSession, parseStopInput, readHookStdin } from '../../../lib/task-memory/loop';
@@ -19,7 +10,7 @@ const QUIET = /^(no-capture-grant|not-a-repo|no-origin|local-origin|session-busy
 
 async function worker(arg: string): Promise<void> {
   let input: ReturnType<typeof parseStopInput> = null;
-  try { input = parseStopInput(JSON.parse(arg)); } catch { /* malformed argument: nothing to capture */ }
+  try { input = parseStopInput(JSON.parse(arg)); } catch {}
   if (!input) return;
   const report = await captureSession(input, Date.now() + CAPTURE_DEADLINE_MS);
   if (report.kind === 'skipped') {

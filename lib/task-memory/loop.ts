@@ -1,19 +1,3 @@
-/**
- * The task-memory loop: capture after Stop, recall on UserPromptSubmit, and
- * the `flush` retry. Both hooks call in here; neither ever blocks the user.
- *
- * Capture re-derives every episode of the session from its native journal on
- * each Stop and reconciles the result with that session's delivery records:
- *
- *   verified now, not yet sent (or changed)   -> pending -> ingest -> queued -> indexed
- *   was sent, no longer verified              -> retracting -> delete -> retracted
- *   unchanged                                 -> nothing
- *
- * One session lock serializes a session's Stops; different sessions write
- * different records. Records carry the grant generation, so a pending
- * procedure from before a disable is never sent after a later enable, and
- * episodes that started before the grant are never read at all.
- */
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { redactFindingSpans, scan } from '../redact-engine';
@@ -61,7 +45,6 @@ export function parsePromptInput(value: unknown): PromptInput | null {
     ? { sessionId: session_id, cwd, prompt } : null;
 }
 
-/** Hook stdin as JSON: bounded in size and time; anything else is null. */
 export async function readHookStdin(timeoutMs: number): Promise<unknown> {
   const raw = await Promise.race([Bun.stdin.text(), new Promise<string>(r => setTimeout(() => r(''), timeoutMs).unref())]);
   if (!raw || raw.length > STDIN_CAP_CHARS) return null;
@@ -73,7 +56,6 @@ const remaining = (deadline: number) => deadline - Date.now();
 
 interface Context { grant: Grant; scope: RepoScope; send: Send; dest: Destination }
 
-/** The grant, policy and key for one capability in the repository at `cwd`, or why there is none. */
 function openContext(cwd: string, capability: 'capture' | 'recall', deadline: number): Context | { skip: string } {
   const resolved = resolveScope(cwd, Math.min(1500, remaining(deadline)));
   if (resolved.kind !== 'ok') return { skip: resolved.reason };
@@ -88,7 +70,6 @@ function openContext(cwd: string, capability: 'capture' | 'recall', deadline: nu
   };
 }
 
-/** Capture one session after Stop. Runs in the detached worker, never on the user's turn. */
 export async function captureSession(session: NativeSession, deadline: number): Promise<CaptureReport> {
   const ctx = openContext(session.cwd, 'capture', deadline);
   if ('skip' in ctx) return { kind: 'skipped', reason: ctx.skip };
@@ -119,7 +100,6 @@ export async function captureSession(session: NativeSession, deadline: number): 
   return held === 'busy' ? { kind: 'skipped', reason: 'session-busy' } : held;
 }
 
-/** Retry this repository's pending, retracting and still-indexing procedures under the current grant. */
 export async function flushRepository(cwd: string, deadline: number): Promise<CaptureReport> {
   const ctx = openContext(cwd, 'capture', deadline);
   if ('skip' in ctx) return { kind: 'skipped', reason: ctx.skip };
@@ -139,9 +119,7 @@ export async function flushRepository(cwd: string, deadline: number): Promise<Ca
 const withState = (d: Delivery, state: Delivery['state']): Delivery => d.state === state ? d : writeDelivery({ ...d, state });
 
 /**
- * Send what the records ask for. A record moves forward only on a server
- * answer that proves it; anything else leaves it where it was for the next
- * Stop or `flush`. HydraDB requires an id's previous ingestion to settle
+ * HydraDB requires an id's previous ingestion to settle
  * before the next upsert, so a pending id the server still reports as
  * queued or processing waits.
  */
@@ -178,7 +156,6 @@ async function deliver(ctx: Context, session: string, pending: Delivery[], retra
   return counts;
 }
 
-/** Poll this session's queued procedures until searchable, within the deadline. Queued is not indexed. */
 async function awaitIndexing(ctx: Context, session: string, deadline: number): Promise<number> {
   const until = Math.min(deadline - 1_000, Date.now() + INDEX_WAIT_MS);
   let indexed = 0;
@@ -198,7 +175,6 @@ const STOPWORDS = new Set(['this', 'that', 'with', 'from', 'have', 'what', 'when
   'please', 'there', 'their', 'about', 'into', 'make', 'does', 'then', 'them', 'they', 'will', 'just', 'also', 'like', 'want', 'need']);
 const tokens = (s: string): Set<string> => new Set((s.toLowerCase().match(/[a-z0-9_./-]{4,}/g) ?? []).filter(t => !STOPWORDS.has(t)));
 
-/** The prompt as a search query: code blocks dropped, redacted, capped; null for a trivial prompt or a credential shape. */
 export function recallQuery(prompt: string): string | null {
   const plain = prompt.replace(/```[\s\S]*?(?:```|$)/g, ' ').replace(/\s+/g, ' ').trim();
   if (plain.length < 12 || plain.startsWith('/') || TRIVIAL.test(plain)) return null;
@@ -216,7 +192,6 @@ function capUtf8(text: string, maxBytes: number): string {
   return `${buf.subarray(0, end).toString('utf8')}\n[truncated]`;
 }
 
-/** Past procedures for this prompt as untrusted reference Markdown, or why there are none. Never throws, never blocks. */
 export async function recallForPrompt(input: PromptInput, startedAt: number = Date.now()): Promise<RecallReport> {
   if (!hasAnyGrant()) return { kind: 'skipped', reason: 'no-grant' };
   const query = recallQuery(input.prompt);

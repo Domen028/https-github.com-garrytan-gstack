@@ -1,10 +1,3 @@
-/**
- * Hermetic fixtures for HydraDB task memory: an owned HOME with a Claude
- * config dir whose skills/gstack links to this checkout (the stable install
- * the hooks register at), a loopback fake HydraDB that records every request,
- * fixture git repositories with hosted origins, and a native Claude Code
- * journal writer whose edits and commands really run in the fixture repo.
- */
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
@@ -22,7 +15,6 @@ export interface FakeRequest {
   authorization: string | null;
   apiVersion: string | null;
   body: string;
-  /** Parsed `memories` field of an ingest, or the JSON body of any other request. */
   payload: any;
   fields: Record<string, string>;
 }
@@ -30,19 +22,12 @@ export interface FakeRequest {
 interface StoredMemory { id: string; title: string; text: string; additional_metadata: Record<string, unknown> }
 
 export interface FakeBehavior {
-  /** Answer ingest with this HTTP status instead of accepting. */
   ingestStatus?: number;
-  /** Indexing status reported for stored ids (default graph_creation). */
   indexing?: string;
-  /** Answer /query with a redirect. */
   redirectQuery?: boolean;
-  /** Return every stored memory from every collection, as a misbehaving server would. */
   leakAcrossCollections?: boolean;
-  /** Leave metadata off query chunks, so the client must look it up through /context/list. */
   chunkMetadata?: boolean;
-  /** Hold every response this long. */
   delayMs?: number;
-  /** Refuse every request as an invalid key would be refused. */
   rejectKey?: boolean;
 }
 
@@ -128,7 +113,6 @@ export interface Home {
   cleanup(): void;
 }
 
-/** An owned HOME. `origin` is where the preload sends HydraDB traffic; HYDRA_DB_API_KEY is never inherited. */
 export function makeHome(origin: string, seedSettings?: unknown): Home {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tm-home-')));
   const claude = path.join(home, '.claude');
@@ -150,7 +134,6 @@ export function makeHome(origin: string, seedSettings?: unknown): Home {
   return { home, claude, settings, state, env, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
 }
 
-/** A git repository with a hosted origin and a tiny bun project: one source file and one passing test. */
 export function makeRepo(home: Home, name: string, origin: string): string {
   const repo = path.join(home.home, 'work', name);
   fs.mkdirSync(path.join(repo, 'src'), { recursive: true });
@@ -192,14 +175,12 @@ export function hookCommands(home: Home, event: string): string[] {
   return (readSettings(home).hooks?.[event] ?? []).flatMap((e: any) => e.hooks.map((h: any) => h.command as string));
 }
 
-/** Run the hook command settings.json registers for `event`, the way Claude Code does (`sh -c`). */
 export function runRegisteredHook(home: Home, event: 'Stop' | 'UserPromptSubmit', stdin: unknown, env: Record<string, string> = {}) {
   const command = hookCommands(home, event).find(c => /task-memory-(stop|prompt)-hook$/.test(c));
   if (!command) throw new Error(`no task-memory ${event} hook registered`);
   return run(['/bin/sh', '-c', command], { env: { ...home.env, ...env }, input: JSON.stringify(stdin), timeoutMs: 30_000 });
 }
 
-/** Wait until no capture worker for this session is running (its argv carries the session id). */
 export async function waitForWorkers(sessionId: string, timeoutMs = 60_000): Promise<void> {
   await Bun.sleep(300);
   await waitFor(() => spawnSync('pgrep', ['-f', '--', `--worker.*${sessionId}`], { timeout: 5_000 }).status === 1, timeoutMs);

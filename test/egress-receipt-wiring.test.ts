@@ -60,9 +60,6 @@ const POLARITY: Record<string, 'fail-closed' | 'fail-open'> = {
   // an unrecorded hand-off of user content is the thing the ledger exists to
   // prevent, so it fails closed ("no receipt, no send").
   'memorable-recall': 'fail-closed',
-  // hydradb-task-memory: derived task procedures and prompt-derived recall
-  // queries leave for HydraDB; a skipped capture retries on the next Stop and
-  // a skipped recall costs one prompt's context, so no receipt means no send.
   'hydradb-task-memory': 'fail-closed',
   // fail-open: user-facing operations that must not die over an audit-log
   // hiccup; they warn on stderr and proceed.
@@ -106,8 +103,6 @@ const MODULE_SINKS = [
   // vendor CLI. hosts/ has no curl/fetch for the scanner to see, so the
   // receipt wiring is pinned here explicitly.
   'hosts/claude/hooks/memorable-user-prompt-hook.ts',
-  // HydraDB task memory: every request to the fixed hosted origin goes
-  // through one receipted request function.
   'lib/task-memory/hydradb.ts',
 ];
 
@@ -412,8 +407,6 @@ describe('egress receipt wiring tripwire', () => {
     expect(memo).toContain('fail-closed');
     expect(memo.indexOf('writeReceipt(')).toBeGreaterThan(0);
     expect(memo.indexOf('writeReceipt(')).toBeLessThan(memo.indexOf('// VENDOR SPAWN'));
-    // hydradb-task-memory (closed): the consent re-check and the receipt
-    // precede the fetch, and a receipt failure refuses the request.
     const tm = read('lib/task-memory/hydradb.ts');
     expect(tm).toMatch(/sink:\s*SINK/);
     expect(tm).toContain("SINK = 'hydradb-task-memory'");

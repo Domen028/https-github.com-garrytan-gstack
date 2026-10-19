@@ -1,8 +1,3 @@
-/**
- * lib/task-memory/procedure.ts: which observed tool evidence becomes a
- * verified task procedure. Free tier, no network. The native hook loop over
- * real journals lives in test/task-memory-loop.test.ts.
- */
 import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';

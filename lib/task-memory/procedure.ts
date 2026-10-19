@@ -1,21 +1,3 @@
-/**
- * Task-memory procedures: what one Claude Code session observably did in a
- * repository, reduced to evidence a later session can reuse.
- *
- *   native journal (main thread only) -> Step[] -> Episode[] -> Verdict -> Procedure
- *
- * Only tool calls with paired native results count. An edit is a successful
- * Edit/Write/MultiEdit/NotebookEdit inside the repository. A check is a
- * recognized test command whose result carries a complete runner summary
- * with a positive pass count and zero failures. A missing exit status,
- * `is_error: false` alone, assistant prose and the Stop event itself prove
- * nothing. Any later change (an edit, a shell command that may write, an
- * unrecognized tool) invalidates every earlier check.
- *
- * Nothing here touches the network. The rendered Markdown carries a redacted
- * goal line, repository-relative paths, literal check commands and runner
- * counts; never file bodies, diffs, tool output or transcript text.
- */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { readOwnedClaudePublicTranscript } from '../claude-public-transcript';
@@ -40,12 +22,10 @@ export type CheckOutcome =
 export type Step =
   | { kind: 'prompt'; key: string; at: string; goal: Goal | null }
   | { kind: 'edit'; tool: EditTool; target: RepoRelPath }
-  /** A change with no renderable target: a shell write, an unrecognized tool, an edit whose result never arrived. */
   | { kind: 'change' }
   | { kind: 'check'; command: LiteralCheck; outcome: CheckOutcome };
 
 export interface Episode {
-  /** Native uuid of the typed prompt that opened the episode. */
   readonly key: string;
   readonly startedAt: string;
   readonly goal: Goal | null;
@@ -73,7 +53,6 @@ const MAX_PROMPT_RECORD_BYTES = 256 * 1024;
 const SUMMARY_TAIL_CHARS = 64 * 1024;
 
 const EDIT_TOOLS: ReadonlySet<string> = new Set<EditTool>(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
-/** Tools that cannot change the working tree. Every other tool, MCP tools and subagents included, counts as a change. */
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'TodoWrite',
   'TodoRead', 'AskUserQuestion', 'ToolSearch', 'ExitPlanMode', 'EnterPlanMode', 'BashOutput', 'ListMcpResourcesTool', 'ReadMcpResourceTool']);
 const CHECK_COMMANDS: readonly RegExp[] = [
@@ -97,12 +76,6 @@ type ShellKind =
   | { kind: 'masked-check' }
   | { kind: 'change' };
 
-/**
- * Classify one Bash command. A check counts only as a simple command (or
- * `cd <repo root> && <check>`): pipes, `||`, `;`, redirection, substitution
- * and env prefixes can hide the runner's real status or output, so such a
- * check is masked and proves nothing. Anything not recognized may write.
- */
 export function classifyShell(raw: string, repoRoot: string): ShellKind {
   const command = joinedStreams(raw.trim());
   if (!command || /[<>`]|\$\(/.test(command)) return command && CHECK_COMMANDS.some(re => re.test(command)) ? { kind: 'masked-check' } : { kind: 'change' };
@@ -121,7 +94,6 @@ function sameDir(dir: string, root: string): boolean {
   try { return fs.realpathSync(dir.replace(/^(['"])(.*)\1$/, '$2')) === root; } catch { return false; }
 }
 
-/** A literal check safe to store: one line, bounded, no local paths, no redaction finding. */
 export function literalCheck(literal: string): LiteralCheck | null {
   if (literal.length > MAX_COMMAND_CHARS || /[\r\n\t]/.test(literal)) return null;
   if (literal.split(/\s+/).some(token => /^['"]?(?:\/|~|[A-Za-z]:\\)/.test(token))) return null;
@@ -143,7 +115,6 @@ const tally = (text: string, words: Record<string, 'passed' | 'failed' | 'skippe
   return out;
 };
 
-/** Complete runner summaries, one parser per supported runner. Each returns null unless its whole summary is present. */
 const SUMMARY_PARSERS: ReadonlyArray<(text: string) => Summary | null> = [
   (text) => {
     const ran = lastMatch(text, /^Ran (\d+) tests? across \d+ files?\./gm);
@@ -179,11 +150,6 @@ const SUMMARY_PARSERS: ReadonlyArray<(text: string) => Summary | null> = [
   },
 ];
 
-/**
- * What a check's native result proves. A host error is a failure (an
- * interrupt proves nothing either way). Success needs a complete supported
- * summary with at least one passing test and no failure.
- */
 export function checkOutcome(text: string, isError: boolean): CheckOutcome {
   if (isError) return /interrupted/i.test(text.slice(0, 200)) ? { kind: 'unknown' } : { kind: 'failed' };
   const tail = text.slice(-SUMMARY_TAIL_CHARS);
@@ -196,7 +162,6 @@ export function checkOutcome(text: string, isError: boolean): CheckOutcome {
   return { kind: 'unknown' };
 }
 
-/** Repository-relative POSIX path of an absolute tool path (symlinks resolved), or null outside the repository. */
 export function insideRepo(file: unknown, repoRoot: string): string | null {
   if (typeof file !== 'string' || !path.isAbsolute(file)) return null;
   let dir = path.dirname(path.normalize(file));
@@ -212,11 +177,9 @@ export function insideRepo(file: unknown, repoRoot: string): string | null {
   return !rel || rel.startsWith('..') || path.isAbsolute(rel) ? null : rel.split(path.sep).join('/');
 }
 
-/** An in-repository path that is safe to render in a Markdown code span. */
 const renderable = (rel: string): RepoRelPath | null =>
   /[\x00-\x1f`]/.test(rel) || rel === '.git' || rel.startsWith('.git/') ? null : rel as RepoRelPath;
 
-/** First line of a typed prompt, redacted and capped; null when it carries a credential or an injection pattern. */
 export function deriveGoal(prompt: string): Goal | null {
   const line = prompt.split('\n').map(l => l.replace(/\s+/g, ' ').trim()).find(Boolean);
   if (!line || /^[/<]/.test(line)) return null;
@@ -241,11 +204,6 @@ export type SessionRead =
 const toolText = (content: unknown): string => typeof content === 'string' ? content
   : Array.isArray(content) ? content.map(b => (b && typeof b === 'object' && typeof b.text === 'string' ? b.text : '')).join('\n') : '';
 
-/**
- * Read the main-thread tool evidence of one native session journal. The
- * journal must sit under `<claude config>/projects/` and pass the shared
- * owned reader's identity checks; sidechains and subagents are excluded.
- */
 export function readSessionSteps(session: NativeSession, repoRoot: string, claudeConfigDir: string): SessionRead {
   let projects: string, file: string;
   try {
@@ -278,7 +236,6 @@ export function readSessionSteps(session: NativeSession, repoRoot: string, claud
   }) };
 }
 
-/** The text of one typed prompt record, re-read by its indexed byte range and checked against its uuid. */
 function promptText(file: string, record: IndexedRecord | undefined): string | null {
   if (!record || record.length > MAX_PROMPT_RECORD_BYTES) return null;
   let fd: number | undefined;
@@ -291,7 +248,6 @@ function promptText(file: string, record: IndexedRecord | undefined): string | n
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-/** Pair native uses with their results in completion order. A mutating use with no result yet is a change. */
 export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: string,
   promptOf: (prompt: ClaudeParentPublicEvent) => { key: string; text: string | null } | null): Step[] {
   const steps: Step[] = [];
@@ -332,11 +288,6 @@ function resultStep(use: { name: string; input: Record<string, unknown> | undefi
   return literal ? { kind: 'check', command: literal, outcome } : null;
 }
 
-/**
- * Split steps into episodes at typed prompts. A prompt opens a new episode
- * when the current one has no edits yet or is already verified; otherwise
- * ("keep going" after a failure) the work continues the same episode.
- */
 export function episodes(steps: readonly Step[]): Episode[] {
   const out: Episode[] = [];
   let current: { key: string; startedAt: string; goal: Goal | null; steps: Step[] } | null = null;
@@ -353,7 +304,6 @@ export function episodes(steps: readonly Step[]): Episode[] {
   return out;
 }
 
-/** Whether an episode's own evidence verifies it: edits, then a passing check after the last change, no unresolved failure. */
 export function verdict(steps: readonly Step[]): Verdict {
   const edits: EditTarget[] = [];
   for (const s of steps) if (s.kind === 'edit' && !edits.some(e => e.target === s.target)) edits.push({ target: s.target, tool: s.tool });
@@ -373,7 +323,6 @@ export function verdict(steps: readonly Step[]): Verdict {
 
 const VERBS: Record<EditTool, string> = { Edit: 'Edited', MultiEdit: 'Edited', Write: 'Wrote', NotebookEdit: 'Edited notebook' };
 
-/** Stable Markdown for a verified episode, or null when the rendered document still carries a credential shape. */
 export function renderProcedure(episode: Episode, proven: Extract<Verdict, { kind: 'verified' }>): Procedure | null {
   const shown = proven.edits.slice(0, MAX_EDIT_TARGETS);
   const title = episode.goal ?? `Edits to ${shown.map(e => e.target).slice(0, 3).join(', ')}`.slice(0, 120);

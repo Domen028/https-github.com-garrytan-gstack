@@ -237,7 +237,6 @@ if [ -x "$SETTINGS_HOOK" ]; then
   if "$SETTINGS_HOOK" remove-source --source gstack-memorable | grep -q "removed [1-9]"; then
     REMOVED+=("Memorable UserPromptSubmit hook (Memorable's own consent is unchanged: memorable disable | memorable forget)")
   fi
-  # HydraDB task memory (opt-in via bin/gstack-task-memory; ours to sweep).
   if "$SETTINGS_HOOK" remove-source --source gstack-task-memory | grep -q "removed [1-9]"; then
     REMOVED+=("HydraDB task-memory hooks")
   fi
@@ -261,8 +260,6 @@ if [ -x "$GSTACK_CONFIG" ] && [ "$("$GSTACK_CONFIG" get memorable_recall 2>/dev/
   fi
 fi
 
-# Task-memory grants live in the resolved state root, which can outlive this
-# run (--keep-state, or a root selected elsewhere). Consent goes with the hooks.
 if [ -d "$RESOLVED_ROOT/task-memory/repos" ]; then
   if rm -rf "$RESOLVED_ROOT/task-memory/repos"; then
     REMOVED+=("HydraDB task-memory grants (procedures already in HydraDB stay there)")
