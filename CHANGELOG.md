@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.140.0] - 2026-10-18
+## [1.91.142.0] - 2026-10-18
 
 **The paid PR gate now tests Claude Opus 5.5 instead of Fable 5.1. Its first full Opus gate went 132/132 green and recorded $32.33, against Fable's $93.16 mean over ten full gates.** Garry's direction (2026-10-18) is to test each lab's best code model. Calibration run 39157502890 passed all 108 rule cases and 24 judges on one attempt each, with no reused receipts, on the same case set every Fable gate passed. Opus 5.5 sessions cost $30.86 (Fable: $90.49), judges $1.44 and Haiku side calls $0.08; with the unrecorded PTY sessions estimated, the full-gate scale is $37.13 against $106.17. Output tokens fell 37% (thinking 69%) and session time from 11,859 s to 6,159 s. The Claude CLI runs Opus 5.5 at medium effort by default and Fable at high.
 
