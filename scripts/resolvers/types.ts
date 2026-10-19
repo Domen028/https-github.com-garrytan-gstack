@@ -116,7 +116,7 @@ export interface TemplateContext {
    * root a per-install render serves (`gen-skill-docs --install-root`).
    * null/undefined = the host's default root (committed render, unchanged bytes).
    */
-   installRoot?: string | null;
+  installRoot?: string | null;
   /**
    * Plan-mode preamble block. Defaults to true (block ships).
    * false (opt-in via `--plan-mode=off`): the "## Plan Mode Safe Operations" +
