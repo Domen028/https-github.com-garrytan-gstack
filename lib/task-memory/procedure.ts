@@ -19,11 +19,6 @@ export type CheckOutcome =
   | { kind: 'failed' }
   | { kind: 'unknown' };
 
-/**
- * `key` identifies the command across runs. `literal` is null for a run that
- * can contradict earlier proof but never prove anything itself: a masked,
- * prefixed or unrenderable command.
- */
 export type Step =
   | { kind: 'prompt'; key: string; at: string; goal: Goal | null }
   | { kind: 'edit'; tool: EditTool; target: RepoRelPath }
@@ -58,7 +53,7 @@ const MAX_PROMPT_RECORD_BYTES = 256 * 1024;
 const SUMMARY_TAIL_CHARS = 64 * 1024;
 
 const EDIT_TOOLS: ReadonlySet<string> = new Set<EditTool>(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
-/** Native tools that change no file; the task-list tools are in the pinned agent SDK's tool schemas. */
+/** The task-list tools are in the pinned agent SDK's tool schemas. */
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'TodoWrite',
   'TodoRead', 'AskUserQuestion', 'ToolSearch', 'ExitPlanMode', 'EnterPlanMode', 'BashOutput', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
   'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate', 'TaskOutput']);
@@ -80,7 +75,6 @@ const GIT_READ_ONLY: Record<string, (args: readonly string[]) => boolean> = {
   branch: args => args.every(a => GIT_LISTING.has(a)),
   remote: args => args.every(a => a === '-v' || a === '--verbose') || (args[0] === 'get-url' && !args.slice(1).some(a => a.startsWith('-') && a !== '--push' && a !== '--all')),
 };
-/** Complete commands that write no file, with the flags that would make them write one refused. */
 const READ_ONLY_COMMANDS: Record<string, (args: readonly string[]) => boolean> = {
   ls: anyArgs, cat: anyArgs, head: anyArgs, tail: anyArgs, wc: anyArgs, grep: anyArgs, pwd: anyArgs, echo: anyArgs, which: anyArgs,
   type: anyArgs, stat: anyArgs, du: anyArgs, df: anyArgs, whoami: anyArgs, true: anyArgs, ':': anyArgs,
@@ -90,12 +84,6 @@ const READ_ONLY_COMMANDS: Record<string, (args: readonly string[]) => boolean> =
 
 interface Shell { readonly segments: string[][]; readonly joins: string[]; readonly hidden: boolean }
 
-/**
- * Split a command line into simple commands. Null means syntax this does not
- * model, which callers treat as a possible write: substitution, subshells,
- * background jobs, unterminated quotes and redirection into a file.
- * `hidden` is set when output goes to /dev/null.
- */
 export function parseShell(command: string): Shell | null {
   const segments: string[][] = [[]];
   const joins: string[] = [];
@@ -349,7 +337,6 @@ function promptText(file: string, record: IndexedRecord | undefined): string | n
 
 type ToolUse = { name: string; input: Record<string, unknown> | undefined };
 
-/** Steps in tool-use order. A use with no result yet counts as what it may have done, never as a result. */
 export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: string,
   promptOf: (prompt: ClaudeParentPublicEvent) => { key: string; text: string | null } | null): Step[] {
   const slots: (Step | null)[] = [];

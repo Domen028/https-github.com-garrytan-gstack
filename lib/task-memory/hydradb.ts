@@ -30,7 +30,6 @@ export interface MemoryItem {
   readonly recordedOn: string;
 }
 
-/** `absent`: HydraDB has no such id in this collection. */
 export type IndexingState = IndexState | 'absent';
 
 export interface RecalledProcedure {
@@ -83,13 +82,10 @@ async function request(send: Send, method: string, route: string, payloadClass: 
   try {
     const status = outcome.kind === 'ok' ? 'ok' : outcome.kind === 'http' ? outcome.status : `${outcome.kind}-${outcome.reason}`;
     writeOutcome({ receipt, status, lockBudgetMs: 200 });
-  } catch {
-    // The receipt already records the attempt; a missing outcome line is not worth failing the request over.
-  }
+  } catch {}
   return outcome;
 }
 
-/** Consent is read again here, after the receipt lock, so a grant revoked while this request waited never sends. */
 async function dispatch(send: Send, method: string, route: string, timeoutMs: number, body?: Body): Promise<HydraResult<unknown>> {
   if (!send.stillAllowed()) return { kind: 'refused', reason: 'consent' };
   let res: Response;

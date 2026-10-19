@@ -778,8 +778,6 @@ case "$ACTION" in
       (process.env.GSTACK_SWEEP_EXCLUDE_SOURCES || "").split(",").forEach(function (sName) {
         if (sName.trim()) sweepExclude[sName.trim()] = true;
       });
-      // GSTACK_SWEEP_KEEP_USER_OPT_INS=1 also keeps every KNOWN_HOOKS row
-      // marked userOptIn, so a new opt-in needs no edit to the caller.
       if (process.env.GSTACK_SWEEP_KEEP_USER_OPT_INS === "1") {
         Object.keys(KNOWN_HOOKS).forEach(function (b) { if (KNOWN_HOOKS[b].userOptIn) sweepExclude[KNOWN_HOOKS[b].source] = true; });
       }

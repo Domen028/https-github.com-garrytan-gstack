@@ -23,12 +23,6 @@ const BACKOFF_MS = { first: 60_000, max: 3_600_000 };
 const remaining = (deadline: number) => deadline - Date.now();
 const held = (d: Delivery | null) => d?.remote.kind === 'held' ? d.remote : null;
 
-/**
- * What each id still needs. Uploads come only from the current grant's
- * admissions, so work admitted under an earlier grant is never resent. A
- * withdrawal removes whatever this machine put in the same destination,
- * whichever grant sent it.
- */
 export function plan(admissions: readonly Admission[], deliveries: readonly Delivery[], ctx: Pick<DeliveryContext, 'grant' | 'dest'>,
   opts: { force: boolean; now: number }): Work[] {
   const byId = new Map(deliveries.map(d => [d.docId, d]));
@@ -50,7 +44,6 @@ export function plan(admissions: readonly Admission[], deliveries: readonly Deli
   return work;
 }
 
-/** A content fingerprint of capture's admissions: it changes whenever a capture writes one. */
 function fingerprint(scope: ScopeId): string {
   const lines = listAdmissions(scope).map(a => `${a.docId} ${a.generation} ${a.procedure?.sha256 ?? '-'}`).sort();
   return createHash('sha256').update(lines.join('\n')).digest('hex');
@@ -78,7 +71,6 @@ function failed(ctx: DeliveryContext, w: Work, problem: Problem | { rejected: nu
   record(ctx, w.docId, w.prior, { retry: { attempts, after, problem } });
 }
 
-/** Folds HydraDB's view of an id into its record; returns the record now on disk. */
 function observe(ctx: DeliveryContext, w: Work, state: IndexingState | undefined): Delivery | null {
   const remote = held(w.prior);
   if (state === undefined) return w.prior;
@@ -89,7 +81,6 @@ function observe(ctx: DeliveryContext, w: Work, state: IndexingState | undefined
   return next;
 }
 
-/** One reconciliation pass over at most MAX_BATCH ids. Returns true while HydraDB is still processing something this run waits on. */
 async function pass(ctx: DeliveryContext, work: readonly Work[], deadline: number, report: DeliveryReport): Promise<boolean> {
   const batch = work.slice(0, MAX_BATCH);
   const states = await indexing(ctx.send, ctx.dest, batch.map(w => w.docId), Math.min(10_000, remaining(deadline)));
@@ -144,13 +135,6 @@ async function pass(ctx: DeliveryContext, work: readonly Work[], deadline: numbe
   return waiting || work.length > batch.length;
 }
 
-/**
- * The repository's single delivery owner. It re-reads capture's admissions
- * after every pass and again after releasing its lock, so a Stop that found
- * the owner busy is still delivered by it. HydraDB processing is awaited
- * for at most INDEX_WAIT_MS; what is left waits for the next Stop or flush.
- * Returns 'busy' when another process owns delivery and `waitMs` ran out.
- */
 export async function deliverRepository(ctx: DeliveryContext, deadline: number, opts: { force: boolean; waitMs: number }): Promise<DeliveryReport | 'busy'> {
   const report: DeliveryReport = { accepted: 0, searchable: 0, removed: 0, outstanding: 0 };
   const until = Math.min(deadline - 1_000, Date.now() + INDEX_WAIT_MS);
@@ -178,7 +162,6 @@ export type Standing = 'pending' | 'processing' | 'searchable' | 'indexed' | 're
 
 const INDEXED: Record<'processing' | 'searchable' | 'settled', Standing> = { processing: 'processing', searchable: 'searchable', settled: 'indexed' };
 
-/** One procedure's standing for `status`, from local records only. */
 export function standing(a: Admission, d: Delivery | null, grant: Grant | null): Standing {
   const remote = held(d);
   if (a.procedure === null) return remote ? 'retracting' : 'retracted';

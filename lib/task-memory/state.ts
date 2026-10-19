@@ -51,11 +51,6 @@ export interface ProcedureBody {
   readonly markdown: string;
 }
 
-/**
- * Capture's latest finding for one episode, written only by that session's
- * capture: the procedure it admitted under `generation`, or null once the
- * episode lost its proof and any copy in HydraDB has to go.
- */
 export interface Admission {
   readonly docId: DocId;
   readonly scope: ScopeId;
@@ -74,12 +69,6 @@ export type Remote =
 
 export type Problem = 'auth' | 'destination' | 'unavailable' | 'refused' | 'indexing-failed';
 
-/**
- * What this machine last confirmed HydraDB holds for one id, written only by
- * the repository's delivery owner. `rejected` marks bytes HydraDB refused as
- * malformed, so the same bytes are not resent. `retry` holds back the next
- * automatic attempt after a failure.
- */
 export interface Delivery {
   readonly docId: DocId;
   readonly scope: ScopeId;
@@ -205,11 +194,6 @@ export function removeGrant(scope: ScopeId): boolean {
 
 const enablingPath = (scope: ScopeId) => path.join(stateDir(), 'repos', `${scope}.enabling`);
 
-/**
- * Marks an enable in progress for this repository and returns its token. The
- * enable's provisional consent, and its right to publish a grant, last only
- * while this token is the current one; disable or a newer enable replaces it.
- */
 export function beginEnable(scope: ScopeId): string {
   const token = randomBytes(16).toString('hex');
   writePrivate(enablingPath(scope), `${token}\n`);
@@ -220,7 +204,6 @@ export function enableStillCurrent(scope: ScopeId, token: string): boolean {
   try { return fs.readFileSync(enablingPath(scope), 'utf8').trim() === token; } catch { return false; }
 }
 
-/** Ends an enable: its own token only, or any token when `token` is null. True when one was ended. */
 export function endEnable(scope: ScopeId, token: string | null): boolean {
   if (token !== null && !enableStillCurrent(scope, token)) return false;
   const had = fs.existsSync(enablingPath(scope));

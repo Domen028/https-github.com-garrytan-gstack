@@ -73,12 +73,6 @@ function openContext(cwd: string, capability: 'capture' | 'recall', deadline: nu
   };
 }
 
-/**
- * Re-derives every episode of this session under its own lock, records what
- * changed, then hands delivery to the repository's single delivery owner.
- * An episode from before the grant is never admitted, but a copy of it that
- * this machine already sent is still withdrawn once it loses its proof.
- */
 export async function captureSession(session: NativeSession, deadline: number): Promise<CaptureReport> {
   const ctx = openContext(session.cwd, 'capture', deadline);
   if ('skip' in ctx) return { kind: 'skipped', reason: ctx.skip };
@@ -112,7 +106,6 @@ export async function captureSession(session: NativeSession, deadline: number): 
   return delivered === 'busy' ? derived : { ...derived, kind: 'done', ...delivered };
 }
 
-/** Delivers this repository's outstanding work now, ignoring retry back-off. Never re-reads transcripts. */
 export async function flushRepository(cwd: string, deadline: number): Promise<({ kind: 'done' } & DeliveryReport) | { kind: 'skipped'; reason: string }> {
   const ctx = openContext(cwd, 'capture', deadline);
   if ('skip' in ctx) return { kind: 'skipped', reason: ctx.skip };

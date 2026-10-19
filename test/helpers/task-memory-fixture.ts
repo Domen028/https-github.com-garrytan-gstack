@@ -40,7 +40,6 @@ export interface FakeHydra {
   requests: FakeRequest[];
   store: Map<string, Map<string, StoredMemory>>;
   behavior: FakeBehavior;
-  /** Same-id upserts sent while HydraDB was still processing the id. */
   prematureUpserts: string[];
   stop(): void;
 }

@@ -26,7 +26,6 @@ describe('a grant revoked while a request waits for its receipt', () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  /** Another process holds the receipt lock for a moment and, when `revoke`, removes the grant before letting go. */
   async function requestWhileLocked(revoke: boolean) {
     const scope = 'a'.repeat(64) as ScopeId;
     const grant = newGrant({ id: scope, root, remote: 'github.com/example-org/x', originUrl: 'https://github.com/example-org/x.git' },

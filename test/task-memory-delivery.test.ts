@@ -39,7 +39,6 @@ async function stop(session: ReturnType<typeof nativeSession>) {
   await waitForWorkers(session.sessionId);
 }
 
-/** Moves every recorded retry time into the past, as if the back-off had run out. */
 function backOffElapsed() {
   const dir = path.join(home.state, 'task-memory', 'delivery');
   for (const scope of fs.readdirSync(dir)) for (const file of fs.readdirSync(path.join(dir, scope))) {
