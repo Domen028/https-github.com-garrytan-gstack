@@ -11,6 +11,16 @@
 ### Gate integrity
 - The structured and review gates' no-findings check (`classifyOutsideReview`) is stricter about position and wider in vocabulary. New free regressions in `test/outside-review-result.test.ts` cover the reporter's exact reply through their CLI invocation, two clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol (both read `unverified` before), fifteen mixed replies that must stay `unverified` under both gates (the two strings from the issue, the phrase before, after and inside untagged findings, exception conclusions, conclusions scoped to one place or to the tests, a quoted `NO_FINDINGS`, a no-issues line inside a code fence), and Recommendation-clause cases including a wrapped clause with "but". A GPT-6.1 Sol outside review probed the classifier; its false passes are among those controls. A known residual, unchanged from before: untagged findings followed by "No issues found in the changed parser." still read `clean`, because "changed" names the change and the parser cannot tell a finding from a summary without tags. All four new tests fail on the previous classifier. Every existing negative control passes unchanged, including the stored Codex clean review that still reads `unverified` ("no actionable correctness issues"). No threshold, trial count or case kind changed.
 
+## [1.91.151.0] - 2026-10-19
+
+**Three contributor fixes: a saved "never ask" now sticks for /plan-eng-review's structure question, /context-save and /context-restore close three checkpoint gaps, and a new how-to covers the first production deploy.** Ported from fork PRs so they can run the paid gate; each commit keeps its author.
+
+### Fixed
+- **/plan-eng-review's complexity-gate structure question has a registered id (`plan-eng-review-structure`).** Each run used to invent its own slug, so a `never-ask` saved through /plan-tune never matched the next run and the question came back every time. On `AUTO_DECIDE` the recommended arrangement is taken; feature cuts are still asked one by one. `gstack-question-preference --check` now also falls back to `$GSTACK_HOME/global-question-preferences.json` (the file the question-preference hook already reads) when the project file has no entry; a project entry still wins and the one-way-door and split-chain guards run first. From #3249 by @bezdekt.
+- **/context-save keeps provenance markers as English literals and backs file claims in Decisions Made; /context-restore treats a translated or unknown marker as `(path assumed)` and asks when no branch can pick between recent checkpoints with different titles.** Fixes #3217. From #3244 by @surlymochan.
+
+### Added
+- **`docs/howto-bring-up-a-first-deploy.md`:** a vendor-neutral walkthrough for when /setup-deploy stops at "Nothing is deployed yet" (host, services, env and secrets, DNS, verification, and what to have ready when you rerun /setup-deploy). Linked from the README and docs/skills.md. Fixes #3150. From #3264 by @szsunyuan.
 ## [1.91.150.0] - 2026-10-19
 
 **The paid evals that still pinned older models now run on the current generation, and two cases that went red on the move are repaired at their cause.** Garry's direction (2026-10-18) is to stop testing older frontier models, so these files are re-baselined as a fresh measured reference rather than held to a threshold change.
