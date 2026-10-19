@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.91.143.0] - 2026-10-18
+
+**Paid-eval fixtures can share one read-only Bash grammar, and the docs-sync fixture uses it, so a pure read inside the fixture no longer fails a case just because the model joined or piped it.** In four Opus gates, docs-sync and qa-only cases went red on commands like `wc -l <SKILL.md>`, `ls -la …/*` and `cat a; echo ----; cat b`. Each was a harmless read inside the fixture, but each fixture's hand-kept allowlist rejected it. `test/helpers/read-only-commands.ts` decides once whether a command line only reads inside a fixture root. Fixtures whose contract is about which reads happen keep their narrow lists. On this tree the PR gate's 13 docs-sync cases all pass on Fable 5.1 ($20.62).
+
+### Added
+- **The shared grammar.** It accepts one line of listed read tools (pwd, ls, wc, head, tail, cat, stat, file, du, find, grep, rg, sort, uniq, cut, nl, the checksum tools, readlink, realpath, echo, printf and `sed -n <range>p`), joined with `;`, `&&` or `||`. A pipe may feed only a filter, and `cd` may go only into the root. Every path operand, path-valued option and glob match must resolve, symlinks included, inside the root and outside the fixture's denied paths. It rejects other tools, redirects, substitutions, variables, tilde and brace expansion, background jobs, multi-line input, and the write, exec, symlink-following and output-file options of the listed tools. On Windows it accepts nothing.
+- **The docs-sync fixture opts in.** Its declared interface includes the grammar text. Git reads, the Preamble block, lifecycle and candidate commands, and scripts still each run as their own Bash call. The completed-read check credits a `cat` inside an accepted line, and a trailing `;` on a declared read counts as a harmless wrapper.
+
+### Changed
+- **Gate integrity, tightening:** docs-sync's narrow pwd, ls, cat, stat and sha256sum forms used to accept any path. Now each operand must stay inside the fixture home, and actor state and every Claude config file except `settings.json` stay unreadable (`.claude.json` holds the API key). A replay of all 538 docs-sync commands from four Opus gates and 466 from two Fable gates finds none newly rejected.
+- **Gate integrity, widening:** 78 negative controls pin each rejected class to its rule. 56 accepted forms run for real and leave both the fixture tree and an outside tree byte-identical. `echo` and `printf` take literal arguments only (no `printf -v`). `sed` takes only `-n` and one line-range print script, so `-i`, `w`, `-e` and multi-command scripts stay rejected. No threshold, kind, trial, behavior assertion or narrow-list allowlist changes.
+
+### If you…
+- **…write a fixture whose contract isn't about which reads happen:** accept `readOnlyCommandAllowed(command, { root, deny })` and declare `readOnlyInterfaceText(root)` to the actor.
+
 ## [1.91.141.0] - 2026-10-18
 
 **Daily `/cso` reports now leave out candidates without demonstrated in-scope impact.** The daily rubric already required an attacker-controlled entrypoint, a security-boundary crossing, demonstrated impact, and challenged protective controls. It now says what to omit: candidates whose impact needs code outside the snapshot or a future change, or that expose nothing sensitive. Those stay coverage evidence instead of supported findings. Comprehensive reports are unchanged and keep unresolved candidates as labeled hypotheses. In the third paid runtime qualification, daily precision was 47/53, below the 0.95 bar, and four of its five false-positive classes were findings of this kind. In a preregistered 12-cell pilot, 5 of the 6 false positives disappeared, every seeded issue was kept, and no new false positive appeared. Daily reports also drop low and informational real issues: 4 of the 13 pilot controls were lost this way. Garry accepted that trade-off. Comprehensive mode still reports them.
