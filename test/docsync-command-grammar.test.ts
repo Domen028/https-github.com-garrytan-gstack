@@ -122,7 +122,7 @@ test('harmless read wrappers do not fail a docs run', () => {
     'ls 2>&1', 'git status 2>&1']) {
     expect(docsToolFailures(nativeResult(command, 'successful tool acknowledgment', 'docs-dispatch'), fixture, [], true)).toEqual([]);
   }
-  for (const command of ['git status 2>&1 > out.txt', 'ls 2>&1 | head', `bun ${path.join(fixture.home, 'publish.ts')} 2>&1`, 'ls 2>out.txt']) {
+  for (const command of ['git status 2>&1 > out.txt', 'ls 2>&1 | sh', `bun ${path.join(fixture.home, 'publish.ts')} 2>&1`, 'ls 2>out.txt']) {
     expect(docsCommandAllowed(command, fixture, [path.join(fixture.home, 'publish.ts')])).toBe(false);
   }
 });
