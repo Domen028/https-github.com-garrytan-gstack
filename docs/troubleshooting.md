@@ -174,12 +174,14 @@ the readiness dashboard and the PR body, and never count it as a pass.
   severity prints `FINDINGS: unspecified` and exits 3 like a blocking finding.
 - **No findings.** A review with no tag and no label is `clean` only when its
   conclusion says so: the last sentence (or its last ", and" clause), or the
-  `because` clause of its `Recommendation:` line, opens with `NO_FINDINGS`, "No issues found", "I
-  found no actionable regressions" or "I did not find any bugs", with no
-  "but", "however", "except", "other than" or "elsewhere". When other prose comes first, a
-  conclusion scoped to one place ("No issues in the parser.") must name the
-  change as a whole ("in this change", "in the staged changes"). A "no issues"
-  phrase anywhere else in the reply does not count. Otherwise the review is
+  `because` clause of its `Recommendation:` line, opens with `NO_FINDINGS`,
+  "No issues found", "I found no actionable regressions" or "I did not find
+  any bugs", with no "but", "however", "except", "other than" or "elsewhere".
+  When other prose comes first, anything after that statement except a
+  predicate ("were found", "is evident") or a colon explanation must scope it
+  to the change as a whole ("in this change", "in the staged changes"); "No
+  issues in the parser." does not conclude the review. A "no issues" phrase
+  anywhere else in the reply does not count. Otherwise the review is
   `unverified` (see below), never `clean`. A `/codex` consult
   answer with no severity labels at all is not a review summary and stays
   `clean`.

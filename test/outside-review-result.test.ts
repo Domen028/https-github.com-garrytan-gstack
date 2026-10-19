@@ -81,6 +81,7 @@ describe('a no-findings statement counts only as the reply\'s conclusion (#3294)
     for (const text of ['No regressions found.', 'I did not find any defects.', 'There are no actionable regressions.',
       'NO_FINDINGS', '**NO_FINDINGS**', '`NO_FINDINGS`', '- NO_FINDINGS',
       `The change adds a retry cap and its tests.\n${REPORTER}`, 'Reviewed the retry helper.\n\nNo issues found in this change.',
+      'After reviewing the patch, I found no issues.', 'I found no issues in this read-only change.',
       // Clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol.
       'The change validates the retry limit before execution. No actionable regression was found.',
       'The change validates `max` before retrying. No affected callers or tests are present in the repository, and no actionable regression is evident.']) {
@@ -100,6 +101,8 @@ describe('a no-findings statement counts only as the reply\'s conclusion (#3294)
       `${FINDING}\nNo other issues.`,
       'No issues found, except that the fallback path now swallows ENOENT.',
       'No issues in the parser, and the fallback path now swallows ENOENT.',
+      'Missing configuration now silently disables authentication. No regressions were found by the existing tests.',
+      'Missing configuration now silently disables authentication. No issues are apparent in the parser.',
       'The fallback path now swallows ENOENT, and no issues elsewhere.',
       'The diff adds a NO_FINDINGS check, but the regex misses lowercase input.',
       `${FINDING}\n\`\`\`\nNo issues found.\n\`\`\``,
@@ -118,6 +121,7 @@ describe('a no-findings statement counts only as the reply\'s conclusion (#3294)
     expect(verdict('No issues in the parser.\nRecommendation: fix the fallback because it swallows ENOENT.')).toBe('unverified');
     expect(verdict(`${FINDING}\nRecommendation: ship because no regressions in the existing tests.`)).toBe('unverified');
     expect(verdict(`${FINDING}\nRecommendation: ship because no issues remain, but the fallback needs a follow-up.`)).toBe('unverified');
+    expect(verdict('Recommendation: address the migration because no regressions were found in the parser change,\nbut the migration drops users_email_idx.')).toBe('unverified');
   });
 });
 
