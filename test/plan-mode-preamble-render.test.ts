@@ -45,6 +45,83 @@ describe('every installed-skill render carries the plan-mode arg', () => {
     expect(fs.readFileSync(path.join(ROOT, 'bin/gstack-config'), 'utf8'))
       .toContain('[ "$("$0" get plan_mode_preamble 2>/dev/null || true)" != off ] || _PLAN_MODE_ARG="--plan-mode=off"');
   });
+
+  test('setup: a build (which renders without the arg) does not skip the host re-renders when the key is off', () => {
+    const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf8');
+    const guards = setup.split('\n').filter(line => /^if \[ "\$INSTALL_[A-Z]+" -eq 1 \] && .*NEEDS_BUILD/.test(line));
+    expect(guards.length).toBe(5);
+    for (const line of guards) expect(line, line).toContain('{ [ "$NEEDS_BUILD" -eq 0 ] || [ -n "$_PLAN_MODE_ARG" ]; }');
+  });
+
+  test('setup: with the key off the gbrain-absent branch leaves the render for the plain re-render (a failed render keeps it)', () => {
+    const setup = fs.readFileSync(path.join(ROOT, 'setup'), 'utf8');
+    const removal = setup.split('\n').filter(line => /if \[ -d "\$_GSTACK_RENDER_DIR" \].*\$_GSTACK_OVERLAY" = claude/.test(line));
+    expect(removal.length).toBe(1);
+    expect(removal[0]).toContain('[ -z "$_PLAN_MODE_ARG" ]');
+  });
+});
+
+describe('gstack-relink router re-render', () => {
+  const BINS = ['gstack-config', 'gstack-relink', 'gstack-patch-names', 'gstack-state-root.sh', 'gstack-install-registry.sh'];
+  const SAFE = '## Plan Mode Safe Operations';
+
+  function relinkFixture() {
+    const install = path.join(tmp, 'gstack');
+    fs.mkdirSync(path.join(install, 'bin'), { recursive: true });
+    for (const b of BINS) {
+      fs.copyFileSync(path.join(ROOT, 'bin', b), path.join(install, 'bin', b));
+      fs.chmodSync(path.join(install, 'bin', b), 0o755);
+    }
+    fs.symlinkSync(path.join(ROOT, 'scripts'), path.join(install, 'scripts'));
+    fs.copyFileSync(path.join(ROOT, 'SKILL.md'), path.join(install, 'SKILL.md'));
+    fs.mkdirSync(path.join(install, 'ship'));
+    fs.writeFileSync(path.join(install, 'ship', 'SKILL.md'), '---\nname: ship\ndescription: test\n---\n# ship\n');
+    const env = {
+      ...process.env,
+      GSTACK_HOME: path.join(tmp, 'state'),
+      GSTACK_STATE_ROOT: '',
+      GSTACK_STATE_DIR: '',
+      GSTACK_INSTALL_DIR: install,
+      GSTACK_SKILLS_DIR: path.join(tmp, 'skills'),
+      GSTACK_SETUP_RUNNING: '1',
+    };
+    const run = (bin: string, ...args: string[]) => {
+      const r = spawnSync('bash', [path.join(install, 'bin', bin), ...args], { encoding: 'utf8', timeout: 60_000, env });
+      expect(r.status, r.stderr).toBe(0);
+      return r;
+    };
+    const router = () => fs.readFileSync(path.join(install, 'SKILL.md'), 'utf8');
+    const alias = () => fs.readFileSync(path.join(tmp, 'skills', '_gstack-command', 'SKILL.md'), 'utf8');
+    const asAlias = (text: string) => text.replace(/^name: gstack$/m, 'name: _gstack-command');
+    return { run, router, alias, asAlias };
+  }
+
+  test('off strips the router and its _gstack-command alias; on restores both to the committed bytes', () => {
+    const { run, router, alias, asAlias } = relinkFixture();
+    const committed = fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf8');
+    run('gstack-relink');
+    expect(router()).toBe(committed);
+    expect(alias()).toBe(asAlias(committed));
+
+    run('gstack-config', 'set', 'plan_mode_preamble', 'off');
+    run('gstack-relink');
+    expect(router()).not.toContain(SAFE);
+    expect(router()).toContain('PLAN MODE EXCEPTION');
+    expect(alias()).toBe(asAlias(router()));
+
+    run('gstack-config', 'set', 'plan_mode_preamble', 'on');
+    run('gstack-relink');
+    expect(router()).toBe(committed);
+    expect(alias()).toBe(asAlias(committed));
+  });
+
+  test('disabled_skills: the alias follows the re-rendered router in the same run', () => {
+    const { run, router, alias, asAlias } = relinkFixture();
+    run('gstack-config', 'set', 'disabled_skills', 'ship');
+    run('gstack-relink');
+    expect(router()).toContain('Disabled on this install (never invoke or suggest them): `/ship`.');
+    expect(alias()).toBe(asAlias(router()));
+  });
 });
 
 let tmp: string;

@@ -2085,8 +2085,10 @@ if [ "$NEEDS_AGENTS_GEN" -eq 1 ]; then
   _prune_stale_generated "$SOURCE_GSTACK_DIR" "$AGENTS_DIR" "$CODEX_SKILLS"
 fi
 
+# 1c-1g: a build (NEEDS_BUILD=1) already rendered these hosts, but without
+# --plan-mode=off, so plan_mode_preamble=off renders them again.
 # 1c. Generate .factory/ Factory Droid skill docs
-if [ "$INSTALL_FACTORY" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
+if [ "$INSTALL_FACTORY" -eq 1 ] && { [ "$NEEDS_BUILD" -eq 0 ] || [ -n "$_PLAN_MODE_ARG" ]; }; then
   log "Generating .factory/ skill docs..."
   (
     cd "$SOURCE_GSTACK_DIR"
@@ -2096,7 +2098,7 @@ if [ "$INSTALL_FACTORY" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
 fi
 
 # 1d. Generate .opencode/ OpenCode skill docs
-if [ "$INSTALL_OPENCODE" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
+if [ "$INSTALL_OPENCODE" -eq 1 ] && { [ "$NEEDS_BUILD" -eq 0 ] || [ -n "$_PLAN_MODE_ARG" ]; }; then
   log "Generating .opencode/ skill docs..."
   (
     cd "$SOURCE_GSTACK_DIR"
@@ -2106,7 +2108,7 @@ if [ "$INSTALL_OPENCODE" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
 fi
 
 # 1e. Generate .cursor/ Cursor skill docs
-if [ "$INSTALL_CURSOR" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
+if [ "$INSTALL_CURSOR" -eq 1 ] && { [ "$NEEDS_BUILD" -eq 0 ] || [ -n "$_PLAN_MODE_ARG" ]; }; then
   log "Generating .cursor/ skill docs..."
   (
     cd "$SOURCE_GSTACK_DIR"
@@ -2116,7 +2118,7 @@ if [ "$INSTALL_CURSOR" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
 fi
 
 # 1f. Generate .copilot/ GitHub Copilot skill docs
-if [ "$INSTALL_COPILOT" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
+if [ "$INSTALL_COPILOT" -eq 1 ] && { [ "$NEEDS_BUILD" -eq 0 ] || [ -n "$_PLAN_MODE_ARG" ]; }; then
   log "Generating .copilot/ skill docs..."
   (
     cd "$SOURCE_GSTACK_DIR"
@@ -2126,7 +2128,7 @@ if [ "$INSTALL_COPILOT" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
 fi
 
 # 1g. Generate .agy/ Antigravity CLI skill docs
-if [ "$INSTALL_AGY" -eq 1 ] && [ "$NEEDS_BUILD" -eq 0 ]; then
+if [ "$INSTALL_AGY" -eq 1 ] && { [ "$NEEDS_BUILD" -eq 0 ] || [ -n "$_PLAN_MODE_ARG" ]; }; then
   log "Generating .agy/ skill docs..."
   (
     cd "$SOURCE_GSTACK_DIR"
@@ -4211,7 +4213,7 @@ if [ -x "$DETECT_BIN" ]; then
       # A render from a previous gbrain install would shadow canonical files
       # on the next link/relink — drop it and restore canonical links. A
       # pinned overlay re-renders it without brain blocks instead (below).
-      if [ -d "$_GSTACK_RENDER_DIR" ] && [ -z "${GSTACK_SKIP_GBRAIN_REGEN:-}" ] && [ "$INSTALL_CLAUDE" -eq 1 ] && [ "$_GSTACK_OVERLAY" = claude ]; then
+      if [ -d "$_GSTACK_RENDER_DIR" ] && [ -z "${GSTACK_SKIP_GBRAIN_REGEN:-}" ] && [ "$INSTALL_CLAUDE" -eq 1 ] && [ "$_GSTACK_OVERLAY" = claude ] && [ -z "$_PLAN_MODE_ARG" ]; then
         rm -rf "$_GSTACK_RENDER_DIR"
         gstack_claude_render_settle "$SOURCE_GSTACK_DIR" "$_GSTACK_RENDER_DIR" absent removed
         if [ "${_CLAUDE_SKILLS_LINKED:-0}" -eq 1 ]; then
