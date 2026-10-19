@@ -65,6 +65,57 @@ describe('classifyOutsideReview: separate execution, findings and verdict', () =
   });
 });
 
+// #3294: "clean" comes only from a no-findings statement that concludes the reply,
+// never from a "no X" phrase among untagged findings anywhere in it.
+describe('a no-findings statement counts only as the reply\'s conclusion (#3294)', () => {
+  const REPORTER = 'I found no actionable regressions in the staged, unstaged, or untracked changes.';
+  const FINDING = 'The fallback path now swallows ENOENT and returns an empty config.';
+
+  test("the reporter's exact codex review reply reads clean through the reporter's CLI invocation", () => {
+    expect(classifyOutsideReview({ text: REPORTER, gate: 'structured' }).verdict).toBe('clean');
+    const r = cli(['--label', 'probe', '--exit', '0', '--stderr', file(''), 'structured', file(REPORTER)]);
+    expect([r.status, r.stdout]).toEqual([0, 'VERDICT: clean\nFINDINGS: none\n']);
+  });
+
+  test('clean conclusions, with the added regressions/defects vocabulary and the requested marker formatted', () => {
+    for (const text of ['No regressions found.', 'I did not find any defects.', 'There are no actionable regressions.',
+      'NO_FINDINGS', '**NO_FINDINGS**', '`NO_FINDINGS`', '- NO_FINDINGS',
+      `The change adds a retry cap and its tests.\n${REPORTER}`, 'Reviewed the retry helper.\n\nNo issues found in this change.']) {
+      expect({ text, verdict: classifyOutsideReview({ text, gate: 'structured' }).verdict }).toEqual({ text, verdict: 'clean' });
+    }
+  });
+
+  test('mixed replies: untagged findings beside a "no X" phrase are unverified, never clean', () => {
+    for (const text of [
+      'The parser change has no new issues. However, db/002_drop_idx.sql drops users_email_idx, which will regress login latency under load.',
+      'Renaming the flag is no problem for callers, but the fallback path now swallows ENOENT and returns an empty config.',
+      `No issues in the parser.\n\n${FINDING}`,
+      `${FINDING}\n\nNo issues in the parser.`,
+      `${FINDING} No regressions in the existing tests.`,
+      'No regressions in the existing tests, but the fallback path now swallows ENOENT.',
+      `${FINDING}\nI found no issues other than the fallback path.`,
+      `${FINDING}\nNo other issues.`,
+      'No issues found, except that the fallback path now swallows ENOENT.',
+      'The diff adds a NO_FINDINGS check, but the regex misses lowercase input.',
+      `${FINDING}\n\`\`\`\nNo issues found.\n\`\`\``,
+    ]) {
+      for (const gate of ['structured', 'review'] as const) {
+        const r = classifyOutsideReview({ text: gate === 'review' ? `${text}\nRecommendation: ship because it looks fine.` : text, gate });
+        expect({ text, gate, verdict: r.verdict, reason: r.reason }).toEqual({ text, gate, verdict: 'unverified', reason: 'untagged_review' });
+      }
+    }
+  });
+
+  test("a review's Recommendation because-clause concludes under the same rules", () => {
+    const verdict = (text: string) => classifyOutsideReview({ text, gate: 'review' }).verdict;
+    expect(verdict('Recommendation: ship because I found no regressions in this change.')).toBe('clean');
+    expect(verdict(`The change adds a retry cap.\nRecommendation: ship because no issues remain.`)).toBe('clean');
+    expect(verdict('No issues in the parser.\nRecommendation: fix the fallback because it swallows ENOENT.')).toBe('unverified');
+    expect(verdict(`${FINDING}\nRecommendation: ship because no regressions in the existing tests.`)).toBe('unverified');
+    expect(verdict(`${FINDING}\nRecommendation: ship because no issues remain, but the fallback needs a follow-up.`)).toBe('unverified');
+  });
+});
+
 describe('validateOutsideReview keeps the text-only shape for direct importers', () => {
   test('existing shapes are unchanged', () => {
     expect(validateOutsideReview('', 'review')).toEqual({ completed: false, reason: 'empty response' });

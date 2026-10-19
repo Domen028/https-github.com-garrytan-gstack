@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+**An outside review whose findings are untagged prose no longer reads `clean` because a "no issues" phrase appears somewhere in it, and a clean Codex review that says "no actionable regressions" no longer reads `unverified`.** Reported in #3294 by @SchizasNik, with the false-pass half pointed out by @xg-gh-25. `lib/outside-review-result.ts` matched its no-findings vocabulary anywhere in the reply, so "The parser change has no new issues. However, … drops users_email_idx" passed /ship's structured gate. It also lacked `regressions`, so `codex review --uncommitted`'s "I found no actionable regressions in the staged, unstaged, or untracked changes." was missing coverage.
+
+### Fixed
+- **A no-findings statement counts only as the review's conclusion.** It must open the reply's last sentence (or the `because` clause of a review's `Recommendation:` line) and carry no contrast or exception ("but", "however", "except", "other than"). When other prose comes first, a conclusion scoped to one place ("No issues in the parser.") must name the change as a whole. Anything else stays `unverified` / `untagged_review`, the same reason code and troubleshooting anchor as before.
+- **`regressions` and `defects` join the vocabulary**, and `NO_FINDINGS` written as inline code still counts.
+
+### Gate integrity
+- The structured and review gates' no-findings check (`classifyOutsideReview`) is stricter about position and wider in vocabulary. New free regressions in `test/outside-review-result.test.ts` cover the reporter's exact reply through their CLI invocation, eleven mixed replies that must stay `unverified` under both gates (the two strings from the issue, the phrase before, after and inside untagged findings, exception conclusions, a quoted `NO_FINDINGS`, a no-issues line inside a code fence), and Recommendation-clause cases. All four new tests fail on the previous classifier. Every existing negative control passes unchanged, including the stored Codex clean review that still reads `unverified` ("no actionable correctness issues"). No threshold, trial count or case kind changed.
+
 ## [1.91.148.0] - 2026-10-19
 
 **Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.

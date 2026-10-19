@@ -172,9 +172,15 @@ the readiness dashboard and the PR body, and never count it as a pass.
   review, including the `execution` gate behind `/codex` consult and challenge.
   A reply whose last `Verdict:` line says `not ready` but carries no readable
   severity prints `FINDINGS: unspecified` and exits 3 like a blocking finding.
-- **No findings.** A review with no tag and no label is `clean` only when it
-  says so explicitly (`NO_FINDINGS`, "no issues", "did not find any bugs").
-  Otherwise it is `unverified` (see below), never `clean`. A `/codex` consult
+- **No findings.** A review with no tag and no label is `clean` only when its
+  conclusion says so: the last sentence, or the `because` clause of its
+  `Recommendation:` line, opens with `NO_FINDINGS`, "No issues found", "I
+  found no actionable regressions" or "I did not find any bugs", with no
+  "but", "however", "except" or "other than". When other prose comes first, a
+  conclusion scoped to one place ("No issues in the parser.") must name the
+  change as a whole ("in this change", "in the staged changes"). A "no issues"
+  phrase anywhere else in the reply does not count. Otherwise the review is
+  `unverified` (see below), never `clean`. A `/codex` consult
   answer with no severity labels at all is not a review summary and stays
   `clean`.
 - **Design proposals** (the design-direction voices in /design-consultation
