@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+**A busy page no longer locks up the browse daemon.** When one tab kept its main thread busy (a heavy dev bundle, a big grid render, a runaway script), every `browse` command, including `status`, `tabs`, `tab <id>`, `closetab` and `stop`, failed with "Daemon busy" after about 9.6 s, and the only way out was `--force-restart`, which threw away cookies, tabs and logins. Fixes #3247. From #3250 by @AndreIntelas.
+
+### Fixed
+- **`/health` `status` reports daemon liveness (Chromium connected)**, and the active tab's responsiveness is reported separately as `activeTab: {id, responsive}`. The CLI no longer gates every command on a 2 s `page.evaluate` race against the active tab.
+- **`tabs` and `state save` bound their per-tab reads**, so a stuck tab shows as `(not responding)` instead of hanging the command, and one pending probe is shared per stuck tab rather than one per poll. A busy tab keeps its last good storage in saved state.
+- **A command that really needs the stuck tab times out with an error naming that tab** and how to get out (switch tabs or close it). The CLI's timeout branch now matches Bun's `TimeoutError`; the old `AbortError` check never fired.
+
+### Changed
+- **Gate integrity:** `browse/test/terminal-agent.test.ts` adds `activeTab` to the exact `/health` keys and updates its stub for the now-synchronous `isHealthy` and the new `probeActiveTab`; its no-token assertions are unchanged. `browse/test/busy-active-tab.test.ts` and `browse/test/command-timeout-report.test.ts` are new. No threshold, trial count or case kind changed.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
