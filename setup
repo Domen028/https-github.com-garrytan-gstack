@@ -4592,6 +4592,7 @@ if [ "$NO_TEAM_MODE" -eq 1 ] && [ -x "$SETTINGS_HOOK" ]; then
   # verify-gate and gstack-memorable are user-registered opt-ins unrelated to
   # team mode -- turning team mode off must not delete them (uninstall still
   # sweeps both, correctly, because there the binaries themselves are removed).
+  GSTACK_SWEEP_KEEP_USER_OPT_INS=1 \
   GSTACK_SWEEP_EXCLUDE_SOURCES="verify-gate,gstack-memorable" "$SETTINGS_HOOK" prune-stale --all >/dev/null || true
 fi
 

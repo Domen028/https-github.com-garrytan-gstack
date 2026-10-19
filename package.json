@@ -1,6 +1,6 @@
 {
   "name": "gstack",
-  "version": "1.91.148",
+  "version": "1.91.149",
   "description": "Garry's Stack — Claude Code skills + fast headless browser. One repo, one install, entire AI engineering workflow.",
   "license": "MIT",
   "type": "module",
@@ -70,6 +70,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.0",
+    "@hydradb/sdk": "2.1.7",
     "@ngrok/ngrok": "^1.7.0",
     "cross-spawn": "^7.0.6",
     "diff": "^9.0.0",

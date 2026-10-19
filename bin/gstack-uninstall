@@ -237,6 +237,9 @@ if [ -x "$SETTINGS_HOOK" ]; then
   if "$SETTINGS_HOOK" remove-source --source gstack-memorable | grep -q "removed [1-9]"; then
     REMOVED+=("Memorable UserPromptSubmit hook (Memorable's own consent is unchanged: memorable disable | memorable forget)")
   fi
+  if "$SETTINGS_HOOK" remove-source --source gstack-task-memory | grep -q "removed [1-9]"; then
+    REMOVED+=("HydraDB task-memory hooks")
+  fi
   # Identity sweep for untagged strays (Claude Code strips _gstack_source
   # tags; pre-v1.67 setups baked worktree paths). Removes every gstack-owned
   # hook item, live or dead — the binaries they point at are being deleted.
@@ -254,6 +257,14 @@ if [ -x "$GSTACK_CONFIG" ] && [ "$("$GSTACK_CONFIG" get memorable_recall 2>/dev/
     REMOVED+=("memorable_recall consent (set off)")
   else
     echo "WARNING: could not set memorable_recall off; run: $GSTACK_CONFIG set memorable_recall off" >&2
+  fi
+fi
+
+if [ -d "$RESOLVED_ROOT/task-memory/repos" ]; then
+  if rm -rf "$RESOLVED_ROOT/task-memory/repos"; then
+    REMOVED+=("HydraDB task-memory grants (procedures already in HydraDB stay there)")
+  else
+    echo "WARNING: could not remove $RESOLVED_ROOT/task-memory/repos; remove it to revoke task-memory consent" >&2
   fi
 fi
 

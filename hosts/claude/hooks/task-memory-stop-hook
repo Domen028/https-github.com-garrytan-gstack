@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Bash shim: Claude Code runs hook commands through /bin/sh, so this makes the
+# TypeScript hook executable via bun. Registered by `gstack-task-memory enable`.
+#
+# FAIL-OPEN: capture must never block the session. The hook only hands the
+# session to a detached worker and exits 0 on every path.
+HERE="$(cd "$(dirname "$0")" && pwd)" || exit 0
+bun "$HERE/task-memory-stop-hook.ts" || true
+exit 0

@@ -31,6 +31,7 @@ import {
   verifyLedger,
 } from '../lib/egress-receipt';
 import { readConfigKey } from '../lib/state-root';
+import { listGrants, stateDir } from '../lib/task-memory/state';
 
 /**
  * Strip control characters (incl. ANSI escapes) from ledger-derived strings
@@ -144,6 +145,7 @@ function egressGrants(args: string[], home: string): number {
   const repoVisibility = configGet('redact_repo_visibility') || 'unknown';
   const prepushHook = configGet('redact_prepush_hook') || 'false';
   const memorableRecall = configGet('memorable_recall') || 'off';
+  const taskMemory = listGrants();
 
   const grants: Grant[] = [
     {
@@ -190,6 +192,15 @@ function egressGrants(args: string[], home: string): number {
       file: configFile,
       key: 'memorable_recall',
       revoke: 'gstack-memorable disable (or gstack-config set memorable_recall off)',
+    },
+    {
+      grant: 'hydradb-task-memory',
+      value: `${taskMemory.length} repositor${taskMemory.length === 1 ? 'y' : 'ies'}`,
+      granted: taskMemory.length > 0,
+      detail: 'Claude Code Stop and UserPromptSubmit hooks send verified task procedures and prompt-derived queries to HydraDB, per repository (receipted as sink hydradb-task-memory)',
+      file: path.join(stateDir(), 'repos'),
+      key: 'one grant file per repository',
+      revoke: 'gstack-task-memory disable (run in each repository)',
     },
   ];
 

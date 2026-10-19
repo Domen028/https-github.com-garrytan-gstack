@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Bash shim: Claude Code runs hook commands through /bin/sh, so this makes the
+# TypeScript hook executable via bun. Registered by `gstack-task-memory enable`.
+#
+# FAIL-OPEN: recall must never block a prompt. Every failure path, bun missing
+# or a crash, still exits 0. bun runs as a job so a host SIGTERM reaches it.
+HERE="$(cd "$(dirname "$0")" && pwd)" || exit 0
+bun "$HERE/task-memory-prompt-hook.ts" <&0 &
+_child=$!
+trap 'kill -TERM "$_child" 2>/dev/null' TERM INT HUP
+wait "$_child" 2>/dev/null || wait "$_child" 2>/dev/null || true
+exit 0
