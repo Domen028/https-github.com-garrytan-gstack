@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.147.0] - 2026-10-19
 
 **The free-suite duration seeds are current again.** This is the first refresh from the weekly recorder. It adds 14 Linux and 6 Windows test files that the shard packers had been placing at the 99th-percentile estimate.
 
