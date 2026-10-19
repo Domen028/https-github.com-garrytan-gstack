@@ -14,6 +14,7 @@ import * as os from 'os';
 import { spawnSync } from 'child_process';
 import { isManualReviewEntry } from './cookie-workflow-manual-review';
 import type { ManualJudgeReview } from './cookie-workflow-manual-review';
+import type { CodexTokenUsage } from './codex-session-runner';
 
 // v2: EvalTestEntry.harvest gains optional {insertions, deletions, net} and
 // may be explicitly null (arm-benchmark harvest-failure taxonomy). Readers
@@ -67,6 +68,8 @@ export interface EvalTestEntry {
   cost_usd: number;
   /** False when the harness captured no billing, so cost_usd 0 means unknown. Absent means known. */
   cost_known?: boolean;
+  /** Codex sessions: the token classes behind cost_usd. */
+  token_usage?: CodexTokenUsage;
   /** Absent in older records means executed; reuse is never a new model run. */
   execution?: 'executed' | 'reused';
   reused_from?: { input_key: string; run_id: string; revision: string; completed_at: string };

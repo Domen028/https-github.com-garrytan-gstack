@@ -11,6 +11,46 @@
 ### Gate integrity
 - The structured and review gates' no-findings check (`classifyOutsideReview`) is stricter about position and wider in vocabulary. New free regressions in `test/outside-review-result.test.ts` cover the reporter's exact reply through their CLI invocation, two clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol (both read `unverified` before), fifteen mixed replies that must stay `unverified` under both gates (the two strings from the issue, the phrase before, after and inside untagged findings, exception conclusions, conclusions scoped to one place or to the tests, a quoted `NO_FINDINGS`, a no-issues line inside a code fence), and Recommendation-clause cases including a wrapped clause with "but". A GPT-6.1 Sol outside review probed the classifier; its false passes are among those controls. A known residual, unchanged from before: untagged findings followed by "No issues found in the changed parser." still read `clean`, because "changed" names the change and the parser cannot tell a finding from a summary without tags. All four new tests fail on the previous classifier. Every existing negative control passes unchanged, including the stored Codex clean review that still reads `unverified` ("no actionable correctness issues"). No threshold, trial count or case kind changed.
 
+## [1.91.150.0] - 2026-10-19
+
+**The paid evals that still pinned older models now run on the current generation, and two cases that went red on the move are repaired at their cause.** Garry's direction (2026-10-18) is to stop testing older frontier models, so these files are re-baselined as a fresh measured reference rather than held to a threshold change.
+
+### Changed
+- **Old-model pins:** the `claude-opus-4-7` pins in `skill-e2e-plan`, `skill-e2e-plan-prosons`, `skill-e2e-design`, `skill-e2e-office-hours-phase4` and `skill-e2e-qa-bugs` now follow `resolveEvalModel('capture')` (Opus 5.5). The overlay benchmark fixtures pin `claude-opus-5-5` and `claude-sonnet-5-5`, the cookie workflow judge pins `claude-sonnet-5-5`, and `codex-sol-scope-termination` runs on `gpt-6.1-sol` while still rendering the `gpt-5.6-sol` overlay.
+- **/setup-browser-cookies:** the workflow is now five ordered steps. It checks for Aside first and ends there on `READY`, since no import is needed. It then asks every decision (source and profile, domains and target, verification, storage reset, all cookies) before any `$B` command, prepares gstack's browser (verification variables before the daemon starts, the fallback, the `Mode: cdp` stop), imports, and reports on three lines: Imported, Storage reset, Sign-in. The `{{BROWSE_SETUP}}` block, which contradicted the Aside probe, is gone from this skill.
+- **Gate integrity:** no threshold, trial count, case kind or assertion changed. Free-test edits follow the new cookie template: two phrase and order assertions, the approval fixture's reverse edits, and the positional-literals checksum list, which no longer includes this skill.
+
+### Fixed
+- **plan-review-prosons-hardstop-neg:** on Opus 5.5 one trial in three stopped with a provider refusal (`stop_reason: refusal`, category `reasoning_extraction`) on the turn that writes the captured question. Replays of the refused request were stopped 7 of 16 times with the capture prompt's "verbatim" and "Do NOT paraphrase. This is a format-capture test." wording and 0 of 24 without it. The shared prosons capture prompt now asks for "the text of the single AskUserQuestion you would have made", with the same required parts. The decision content and every assertion are unchanged; all four prosons cases pass 3/3.
+- **Cookie workflow judge:** on `claude-sonnet-5-5` it scored clarity 3, completeness 4, actionability 3 against the old template. The rewritten template scores 4/4/4 with unchanged thresholds.
+
+## [1.91.149.0] - 2026-10-19
+
+**Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
+
+### Added
+- **Codex host adapter:** `test/helpers/e2e-hosts.ts` holds the `EVALS_HOST` switch (`claude` default, `codex`) and the per-case host metadata. `test/helpers/codex-host-runner.ts` adds:
+  - the case runner, with sandbox settings and a reasoning effort (the model default unless set);
+  - file-change event mapping;
+  - a transcript translated into the Claude stream-json shape that existing assertions read;
+  - the native-lifecycle hooks.
+
+  The 26 rework cases stay Claude-only.
+- **Census arms (`scripts/census-arms.ts`):** `evals-periodic.yml` gets two census schedules.
+  - **Monday:** a two-arm gate census, `claude-opus` and `codex-sol`.
+  - **Monthly (`0 6 1 * *`):** census jobs only, with `claude-fable` (claude-fable-5-1) and `codex-astra` (gpt-6-astra) arms and a `-monthly` concurrency key.
+
+  A `census_arms` dispatch input picks arms by hand. Artifact names and run IDs carry the arm, and a census-only run executes no periodic slice. Every arm keeps the census's `--skip-judges`.
+
+### Changed
+- **Codex cost is real:** `cost_known: false` is gone. Codex sessions price their `turn.completed` usage (input, cached input, cache-write input and output tokens) through `lib/pricing.ts`. The shared `execCodex` keeps the old runner's events and verdicts.
+- **Plans, reports and the ledger carry the host** when it is not Claude. On Codex, the Anthropic preflight skips its `claude -p` ping.
+- **Gate integrity:** no threshold, trial count, case kind, judge or Claude-host verdict changed. `HARNESS_VERSION` stays 6, and the changed harness files are recorded as non-behavioral. Five workflow tests now assert the census matrix per arm (one row per arm and slice, per-arm plan and report paths, a `periodic_lane` guard) in place of the single-arm shape; no assertion was dropped.
+
+### If you…
+- **…want one case on Codex:** `EVALS_HOST=codex GSTACK_CODEX_MODEL=gpt-6.1-sol bun run scripts/test-paid-shards.ts --tier gate --case <id> --trials 1`.
+- **…want the monthly arms now:** dispatch `evals-periodic.yml` with `census_arms=claude-fable,codex-astra`.
+
 ## [1.91.148.0] - 2026-10-19
 
 **Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.
