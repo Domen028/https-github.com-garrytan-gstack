@@ -53,13 +53,20 @@ describe('shell commands', () => {
     expect(classifyShell('bun test', root)).toEqual({ kind: 'check', literal: 'bun test' });
     expect(classifyShell(`cd ${root} && bun test src`, root)).toEqual({ kind: 'check', literal: 'bun test src' });
     expect(classifyShell('pytest -q 2>&1', root)).toEqual({ kind: 'check', literal: 'pytest -q' });
-    for (const masked of ['bun test | tail -3', 'bun test || true', 'bun test; echo done', 'CI=1 bun test', 'bun test > out.txt', 'cd /tmp && bun test'])
+    expect(classifyShell('bun test -t "adds zero"', root)).toEqual({ kind: 'check', literal: "bun test -t 'adds zero'" });
+    for (const masked of ['bun test | tail -3', 'bun test || true', 'bun test; echo done', 'CI=1 bun test', 'bun test 2>/dev/null', 'cd /tmp && bun test', 'cd test && bun test'])
       expect(classifyShell(masked, root).kind).toBe('masked-check');
   });
 
   test('read-only commands change nothing; anything else may write', () => {
-    for (const ro of ['git status', 'git diff | head -20', 'ls -la src', 'cat a.ts && grep x b.ts']) expect(classifyShell(ro, root).kind).toBe('read-only');
-    for (const w of ['rm -rf dist', "sed -i '' s/a/b/ src/a.ts", 'echo x > src/a.ts', 'bun install', 'git checkout -- src']) expect(classifyShell(w, root).kind).toBe('change');
+    for (const ro of ['git status', 'git diff | head -20', 'ls -la src', 'cat a.ts && grep x b.ts', 'grep -n "a|b;c" src/a.ts',
+      'git remote -v', 'git branch --show-current', 'git log --oneline -5 2>&1'])
+      expect(classifyShell(ro, root).kind).toBe('read-only');
+    for (const w of ['rm -rf dist', "sed -i '' s/a/b/ src/a.ts", 'echo x > src/a.ts', 'bun install', 'git checkout -- src',
+      'ls & rm src/a.ts', 'git status & sed -i s/a/b/ src/a.ts', 'echo x & touch src/new.ts', 'git diff --output=src/a.ts', 'git log --output src/a.ts',
+      'bun test && git commit -m fix', 'git add . && git commit -m fix', 'git remote set-url origin https://github.com/other/repo.git',
+      'git branch -D release', 'git fetch origin main:main', 'bun test -u', 'echo $(touch src/a.ts)', 'rg --pre ./run x', 'cat <<EOF', "echo 'open"])
+      expect(classifyShell(w, root).kind).toBe('change');
   });
 });
 
@@ -80,6 +87,7 @@ describe('verdict', () => {
     expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), bash('git status', 'clean'), tool('Read', { file_path: 'x' }, { content: 'x' }))).kind).toBe('verified');
     expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), tool('Edit', { file_path: path.join(root, 'src/a.ts') }, { content: 'no match', isError: true }))).kind).toBe('verified');
     expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), tool('Write', { file_path: path.join(os.tmpdir(), 'scratch.md') }, { content: 'ok' }))).kind).toBe('verified');
+    expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), tool('TaskUpdate', { taskId: '1', status: 'completed' }, { content: 'Updated task #1 status' }))).kind).toBe('verified');
   });
 
   test('a failure counts until the same check passes again; another passing command does not resolve it', () => {
@@ -87,10 +95,24 @@ describe('verdict', () => {
     expect(verdict(steps(edit('src/a.ts'), bash('bun test src', 'Exit code 1\nboom', true), bash('bun test', BUN_PASS)))).toEqual({ kind: 'unverified', reason: 'failed-check' });
   });
 
+  test('a later masked, prefixed or subdirectory run that fails takes the earlier proof away', () => {
+    for (const later of [bash('bun test || true', BUN_FAIL), bash('bun test 2>&1 | tail -5', BUN_FAIL), bash('CI=1 bun test', `Exit code 1\n${BUN_FAIL}`, true),
+      bash('cd test && bun test', `Exit code 1\n${BUN_FAIL}`, true)])
+      expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), later))).toEqual({ kind: 'unverified', reason: 'failed-check' });
+    expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), bash('bun test 2>&1 | tail -5', BUN_PASS))).kind).toBe('verified');
+  });
+
+  test('a later run with no result, an interrupted run or an unreadable one leaves nothing proven', () => {
+    for (const later of [tool('Bash', { command: 'bun test' }, null), bash('bun test', ''), bash('bun test', '[Request interrupted by user for tool use]', true),
+      bash('bun test | tail -0', '')])
+      expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), later))).toEqual({ kind: 'unverified', reason: 'unconfirmed-check' });
+    expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), tool('Bash', { command: 'bun test' }, null), bash('bun test', BUN_PASS))).kind).toBe('verified');
+  });
+
   test('unknown, masked and absent results prove nothing', () => {
-    expect(verdict(steps(edit('src/a.ts'), bash('bun test', 'ok')))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    expect(verdict(steps(edit('src/a.ts'), bash('bun test', 'ok')))).toEqual({ kind: 'unverified', reason: 'unconfirmed-check' });
     expect(verdict(steps(edit('src/a.ts'), bash('bun test | tail -5', BUN_PASS)))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
-    expect(verdict(steps(edit('src/a.ts'), tool('Bash', { command: 'bun test' }, null)))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    expect(verdict(steps(edit('src/a.ts'), tool('Bash', { command: 'bun test' }, null)))).toEqual({ kind: 'unverified', reason: 'unconfirmed-check' });
     expect(verdict(steps(bash('bun test', BUN_PASS)))).toEqual({ kind: 'unverified', reason: 'no-edits' });
   });
 });

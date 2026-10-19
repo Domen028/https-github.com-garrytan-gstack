@@ -19,11 +19,16 @@ export type CheckOutcome =
   | { kind: 'failed' }
   | { kind: 'unknown' };
 
+/**
+ * `key` identifies the command across runs. `literal` is null for a run that
+ * can contradict earlier proof but never prove anything itself: a masked,
+ * prefixed or unrenderable command.
+ */
 export type Step =
   | { kind: 'prompt'; key: string; at: string; goal: Goal | null }
   | { kind: 'edit'; tool: EditTool; target: RepoRelPath }
   | { kind: 'change' }
-  | { kind: 'check'; command: LiteralCheck; outcome: CheckOutcome };
+  | { kind: 'check'; key: string; literal: LiteralCheck | null; outcome: CheckOutcome };
 
 export interface Episode {
   readonly key: string;
@@ -37,7 +42,7 @@ export interface EditTarget { readonly target: RepoRelPath; readonly tool: EditT
 
 export type Verdict =
   | { kind: 'verified'; edits: NonEmpty<EditTarget>; checks: NonEmpty<PassedCheck> }
-  | { kind: 'unverified'; reason: 'no-edits' | 'no-passing-check' | 'changed-after-check' | 'failed-check' };
+  | { kind: 'unverified'; reason: 'no-edits' | 'no-passing-check' | 'changed-after-check' | 'failed-check' | 'unconfirmed-check' };
 
 export interface Procedure {
   readonly title: string;
@@ -53,8 +58,10 @@ const MAX_PROMPT_RECORD_BYTES = 256 * 1024;
 const SUMMARY_TAIL_CHARS = 64 * 1024;
 
 const EDIT_TOOLS: ReadonlySet<string> = new Set<EditTool>(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+/** Native tools that change no file; the task-list tools are in the pinned agent SDK's tool schemas. */
 const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(['Read', 'Grep', 'Glob', 'LS', 'WebFetch', 'WebSearch', 'TodoWrite',
-  'TodoRead', 'AskUserQuestion', 'ToolSearch', 'ExitPlanMode', 'EnterPlanMode', 'BashOutput', 'ListMcpResourcesTool', 'ReadMcpResourceTool']);
+  'TodoRead', 'AskUserQuestion', 'ToolSearch', 'ExitPlanMode', 'EnterPlanMode', 'BashOutput', 'ListMcpResourcesTool', 'ReadMcpResourceTool',
+  'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate', 'TaskOutput']);
 const CHECK_COMMANDS: readonly RegExp[] = [
   /^bun (?:test|run test[\w:-]*)(?:\s|$)/,
   /^(?:npm|pnpm|yarn)(?: run)? test[\w:-]*(?:\s|$)/,
@@ -62,36 +69,128 @@ const CHECK_COMMANDS: readonly RegExp[] = [
   /^(?:python3? -m )?pytest(?:\s|$)/,
   /^cargo test(?:\s|$)/,
 ];
-const READ_ONLY_COMMANDS = /^(?:git (?:status|diff|log|show|branch|rev-parse|add|commit|fetch|remote|blame)|ls|cat|head|tail|wc|grep|rg|pwd|echo|which|type|file|stat|du|df|date|whoami|tree|true|:)(?:\s|$)/;
-const ENV_PREFIX = /^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/;
+const SNAPSHOT_WRITE = /^(?:-u|--update|--update-snapshots?|--updateSnapshot|--snapshot-update)(?:=|$)/;
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 const isNonEmpty = <T>(items: T[]): items is NonEmpty<T> => items.length > 0;
+const anyArgs = () => true;
+const GIT_LISTING = new Set(['-a', '-r', '-v', '-vv', '--all', '--remotes', '--verbose', '--list', '--show-current', '--no-color']);
+const GIT_READ_ONLY: Record<string, (args: readonly string[]) => boolean> = {
+  status: anyArgs, log: anyArgs, show: anyArgs, diff: anyArgs, blame: anyArgs, 'rev-parse': anyArgs, 'ls-files': anyArgs,
+  branch: args => args.every(a => GIT_LISTING.has(a)),
+  remote: args => args.every(a => a === '-v' || a === '--verbose') || (args[0] === 'get-url' && !args.slice(1).some(a => a.startsWith('-') && a !== '--push' && a !== '--all')),
+};
+/** Complete commands that write no file, with the flags that would make them write one refused. */
+const READ_ONLY_COMMANDS: Record<string, (args: readonly string[]) => boolean> = {
+  ls: anyArgs, cat: anyArgs, head: anyArgs, tail: anyArgs, wc: anyArgs, grep: anyArgs, pwd: anyArgs, echo: anyArgs, which: anyArgs,
+  type: anyArgs, stat: anyArgs, du: anyArgs, df: anyArgs, whoami: anyArgs, true: anyArgs, ':': anyArgs,
+  rg: args => !args.some(a => /^--pre(?:=|$)/.test(a)),
+  git: ([sub, ...args]) => sub !== undefined && Object.hasOwn(GIT_READ_ONLY, sub) && !args.some(a => /^--output(?:=|$)/.test(a)) && GIT_READ_ONLY[sub]!(args),
+};
 
-/** Strip `2>&1`, which joins streams without hiding the exit status. */
-const joinedStreams = (command: string): string => command.replace(/\s+2>&1(?=\s|$)/g, '');
+interface Shell { readonly segments: string[][]; readonly joins: string[]; readonly hidden: boolean }
+
+/**
+ * Split a command line into simple commands. Null means syntax this does not
+ * model, which callers treat as a possible write: substitution, subshells,
+ * background jobs, unterminated quotes and redirection into a file.
+ * `hidden` is set when output goes to /dev/null.
+ */
+export function parseShell(command: string): Shell | null {
+  const segments: string[][] = [[]];
+  const joins: string[] = [];
+  let word: string | null = null;
+  let hidden = false;
+  const end = () => { if (word !== null) segments.at(-1)!.push(word); word = null; };
+  const join = (op: string) => { end(); joins.push(op); segments.push([]); };
+  const target = (from: number): [string, number] => {
+    let i = from;
+    while (command[i] === ' ') i++;
+    const start = i;
+    while (i < command.length && !/[\s|&;<>()]/.test(command[i]!)) i++;
+    return [command.slice(start, i), i - 1];
+  };
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i]!;
+    if (c === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close < 0) return null;
+      word = (word ?? '') + command.slice(i + 1, close);
+      i = close;
+    } else if (c === '"') {
+      let text = '';
+      for (i++; i < command.length && command[i] !== '"'; i++) {
+        if (command[i] === '`' || (command[i] === '$' && command[i + 1] === '(')) return null;
+        if (command[i] === '\\') i++;
+        text += command[i] ?? '';
+      }
+      if (i >= command.length) return null;
+      word = (word ?? '') + text;
+    } else if (c === '\\') {
+      if (i + 1 >= command.length) return null;
+      word = (word ?? '') + command[++i];
+    } else if (c === '`' || c === '(' || c === ')' || (c === '$' && command[i + 1] === '(')) {
+      return null;
+    } else if (c === ' ' || c === '\t') {
+      end();
+    } else if (c === '>' || c === '<' || (c === '&' && command[i + 1] === '>')) {
+      if (word !== null && /^\d$/.test(word)) word = null; else end();
+      if (c === '&') i++;
+      if (command[i] === '>' && command[i + 1] === '>') i++;
+      if (command[i] === '>' && command[i + 1] === '&' && /\d/.test(command[i + 2] ?? '')) { i += 2; continue; }
+      const [file, last] = target(i + 1);
+      if (!file) return null;
+      if (c !== '<') { if (file !== '/dev/null') return null; hidden = true; }
+      i = last;
+    } else if (c === '|' || c === '&' || c === ';' || c === '\n') {
+      const two = command.slice(i, i + 2);
+      if (two === '&&' || two === '||' || two === '|&') { join(two === '|&' ? '|' : two); i++; } else if (c === '&') return null;
+      else join(c === '\n' ? ';' : c);
+    } else {
+      word = (word ?? '') + c;
+    }
+  }
+  end();
+  return segments.some(s => s.length === 0) ? null : { segments, joins, hidden };
+}
+
+type SegmentKind = 'check' | 'cd-root' | 'cd' | 'read-only' | 'change';
+
+function segmentKind(words: readonly string[], repoRoot: string): SegmentKind {
+  const [name, ...args] = words;
+  if (name === undefined) return 'read-only';
+  if (name === 'cd') return args.length > 1 ? 'change' : args[0] !== undefined && sameDir(args[0], repoRoot) ? 'cd-root' : 'cd';
+  if (CHECK_COMMANDS.some(re => re.test(words.join(' ')))) return args.some(a => SNAPSHOT_WRITE.test(a)) ? 'change' : 'check';
+  return Object.hasOwn(READ_ONLY_COMMANDS, name) && READ_ONLY_COMMANDS[name]!(args) ? 'read-only' : 'change';
+}
+
+const shellWord = (w: string) => /^[\w./:=@%+,-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`;
 
 type ShellKind =
   | { kind: 'read-only' }
   | { kind: 'check'; literal: string }
-  | { kind: 'masked-check' }
+  | { kind: 'masked-check'; key: string }
   | { kind: 'change' };
 
 export function classifyShell(raw: string, repoRoot: string): ShellKind {
-  const command = joinedStreams(raw.trim());
-  if (!command || /[<>`]|\$\(/.test(command)) return command && CHECK_COMMANDS.some(re => re.test(command)) ? { kind: 'masked-check' } : { kind: 'change' };
-  const segments = command.split(/\s*(?:&&|\|\||;|\||\n)\s*/).filter(Boolean);
-  const bare = segments.map(s => s.replace(ENV_PREFIX, ''));
-  if (bare.every(s => READ_ONLY_COMMANDS.test(s))) return { kind: 'read-only' };
-  const cdRoot = segments.length === 2 && /^cd\s+\S+\s*&&/.test(command) && sameDir(segments[0]!.slice(2).trim(), repoRoot);
-  const lone = segments.length === 1 ? segments[0]! : cdRoot ? segments[1]! : undefined;
-  if (lone !== undefined && !ENV_PREFIX.test(lone) && CHECK_COMMANDS.some(re => re.test(lone))) return { kind: 'check', literal: lone };
-  if (bare.some(s => CHECK_COMMANDS.some(re => re.test(s))) && bare.every(s => READ_ONLY_COMMANDS.test(s) || CHECK_COMMANDS.some(re => re.test(s)) || /^cd\s/.test(s)))
-    return { kind: 'masked-check' };
-  return { kind: 'change' };
+  const command = raw.trim();
+  const shell = command ? parseShell(command) : null;
+  if (!shell) return { kind: 'change' };
+  const parts = shell.segments.map(words => {
+    const at = words.findIndex(w => !ASSIGNMENT.test(w));
+    const bare = at < 0 ? [] : words.slice(at);
+    return { prefixed: at !== 0, words: bare, kind: segmentKind(bare, repoRoot) };
+  });
+  if (parts.some(p => p.kind === 'change')) return { kind: 'change' };
+  if (!parts.some(p => p.kind === 'check')) return { kind: 'read-only' };
+  const lone = parts.length === 1 ? parts[0]
+    : parts.length === 2 && parts[0]!.kind === 'cd-root' && !parts[0]!.prefixed && shell.joins[0] === '&&' ? parts[1] : undefined;
+  if (lone?.kind === 'check' && !lone.prefixed && !shell.hidden) return { kind: 'check', literal: lone.words.map(shellWord).join(' ') };
+  return { kind: 'masked-check', key: command };
 }
 
 function sameDir(dir: string, root: string): boolean {
-  try { return fs.realpathSync(dir.replace(/^(['"])(.*)\1$/, '$2')) === root; } catch { return false; }
+  try { return path.isAbsolute(dir) && fs.realpathSync(dir) === root; } catch { return false; }
 }
 
 export function literalCheck(literal: string): LiteralCheck | null {
@@ -222,9 +321,9 @@ export function readSessionSteps(session: NativeSession, repoRoot: string, claud
         for (const r of records) for (const e of r.events) {
           if (e.kind === 'user_turn') prompts.set(e, r);
           if (e.kind === 'use' && e.name === 'Bash' && typeof e.input?.command === 'string' &&
-              classifyShell(e.input.command, repoRoot).kind === 'check') checkIds.add(e.toolUseId);
+              ['check', 'masked-check'].includes(classifyShell(e.input.command, repoRoot).kind)) checkIds.add(e.toolUseId);
         }
-        for (const r of records) if (r.events.some(e => e.kind === 'result' && !e.isError && checkIds.has(e.toolUseId))) wanted.push(r);
+        for (const r of records) if (r.events.some(e => e.kind === 'result' && checkIds.has(e.toolUseId))) wanted.push(r);
         load(wanted);
       },
     },
@@ -248,44 +347,47 @@ function promptText(file: string, record: IndexedRecord | undefined): string | n
   } catch { return null; } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
+type ToolUse = { name: string; input: Record<string, unknown> | undefined };
+
+/** Steps in tool-use order. A use with no result yet counts as what it may have done, never as a result. */
 export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: string,
   promptOf: (prompt: ClaudeParentPublicEvent) => { key: string; text: string | null } | null): Step[] {
-  const steps: Step[] = [];
-  const pending = new Map<string, { name: string; input: Record<string, unknown> | undefined }>();
+  const slots: (Step | null)[] = [];
+  const open = new Map<string, { slot: number; use: ToolUse }>();
   for (const e of events) {
     if (e.kind === 'user_turn') {
       const prompt = promptOf(e);
-      if (prompt) steps.push({ kind: 'prompt', key: prompt.key, at: e.timestamp, goal: prompt.text === null ? null : deriveGoal(prompt.text) });
+      if (prompt) slots.push({ kind: 'prompt', key: prompt.key, at: e.timestamp, goal: prompt.text === null ? null : deriveGoal(prompt.text) });
     } else if (e.kind === 'use') {
-      if (!READ_ONLY_TOOLS.has(e.name ?? '')) pending.set(e.toolUseId, { name: e.name ?? '', input: e.input });
+      if (!READ_ONLY_TOOLS.has(e.name ?? '')) open.set(e.toolUseId, { slot: slots.push(null) - 1, use: { name: e.name ?? '', input: e.input } });
     } else if (e.kind === 'result') {
-      const use = pending.get(e.toolUseId);
-      if (!use) continue;
-      pending.delete(e.toolUseId);
-      const step = resultStep(use, e.isError === true, toolText(e.content), repoRoot);
-      if (step) steps.push(step);
+      const pending = open.get(e.toolUseId);
+      if (!pending) continue;
+      open.delete(e.toolUseId);
+      slots[pending.slot] = resultStep(pending.use, { isError: e.isError === true, text: toolText(e.content) }, repoRoot);
     }
   }
-  for (const use of pending.values()) if (use.name !== 'Bash' || classifyShell(String(use.input?.command ?? ''), repoRoot).kind === 'change') steps.push({ kind: 'change' });
-  return steps;
+  for (const { slot, use } of open.values()) slots[slot] = resultStep(use, null, repoRoot);
+  return slots.filter((s): s is Step => s !== null);
 }
 
-function resultStep(use: { name: string; input: Record<string, unknown> | undefined }, isError: boolean, text: string, repoRoot: string): Step | null {
+function resultStep(use: ToolUse, result: { isError: boolean; text: string } | null, repoRoot: string): Step | null {
   if (EDIT_TOOLS.has(use.name)) {
-    if (isError) return null;
+    if (result?.isError) return null;
+    if (!result) return { kind: 'change' };
     const rel = insideRepo(use.input?.file_path, repoRoot);
     if (rel === null) return null;
     const target = renderable(rel);
     return target ? { kind: 'edit', tool: use.name as EditTool, target } : { kind: 'change' };
   }
   if (use.name !== 'Bash') return { kind: 'change' };
-  const command = String(use.input?.command ?? '');
-  const shell = classifyShell(command, repoRoot);
-  if (shell.kind === 'read-only' || shell.kind === 'masked-check') return null;
+  const shell = classifyShell(String(use.input?.command ?? ''), repoRoot);
+  if (shell.kind === 'read-only') return null;
   if (shell.kind === 'change') return { kind: 'change' };
-  const literal = literalCheck(shell.literal);
-  const outcome = use.input?.run_in_background === true ? { kind: 'unknown' as const } : checkOutcome(text, isError);
-  return literal ? { kind: 'check', command: literal, outcome } : null;
+  const outcome: CheckOutcome = !result || use.input?.run_in_background === true ? { kind: 'unknown' } : checkOutcome(result.text, result.isError);
+  return shell.kind === 'check'
+    ? { kind: 'check', key: shell.literal, literal: literalCheck(shell.literal), outcome }
+    : { kind: 'check', key: shell.key, literal: null, outcome };
 }
 
 export function episodes(steps: readonly Step[]): Episode[] {
@@ -309,11 +411,12 @@ export function verdict(steps: readonly Step[]): Verdict {
   for (const s of steps) if (s.kind === 'edit' && !edits.some(e => e.target === s.target)) edits.push({ target: s.target, tool: s.tool });
   if (!isNonEmpty(edits)) return { kind: 'unverified', reason: 'no-edits' };
   const lastChange = steps.findLastIndex(s => s.kind === 'edit' || s.kind === 'change');
-  const final = new Map<LiteralCheck, CheckOutcome>();
-  for (const s of steps.slice(lastChange + 1)) if (s.kind === 'check' && s.outcome.kind !== 'unknown') final.set(s.command, s.outcome);
-  if ([...final.values()].some(o => o.kind === 'failed')) return { kind: 'unverified', reason: 'failed-check' };
-  const checks: PassedCheck[] = [];
-  for (const [command, outcome] of final) if (outcome.kind === 'passed') checks.push({ command, outcome });
+  const final = new Map<string, Extract<Step, { kind: 'check' }>>();
+  for (const s of steps.slice(lastChange + 1)) if (s.kind === 'check') final.set(s.key, s);
+  const latest = [...final.values()];
+  if (latest.some(s => s.outcome.kind === 'failed')) return { kind: 'unverified', reason: 'failed-check' };
+  if (latest.some(s => s.outcome.kind === 'unknown')) return { kind: 'unverified', reason: 'unconfirmed-check' };
+  const checks = latest.flatMap(s => s.literal !== null && s.outcome.kind === 'passed' ? [{ command: s.literal, outcome: s.outcome }] : []);
   if (!isNonEmpty(checks)) {
     const passedEarlier = steps.slice(0, lastChange).some(s => s.kind === 'check' && s.outcome.kind === 'passed');
     return { kind: 'unverified', reason: passedEarlier ? 'changed-after-check' : 'no-passing-check' };
