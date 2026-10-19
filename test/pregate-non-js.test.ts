@@ -15,6 +15,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT } from '../lib/headless-artifacts';
 import { referencesIn } from '../lib/pregate/import-graph';
+import { describeDraft, draftConfig } from '../lib/pregate/init-draft';
 import { parseWorkflow } from '../lib/pregate/workflows';
 import { cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
 
@@ -181,6 +182,9 @@ describe('gstack-pregate init drafts a policy from the repo (#3268)', () => {
     expect(draft.dependencies['lib/util.js']).toBeUndefined();
     expect(draft.dependencies['lib/retry.js']).toBeUndefined();
     expect(r.out).toContain('TODO selection: windows.yml/windows-shard computes its matrix');
+    const direct = draftConfig(repo.work);
+    expect(direct.todo).toContain('lib/orphan.js');
+    expect(describeDraft(direct)).toContain('TODO lib/orphan.js: no test lane and no nearby test; add a test, map it under dependencies, or declare [] if no test can cover it');
   });
 });
 
