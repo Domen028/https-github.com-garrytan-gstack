@@ -6,6 +6,7 @@ import { nativeCalls } from './qa-checkpoint-evidence';
 import type { SkillTestResult } from './session-runner';
 import { DOC_PATH, type DocsScenario, type fixtureDocs } from './docsync-fixture';
 import { sliceBetween } from './skill-fixture';
+import { readOnlyCommandAllowed, readOnlyInterfaceText } from './read-only-commands';
 
 export async function observeDocsWrites(fixture: ReturnType<typeof fixtureDocs>) {
   return observeQAWrites(fixture.repo, { atomicTargets: [DOC_PATH] });
@@ -211,7 +212,7 @@ function unwrapHarmlessRead(text: string, fixture: ReturnType<typeof fixtureDocs
   const sameRepo = (value: string) => {
     try { return fs.realpathSync(unquote(value)) === fs.realpathSync(fixture.repo); } catch { return false; }
   };
-  let out = text.replace(/\s+\|\|\s+true$/, '').replace(/\s+2>\s*(?:\/dev\/null|&1)(?=\s|$)/g, '').trim();
+  let out = text.replace(/\s*;$/, '').replace(/\s+\|\|\s+true$/, '').replace(/\s+2>\s*(?:\/dev\/null|&1)(?=\s|$)/g, '').trim();
   const cd = /^cd\s+('[^']*'|"[^"]*"|\S+)\s+&&\s+/.exec(out);
   if (cd && sameRepo(cd[1]!)) out = out.slice(cd[0].length);
   const globals = /^git((?:\s+(?:--no-pager|-C\s+(?:'[^']*'|"[^"]*"|\S+)|-c\s+(?:'[^']*'|"[^"]*"|\S+)))+)(?=\s)/.exec(out);
@@ -226,6 +227,7 @@ function unwrapHarmlessRead(text: string, fixture: ReturnType<typeof fixtureDocs
 export function docsCommandAllowed(command: string, fixture: ReturnType<typeof fixtureDocs>, scripts: string[] = []): boolean {
   const text = command.trim();
   if (docsPreambleCommands(fixture).some(block => block.trim() === text)) return true;
+  if (readOnlyCommandAllowed(text, docsReadOnlyScope(fixture))) return true;
   const insert = /^cat (['"]?)([^\s'"]+)\1 >> (['"]?)([^\s'"]+)\3$/.exec(text);
   if (insert) return [insert[2], insert[4]].every(file => path.isAbsolute(file) && /\.md$/i.test(file) &&
     !/[\x00-\x1f\x7f;&|<>`$\\()*?\[\]{}~#]/.test(file) && docsPrivateArtifact(file, fixture, scripts));
@@ -238,6 +240,22 @@ export function docsCommandAllowed(command: string, fixture: ReturnType<typeof f
     return DOCS_READ_COMMANDS.includes(name) || name === 'git';
   }
   return literalDocsCommandAllowed(text, fixture, scripts);
+}
+
+/** The shared read-only grammar inside the owned fixture home; private actor state and every Claude config file but settings.json (.claude.json holds the API key) stay unreadable. */
+function docsReadOnlyScope(fixture: ReturnType<typeof fixtureDocs>) {
+  const config = actualWritePath(fixture.env.CLAUDE_CONFIG_DIR);
+  return { root: fixture.home, cwd: fixture.repo,
+    deny: (file: string) => path.basename(file) === 'actor-state.json' ||
+      (config !== null && within(file, config) && file !== config && file !== path.join(config, 'settings.json')) };
+}
+
+/** A literal read operand resolves (symlinks included) inside the fixture home and outside its denied paths. */
+function docsReadablePath(arg: string, fixture: ReturnType<typeof fixtureDocs>): boolean {
+  const raw = path.isAbsolute(arg) ? arg : fixture.repo + path.sep + arg;
+  let actual: string | null;
+  try { actual = fs.realpathSync.native(raw); } catch { actual = /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(arg) ? null : actualWritePath(path.resolve(raw)); }
+  return actual !== null && within(actual, fs.realpathSync(fixture.home)) && !docsReadOnlyScope(fixture).deny(actual);
 }
 
 function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixtureDocs>, scripts: string[]): boolean {
@@ -257,7 +275,7 @@ function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixt
       /[{}]/.test(arg.replace(/(?:\^|@)\{[^{}]*\}/g, ''))))) return false;
   if (args.some(arg => path.basename(arg) === 'actor-state.json') &&
       !((commandName === 'bun' || commandName === process.execPath) && scripts.includes(rest[0]))) return false;
-  if (DOCS_READ_COMMANDS.includes(commandName)) return true;
+  if (DOCS_READ_COMMANDS.includes(commandName)) return rest.every(arg => arg.startsWith('-') || docsReadablePath(arg, fixture));
   if (commandName === 'git') {
     if (rest.some(arg => /^(?:--output|--ext-diff|--textconv|-w)(?:=|$)/.test(arg))) return false;
     if (rest[0] === 'hash-object' && rest.some(arg => /^-[^-]*w/.test(arg))) return false;
@@ -293,7 +311,7 @@ function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixt
 
 export function docsNativeInterface(fixture: Pick<ReturnType<typeof fixtureDocs>, 'home' | 'repo' | 'skills'>, scripts: string[] = [], transport = false, insert = false, file?: string): string {
   const skills = fixture.skills.split(path.sep).join('/');
-  return `Fixture observation interface (applies to parent and every child; ${file ? `saved at ${file}: each child prompt tells the child to Read that file first instead of copying this text` : 'include this interface in child prompts'}): Bash may execute only separate literal pwd, ls, cat, stat, sha256sum, Git read commands (status, diff, show, log, ls-files, ls-tree, check-ignore, rev-parse, merge-base, hash-object without -w, branch --show-current, describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision), the exact generated Preamble block with its spawned prefix, literal installed gstack-skill-start/gstack-skill-end commands for document-release (start requires GSTACK_SESSION_KIND=spawned) or their own --help, or the literal installed ${skills}/bin/gstack-docs-candidate snapshot (its --out a private .json under ${fixture.home}), compare <that .json> and --help commands. No shell composition, custom interpreters, arbitrary scripts, inline eval or memory-mapped writes. The only additional scripts are ${scripts.length ? scripts.join(', ') : 'none'}.${insert ? ` To insert one saved private Markdown artifact into another (a saved section file into a report), Bash may also run the single literal command cat SOURCE.md >> TARGET.md with absolute paths under ${fixture.home}.` : ''} Read/Glob/Grep remain available; Read skill and section files with Read (offset/limit for ranges), because Bash output over 30KB becomes a preview that no permitted Bash command can page. Use Write/Edit for permitted docs and private JSON/Markdown artifacts under ${fixture.home}; do not rewrite installed skills, config, actor state or scripts. No effects outside the owned fixture. The owner preserves evidence and cleans up. Missing observer coverage blocks acceptance; the Linux kernel monitor covers syscall writes in the product tree, not hostile processes or arbitrary external destinations.
+  return `Fixture observation interface (applies to parent and every child; ${file ? `saved at ${file}: each child prompt tells the child to Read that file first instead of copying this text` : 'include this interface in child prompts'}): Bash may execute only separate literal pwd, ls, cat, stat, sha256sum, Git read commands (status, diff, show, log, ls-files, ls-tree, check-ignore, rev-parse, merge-base, hash-object without -w, branch --show-current, describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision), the exact generated Preamble block with its spawned prefix, literal installed gstack-skill-start/gstack-skill-end commands for document-release (start requires GSTACK_SESSION_KIND=spawned) or their own --help, or the literal installed ${skills}/bin/gstack-docs-candidate snapshot (its --out a private .json under ${fixture.home}), compare <that .json> and --help commands. ${readOnlyInterfaceText(fixture.home)} Git reads, the Preamble block, lifecycle and candidate commands and scripts never join such a line: run each as its own Bash call, never joined to another command with ;, &&, || or a pipe, not even to another Git read. Otherwise no shell composition, custom interpreters, arbitrary scripts, inline eval or memory-mapped writes. The only additional scripts are ${scripts.length ? scripts.join(', ') : 'none'}.${insert ? ` To insert one saved private Markdown artifact into another (a saved section file into a report), Bash may also run the single literal command cat SOURCE.md >> TARGET.md with absolute paths under ${fixture.home}.` : ''} Read/Glob/Grep remain available; Read skill and section files with Read (offset/limit for ranges), because Bash output over 30KB becomes a truncated preview. Use Write/Edit for permitted docs and private JSON/Markdown artifacts under ${fixture.home}; do not rewrite installed skills, config, actor state or scripts. No effects outside the owned fixture. The owner preserves evidence and cleans up. Missing observer coverage blocks acceptance; the Linux kernel monitor covers syscall writes in the product tree, not hostile processes or arbitrary external destinations.
 
 The working directory for parent and child Bash calls is already ${fixture.repo}. Run Git reads directly, for example: git status, git diff --cached, git merge-base main HEAD, git rev-parse HEAD. Do not use Git global options such as -C, -c, --git-dir or --work-tree, and do not prepend cd or another shell wrapper. The literal git subcommand must immediately follow git; an absolute owned repository path does not make git -C an allowed command.
 
@@ -381,8 +399,10 @@ export function docsCompletedRead(result: SkillTestResult, file: string, fixture
     if (options.beforeFirstEdit && ['Write', 'Edit'].includes(call.tool) && resolve(call.input?.file_path ?? '') === target) break;
     const read = call.tool === 'Read' && resolve(call.input?.file_path ?? '') === target;
     const command = String(call.input?.command ?? '').trim();
-    const catArgs = /^cat\s+/.test(command) && !/[\n\r;&|<>`$\\(){}]/.test(command)
-      ? command.match(/'[^']*'|"[^"]*"|[^\s'"]+/g)?.slice(1).map(arg => /^['"]/.test(arg) ? arg.slice(1, -1) : arg) ?? [] : [];
+    const literal = /^cat\s+/.test(command) && !/[\n\r;&|<>`$\\(){}]/.test(command);
+    const grammar = !literal && !/(?:^|[;&|]\s*)cd\s/.test(command) && readOnlyCommandAllowed(command, docsReadOnlyScope(fixture));
+    const catArgs = !literal && !grammar ? [] : command.split(/\s*(?:;|&&|\|\|)\s*/).filter(part => /^cat\s/.test(part) && !part.includes('|'))
+      .flatMap(part => part.match(/'[^']*'|"[^"]*"|[^\s'"]+/g)?.slice(1).map(arg => /^['"]/.test(arg) ? arg.slice(1, -1) : arg) ?? []);
     const cat = call.tool === 'Bash' && catArgs.some(arg => resolve(arg) === target);
     if ((read || cat) && !/^(?:<tool_use_error>|Error(?: reading file|:)|Exit code [1-9]\d*\b)/i.test(call.output.trimStart()) &&
         call.output.replace(/^\s*\d+(?:→|\t)/gm, '').includes(source)) return true;
