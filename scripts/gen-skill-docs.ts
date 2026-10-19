@@ -25,6 +25,7 @@ import { HOST_PATHS } from './resolvers/types';
 import { RESOLVERS } from './resolvers/index';
 import { rewriteCarvedSectionRefs, SKILL_BYTE_CEILING, usesLazySections } from './resolvers/sections';
 import { insertRuntimePreludes } from './resolvers/runtime-root';
+import { extractVoiceTriggers } from './resolvers/voice-triggers';
 import { ALL_HOST_NAMES, resolveHostArg, getHostConfig } from '../hosts/index';
 import type { HostConfig } from './host-config';
 
@@ -217,30 +218,6 @@ function rewriteSectionBase(content: string, linkRoot: string | null): string {
 // ─── Voice Trigger Processing ────────────────────────────────
 
 /**
- * Extract voice-triggers YAML list from frontmatter.
- * Returns an array of trigger strings, or [] if no voice-triggers field.
- */
-function extractVoiceTriggers(content: string): string[] {
-  const fmStart = content.indexOf('---\n');
-  if (fmStart !== 0) return [];
-  const fmEnd = content.indexOf('\n---', fmStart + 4);
-  if (fmEnd === -1) return [];
-  const frontmatter = content.slice(fmStart + 4, fmEnd);
-
-  const triggers: string[] = [];
-  let inVoice = false;
-  for (const line of frontmatter.split('\n')) {
-    if (/^voice-triggers:/.test(line)) { inVoice = true; continue; }
-    if (inVoice) {
-      const m = line.match(/^\s+-\s+"(.+)"$/);
-      if (m) triggers.push(m[1]);
-      else if (!/^\s/.test(line)) break;
-    }
-  }
-  return triggers;
-}
-
-/**
  * Preprocess voice triggers: fold voice-triggers YAML field into description,
  * then strip the field from frontmatter. Must run BEFORE transformFrontmatter
  * and extractNameAndDescription so all hosts see the updated description.
@@ -278,8 +255,10 @@ export { extractVoiceTriggers, processVoiceTriggers };
 // "(gstack)" tag. This pile is the always-loaded catalog surface — every
 // session pays for the full text. The catalog trim splits the description
 // into a one-line catalog entry (lead sentence + "(gstack)") that stays in
-// the frontmatter, and a "## When to invoke" body section that holds the
-// routing/voice triggers prose for in-skill discovery.
+// the frontmatter and drops the routing/voice prose. The body is not a home
+// for it: Claude Code loads a skill body only after the skill is invoked, so
+// routing text there can no longer route anything. Voice triggers live on in
+// the root router's routing block ({{VOICE_TRIGGER_ROUTING}}).
 //
 // Opt-out: `--catalog-mode=full` keeps v1.44 behavior (no trim, full
 // description in frontmatter). Use when debugging routing regressions or
@@ -365,20 +344,6 @@ export function buildTrimmedDescription(parts: CatalogParts): string {
   return `${lead}${suffix}`;
 }
 
-/** Build the body section that holds the routing/voice prose. */
-export function buildWhenToInvokeSection(parts: CatalogParts): string {
-  const lines: string[] = ['## When to invoke this skill', ''];
-  if (parts.routingProse) {
-    lines.push(parts.routingProse);
-    lines.push('');
-  }
-  if (parts.voiceLine) {
-    lines.push(parts.voiceLine);
-    lines.push('');
-  }
-  return lines.join('\n');
-}
-
 /**
  * Render a string as a YAML inline scalar value (the text after `key: `),
  * quoting only when a plain scalar would be invalid or ambiguous.
@@ -405,9 +370,6 @@ export function toYamlInlineScalar(s: string): string {
 /**
  * Apply catalog trim to a SKILL.md body:
  *  - shorten frontmatter `description:` to lead + (gstack)
- *  - insert "## When to invoke" body section AFTER the generated header
- *    (so it lands near the top of body content, where routing guidance
- *    belongs)
  *
  * Returns the rewritten content plus the extracted parts.
  */
@@ -452,16 +414,7 @@ export function applyCatalogTrim(content: string, skillName: string): { content:
   // pattern and silently corrupt the frontmatter.
   const newDescLine = `description: ${toYamlInlineScalar(newDesc)}\n`;
   const newFrontmatter = frontmatter.replace(descMatch[0], () => newDescLine);
-  let newContent = '---\n' + newFrontmatter + content.slice(fmEnd);
-
-  // Insert body section after frontmatter (after the closing ---\n and any
-  // existing GENERATED header). We insert before the first non-comment line.
-  const bodyStart = newContent.indexOf('\n---\n') + 5;
-  const whenToInvoke = '\n' + buildWhenToInvokeSection(parts).trim() + '\n';
-  // Skip past the generated header if present (it lives after frontmatter close)
-  const headerMatch = newContent.slice(bodyStart).match(/^(<!--[^>]*-->\s*\n)+/);
-  const insertAt = bodyStart + (headerMatch ? headerMatch[0].length : 0);
-  newContent = newContent.slice(0, insertAt) + whenToInvoke + '\n' + newContent.slice(insertAt);
+  const newContent = '---\n' + newFrontmatter + content.slice(fmEnd);
 
   return { content: newContent, parts };
 }

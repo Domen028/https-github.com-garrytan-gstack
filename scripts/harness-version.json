@@ -48,7 +48,7 @@
     "test/helpers/session-drain-policy.ts": {"blob":"6211239dd0485e6495a700b824a7e0e61d1bcd97","since":6},
     "test/helpers/session-ledger.ts": {"blob":"425323284a368f5e77937e03884db4dea4e6134e","since":6,"nonBehavioral":"Claude-host verdicts are unchanged: the Codex host (EVALS_HOST=codex, codex-host-runner) runs only when selected and records its own per-model series; the Codex runner refactor (execCodex extraction, onSpawn hook) keeps its events and verdicts and adds token cost accounting; host fields on the plan/report are absent for claude"},
     "test/helpers/session-runner.ts": {"blob":"cc65a66adafa9c053e3da3c6f17b5ac86c0eade7","since":6,"nonBehavioral":"Claude-host verdicts are unchanged: the Codex host (EVALS_HOST=codex, codex-host-runner) runs only when selected and records its own per-model series; the Codex runner refactor (execCodex extraction, onSpawn hook) keeps its events and verdicts and adds token cost accounting; host fields on the plan/report are absent for claude"},
-    "test/helpers/skill-fixture.ts": {"blob":"b188064594eb4201a54a80ba1bc6f28e31d7f49e","since":6},
+    "test/helpers/skill-fixture.ts": {"blob":"ffece830f35b0f1562005105e9296dc4d8ca50c2","since":6,"nonBehavioral":"skill-fixture.ts drops 'When to invoke this skill' from the review, review-army and retro section lists because #3129 stops generating that heading; extraction would throw otherwise. The fixture bytes follow the regenerated SKILL.md, whose owned prompt bytes already start those cases' new series."},
     "test/helpers/test-selection.ts": {"blob":"51655f89f66be7a5ec487e2abfe4744300ebd5f6","since":6},
     "test/helpers/touchfiles.ts": {"blob":"15f369056d41b9dc42dcd86f81f60c878074704c","since":6}
   }
