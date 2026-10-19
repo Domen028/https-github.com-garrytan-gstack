@@ -1,5 +1,20 @@
 # Changelog
 
+## [Unreleased]
+
+**The evals workflow carries merge trains: a train's own gate publishes its record and the `gstack/full-gate` check, bisects run one executor per prefix, `ready --screen` dispatches a real screen, and a main backstop gates any tree no green train covered.** All of it stays off unless the base revision's `.gstack/ship-policy.json` declares a `train` block. Without one, a PR push and every eval-bg dispatch run today's jobs and steps with today's values. The one addition is a free `route` job that reads the policy with git and jq. gstack's own policy still has no `train` block; turning it on is a separate one-line policy PR. Plan GSTA-49, lane T1b.
+
+### Added
+- **Train gate runs** (`train/<nonce>` with a train nonce): the full census runs without verdict reuse or reuse binding. The report job writes the train record (`scripts/train-gate.ts train-record`) from this run's plan manifest, one panel per planned case, plus the prefix trees modulo stamps. It uploads the record as the policy's `record_artifact`. A separate `train-check` job, with `checks: write` and no repository code, publishes `full_gate_check` as success only for a complete GREEN census whose nonce and head match the dispatch. A train nonce dispatched on main is refused before any paid work.
+- **Bisect inputs `cases` and `prefix_shas`.** Case ids must be in the run's plan, and each prefix must be an ancestor of the train head on `train/<nonce>`, or the run refuses. A `train-bisect` matrix runs one executor per prefix, checks out and verifies that prefix, and uploads `<record_artifact>-bisect-<sha12>`, the name `train bisect` reads.
+- **Dispatched screens** (`screen_pr`, `screen_merge_sha`, `screen_policy`): the run checks out and verifies the pinned merge commit. It waits on the PR head's Free Tests, cancels an older screen of the same PR, and comments on that PR. Verdict reuse (R2a/R2) authenticates a screen by PR number, head SHA, repository and tested base (the merge commit's first parent). It keeps every selection and newer-run veto, and lists pull_request and screen runs filtered by PR. A broad screen never adopts a narrow run.
+- **`.github/workflows/evals-main-backstop.yml`** runs on every push to main, one at a time. It does nothing without a `train` block. With one, it waits until no train is merging. It runs the full gate on main only when no green train record lists main's tree modulo stamps, and writes the freeze record `gstack-ship-queue` reads. A five-PR train fires zero backstop gates.
+- **The free screening summary:** under a `train` block, a PR push runs readiness and prints the screen selection and an estimated cost instead of starting paid slices.
+
+### Changed
+- **Gate integrity (train block only):** under a `train` block, PR pushes no longer start paid slices; trains, screens and the backstop gate instead. Train and bisect runs never reuse a verdict and never bind one for reuse. No threshold, trial count, case kind or selection changed.
+- **Gate integrity (always, GSTA-48 P3-1):** when the readiness job blocks a PR head, a new `readiness-comment` job replaces an existing `## E2E Evals` comment with "NOT RUN on <head>", so an earlier PASS no longer stands beside a head that never ran. It posts nothing when no such comment exists. A slice killed before its upload step counts as incomplete.
+
 ## [1.91.146.0] - 2026-10-19
 
 **`gstack-ship-queue` can run merge trains: several READY PRs share one full gate, merge one by one only while main's tree matches the prefix that gate tested, and a red train is bisected on its red cases alone.** The surface is off unless the base revision's `.gstack/ship-policy.json` declares a `train` block. Without one, `ready --pr <n>` prints exactly the block it prints today. gstack's own policy does not turn trains on yet: that waits for the workflow side (the train-nonce record, the `cases` and `prefix_shas` inputs and the dispatched screen) and one dry-run train. Walkthrough: [docs/ship-policy.md#run-a-merge-train](docs/ship-policy.md#run-a-merge-train). Plan GSTA-49, lane T1.
