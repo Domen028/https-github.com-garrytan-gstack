@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.157.0] - 2026-10-19
 
 **Claude SKILL.md files no longer carry a "When to invoke" body section, which saves about 20 KB across 56 skills.** Claude Code reads a skill's body only after the skill is invoked, so routing prose there never routed anything. Routing still comes from the catalog description and the CLAUDE.md routing block, and voice triggers move into the root router's routing block. From #3129 by @thanhnguyentung95.
 
