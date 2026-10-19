@@ -30,10 +30,7 @@ afterEach(() => { fake.stop(); home.cleanup(); });
 const enable = (...args: string[]) => cli(home, repo, ['enable', '--yes', '--key-stdin', ...args], { input: `${KEY}\n` });
 const status = async (cwd = repo) => JSON.parse((await cli(home, cwd, ['status', '--json'])).stdout);
 const ingests = () => fake.requests.filter(r => r.path === '/context/ingest');
-const deliveries = () => {
-  const dir = path.join(home.state, 'task-memory', 'delivery');
-  return fs.existsSync(dir) ? fs.readdirSync(dir).flatMap(s => fs.readdirSync(path.join(dir, s)).map(f => JSON.parse(fs.readFileSync(path.join(dir, s, f), 'utf8')))) : [];
-};
+const procedures = async () => (await status()).deliveries as Record<string, number>;
 const receipts = () => {
   const ledger = path.join(home.state, 'security', 'egress.jsonl');
   return fs.existsSync(ledger) ? fs.readFileSync(ledger, 'utf8').trim().split('\n').map(l => JSON.parse(l)).filter(r => r.type === 'egress') : [];
@@ -60,7 +57,8 @@ describe('the loop: enable, Stop capture, next-prompt recall', () => {
     const stop = await runRegisteredHook(home, 'Stop', session.stop);
     expect(stop.status).toBe(0);
     expect(stop.stdout).toBe('');
-    await waitFor(() => deliveries().some(d => d.state === 'indexed'));
+    await waitForWorkers(session.sessionId);
+    expect(await procedures()).toEqual({ searchable: 1 });
 
     const [ingest] = ingests();
     expect(ingest!.authorization).toBe(`Bearer ${KEY}`);
@@ -142,10 +140,10 @@ describe('invalidation', () => {
     await stopAndSettle(session);
     const deletion = fake.requests.find(r => r.method === 'DELETE')!;
     expect(deletion.payload).toMatchObject({ type: 'memory', ids: [memory.id] });
-    expect(deliveries().map(d => d.state)).toEqual(['retracted']);
+    expect(await procedures()).toEqual({ retracted: 1 });
 
     const collection = [...fake.store.values()][0]!;
-    collection.set(memory.id, { id: memory.id, title: memory.title, text: memory.text, additional_metadata: memory.additional_metadata });
+    collection.set(memory.id, { id: memory.id, title: memory.title, text: memory.text, additional_metadata: memory.additional_metadata, stage: 'completed', failIndexing: false });
     const recalled = await prompt('The add helper breaks on negative numbers again');
     expect(fake.requests.some(r => r.path === '/query')).toBe(true);
     expect(recalled.stdout).toBe('');
@@ -165,22 +163,25 @@ describe('invalidation', () => {
 });
 
 describe('retry and stale grants', () => {
-  test('a refused upload stays pending, flush delivers the same bytes, and a re-enable never sends the old generation', async () => {
+  test('a refused upload waits out its back-off, flush delivers the same bytes, and a re-enable never sends the old generation', async () => {
     expect((await enable()).status).toBe(0);
     fake.behavior.ingestStatus = 503;
     const session = verifiedTask();
     await stopAndSettle(session);
     const refused = fake.requests.filter(r => r.path === '/context/ingest');
-    expect(refused.length).toBe(2);
-    expect(deliveries().map(d => d.state)).toEqual(['pending']);
+    expect(refused.length).toBe(1);
+    expect(await procedures()).toEqual({ pending: 1 });
+    expect((await status()).retrying).toEqual({ unavailable: 1 });
     expect(errorLog()).toContain('not delivered yet');
+    await stopAndSettle(session);
+    expect(fake.requests.filter(r => r.path === '/context/ingest').length).toBe(1);
 
     delete fake.behavior.ingestStatus;
     const flushed = await cli(home, repo, ['flush']);
-    expect(flushed.stdout).toContain('1 queued');
+    expect(flushed.stdout).toContain('1 accepted');
     const sent = fake.requests.filter(r => r.path === '/context/ingest');
-    expect(sent.length).toBe(3);
-    expect(sent[2]!.payload).toEqual(refused[0]!.payload);
+    expect(sent.length).toBe(2);
+    expect(sent[1]!.payload).toEqual(refused[0]!.payload);
 
     fake.behavior.ingestStatus = 503;
     const second = verifiedTask();
@@ -192,7 +193,7 @@ describe('retry and stale grants', () => {
     await cli(home, repo, ['flush']);
     await stopAndSettle(second);
     expect(fake.requests.slice(before).filter(r => r.path === '/context/ingest')).toEqual([]);
-    expect((await status()).deliveries).toMatchObject({ stale: 2 });
+    expect(await procedures()).toEqual({ searchable: 1, stale: 1 });
   }, 120_000);
 });
 

@@ -11,6 +11,7 @@
     { "file": "lib/task-memory/state.ts", "movedFrom": "(new: HydraDB task memory, scope, grants, key custody and delivery records)" },
     { "file": "lib/task-memory/hydradb.ts", "movedFrom": "(new: HydraDB task memory, the receipted hosted API boundary)" },
     { "file": "lib/task-memory/loop.ts", "movedFrom": "(new: HydraDB task memory, Stop capture, prompt recall and flush)" },
+    { "file": "lib/task-memory/delivery.ts", "movedFrom": "(new: HydraDB task memory, the per-repository delivery owner)" },
     { "file": "lib/task-memory/cli.ts", "movedFrom": "(new: HydraDB task memory, bin/gstack-task-memory)" },
     { "file": "scripts/lib/shard-engine.ts", "movedFrom": "scripts/test-strict-output.ts" },
     { "file": "autoplan/bin/phase-publication-hook.ts", "movedFrom": "(owner: the /autoplan publication guard; ENG-17 keeps it under the module limit)" },

@@ -1,15 +1,8 @@
-/**
- * Every request, in order: re-check that the caller's grant is still the
- * current one for this destination, scan the exact body bytes for credential
- * shapes, write an egress receipt (fail-closed: no receipt, no send), then
- * send with redirects refused and a deadline. The API key travels only in
- * the Authorization header.
- */
 import { randomBytes } from 'node:crypto';
 import { buildString } from '@hydradb/sdk/helpers';
 import { sha256Hex, writeOutcome, writeReceipt } from '../egress-receipt';
 import { scan } from '../redact-engine';
-import { isDocId, type Capability, type DocId, type Grant, type Mode, type ScopeId } from './state';
+import { isDocId, type Capability, type DocId, type Grant, type IndexState, type Mode, type ScopeId } from './state';
 
 export const HYDRADB_ORIGIN = 'https://api.hydradb.com';
 export const SINK = 'hydradb-task-memory';
@@ -37,7 +30,8 @@ export interface MemoryItem {
   readonly recordedOn: string;
 }
 
-export type IndexingState = 'queued' | 'processing' | 'searchable' | 'failed' | 'unknown';
+/** `absent`: HydraDB has no such id in this collection. */
+export type IndexingState = IndexState | 'absent';
 
 export interface RecalledProcedure {
   readonly docId: DocId;
@@ -85,17 +79,24 @@ async function request(send: Send, method: string, route: string, payloadClass: 
   } catch {
     return { kind: 'refused', reason: 'receipt' };
   }
-  const outcome = await dispatch(send.key, method, route, timeoutMs, body);
-  try { writeOutcome({ receipt, status: outcome.kind === 'ok' ? 'ok' : outcome.kind === 'http' ? outcome.status : outcome.kind, lockBudgetMs: 200 }); } catch {}
+  const outcome = await dispatch(send, method, route, timeoutMs, body);
+  try {
+    const status = outcome.kind === 'ok' ? 'ok' : outcome.kind === 'http' ? outcome.status : `${outcome.kind}-${outcome.reason}`;
+    writeOutcome({ receipt, status, lockBudgetMs: 200 });
+  } catch {
+    // The receipt already records the attempt; a missing outcome line is not worth failing the request over.
+  }
   return outcome;
 }
 
-async function dispatch(key: string, method: string, route: string, timeoutMs: number, body?: Body): Promise<HydraResult<unknown>> {
+/** Consent is read again here, after the receipt lock, so a grant revoked while this request waited never sends. */
+async function dispatch(send: Send, method: string, route: string, timeoutMs: number, body?: Body): Promise<HydraResult<unknown>> {
+  if (!send.stillAllowed()) return { kind: 'refused', reason: 'consent' };
   let res: Response;
   try {
     res = await fetch(`${HYDRADB_ORIGIN}${route}`, {
       method, redirect: 'manual', signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
-      headers: { authorization: `Bearer ${key}`, 'api-version': '2', ...(body ? { 'content-type': body.contentType } : {}) },
+      headers: { authorization: `Bearer ${send.key}`, 'api-version': '2', ...(body ? { 'content-type': body.contentType } : {}) },
       ...(body ? { body: body.bytes } : {}),
     });
   } catch (err) {
@@ -127,41 +128,49 @@ export async function ensureDatabase(send: Send, database: string, waitMs: numbe
   }
 }
 
-export async function ingest(send: Send, dest: Destination, scope: ScopeId, items: readonly MemoryItem[], timeoutMs: number): Promise<HydraResult<Set<DocId>>> {
+export async function ingest(send: Send, dest: Destination, scope: ScopeId, items: readonly MemoryItem[], timeoutMs: number): Promise<HydraResult<Map<DocId, 'accepted' | 'refused'>>> {
   const memories = items.map(item => ({
     id: item.docId, title: item.title, text: item.markdown, is_markdown: true, infer: false,
     additional_metadata: { tm_schema: SCHEMA, tm_scope: scope, tm_recorded: item.recordedOn },
   }));
   const body = multipart({ type: 'memory', database: dest.database, collection: dest.collection, upsert: 'true', memories: JSON.stringify(memories) });
   const result = await request(send, 'POST', '/context/ingest', 'task-procedure-markdown', timeoutMs, body);
-  return map(result, data => new Set(array(object(data) ? data.results : undefined)
-    .filter(r => isDocId(r.id) && !r.error && ['queued', 'processing', 'graph_creation', 'completed'].includes(String(r.status)))
-    .map(r => r.id as DocId)));
+  return map(result, data => {
+    const out = new Map<DocId, 'accepted' | 'refused'>();
+    for (const r of array(object(data) ? data.results : undefined)) {
+      if (isDocId(r.id)) out.set(r.id, !r.error && ['queued', 'processing', 'graph_creation', 'completed'].includes(String(r.status)) ? 'accepted' : 'refused');
+    }
+    return out;
+  });
 }
 
-/** Indexing state per id; `searchable` from graph_creation on. A scope miss (FILE_NOT_FOUND) reads as unknown, never failed. */
+/** HydraDB's indexing state per id. A scope miss (FILE_NOT_FOUND) is `absent`, never a failure; an unrecognized state is still processing. */
 export async function indexing(send: Send, dest: Destination, ids: readonly DocId[], timeoutMs: number): Promise<HydraResult<Map<DocId, IndexingState>>> {
   const query = new URLSearchParams({ database: dest.database, collection: dest.collection, ids: ids.join(',') });
   const result = await request(send, 'GET', `/context/status?${query}`, 'procedure-ids', timeoutMs);
   return map(result, data => {
     const out = new Map<DocId, IndexingState>();
     for (const s of array(object(data) ? data.statuses : undefined)) {
-      if (!isDocId(s.id)) continue;
-      const state = String(s.indexing_status);
-      out.set(s.id, state === 'graph_creation' || state === 'completed' ? 'searchable'
-        : state === 'queued' || state === 'processing' ? state
-        : (state === 'errored' || state === 'failed') && s.error_code !== 'FILE_NOT_FOUND' ? 'failed' : 'unknown');
+      const wire = String(s.indexing_status);
+      if (isDocId(s.id)) out.set(s.id, wire === 'errored' || wire === 'failed' ? (s.error_code === 'FILE_NOT_FOUND' ? 'absent' : 'failed') : WIRE_INDEXING[wire] ?? 'processing');
     }
     return out;
   });
 }
 
-export async function remove(send: Send, dest: Destination, ids: readonly DocId[], timeoutMs: number): Promise<HydraResult<Set<DocId>>> {
+const WIRE_INDEXING: Record<string, IndexingState> = { queued: 'processing', processing: 'processing', graph_creation: 'searchable', completed: 'settled' };
+
+/** `deleted` also covers an id HydraDB no longer has; `busy` is an id still being indexed, which HydraDB refuses to delete. */
+export async function remove(send: Send, dest: Destination, ids: readonly DocId[], timeoutMs: number): Promise<HydraResult<Map<DocId, 'deleted' | 'busy'>>> {
   const result = await request(send, 'DELETE', '/context', 'procedure-ids', timeoutMs,
     json({ database: dest.database, collection: dest.collection, type: 'memory', ids }));
-  return map(result, data => new Set(array(object(data) ? data.results : undefined)
-    .filter(r => isDocId(r.id) && (r.deleted === true || /not found|does not exist/i.test(String(r.error ?? ''))))
-    .map(r => r.id as DocId)));
+  return map(result, data => {
+    const out = new Map<DocId, 'deleted' | 'busy'>();
+    for (const r of array(object(data) ? data.results : undefined)) {
+      if (isDocId(r.id)) out.set(r.id, r.deleted === true || /not found|does not exist/i.test(String(r.error ?? '')) ? 'deleted' : 'busy');
+    }
+    return out;
+  });
 }
 
 const metadataOf = (v: unknown): Wire | null => object(v) ? v : null;
@@ -186,8 +195,9 @@ export async function recall(send: Send, dest: Destination, scope: ScopeId, quer
     const listed = await request(send, 'POST', '/context/list', 'procedure-ids', deadline - Date.now(),
       json({ database: dest.database, collection: dest.collection, type: 'memory', ids: missing, page_size: missing.length }));
     if (listed.kind === 'ok' && object(listed.value)) {
-      for (const s of [...array(listed.value.sources), ...array(listed.value.memories)])
-        if (typeof s.id === 'string') metadata.set(s.id, metadataOf(s.additional_metadata));
+      for (const m of array(listed.value.user_memories)) {
+        if (typeof m.memory_id === 'string' && missing.includes(m.memory_id) && m.collection === dest.collection) metadata.set(m.memory_id, metadataOf(m.additional_metadata));
+      }
     }
   }
   return {

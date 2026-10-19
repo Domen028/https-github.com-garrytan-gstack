@@ -407,10 +407,11 @@ describe('egress receipt wiring tripwire', () => {
     expect(memo).toContain('fail-closed');
     expect(memo.indexOf('writeReceipt(')).toBeGreaterThan(0);
     expect(memo.indexOf('writeReceipt(')).toBeLessThan(memo.indexOf('// VENDOR SPAWN'));
+    // hydradb-task-memory (closed): behavioural proof that a missing receipt
+    // or a revoked grant sends nothing lives in test/task-memory-consent.test.ts.
     const tm = read('lib/task-memory/hydradb.ts');
     expect(tm).toMatch(/sink:\s*SINK/);
     expect(tm).toContain("SINK = 'hydradb-task-memory'");
-    expect(tm).toContain('fail-closed');
     expect(tm.indexOf('writeReceipt(')).toBeLessThan(tm.indexOf('await fetch('));
     expect(tm.indexOf('stillAllowed()')).toBeLessThan(tm.indexOf('writeReceipt('));
     // design (open): the wrapper catches receipt errors and proceeds.

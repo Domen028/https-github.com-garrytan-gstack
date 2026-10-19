@@ -5,9 +5,10 @@ import { createInterface } from 'node:readline/promises';
 import { repoPolicyTier } from '../gbrain-repo-policy-client';
 import { resolveStateRoot } from '../state-root';
 import { ensureDatabase, SINK } from './hydradb';
+import { standing } from './delivery';
 import { flushRepository } from './loop';
 import {
-  DEFAULT_DATABASE, MANAGE_LOCK, API_KEY_ENV, isDatabaseName, isPlausibleKey, listDeliveries, listGrants, newGrant, policyAllows,
+  DEFAULT_DATABASE, MANAGE_LOCK, API_KEY_ENV, isDatabaseName, isPlausibleKey, listAdmissions, listDeliveries, listGrants, newGrant, policyAllows,
   readGrant, readMode, removeCredential, removeGrant, resolveCredential, resolveScope, saveGrant, storeCredential, withLock, writeMode,
   type Capability, type Mode, type RepoScope,
 } from './state';
@@ -235,12 +236,14 @@ function status(args: string[]): number {
   const scope = resolved.kind === 'ok' ? resolved.scope : null;
   const grant = scope ? readGrant(scope.id) : null;
   const credential = resolveCredential();
-  const deliveries = scope ? listDeliveries(scope.id) : [];
+  const deliveries = new Map(scope ? listDeliveries(scope.id).map(d => [d.docId, d]) : []);
   const counts: Record<string, number> = {};
-  for (const d of deliveries) {
-    const k = grant && d.generation === grant.generation ? d.state : 'stale';
+  for (const a of scope ? listAdmissions(scope.id) : []) {
+    const k = standing(a, deliveries.get(a.docId) ?? null, grant);
     counts[k] = (counts[k] ?? 0) + 1;
   }
+  const retrying: Record<string, number> = {};
+  for (const d of deliveries.values()) if (d.retry) retrying[d.retry.problem] = (retrying[d.retry.problem] ?? 0) + 1;
   const report = {
     repository: scope ? { remote: scope.remote, scope: scope.id } : { unavailable: resolved.kind === 'none' ? resolved.reason : 'unknown' },
     trust: scope ? repoPolicyTier(scope.originUrl, process.env, 10_000).tier : null,
@@ -251,6 +254,7 @@ function status(args: string[]): number {
     mode: readMode(),
     hooks: hookState(canonicalRoot()),
     deliveries: counts,
+    retrying,
     recentErrors: recentErrors(),
   };
   if (json) { io.out(JSON.stringify(report, null, 2)); return 0; }
@@ -260,7 +264,8 @@ function status(args: string[]): number {
   io.out(`key: ${{ env: `from ${API_KEY_ENV}`, file: 'stored key file', missing: 'missing', insecure: 'key file has loose permissions (refused)' }[report.key]}`);
   io.out(`mode: ${report.mode}`);
   io.out(`hooks: ${Object.entries(report.hooks).map(([e, s]) => `${e} ${s}`).join(', ')}`);
-  io.out(`deliveries: ${Object.entries(counts).map(([s, n]) => `${n} ${s}`).join(', ') || 'none'} (queued is accepted but not yet searchable)`);
+  io.out(`procedures: ${Object.entries(counts).map(([s, n]) => `${n} ${s}`).join(', ') || 'none'}`);
+  if (Object.keys(retrying).length) io.out(`waiting to retry: ${Object.entries(retrying).map(([p, n]) => `${n} (${p})`).join(', ')}; gstack-task-memory flush retries now`);
   if (report.otherRepositories) io.out(`other repositories with a grant: ${report.otherRepositories}`);
   for (const line of report.recentErrors) io.out(`recent: ${line}`);
   return 0;
@@ -281,8 +286,8 @@ async function flush(args: string[]): Promise<number> {
   if (args.length) refuse(`unknown argument: ${args[0]}`);
   const report = await flushRepository(process.cwd(), Date.now() + 120_000);
   if (report.kind === 'skipped') refuse(`nothing flushed: ${report.reason}`);
-  if (report.kind === 'done') io.out(`flush: ${report.queued} queued, ${report.indexed} now searchable, ${report.retracted} retracted, ${report.pending} still pending`);
-  return report.kind === 'done' && report.pending === 0 ? 0 : 1;
+  io.out(`flush: ${report.accepted} accepted, ${report.searchable} now searchable, ${report.removed} removed, ${report.outstanding} still outstanding`);
+  return report.outstanding === 0 ? 0 : 1;
 }
 
 export async function main(argv: string[]): Promise<number> {

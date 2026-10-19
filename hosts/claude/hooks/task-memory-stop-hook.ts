@@ -6,7 +6,7 @@ import { listGrants } from '../../../lib/task-memory/state';
 import { logHookError } from './hook-log';
 
 const HOOK = 'task-memory-stop-hook';
-const QUIET = /^(no-capture-grant|not-a-repo|no-origin|local-origin|session-busy)$/;
+const QUIET = /^(no-capture-grant|not-a-repo|no-origin|local-origin)$/;
 
 async function worker(arg: string): Promise<void> {
   let input: ReturnType<typeof parseStopInput> = null;
@@ -15,8 +15,8 @@ async function worker(arg: string): Promise<void> {
   const report = await captureSession(input, Date.now() + CAPTURE_DEADLINE_MS);
   if (report.kind === 'skipped') {
     if (!QUIET.test(report.reason)) logHookError(HOOK, `capture skipped: ${report.reason}`, { rateLimit: { nowMs: Date.now(), key: report.reason } });
-  } else if (report.pending > 0) {
-    logHookError(HOOK, `${report.pending} procedure(s) not delivered yet; retried on the next Stop or by gstack-task-memory flush`,
+  } else if (report.kind === 'done' && report.outstanding > 0) {
+    logHookError(HOOK, `${report.outstanding} procedure change(s) not delivered yet; retried on a later Stop in this repository or by gstack-task-memory flush`,
       { rateLimit: { nowMs: Date.now(), key: 'pending' } });
   }
 }

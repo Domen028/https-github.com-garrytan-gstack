@@ -19,11 +19,15 @@ export interface FakeRequest {
   fields: Record<string, string>;
 }
 
-interface StoredMemory { id: string; title: string; text: string; additional_metadata: Record<string, unknown> }
+type Stage = 'queued' | 'graph_creation' | 'completed' | 'errored';
+interface StoredMemory { id: string; title: string; text: string; additional_metadata: Record<string, unknown>; stage: Stage; failIndexing: boolean }
 
 export interface FakeBehavior {
   ingestStatus?: number;
-  indexing?: string;
+  ingestDelayMs?: number;
+  failIndexing?: boolean;
+  holdIndexing?: boolean;
+  holdDatabase?: boolean;
   redirectQuery?: boolean;
   leakAcrossCollections?: boolean;
   chunkMetadata?: boolean;
@@ -36,16 +40,28 @@ export interface FakeHydra {
   requests: FakeRequest[];
   store: Map<string, Map<string, StoredMemory>>;
   behavior: FakeBehavior;
+  /** Same-id upserts sent while HydraDB was still processing the id. */
+  prematureUpserts: string[];
   stop(): void;
 }
 
 const ok = (data: unknown, status = 200) => Response.json({ success: true, data, error: null }, { status });
 const fail = (status: number, code: string) => Response.json({ success: false, data: null, error: { code, message: code } }, { status });
+const settled = (m: StoredMemory) => m.stage === 'completed' || m.stage === 'errored';
+const NEXT: Record<Stage, Stage> = { queued: 'graph_creation', graph_creation: 'completed', completed: 'completed', errored: 'errored' };
 
+/**
+ * HydraDB v2 as the hosted API answers it: ingest is 202 and queued, each
+ * status read moves an id one stage (queued, graph_creation, completed) unless
+ * held, queries see only searchable ids, deletion of an id still being
+ * indexed answers deleted=false, and memory listings are user_memories[]
+ * keyed by memory_id.
+ */
 export function startFakeHydra(): FakeHydra {
   const requests: FakeRequest[] = [];
   const store = new Map<string, Map<string, StoredMemory>>();
   const behavior: FakeBehavior = {};
+  const prematureUpserts: string[] = [];
   const bucket = (db: string, collection: string) => {
     const key = `${db}/${collection}`;
     if (!store.has(key)) store.set(key, new Map());
@@ -69,39 +85,63 @@ export function startFakeHydra(): FakeHydra {
       if (behavior.delayMs) await Bun.sleep(behavior.delayMs);
       if (behavior.rejectKey) return fail(401, 'UNAUTHORIZED');
       const route = `${req.method} ${url.pathname}`;
-      if (route === 'POST /databases') return ok({ database: payload.database });
-      if (route === 'GET /databases/status') return ok({ infra: { ready_for_ingestion: true } });
+      if (route === 'POST /databases') return ok({ status: 'created', database: payload.database, message: 'Database created' });
+      if (route === 'GET /databases/status') return ok({ database: url.searchParams.get('database'), infra: { ready_for_ingestion: !behavior.holdDatabase } });
       if (route === 'POST /context/ingest') {
-        if (behavior.ingestStatus) return fail(behavior.ingestStatus, 'SERVICE_UNAVAILABLE');
+        if (behavior.ingestDelayMs) await Bun.sleep(behavior.ingestDelayMs);
+        if (behavior.ingestStatus) return fail(behavior.ingestStatus, behavior.ingestStatus === 400 ? 'INVALID_INPUT' : 'SERVICE_UNAVAILABLE');
         const items = bucket(fields.database!, fields.collection!);
-        for (const m of payload) items.set(m.id, { id: m.id, title: m.title, text: m.text, additional_metadata: m.additional_metadata });
-        return ok({ results: payload.map((m: any) => ({ id: m.id, status: 'queued' })), success_count: payload.length, failed_count: 0 });
+        const results = payload.map((m: any) => {
+          const prior = items.get(m.id);
+          if (prior && !settled(prior)) prematureUpserts.push(m.id);
+          items.set(m.id, { id: m.id, title: m.title, text: m.text, additional_metadata: m.additional_metadata, stage: 'queued', failIndexing: !!behavior.failIndexing });
+          return { id: m.id, title: m.title, status: 'queued', infer: false, error: null, error_code: null };
+        });
+        return ok({ success: true, message: 'accepted', results, success_count: payload.length, failed_count: 0 }, 202);
       }
       if (route === 'GET /context/status') {
         const items = bucket(url.searchParams.get('database')!, url.searchParams.get('collection')!);
-        return ok({ statuses: (url.searchParams.get('ids') ?? '').split(',').map(id => items.has(id)
-          ? { id, indexing_status: behavior.indexing ?? 'graph_creation' }
-          : { id, indexing_status: 'errored', error_code: 'FILE_NOT_FOUND' }) });
+        return ok({ statuses: (url.searchParams.get('ids') ?? '').split(',').map(id => {
+          const m = items.get(id);
+          if (!m) return { id, indexing_status: 'errored', error_code: 'FILE_NOT_FOUND', error_message: '', success: false, message: 'ID not found' };
+          const shown = m.stage;
+          if (!behavior.holdIndexing) m.stage = m.stage === 'queued' && m.failIndexing ? 'errored' : NEXT[m.stage];
+          return shown === 'errored'
+            ? { id, indexing_status: 'errored', error_code: 'INDEXING_FAILED', error_message: 'embedding failed', success: false, message: 'Indexing failed' }
+            : { id, indexing_status: shown, error_code: '', error_message: '', success: true, message: 'Processing status retrieved successfully' };
+        }) });
       }
       if (route === 'DELETE /context') {
         const items = bucket(payload.database, payload.collection);
-        return ok({ results: payload.ids.map((id: string) => items.delete(id) ? { id, deleted: true } : { id, deleted: false, error: 'not found' }) });
+        const results = payload.ids.map((id: string) => {
+          const m = items.get(id);
+          if (!m) return { id, deleted: false, error: 'not found' };
+          if (!settled(m)) return { id, deleted: false, error: 'Memory is still processing; retry deletion after ingestion completes' };
+          items.delete(id);
+          return { id, deleted: true, error: null };
+        });
+        const deleted = results.filter((r: any) => r.deleted).length;
+        return ok({ success: true, message: 'done', results, deleted_count: deleted, user_memory_deleted: deleted });
       }
       if (route === 'POST /query') {
         if (behavior.redirectQuery) return new Response(null, { status: 302, headers: { location: 'https://elsewhere.example/query' } });
-        const pool = behavior.leakAcrossCollections ? [...store.values()].flatMap(m => [...m.values()]) : [...bucket(payload.database, payload.collection).values()];
-        return ok({ chunks: pool.map((m, i) => ({ chunk_uuid: `${m.id}_c${i}`, id: m.id, chunk_content: m.text, source_title: m.title,
-          relevancy_score: 0.8, ...(behavior.chunkMetadata === false ? {} : { additional_metadata: m.additional_metadata }) })),
+        const pool = (behavior.leakAcrossCollections ? [...store.values()].flatMap(m => [...m.values()]) : [...bucket(payload.database, payload.collection).values()])
+          .filter(m => m.stage === 'graph_creation' || m.stage === 'completed');
+        return ok({ chunks: pool.map((m, i) => ({ chunk_uuid: `${m.id}_chunk_${String(i).padStart(4, '0')}`, id: m.id, chunk_content: m.text, source_type: 'memory',
+          source_title: m.title, relevancy_score: 0.8, ...(behavior.chunkMetadata === false ? {} : { additional_metadata: m.additional_metadata }) })),
           sources: [], graph_context: { query_paths: [], chunk_relations: [] }, llm_prompt: 'SERVER_RENDERED_PROMPT' });
       }
       if (route === 'POST /context/list') {
         const items = bucket(payload.database, payload.collection);
-        return ok({ sources: payload.ids.flatMap((id: string) => items.has(id) ? [{ id, title: items.get(id)!.title, additional_metadata: items.get(id)!.additional_metadata }] : []) });
+        const listed = (payload.ids ?? []).flatMap((id: string) => items.has(id) ? [items.get(id)!] : []);
+        return ok({ success: true, total: listed.length, pagination: { page: 1, page_size: payload.page_size ?? 50, total: listed.length, total_pages: 1, has_next: false, has_previous: false },
+          user_memories: listed.map((m: StoredMemory) => ({ memory_id: m.id, database: payload.database, collection: payload.collection, tenant_id: payload.database,
+            sub_tenant_id: payload.collection, title: m.title, memory_content: m.text, additional_metadata: m.additional_metadata, type: 'memory' })) });
       }
       return fail(404, 'NOT_FOUND');
     },
   });
-  return { origin: `http://127.0.0.1:${server.port}`, requests, store, behavior, stop: () => server.stop(true) };
+  return { origin: `http://127.0.0.1:${server.port}`, requests, store, behavior, prematureUpserts, stop: () => server.stop(true) };
 }
 
 export interface Home {

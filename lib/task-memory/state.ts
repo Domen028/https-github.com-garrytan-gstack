@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { safeUnlink, safeUnlinkQuiet } from '../error-handling';
 import { atomicWriteSync } from '../fs-atomic';
 import { repoPolicyTier } from '../gbrain-repo-policy-client';
 import { canonicalRemote } from '../remote-identity';
@@ -43,22 +44,53 @@ export type Credential =
   | { kind: 'missing' }
   | { kind: 'insecure'; path: string };
 
-export type DeliveryState = 'pending' | 'queued' | 'indexed' | 'retracting' | 'retracted' | 'rejected';
-
-export interface Delivery {
-  readonly docId: DocId;
-  readonly scope: ScopeId;
-  readonly generation: string;
-  readonly session: string;
+export interface ProcedureBody {
   readonly sha256: string;
   readonly title: string;
   readonly recordedOn: string;
   readonly markdown: string;
-  readonly state: DeliveryState;
+}
+
+/**
+ * Capture's latest finding for one episode, written only by that session's
+ * capture: the procedure it admitted under `generation`, or null once the
+ * episode lost its proof and any copy in HydraDB has to go.
+ */
+export interface Admission {
+  readonly docId: DocId;
+  readonly scope: ScopeId;
+  readonly session: string;
+  readonly generation: string;
+  readonly procedure: ProcedureBody | null;
   readonly updatedAt: string;
 }
 
-const DELIVERY_STATES: ReadonlySet<string> = new Set<DeliveryState>(['pending', 'queued', 'indexed', 'retracting', 'retracted', 'rejected']);
+/** HydraDB's progress on an accepted id. Only `settled` and `failed` accept a same-id upsert or a deletion. */
+export type IndexState = 'processing' | 'searchable' | 'settled' | 'failed';
+
+export type Remote =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'held'; readonly sha256: string; readonly index: IndexState };
+
+export type Problem = 'auth' | 'destination' | 'unavailable' | 'refused' | 'indexing-failed';
+
+/**
+ * What this machine last confirmed HydraDB holds for one id, written only by
+ * the repository's delivery owner. `rejected` marks bytes HydraDB refused as
+ * malformed, so the same bytes are not resent. `retry` holds back the next
+ * automatic attempt after a failure.
+ */
+export interface Delivery {
+  readonly docId: DocId;
+  readonly scope: ScopeId;
+  readonly database: string;
+  readonly collection: string;
+  readonly remote: Remote;
+  readonly rejected: { readonly sha256: string; readonly status: number } | null;
+  readonly retry: { readonly attempts: number; readonly after: string; readonly problem: Problem } | null;
+  readonly updatedAt: string;
+}
+
 const HEX64 = /^[0-9a-f]{64}$/;
 const DOC_ID = /^tm_[0-9a-f]{32}$/;
 const DATABASE_NAME = /^[a-z0-9_]{1,63}$/;
@@ -71,6 +103,7 @@ export const isDatabaseName = (value: unknown): value is string => typeof value 
 export const stateDir = (env: NodeJS.ProcessEnv = process.env): string => path.join(resolveStateRoot(env), 'task-memory');
 const grantPath = (scope: ScopeId) => path.join(stateDir(), 'repos', `${scope}.json`);
 const deliveryDir = (scope: ScopeId) => path.join(stateDir(), 'delivery', scope);
+const admissionDir = (scope: ScopeId) => path.join(stateDir(), 'procedures', scope);
 export const keyPath = (env: NodeJS.ProcessEnv = process.env) => path.join(stateDir(env), 'hydradb.key');
 
 function privateDir(dir: string): void {
@@ -208,28 +241,66 @@ export function writeMode(mode: Mode): void {
   writePrivate(path.join(stateDir(), 'settings.json'), `${JSON.stringify({ mode })}\n`);
 }
 
-function parseDelivery(value: unknown, scope: ScopeId, docId: DocId): Delivery | null {
-  if (!value || typeof value !== 'object') return null;
-  const d = value as Record<string, unknown>;
-  const strings = ['generation', 'session', 'sha256', 'title', 'recordedOn', 'markdown', 'updatedAt'] as const;
-  if (d.scope !== scope || d.docId !== docId || !strings.every(k => typeof d[k] === 'string') ||
-      typeof d.state !== 'string' || !DELIVERY_STATES.has(d.state)) return null;
-  return value as Delivery;
+const isRecord = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === 'object' && !Array.isArray(v);
+const INDEX_STATES: ReadonlySet<unknown> = new Set<IndexState>(['processing', 'searchable', 'settled', 'failed']);
+const PROBLEMS: ReadonlySet<unknown> = new Set<Problem>(['auth', 'destination', 'unavailable', 'refused', 'indexing-failed']);
+
+function parseBody(v: unknown): ProcedureBody | null | undefined {
+  if (v === null) return null;
+  if (!isRecord(v) || !['sha256', 'title', 'recordedOn', 'markdown'].every(k => typeof v[k] === 'string')) return undefined;
+  return { sha256: v.sha256 as string, title: v.title as string, recordedOn: v.recordedOn as string, markdown: v.markdown as string };
 }
 
-export function readDelivery(scope: ScopeId, docId: DocId): Delivery | null {
-  return parseDelivery(readJson(path.join(deliveryDir(scope), `${docId}.json`)), scope, docId);
+function parseAdmission(v: unknown, scope: ScopeId, docId: DocId): Admission | null {
+  if (!isRecord(v) || v.scope !== scope || v.docId !== docId || typeof v.session !== 'string' || typeof v.generation !== 'string' ||
+      typeof v.updatedAt !== 'string') return null;
+  const procedure = parseBody(v.procedure);
+  return procedure === undefined ? null : { docId, scope, session: v.session, generation: v.generation, procedure, updatedAt: v.updatedAt };
 }
 
-export function listDeliveries(scope: ScopeId): Delivery[] {
+function parseRemote(v: unknown): Remote | null {
+  if (isRecord(v) && v.kind === 'none') return { kind: 'none' };
+  return isRecord(v) && v.kind === 'held' && typeof v.sha256 === 'string' && INDEX_STATES.has(v.index)
+    ? { kind: 'held', sha256: v.sha256, index: v.index as IndexState } : null;
+}
+
+function parseDelivery(v: unknown, scope: ScopeId, docId: DocId): Delivery | null {
+  if (!isRecord(v) || v.scope !== scope || v.docId !== docId || !isDatabaseName(v.database) || typeof v.collection !== 'string' ||
+      typeof v.updatedAt !== 'string') return null;
+  const remote = parseRemote(v.remote);
+  const rejected = v.rejected === null ? null
+    : isRecord(v.rejected) && typeof v.rejected.sha256 === 'string' && typeof v.rejected.status === 'number'
+      ? { sha256: v.rejected.sha256, status: v.rejected.status } : undefined;
+  const retry = v.retry === null ? null
+    : isRecord(v.retry) && typeof v.retry.attempts === 'number' && typeof v.retry.after === 'string' && PROBLEMS.has(v.retry.problem)
+      ? { attempts: v.retry.attempts, after: v.retry.after, problem: v.retry.problem as Problem } : undefined;
+  if (!remote || rejected === undefined || retry === undefined) return null;
+  return { docId, scope, database: v.database, collection: v.collection, remote, rejected, retry, updatedAt: v.updatedAt };
+}
+
+function listRecords<T>(dir: string, read: (docId: DocId) => T | null): T[] {
   let names: string[];
-  try { names = fs.readdirSync(deliveryDir(scope)); } catch { return []; }
+  try { names = fs.readdirSync(dir); } catch { return []; }
   return names.flatMap(name => {
     const docId = name.replace(/\.json$/, '');
-    const record = isDocId(docId) ? readDelivery(scope, docId) : null;
+    const record = isDocId(docId) ? read(docId) : null;
     return record ? [record] : [];
   });
 }
+
+export const readAdmission = (scope: ScopeId, docId: DocId): Admission | null =>
+  parseAdmission(readJson(path.join(admissionDir(scope), `${docId}.json`)), scope, docId);
+export const listAdmissions = (scope: ScopeId): Admission[] => listRecords(admissionDir(scope), id => readAdmission(scope, id));
+
+export function writeAdmission(record: Omit<Admission, 'updatedAt'>): Admission {
+  const full: Admission = { ...record, updatedAt: new Date().toISOString() };
+  writePrivate(path.join(admissionDir(record.scope), `${record.docId}.json`), `${JSON.stringify(full)}\n`);
+  return full;
+}
+
+export const readDelivery = (scope: ScopeId, docId: DocId): Delivery | null =>
+  parseDelivery(readJson(path.join(deliveryDir(scope), `${docId}.json`)), scope, docId);
+export const listDeliveries = (scope: ScopeId): Delivery[] => listRecords(deliveryDir(scope), id => readDelivery(scope, id));
 
 export function writeDelivery(record: Omit<Delivery, 'updatedAt'>): Delivery {
   const full: Delivery = { ...record, updatedAt: new Date().toISOString() };
@@ -241,6 +312,7 @@ export const contentSha = sha256;
 
 const lockFile = (name: string) => path.join(stateDir(), 'locks', `${name}.lock`);
 export const sessionLock = (session: string) => `session-${sha256(session).slice(0, 24)}`;
+export const deliveryLock = (scope: ScopeId) => `deliver-${scope.slice(0, 24)}`;
 
 function tryLock(file: string, ttlMs: number): boolean {
   privateDir(path.dirname(file));
@@ -248,16 +320,20 @@ function tryLock(file: string, ttlMs: number): boolean {
     try { fs.writeFileSync(file, `${process.pid}\n`, { flag: 'wx', mode: 0o600 }); return true; } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       let fresh = false;
-      try { fresh = Date.now() - fs.statSync(file).mtimeMs < ttlMs; } catch {}
+      try { fresh = Date.now() - fs.statSync(file).mtimeMs < ttlMs; } catch (statErr) {
+        if ((statErr as NodeJS.ErrnoException).code !== 'ENOENT') throw statErr;
+      }
       if (fresh) return false;
-      try { fs.unlinkSync(file); } catch {}
+      safeUnlink(file);
     }
   }
   return false;
 }
 
 function release(file: string): void {
-  try { if (fs.readFileSync(file, 'utf8').trim() === String(process.pid)) fs.unlinkSync(file); } catch {}
+  let owner = '';
+  try { owner = fs.readFileSync(file, 'utf8').trim(); } catch { return; }
+  if (owner === String(process.pid)) safeUnlinkQuiet(file);
 }
 
 export async function withLock<T>(name: string, opts: { ttlMs: number; waitMs: number }, fn: () => Promise<T> | T): Promise<T | 'busy'> {
