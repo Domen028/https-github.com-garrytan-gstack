@@ -31,7 +31,7 @@ Every other Bash call must be exactly one invocation of bun ${quote(guard)}, wit
 Start exactly once, and only after you have read the workflow sections you need and your Write of the initial charter to ${path.join(directory, 'qa-reports/qa-only-report.md')} has completed; the 30-second deadline begins at start: bun ${quote(guard)} start ${quote(file)} 30
 Then use bun ${quote(guard)} status ${quote(file)} or bun ${quote(guard)} run ${quote(file)} -- COMMAND ARGS. Use the absolute guard path directly, not $G.
 For browser scripts, put all assignments, pipelines and scripts INSIDE the child: bun ${quote(guard)} run ${quote(file)} -- bash -c 'B="${browse}"; "$B" goto URL; "$B" snapshot -i'. Literal argv and single/double quoted literal arguments are accepted; expansions are only allowed inside the single-quoted child script.
-Do not write, reset, replace, chmod or remove deadline.json, invoke the guard recursively, or print QA_DEADLINE receipts yourself. Browser cleanup also goes inside the guard; after expiry only local report bookkeeping is allowed. Fallback screenshots must be saved directly in the owned screenshots directory; retain them and write the report after expiry without new browser calls. This fixture does not accept a separate post-expiry shell copy from Aside's session directory; mark that artifact unavailable rather than launching new browser work.
+Do not write, reset, replace, chmod or remove deadline.json, invoke the guard recursively, or print QA_DEADLINE receipts yourself. Browser cleanup also goes inside the guard, as a whole child that is exactly "$B" closetab or "$B" stop (B set to the supplied browse binary); any other child counts as a probe; after expiry only local report bookkeeping is allowed. Fallback screenshots must be saved directly in the owned screenshots directory; retain them and write the report after expiry without new browser calls. This fixture does not accept a separate post-expiry shell copy from Aside's session directory; mark that artifact unavailable rather than launching new browser work.
 An expired refusal is not an executed probe or a pass. Report unfinished coverage honestly; do not try to finish every page after expiry.` };
 }
 
@@ -110,13 +110,13 @@ export function assertQaBrowserPreparation(transcript: unknown[], options: Pick<
 
 /**
  * The fixture prompt routes browser cleanup through the guard, and a probe
- * excludes bookkeeping. Only closing the tab with the supplied browse binary,
- * as the whole child, is cleanup; anything else in the child is a probe.
+ * excludes bookkeeping. Only closing the tab or stopping the supplied browse
+ * binary, as the whole child, is cleanup; anything else in the child is a probe.
  */
 function browserCleanupChild(child: string[], browse: string): boolean {
-  if (child.length === 2) return child[0] === browse && child[1] === 'closetab';
-  return child.length === 3 && child[0] === 'bash' && child[1] === '-c'
-    && [`B="${browse}"; "$B" closetab`, `"${browse}" closetab`].includes(child[2].trim());
+  if (child.length === 2) return child[0] === browse && ['closetab', 'stop'].includes(child[1]);
+  return child.length === 3 && child[0] === 'bash' && child[1] === '-c' && ['closetab', 'stop'].some(verb =>
+    [`B="${browse}"; "$B" ${verb}`, `B="${browse}"; $B ${verb}`, `"${browse}" ${verb}`].includes(child[2].trim()));
 }
 
 export function assertQaBrowserCheckpoints(transcript: unknown[], options: Pick<Options, 'directory' | 'guard' | 'browse'>) {
