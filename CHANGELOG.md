@@ -9,6 +9,17 @@
 - **Office-hours marathon fixture:** `test/helpers/office-hours-formatter-fixture.ts` copies the formatter together with every local module it imports, so a new import can no longer be left out. A free test in `test/office-hours-review.test.ts` loads the copied formatter and fails on a missing module; the old three-file list reproduces the exact `Cannot find module '../lib/spec-review-cap.ts'` error. The case's touchfiles now include `lib/spec-review-cap.ts` and the new helper.
 - **Gate integrity:** no threshold, trial count, case kind or judge changed. The marathon assertions are unchanged; only the fixture's file copy changed.
 
+## [1.91.152.0] - 2026-10-19
+
+**`/cso` now starts and finishes on ordinary repositories that hold a nested Git repository, a long patch history, or a Docker socket on macOS 27.** Three user reports (#3255, #3248) each stopped a run on a normal repo.
+
+### Fixed
+- **An untracked nested Git repository or a registered submodule no longer stops `gstack-cso start` with `UNSAFE_PATH`.** Git lists such a directory as one entry (`inner/` for an untracked repo, `sub` for a gitlink). The snapshot now records it as one explicit `excluded: nested Git repository` entry that is never read or copied, and the snapshot coverage lists it under exclusions. The capture pins the boundary's device, inode and mode, so a directory swapped in during capture fails as `SNAPSHOT_RACE`. A symlink to a directory is still refused. Ported from #3256 by Chao Chen (@surlymochan), who keeps authorship of the fix. (#3255, bug 1)
+- **A patch history over 1 MiB no longer leaves `history-inputs` not assessed.** The helper reads up to 100 commits of patches, then keeps the newest whole commits that fit the 1 MiB redaction bound. It never cuts inside a commit, so a secret can't be split across the cut and escape redaction. When even the newest patch is too large, it keeps commit metadata only. A truncated `history.txt` starts with a `[gstack-cso history truncated: …]` line, `history-status.json` records `truncated` and the retained commit count, and the history coverage becomes `partial` with that gap. The redaction bound is unchanged. (#3255, bug 2)
+
+### For contributors
+- **`test/cso-ordinary-repos.test.ts`** covers each report end to end through the compiled launcher and `capture()`. Its negative controls show that a symlinked directory is still refused, that a nested repository swapped during capture fails as a race (this check fails if the device and inode comparison is removed), that retained and omitted history never shows a credential canary, and that Docker endpoint admission still refuses non-sockets, dangling and looping links, `..` paths and TCP. The #3248 socket fallback (`realpathSocket`) shipped in 1.91.96.0. The new endpoint-level case fails when admission calls plain `realpathSync`.
+
 ## [1.91.151.0] - 2026-10-19
 
 **Three contributor fixes: a saved "never ask" now sticks for /plan-eng-review's structure question, /context-save and /context-restore close three checkpoint gaps, and a new how-to covers the first production deploy.** Ported from fork PRs so they can run the paid gate; each commit keeps its author.
