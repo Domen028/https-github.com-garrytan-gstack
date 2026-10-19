@@ -8,7 +8,9 @@ import {
   createSharedInteractiveToolHandler, createSharedLibsFixture, fixtureGit, fixtureWrite, installSourceShims,
   installHostileGitConfig, isGuardedGitRequest, reviewLifecycleInstructions, standaloneInstructions, SHARED_LIBS_ROOT, readRequests, seedOpportunitySources, sharedReadOnlyViolations, shellQuote, snapshotFixture, type SharedLibsFixture,
   SharedCaptureAccumulator, type SharedCaptureAttempt, isInternalClaudeGitRequest, SHARED_LIBS_OLDER_OPEN_PRS, prCoverageRequestViolations,
+  disclosesUnavailableHistory,
 } from './helpers/shared-libs-eval-fixture';
+import unsupportedGitReports from './fixtures/shared-libs-unsupported-git-opus-reports.json';
 import { EvalCollector, type EvalTestEntry } from './helpers/eval-store';
 import { collectorOutcomeCounts } from '../scripts/test-paid-shards';
 import { E2E_TOUCHFILES, GLOBAL_TOUCHFILES, selectTests } from './helpers/touchfiles';
@@ -1903,3 +1905,23 @@ describe('skip actor: deferred-reuse wording in a Skip option (PR lane run 36641
     });
   });
 }
+
+// Every Opus 5.5 shared-libs-unsupported-git report (runs 39157502890..39199692993). In 39157502890 the
+// old regex matched only the pasted "HTTP 403: API unavailable in this fixture"; the model's own
+// disclosure, "I couldn't read Git history or the GitHub API", has no "could not".
+describe('unsupported-Git coverage disclosure', () => {
+  test('every captured report discloses the missing history in its own words', () => {
+    expect(unsupportedGitReports.reports).toHaveLength(7);
+    for (const { run, output } of unsupportedGitReports.reports) expect(disclosesUnavailableHistory(output), run).toBe(true);
+    const first = unsupportedGitReports.reports.find(report => report.run === '39157502890')!.output;
+    const old = /unavailable|unsupported|cannot|could not|coverage|limited/i;
+    expect(old.test(first.replaceAll('API unavailable in this fixture', ''))).toBe(false);
+    expect(disclosesUnavailableHistory("I couldn't read Git history or the GitHub API, so this review is based only on the current files on disk.")).toBe(true);
+  });
+  test('a pasted tool error or a full-history claim is not a disclosure', () => {
+    for (const text of ['Reviewed 12 commits in the 14-day window on main (603d6ae6). Top idea: reuse lib/retry-after.ts in src/retry-worker.ts.',
+      'Git history read for the full window; GitHub API: "HTTP 403: API unavailable in this fixture". Five ideas below.',
+      'The probe printed "unknown option: --no-lazy-fetch", so I read history with plain git log: 4 commits, 2 PRs.',
+      'All sources checked against origin/main; every PR in the window was inspected.']) expect(disclosesUnavailableHistory(text), text).toBe(false);
+  });
+});

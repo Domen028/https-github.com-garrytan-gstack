@@ -33,7 +33,7 @@ const designFocusBoundary = (fp: AskUserQuestionFingerprint): boolean =>
     // body carries the step's own design-completeness rating (run 39199692993).
     const title = text.split(/\r?\n/, 1)[0]!;
     const rated = /\bI(?:['’]ve| have)? rated this plan (?:10(?:\.0+)?|[0-9](?:\.\d+)?)\/10 on design completeness\b/i;
-    return /^I(?:['’]ve| have) rated this plan (?:10(?:\.0+)?|[0-9](?:\.\d+)?)\/10 on design completeness\.[\s\S]*\bWant me to focus on specific areas instead of all (?:7|seven)\?/i.test(text)
+    return /^I(?:['’]ve| have) rated this plan (?:10(?:\.0+)?|[0-9](?:\.\d+)?)\/10 on design completeness\.[\s\S]*\bWant me to focus on specific areas instead(?: of all (?:7|seven))?\?/i.test(text)
       || (/\ball (?:7|seven) (?:design )?(?:dimensions|passes)\b/i.test(title) && /\bfocus\b/i.test(title)
         && (/\bdesign\b/i.test(title) || rated.test(text.slice(title.length))) && /\?\s*$/.test(title));
   });
@@ -49,7 +49,7 @@ const issueLabeled = (options: Array<{ label: string }>): boolean => {
     && new Set(labels.map(match => match![1])).size === 1
     && new Set(labels.map(match => match![2])).size === labels.length;
 };
-const uiChoice = /\b(?:layout|compos(?:e|ed|ition)|anchor|regions?|panels?|notifications?|activity|quick actions?|loading|skeletons?|empty|errors?|success|modals?|toasts?|buttons?|links?|copy|typography|fonts?|spacing|contrast|colors?|breakpoints?|responsive|keyboard|focus (?:order|trap|management)|aria|a11y|accessibility)\b/i;
+const uiChoice = /\b(?:hierarch(?:y|ies)|see first|layout|compos(?:e|ed|ition)|anchor|regions?|panels?|notifications?|activity|quick actions?|loading|skeletons?|empty|errors?|success|modals?|toasts?|buttons?|links?|copy|typography|fonts?|spacing|contrast|colors?|breakpoints?|responsive|keyboard|focus (?:order|trap|management)|aria|a11y|accessibility)\b/i;
 const designReviewFinding = (fp: AskUserQuestionFingerprint): boolean =>
   fp.nativeCall?.answered === true && !fp.nativeCall.failed && !designFocusBoundary(fp) && fp.nativeCall.questions.some(({ question, options }) => {
     const title = question.split(/\r?\n/, 1)[0]!.trim().replace(/^D\d+(?:\.\d+)?\s*[—–:-]\s*/i, '');

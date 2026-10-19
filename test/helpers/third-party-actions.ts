@@ -9,12 +9,12 @@ const ASIDE_DOWNLOAD_PITCH = String.raw`(?:^|[.!?;:]\s*|\n)\s*(?:[>*-]\s*)*["\u2
 export const asideDownloadPitch = new RegExp(ASIDE_DOWNLOAD_PITCH, 'im');
 export const asideDownloadPitchCount = (text: string): number => [...text.matchAll(new RegExp(ASIDE_DOWNLOAD_PITCH, 'gim'))].length;
 
-/** Inspect lettered consent options, not narration that quotes an unavailable option. */
-export function asideDriveOptions(text: string): string[] {
+/** Lettered consent options (A-D), bulleted, bold or blockquoted, with indented continuation lines. */
+export function letteredOptions(text: string): string[] {
   const options: string[] = [];
   let current: string | undefined;
   for (const line of text.replaceAll('**', '').split('\n')) {
-    const option = line.match(/^[ \t]*(?:[-*+][ \t]+)?[A-D][).][ \t]+(.*)$/);
+    const option = line.match(/^[ \t]*(?:>[ \t]*)?(?:[-*+][ \t]+)?[A-D][).][ \t]+(.*)$/);
     if (option) {
       if (current !== undefined) options.push(current);
       current = option[1];
@@ -26,14 +26,27 @@ export function asideDriveOptions(text: string): string[] {
     }
   }
   if (current !== undefined) options.push(current);
-  return options.filter(option => {
+  return options;
+}
+
+/** Inspect lettered consent options, not narration that quotes an unavailable option. */
+export function asideDriveOptions(text: string): string[] {
+  return letteredOptions(text).filter(option => {
     const currentOffer = option.replace(
       /\b(?:I|we)(?:['’]ll| will) (?:re[- ]?ask|ask again)(?: (?:you|this question))? with (?:the )?(?:"[^"]+"|“[^”]+”|[\w -]+?) option(?: included)?\b/gi,
       '',
     );
-    return /\bAside\b/.test(option) && /\b(?:drive|driving|browse|browsing|navigate|click)\b/i.test(currentOffer);
+    return /\bAside\b/.test(option) && (/\b(?:drive|driving|browse|browsing|navigate|click)\b/i.test(currentOffer)
+      || /\bI(?:['’]ll| will)? (?:do|handle|create|complete) (?:it|this)\b/i.test(currentOffer));
   });
 }
+
+/** Any lettered option offering a browser drive, for flows where no drive may be offered. */
+export const offersDriveOption = (text: string): boolean => letteredOptions(text).some(option => /drive|browse|Aside/i.test(option));
+
+/** The defer option: a lettered option that defers, postpones or sets the step aside for now. */
+export const offersDefer = (text: string): boolean => letteredOptions(text).some(option =>
+  /\b(?:defer\w*|postpone\w*|put (?:this|it)(?: step)? off|skip (?:this|it)(?: step)? for now|come back to (?:this|it)(?: step)? later|leave (?:this|it)(?: step)? for (?:now|later))\b/i.test(option));
 
 /** The manual option: "manual", or one sentence offering instructions or steps the user follows themselves. */
 export function offersManualSteps(text: string): boolean {

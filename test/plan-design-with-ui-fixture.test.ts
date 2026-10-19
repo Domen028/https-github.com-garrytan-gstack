@@ -134,6 +134,15 @@ mock.module(${JSON.stringify(path.join(ROOT, 'test/helpers/claude-pty-runner.ts'
     if (mode.startsWith('native-')) expect(opts.isLastStep0AUQ(nativeFocus)).toBe(true);
     expect(opts.isLastStep0AUQ(captured[1])).toBe(true);
     expect(opts.isLastStep0AUQ(capturedRated[1])).toBe(true);
+    // Runs 39181697029 and 39195396438: the 0D sentence ended "specific areas instead?" (no "of all 7").
+    const instead = "I've rated this plan 5/10 on design completeness. The biggest gaps are panel hierarchy/responsive layout, row anatomy plus state copy, and the accessibility contract. I'll generate visual mockups next, then review all 7 dimensions. Want me to focus on specific areas instead?";
+    expect(opts.isLastStep0AUQ(fp('instead', 'D2 — ' + instead + '\\nProject/branch/task: main.'))).toBe(true);
+    expect(opts.isLastStep0AUQ(fp('instead-split', 'D2 — ' + instead.replace(' The biggest', '\\nThe biggest')))).toBe(true);
+    for (const absent of ["D2 — I've rated this plan 5/10 on design completeness.\\nI'll generate visual mockups next.",
+      "D2 — I've rated this plan 5/10 on design completeness.\\nWant me to focus on the current branch diff instead?",
+      "D2 — Want me to focus on specific areas instead?\\nI'll review the plan next."]) {
+      expect(opts.isLastStep0AUQ(fp('instead-absent', absent))).toBe(false);
+    }
     for (const unrated of ['D2 — Review focus: all 7 dimensions or specific areas?\\nELI10: I will review every dimension unless you narrow the focus.',
       'D3 — Want outside design voices before the detailed review?\\nELI10: I rated this plan 5/10 on design completeness.',
       'D1 — Which file should I review against the design system?\\nELI10: I rated this plan 5/10 on design completeness.',
@@ -173,6 +182,15 @@ mock.module(${JSON.stringify(path.join(ROOT, 'test/helpers/claude-pty-runner.ts'
       ['D10 — Issue 4: Confirmation pattern and content for "Mark all as read"?', ['4A) Keep modal, specify copy and labels ', '4B) No modal; immediate action plus undo', '4C) Keep modal, leave copy to implemente']],
       ['Issue 1 — What does the user see first on a phone?', ['1A: Notifications first on sm, feed firs', '1B: Feed first everywhere', '1C: Bell badge + drawer on sm']],
     ]) expect(opts.isReviewAUQ(labeled('captured-issue', question, labels))).toBe(true);
+    // Runs 39157502890 and 39161502626: the template's Pass 1 hierarchy question, without issue-numbered labels.
+    for (const question of ['D5 — Issue 1: What does the user see first, second, third on /dashboard?', 'D5 — Issue 1: What does the user see first on the dashboard?',
+      'D5 — Which information hierarchy should the dashboard use?']) {
+      expect(opts.isReviewAUQ(labeled('hierarchy', question, ['Notifications panel first (recommended)', 'Activity feed first']))).toBe(true);
+    }
+    for (const question of ['D5 — Search learnings from your other projects too?', 'D5 — Ready to implement, or run /plan-eng-review next?',
+      'D5 — Run /design-shotgun to explore visual variants?', 'D5 — Save the plan and review report?']) {
+      expect(opts.isReviewAUQ(labeled('hierarchy-absent', question, ['Notifications panel first (recommended)', 'Activity feed first']))).toBe(false);
+    }
     for (const [question, labels] of [
       ['D11 — Update the approved mockups with these decisions?', ['A) Regenerate mockups (recommended)', 'B) Keep the current mockups']],
       ['D12 — Which follow-up should I record?', ['1A) Record a TODO', '2B) Skip it']],

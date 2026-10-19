@@ -478,6 +478,16 @@ const SAFE_GIT_CONFIG = ['core.fsmonitor=false', 'log.showSignature=false', 'dif
 
 /** A repository Git process that carries the complete safe prefix bin/gstack-safe-git applies, including its
  * environment, plus patch-driver disabling for diffs; a partial literal prefix does not qualify. */
+/**
+ * The report discloses the unavailable local-history and API coverage in its own words. The shims'
+ * error text ("unknown option: --no-lazy-fetch", "API unavailable in this fixture") is removed first,
+ * so pasting a tool error is not a disclosure; Opus wrote "I couldn't read Git history".
+ */
+export function disclosesUnavailableHistory(output: string): boolean {
+  const own = output.replaceAll('unknown option: --no-lazy-fetch', '').replaceAll('API unavailable in this fixture', '');
+  return /unavailable|unsupported|unreadable|cannot|can['’]t|could ?not|couldn['’]t|coverage|limited|no (?:commit |git |local )?history/i.test(own);
+}
+
 export function isGuardedGitRequest(request: SourceRequest): boolean {
   const args = request.args, command = args.findIndex((arg, i) => !arg.startsWith('-') && args[i - 1] !== '-c' && args[i - 1] !== '-C');
   const globals = command < 0 ? args : args.slice(0, command), rest = command < 0 ? [] : args.slice(command);
