@@ -17,6 +17,8 @@ import billing_coverage_shell_display_aq from './fixtures/coverage-audit-ae.json
 import captured_parallel_column from './fixtures/coverage-audit-parallel-column.json';
 import captured_sed_context from './fixtures/coverage-audit-sed-context.json';
 import captured_cd_chain from './fixtures/coverage-audit-cd-chain.json';
+import captured_wc_anchor from './fixtures/coverage-audit-wc-anchor.json';
+import captured_separator from './fixtures/coverage-audit-separator-collision.json';
 
 const clone = <T>(v:T):T => structuredClone(v);
 const diagram = '```text\nsrc/billing.ts\n├── processPayment: happy path [TESTED]\n└── refundPayment [UNTESTED]\n```';
@@ -1191,3 +1193,61 @@ describe('coverage audit native evidence: captured owned-cd chains (CI 391615026
   });
 });
 
+
+describe('coverage audit native evidence: exact-count output anchors the next read (CI 39207508651 slice 3)', () => {
+  const capture = captured_wc_anchor;
+  const both = { sourceRead: true, testsRead: true }, neither = { sourceRead: false, testsRead: false };
+  const files = { cwd: capture.cwd, source: { path: capture.cwd + '/src/billing.ts', content: capture.files.source },
+    tests: { path: capture.cwd + '/test/billing.test.ts', content: capture.files.tests } };
+  const reads = (command = capture.call.command, output = capture.call.output) => coverageAuditReadEvidence([
+    { type: 'system', subtype: 'init', session_id: capture.sessionId, cwd: capture.cwd },
+    { type: 'assistant', session_id: capture.sessionId, parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: capture.call.toolUseId, name: 'Bash', input: { command } }] } },
+    { type: 'user', session_id: capture.sessionId, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: capture.call.toolUseId, is_error: capture.call.isError, content: output }] } },
+  ], files);
+
+  test('cat directly after wc -l over literal in-cwd files is credited at the counted line', () => {
+    expect(capture.provenance.recordedPassed).toBe(false);
+    expect(capture.call.command).toContain('; wc -l plan-eng-review/SKILL.md plan-eng-review/sections/review-sections.md; cat src/billing.ts; echo ----; cat test/billing.test.ts');
+    expect(reads()).toEqual(both);
+  });
+
+  test('unbounded output, a wrong count, an outside file or a missing file still gets no credit', () => {
+    const [counts, rest] = [capture.call.output.split('\n').slice(0, 3).join('\n') + '\n', capture.call.output.split('\n').slice(3).join('\n')];
+    expect(reads(capture.call.command.replace('wc -l plan-eng-review/SKILL.md plan-eng-review/sections/review-sections.md', 'ls plan-eng-review'))).toMatchObject({ sourceRead: false });
+    expect(reads(capture.call.command, counts + 'injected\n' + rest)).toMatchObject({ sourceRead: false });
+    expect(reads(capture.call.command, counts.split('\n').slice(1).join('\n') + rest)).toMatchObject({ sourceRead: false });
+    expect(reads(capture.call.command.replace('wc -l plan-eng-review/SKILL.md', 'wc -l ../plan-eng-review/SKILL.md'))).toEqual(neither);
+    expect(reads(capture.call.command.replace('cat src/billing.ts', 'cat src/billing.ts.orig'))).toMatchObject({ sourceRead: false });
+    expect(reads(capture.call.command, counts + capture.files.tests + '----\n' + capture.files.source)).toEqual(neither);
+  });
+});
+
+describe('coverage audit native evidence: a separator that also appears in neighboring output (CI 39199692993 slice 3)', () => {
+  const capture = captured_separator;
+  const both = { sourceRead: true, testsRead: true }, neither = { sourceRead: false, testsRead: false };
+  const files = { cwd: capture.cwd, source: { path: capture.cwd + '/src/billing.ts', content: capture.files.source },
+    tests: { path: capture.cwd + '/test/billing.test.ts', content: capture.files.tests } };
+  const reads = (command: string, output: string) => coverageAuditReadEvidence([
+    { type: 'system', subtype: 'init', session_id: capture.sessionId, cwd: capture.cwd },
+    { type: 'assistant', session_id: capture.sessionId, parent_tool_use_id: null, message: { role: 'assistant', content: [{ type: 'tool_use', id: capture.call.toolUseId, name: 'Bash', input: { command } }] } },
+    { type: 'user', session_id: capture.sessionId, parent_tool_use_id: null, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: capture.call.toolUseId, is_error: capture.call.isError, content: output }] } },
+  ], files);
+  // The same command with Opus's most common separator, "echo ---", which testing.md also prints as a line.
+  const dashed = { command: capture.call.command.replaceAll('echo ----', 'echo ---'), output: capture.call.output.replaceAll('\n----\n', '\n---\n') };
+
+  test('the captured echo ---- read and its echo --- form both credit the owned files', () => {
+    expect(capture.call.output.split('\n----\n')[0]).toMatch(/^---$/m);
+    expect(reads(capture.call.command, capture.call.output)).toEqual(both);
+    expect(reads(dashed.command, dashed.output)).toEqual(both);
+  });
+
+  test('a forged complete copy, a tampered slot or a later label still gets no credit', () => {
+    const [testing, source, tests, counts] = capture.call.output.split('\n----\n');
+    const join = (...parts: string[]) => parts.join('\n---\n');
+    expect(reads(dashed.command, join(testing + '\n---\n' + source + '\n---\n' + tests, source, tests, counts))).toEqual(neither);
+    expect(reads(dashed.command, join(testing + '\n---\n' + source + '\n---\n' + tests, source.replace('processPayment', 'processPaymnet'), tests, counts))).toMatchObject({ sourceRead: false });
+    expect(reads(dashed.command, join(testing, source.replace('processPayment', 'processPaymnet'), tests, counts))).toMatchObject({ sourceRead: false });
+    expect(reads(dashed.command + '; cat review/SKILL.md', dashed.output + '\n---\n' + capture.files.source)).toEqual(neither);
+    expect(reads(dashed.command.replace('cat src/billing.ts', 'cat src/other.ts'), dashed.output)).toMatchObject({ sourceRead: false });
+  });
+});

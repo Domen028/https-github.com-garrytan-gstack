@@ -218,9 +218,10 @@ function matchRun(run: Exclude<Piece, { kind: 'unknown' }>[], out: string, offse
  * Owned files whose complete bytes occupy exactly the stdout position their
  * cat/sed produces. Literal echo labels and owned reads are known output;
  * neighboring displays are unknown. A run after unknown output starts at a
- * label, and a run that credits a file needs every copy of that label to
- * come from its own echoes, so no neighboring output can supply or relocate
- * the owned slot. Every later run must still appear in order.
+ * label (or, after exact-count output, at that line). Its slot is counted
+ * from the end, so neighboring lines equal to the label may only precede it,
+ * and a second complete copy of the run anywhere after the cursor voids the
+ * credit. Every later run must still appear in order.
  */
 function shellReads(command: unknown, output: unknown, scope: ShellScope): Set<string> {
   const credited = new Set<string>();
@@ -241,24 +242,42 @@ function shellReads(command: unknown, output: unknown, scope: ShellScope): Set<s
     const run = pieces.slice(first, index) as Exclude<Piece, { kind: 'unknown' }>[];
     const owns = run.some(item => item.kind === 'owned');
     let starts = cursor === 0 && !pending ? Array.from({ length: lead + 1 }, (_, k) => k) : [cursor];
+    let rivals: number[] = [];
     if (pending) {
       const blanks = run.findIndex(item => item.kind !== 'label' || item.text.trim());
       const anchor = run[blanks];
       // Bare echo separators after unknown output print blank lines only: they
       // anchor nothing and credit nothing, so they extend the unknown span.
       if (!anchor) { min += run.length; max += run.length; continue; }
-      if (anchor.kind !== 'label') return new Set();
-      let found = anywhere(anchor.text);
-      if (owns) {
-        // Each same-text echo prints one full line. Exactly that many copies
-        // means no neighboring output holds one, so the ordinal copy is ours.
-        const same = (item: Piece) => item.kind === 'label' && item.text === anchor.text;
-        found = fullLines(anchor.text);
-        if (found.length !== pieces.filter(same).length) return new Set();
-        found = [found[pieces.slice(0, first + blanks).filter(same).length]!];
+      if (anchor.kind !== 'label') {
+        // Output of an exact line count (wc -l over literal in-cwd files, pwd)
+        // places the next run exactly that many lines after the cursor.
+        if (min !== max) return new Set();
+        let start = cursor;
+        for (let line = 0; line < min; line++) {
+          const end = out.indexOf('\n', start);
+          if (end < 0) return new Set();
+          start = end + 1;
+        }
+        starts = [start];
+      } else {
+        let found = anywhere(anchor.text);
+        if (owns) {
+          // Each same-text echo prints one full line. Exactly that many copies
+          // means no neighboring output holds one, so the ordinal copy is ours.
+          const same = (item: Piece) => item.kind === 'label' && item.text === anchor.text;
+          found = fullLines(anchor.text);
+          const expected = pieces.filter(same).length;
+          if (found.length < expected) return new Set();
+          // Extra copies are neighbouring lines equal to the label. Count the
+          // slot from the end so earlier unknown output cannot relocate it,
+          // and (below) refuse when any other copy also carries the run.
+          if (found.length > expected) rivals = found.map(start => start - blanks);
+          found = [found[found.length - pieces.slice(first + blanks).filter(same).length]!];
+        }
+        starts = found.map(start => start - blanks)
+          .filter(start => start >= cursor && out.slice(start, start + blanks) === '\n'.repeat(blanks));
       }
-      starts = found.map(start => start - blanks)
-        .filter(start => start >= cursor && out.slice(start, start + blanks) === '\n'.repeat(blanks));
     }
     // Unknown output directly before a credited run must fit its line bounds.
     const matched = starts.map(start => {
@@ -266,6 +285,7 @@ function shellReads(command: unknown, output: unknown, scope: ShellScope): Set<s
       return !owns || !pending || (lines >= min && lines <= max) ? matchRun(run, out, start) : undefined;
     }).find(Boolean);
     if (!matched) return new Set();
+    if (rivals.some(start => start >= cursor && start !== starts[0] && matchRun(run, out, start))) return new Set();
     matched.credited.forEach(file => credited.add(file));
     cursor = matched.end; min = max = 0; pending = false;
   }

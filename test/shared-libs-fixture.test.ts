@@ -8,7 +8,7 @@ import {
   createSharedInteractiveToolHandler, createSharedLibsFixture, fixtureGit, fixtureWrite, installSourceShims,
   installHostileGitConfig, isGuardedGitRequest, reviewLifecycleInstructions, standaloneInstructions, SHARED_LIBS_ROOT, readRequests, seedOpportunitySources, sharedReadOnlyViolations, shellQuote, snapshotFixture, type SharedLibsFixture,
   SharedCaptureAccumulator, type SharedCaptureAttempt, isInternalClaudeGitRequest, SHARED_LIBS_OLDER_OPEN_PRS, prCoverageRequestViolations,
-  disclosesUnavailableHistory,
+  disclosesUnavailableHistory, isReadOnlyRepoGitRequest, repoGitRequests, type SourceRequest,
 } from './helpers/shared-libs-eval-fixture';
 import unsupportedGitReports from './fixtures/shared-libs-unsupported-git-opus-reports.json';
 import { EvalCollector, type EvalTestEntry } from './helpers/eval-store';
@@ -17,6 +17,7 @@ import { E2E_TOUCHFILES, GLOBAL_TOUCHFILES, selectTests } from './helpers/touchf
 import nativeNoChangeCases from './fixtures/shared-libs-no-change-ci-public.json';
 import r44 from './fixtures/shared-libs-index-flags-r44-packets.json';
 import claudeVersionProbe from './fixtures/shared-libs-claude-version-probe.json';
+import unsupportedGitRequests from './fixtures/shared-libs-unsupported-git-requests.json';
 import skipDescriptions from './fixtures/shared-libs-index-flags-skip-description-public.json';
 import { seedPathReviewPrerequisites, checkPathReviewPrerequisites } from './helpers/shared-libs-path-fixture';
 
@@ -1820,6 +1821,47 @@ describe('retained native runtime callback failures', () => {
       expect(isInternalClaudeGitRequest({ ...request, args }, commands), args.slice(-2).join(' ')).toBe(false);
     }
     expect(isInternalClaudeGitRequest(request, [`git ${request.args.join(' ')}`])).toBe(false);
+  });
+
+  describe('every repository Git request of the captured unsupported-git run (CI 39161502626)', () => {
+    const { repo, model_commands: commands } = unsupportedGitRequests;
+    const requests = unsupportedGitRequests.git_requests as SourceRequest[];
+    const worktreeProbe = requests.find(request => request.args.includes('worktree'))!;
+    const replay = (rows: SourceRequest[], trace = commands) => repoGitRequests(rows, trace, repo);
+
+    test('passes the read-only Git replay, with the cwd probe after the model cd excluded as Claude\'s own', () => {
+      expect(worktreeProbe.args.slice(-6)).toEqual(['-C', repo, 'worktree', 'list', '--porcelain', '-z']);
+      expect(isInternalClaudeGitRequest(worktreeProbe, commands)).toBe(true);
+      const git = replay(requests);
+      expect(git).not.toContain(worktreeProbe);
+      expect(git.some(request => request.args.includes('--no-lazy-fetch') &&
+        request.args.includes('rev-parse') && request.args.includes('--is-inside-work-tree'))).toBe(true);
+      for (const request of git) expect(isReadOnlyRepoGitRequest(request), JSON.stringify(request.args)).toBe(true);
+      expect(requests.filter(request => !isInternalClaudeGitRequest(request, commands))
+        .filter(request => request.args.some(arg => ['show', 'log', 'cat-file', 'diff'].includes(arg)))).toEqual([]);
+    });
+
+    const prefix = worktreeProbe.args.slice(0, -6);
+    test.each<[string, Partial<SourceRequest>]>([
+      ['log -1', { args: [...prefix, '-C', repo, 'log', '-1'] }],
+      ['cat-file -p HEAD', { args: [...prefix, '-C', repo, 'cat-file', '-p', 'HEAD'] }],
+      ['worktree add', { args: [...prefix, '-C', repo, 'worktree', 'add', '/tmp/x'] }],
+      ['an appended subcommand', { args: [...prefix, '-C', repo, 'worktree', 'list', '--porcelain', '-z', 'status'] }],
+      ['a relative -C', { args: [...prefix, '-C', '.', 'worktree', 'list', '--porcelain', '-z'], cwd: repo }],
+      ['a hook flag removed', { args: worktreeProbe.args.filter(arg => arg !== 'hook.post-index-change.enabled=false') }],
+      ['a shell parent', { parentExecutable: '/usr/bin/zsh' }],
+      ['no parent pid', { ppid: undefined }],
+    ])('refuses the probe shape with %s', (_label, change) => {
+      const forged = { ...worktreeProbe, ...change };
+      expect(isInternalClaudeGitRequest(forged, commands)).toBe(false);
+      expect(replay([...requests, forged]).every(isReadOnlyRepoGitRequest)).toBe(false);
+    });
+
+    test('refuses the exact probe argv when the model issued it', () => {
+      const trace = [...commands, `git ${worktreeProbe.args.join(' ')}`];
+      expect(isInternalClaudeGitRequest(worktreeProbe, trace)).toBe(false);
+      expect(replay(requests, trace).every(isReadOnlyRepoGitRequest)).toBe(false);
+    });
   });
 
   test('answers the exact captured two-question skip-only request without altering its input', async () => {

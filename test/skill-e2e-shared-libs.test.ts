@@ -11,7 +11,7 @@ import { EvalCollector } from './helpers/eval-store';
 import {
   addBranchAndRawOverlay, createSharedLibsFixture, fixtureGit, fixtureWrite, fixtureWorkingTree,
   disclosesUnavailableHistory, installHostileGitConfig, installInterpreterCanary, installNormalizingFilter,
-  isGuardedGitRequest, isInternalClaudeGitRequest,
+  isInternalClaudeGitRequest, isReadOnlyRepoGitRequest, repoGitRequests,
   installSourceShims, readRequests, reviewLifecycleInstructions, reviewPrompt, reviewRevalidationPrompt,
   reviewRecords, runSharedCapture, runSharedInteractive, seedLifecycleFirstPass, seedOpportunitySources,
   seedReviewSources, seedSkippedAdvisory, snapshotFixture, specialistFixture,
@@ -71,26 +71,11 @@ function assertReadOnly(f: SharedLibsFixture, before: Record<string, string>, re
   expect(bash).not.toMatch(/\bgstack-(?:review-read|wtree|skill-start|learnings-log)\b/);
   expect(bash).not.toMatch(/\b(?:node\s+bootstrap\.js|npm\s+install|bun\s+(?:install|test|run\s+test))\b/);
   const requests = readRequests(f);
-  const git = requests.filter(row => row.tool === 'git' &&
-    !isInternalClaudeGitRequest(row, toolCommandTrace(result)) &&
-    (row.cwd === f.repo || row.cwd.startsWith(f.repo + path.sep) ||
-      row.args.some(arg => arg.includes(f.repo)) ||
-      row.args.some((arg, i) => arg === '-C' && row.args[i + 1] && path.resolve(row.cwd, row.args[i + 1]) === f.repo)));
+  const git = repoGitRequests(requests, toolCommandTrace(result), f.repo);
   expect(git.length).toBeGreaterThan(0);
   expect(git.some(request => request.args.includes('--no-lazy-fetch') &&
     request.args.includes('rev-parse') && request.args.includes('--is-inside-work-tree'))).toBe(true);
-  for (const request of git) {
-    // This exact intrinsic diagnostic cannot inspect repository state or replace the probe.
-    if (request.args.length === 1 && request.args[0] === '--version') continue;
-    expect(request.args).not.toContain('status');
-    expect(request.args).not.toContain('fetch');
-    for (const transport of ['ls-remote', 'pull', 'push', 'clone']) expect(request.args).not.toContain(transport);
-    expect(request.args).not.toContain('add');
-    expect(request.args).not.toContain('write-tree');
-    expect(request.args).not.toContain('hash-object');
-    // Every repository read carries the complete gstack-safe-git prefix, environment included.
-    expect(isGuardedGitRequest(request), JSON.stringify(request)).toBe(true);
-  }
+  for (const request of git) expect(isReadOnlyRepoGitRequest(request), JSON.stringify(request)).toBe(true);
   for (const request of requests.filter(row => row.tool === 'gh' && row.args[0] === 'api')) {
     expect(request.method).toBe('GET');
   }
