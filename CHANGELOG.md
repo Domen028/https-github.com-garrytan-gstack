@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.154.0] - 2026-10-19
 
 **/cso can verify Rails repairs in a read-only checkout, its retained Git history no longer brings back credential files the snapshot leaves out, a repair whose external assertions fail is now reported as `ASSERTION_FAILED` instead of a misleading `INCOMPATIBLE_INPUT`, and a security assertion can accept several safe rejection statuses while still requiring the secret to be absent.** The helper keeps `.env`, `master.key`, keys and agent configuration out of the readable tree, but `history.txt` captured `git log -p` in full, so a committed `.env` came back through its diff whenever the value wasn't credential-shaped enough for the redactor. Paid qualification run 39186328569 caught this when the private corpus's planted `.env` value showed up in the judge's helper state.
 
@@ -11,6 +11,28 @@
 
 ### Changed
 - **A security assertion's `expected.status` may list up to eight safe statuses** (for example `[403, 404]`), so a repair that refuses an attack with a different reasonable rejection still passes. A set is accepted only on a security assertion that also carries a `vulnerable` expectation, and only with `excludes` set, so the response must still withhold the vulnerable marker. The fixed and vulnerable oracles must stay provably mutually exclusive: a set that contains the vulnerable status is accepted only when the vulnerable response's `includes` contains the excluded marker. Legitimate controls and `vulnerable` expectations still take exactly one status, so a patch that answers every route with 403 still fails its controls. A no-op patch, a listed rejection that still leaks the marker, and an unlisted status all stay `inconclusive`.
+
+## [1.91.153.0] - 2026-10-19
+
+**An outside review whose findings are untagged prose no longer reads `clean` because a "no issues" phrase appears somewhere in it, and a clean Codex review that says "no actionable regressions" no longer reads `unverified`.** Reported in #3294 by @SchizasNik, with the false-pass half pointed out by @xg-gh-25. `lib/outside-review-result.ts` matched its no-findings vocabulary anywhere in the reply, so "The parser change has no new issues. However, … drops users_email_idx" passed /ship's structured gate. It also lacked `regressions`, so `codex review --uncommitted`'s "I found no actionable regressions in the staged, unstaged, or untracked changes." was missing coverage.
+
+### Fixed
+- **A no-findings statement counts only as the review's conclusion.** It must open the reply's last sentence or last ", and" clause (or the `because` clause of a review's `Recommendation:` line) and carry no contrast or exception ("but", "however", "except", "other than", "elsewhere"). When other prose comes first, anything after the statement other than a predicate ("were found", "is evident") or a colon explanation must scope it to the change as a whole, so "No issues in the parser." and "No regressions were found by the existing tests." do not conclude the review. Anything else stays `unverified` / `untagged_review`, the same reason code and troubleshooting anchor as before.
+- **`regressions` and `defects` join the vocabulary**, and `NO_FINDINGS` written as inline code still counts.
+
+### Gate integrity
+- The structured and review gates' no-findings check (`classifyOutsideReview`) is stricter about position and wider in vocabulary. New free regressions in `test/outside-review-result.test.ts` cover the reporter's exact reply through their CLI invocation, two clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol (both read `unverified` before), fifteen mixed replies that must stay `unverified` under both gates (the two strings from the issue, the phrase before, after and inside untagged findings, exception conclusions, conclusions scoped to one place or to the tests, a quoted `NO_FINDINGS`, a no-issues line inside a code fence), and Recommendation-clause cases including a wrapped clause with "but". A GPT-6.1 Sol outside review probed the classifier; its false passes are among those controls. A known residual, unchanged from before: untagged findings followed by "No issues found in the changed parser." still read `clean`, because "changed" names the change and the parser cannot tell a finding from a summary without tags. All four new tests fail on the previous classifier. Every existing negative control passes unchanged, including the stored Codex clean review that still reads `unverified` ("no actionable correctness issues"). No threshold, trial count or case kind changed.
+
+## [1.91.152.0] - 2026-10-19
+
+**`/cso` now starts and finishes on ordinary repositories that hold a nested Git repository, a long patch history, or a Docker socket on macOS 27.** Three user reports (#3255, #3248) each stopped a run on a normal repo.
+
+### Fixed
+- **An untracked nested Git repository or a registered submodule no longer stops `gstack-cso start` with `UNSAFE_PATH`.** Git lists such a directory as one entry (`inner/` for an untracked repo, `sub` for a gitlink). The snapshot now records it as one explicit `excluded: nested Git repository` entry that is never read or copied, and the snapshot coverage lists it under exclusions. The capture pins the boundary's device, inode and mode, so a directory swapped in during capture fails as `SNAPSHOT_RACE`. A symlink to a directory is still refused. Ported from #3256 by Chao Chen (@surlymochan), who keeps authorship of the fix. (#3255, bug 1)
+- **A patch history over 1 MiB no longer leaves `history-inputs` not assessed.** The helper reads up to 100 commits of patches, then keeps the newest whole commits that fit the 1 MiB redaction bound. It never cuts inside a commit, so a secret can't be split across the cut and escape redaction. When even the newest patch is too large, it keeps commit metadata only. A truncated `history.txt` starts with a `[gstack-cso history truncated: …]` line, `history-status.json` records `truncated` and the retained commit count, and the history coverage becomes `partial` with that gap. The redaction bound is unchanged. (#3255, bug 2)
+
+### For contributors
+- **`test/cso-ordinary-repos.test.ts`** covers each report end to end through the compiled launcher and `capture()`. Its negative controls show that a symlinked directory is still refused, that a nested repository swapped during capture fails as a race (this check fails if the device and inode comparison is removed), that retained and omitted history never shows a credential canary, and that Docker endpoint admission still refuses non-sockets, dangling and looping links, `..` paths and TCP. The #3248 socket fallback (`realpathSocket`) shipped in 1.91.96.0. The new endpoint-level case fails when admission calls plain `realpathSync`.
 
 ## [1.91.151.0] - 2026-10-19
 
