@@ -79,6 +79,19 @@ describe('GSTA-56: gstack never takes configuration from the audited repository'
     expect(TRACKED.filter(f => firstLine(f) === ISOLATED_SHEBANG).length).toBeGreaterThan(100);
   });
 
+  test('developer scripts run as ./scripts/<name>.ts start isolated', () => {
+    const scripts = [
+      'browse/scripts/extension-id.ts',
+      'scripts/detect-bump.ts',
+      'scripts/eval-compare.ts',
+      'scripts/eval-summary.ts',
+      'scripts/garry-output-comparison.ts',
+      'scripts/judge-controls.ts',
+      'scripts/measure-journal-read.ts',
+    ];
+    expect(scripts.filter(f => firstLine(f) !== ISOLATED_SHEBANG)).toEqual([]);
+  });
+
   test('the shell-caller detector flags unisolated calls and passes isolated ones', () => {
     for (const bad of [
       'bun run ~/.claude/skills/gstack/bin/gstack-render.ts x.html',
