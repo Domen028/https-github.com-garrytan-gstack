@@ -7,14 +7,15 @@
  * A drafted entry only ever adds tests: it maps an unmapped file to the tests
  * of the nearest directory above it that has any. An empty list (`[]`) would
  * clear the file without a test, so the draft never writes one; a file with no
- * nearby test is printed as a TODO for the owner to decide. Documentation,
+ * nearby test, or past the schema's entry limit, is printed as a TODO for the
+ * owner to decide. Documentation,
  * assets and tool config already clear without a policy (docs-lane.ts), and
  * Dart packages run per package root, so `runner` stays null unless no
  * runner can be detected.
  */
 import * as path from 'node:path';
 import { detectRunner } from './checks/lanes';
-import { DEFAULT_CONFIG, PREGATE_CONFIG_PATH, PREGATE_CONFIG_SCHEMA } from './config';
+import { DEFAULT_CONFIG, MAX_LIST, PREGATE_CONFIG_PATH, PREGATE_CONFIG_SCHEMA } from './config';
 import { isDocsEmptyLane, isInertNoTests } from './docs-lane';
 import { buildGraph, listRepoFiles, testsFor } from './import-graph';
 import { GENERATED_PATH, isRegistryUnavailable, loadRegistryFromHead } from '../regen';
@@ -65,7 +66,7 @@ export function draftConfig(repoRoot: string): InitDraft {
     if (isDocsEmptyLane(file) || isInertNoTests(file)) continue;
     if (testsFor(graph, file).tests.length) continue;
     const suggested = nearestTests(tests, file);
-    if (!suggested.length) { todo.push(file); continue; }
+    if (!suggested.length || drafted >= MAX_LIST) { todo.push(file); continue; }
     dependencies[file] = suggested;
     drafted++;
   }

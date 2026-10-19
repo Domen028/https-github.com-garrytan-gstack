@@ -68,13 +68,25 @@ describe('Django files loaded by name have a lane (#3266)', () => {
     expect(r.out).toMatch(/tests\/test_smoke\.py ← config\/settings\.py ← config\/urls\.py ← shop\/urls\.py ← shop\/views\.py \(framework\)/);
   });
 
-  test('negative controls: without a settings module there are no Django edges, and unmapped Python in a Django repo still fails closed', () => {
+  test('negative controls: no Django edges without a settings module, from settings text inside a string or comment, or without Django evidence; unmapped Python in a Django repo still fails closed', () => {
     const plain = fixture(DJANGO_APP);
     commit(plain, { 'orders/admin.py': 'from django.contrib import admin\nadmin.site.site_header = "Orders"\n' });
     const r = lanes(plain);
     expect(r.status).toBe(EXIT.fail);
     expect(r.out).toContain('FAIL lanes — orders/admin.py has no test lane');
     expect(r.out).not.toContain('(framework)');
+
+    const quoted = fixture({ ...DJANGO_APP, 'docs_example.py': 'EXAMPLE = """\nINSTALLED_APPS = []\n"""\n# ROOT_URLCONF = "config.urls"\n' });
+    commit(quoted, { 'orders/admin.py': 'from django.contrib import admin\nadmin.site.site_header = "Orders"\n' });
+    const q = lanes(quoted);
+    expect(q.out).toContain('FAIL lanes — orders/admin.py has no test lane');
+    expect(q.out).not.toContain('(framework)');
+
+    const noDjango = fixture({ 'app/settings.py': 'INSTALLED_APPS = ["app.plugins.Core"]\n', 'app/__init__.py': '', 'app/plugins.py': 'class Core: pass\n', 'app/admin.py': 'X = 1\n', 'app/models.py': 'Y = 2\n', 'tests/test_app.py': 'def test_x():\n    assert True\n' });
+    commit(noDjango, { 'app/admin.py': 'X = 2\n' });
+    const n = lanes(noDjango);
+    expect(n.out).toContain('FAIL lanes — app/admin.py has no test lane');
+    expect(n.out).not.toContain('(framework)');
 
     const django = fixture({ ...DJANGO_APP, 'config/settings.py': SETTINGS });
     commit(django, { 'scripts/oneoff.py': 'print("not loaded by Django or any test")\n' });
@@ -121,7 +133,7 @@ describe('assets, licence text and tool config take an empty lane (#3267)', () =
     expect(r.out).toContain('no-tests (assets and tool config): .pre-commit-config.yaml');
   });
 
-  test('negative controls: runtime dotfiles, CI workflows, plain text and code stay unmapped; an asset a test names selects that test', () => {
+  test('negative controls: runtime and unknown dotfiles, hooks, CI workflows, stylesheets, snapshot baselines, plain text and code stay unmapped; an asset a test names selects that test', () => {
     const repo = fixture();
     commit(repo, {
       '.nvmrc': '24\n',
@@ -129,10 +141,15 @@ describe('assets, licence text and tool config take an empty lane (#3267)', () =
       '.github/workflows/lint.yml': 'name: Lint\non: [push]\njobs:\n  lint:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo lint\n',
       'notes/sketch.txt': 'not licence text\n',
       'lib/orphan.js': 'exports.lonely = () => 3;\n',
+      '.rspec': '--tag ~slow\n',
+      '.husky/pre-commit': 'npx lint-staged\n',
+      'styles/colors.css': ':root { --brand: red; }\n',
+      'src/__image_snapshots__/home.png': '\u0089PNG',
+      '.gstack/icon.svg': '<svg/>\n',
     });
     const r = lanes(repo);
     expect(r.status).toBe(EXIT.fail);
-    for (const f of ['.nvmrc', '.env.test', '.github/workflows/lint.yml', 'notes/sketch.txt', 'lib/orphan.js']) expect(r.out).toContain(`FAIL lanes — ${f} has no test lane`);
+    for (const f of ['.nvmrc', '.env.test', '.github/workflows/lint.yml', 'notes/sketch.txt', 'lib/orphan.js', '.rspec', '.husky/pre-commit', 'styles/colors.css', 'src/__image_snapshots__/home.png', '.gstack/icon.svg']) expect(r.out).toContain(`FAIL lanes — ${f} has no test lane`);
     expect(r.out).not.toContain('no-tests (assets and tool config)');
 
     const named = fixture({ 'assets/logo.svg': '<svg/>\n', 'test/logo.test.js': "const test = require('node:test');\nconst fs = require('node:fs');\ntest('logo', () => { fs.readFileSync('assets/logo.svg', 'utf8'); });\n" });
@@ -188,24 +205,42 @@ describe('gstack-pregate init drafts a policy from the repo (#3268)', () => {
   });
 });
 
+describe('gstack-pregate init respects the schema limit (#3268)', () => {
+  test('past 256 drafted entries the rest are TODO, and the draft still validates', () => {
+    const many: Record<string, string> = { 'pkg/tests/test_pkg.py': 'def test_pkg():\n    assert True\n' };
+    for (let n = 0; n < 260; n++) many[`pkg/mod_${n}.py`] = `VALUE = ${n}\n`;
+    const repo = fixture(many);
+    const draft = draftConfig(repo.work);
+    expect(Object.keys(JSON.parse(draft.json).dependencies)).toHaveLength(256);
+    expect(draft.todo.filter(f => f.startsWith('pkg/mod_'))).toHaveLength(4);
+    expect(runBin(repo, 'gstack-pregate', ['init']).status).toBe(EXIT.ok);
+    expect(runBin(repo, 'gstack-pregate', ['validate']).status).toBe(EXIT.ok);
+  });
+});
+
 describe('review fixes on the #3285 port: selection never shrinks on syntax it cannot follow', () => {
   const files = (run: string) => parseWorkflow('ci.yml', `jobs:\n  unit:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: ${run}\n`)[0]!.testFiles;
 
-  test('a cd inside a pipeline or a redirected subshell leaves the lane unknown instead of moving later paths', () => {
+  test('a cd inside a pipeline, an alternative, a background job, control flow or a redirected subshell leaves the lane unknown instead of moving later paths', () => {
     expect(files('cd pkg | cat; bun test test/a.test.ts')).toEqual([]);
     expect(files('(cd pkg && echo ok) > logfile; bun test test/a.test.ts')).toEqual([]);
     expect(files('cd pkg && bun test test/a.test.ts')).toEqual(['pkg/test/a.test.ts']);
     expect(files('(cd pkg && bun test test/b.test.ts); bun test test/a.test.ts')).toEqual(['pkg/test/b.test.ts', 'test/a.test.ts']);
     expect(files('bun test test/a.test.ts | tee log')).toEqual(['test/a.test.ts']);
+    expect(files('cd . || cd elsewhere; bun test test/a.test.ts')).toEqual([]);
+    expect(files('cd pkg & wait; bun test test/a.test.ts')).toEqual([]);
+    expect(files('if [ -d pkg ]; then cd pkg; fi; bun test test/a.test.ts')).toEqual([]);
   });
 
-  test('Dart directives: an unindented conditional clause, nested comments, a long show list, two on a line; part of is not a directive', () => {
-    const files = new Set(['lib/core.dart', 'lib/core_io.dart', 'lib/a.dart', 'lib/b.dart', 'lib/c.dart', 'lib/big.dart', 'lib/nope.dart', 'lib/commented.dart', 'lib/lib.dart']);
+  test('Dart directives: an unindented conditional clause, nested comments, a long show list, two on a line, metadata, a quoted semicolon; part of is not a directive', () => {
+    const files = new Set(['lib/part;name.dart', 'lib/core.dart', 'lib/core_io.dart', 'lib/a.dart', 'lib/b.dart', 'lib/c.dart', 'lib/big.dart', 'lib/nope.dart', 'lib/commented.dart', 'lib/lib.dart']);
     const targets = (source: string) => referencesIn(files, new Set(['lib']), 'lib/main.dart', source).map(r => r.target);
     expect(targets("import 'core.dart'\nif (dart.library.io) 'core_io.dart';\n")).toEqual(['lib/core.dart', 'lib/core_io.dart']);
     expect(targets("/* outer /* inner */ still a comment 'nope.dart' */\nimport 'a.dart';\n")).toEqual(['lib/a.dart']);
     expect(targets(`import 'big.dart' show ${Array.from({ length: 600 }, (_, n) => `name${n}`).join(', ')};\n`)).toEqual(['lib/big.dart']);
     expect(targets("import 'a.dart'; export 'b.dart';\npart 'c.dart';\npart of 'lib.dart';\n")).toEqual(['lib/a.dart', 'lib/b.dart', 'lib/c.dart']);
     expect(targets("// import 'commented.dart';\nvoid main() {}\n")).toEqual([]);
+    expect(targets("@deprecated import 'a.dart';\n@Deprecated('use b') export 'b.dart';\n")).toEqual(['lib/a.dart', 'lib/b.dart']);
+    expect(targets("import 'part;name.dart';\n")).toEqual(['lib/part;name.dart']);
   });
 });

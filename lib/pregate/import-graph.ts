@@ -109,19 +109,22 @@ function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fro
 
 /**
  * The URIs of every `import`/`export`/`part` directive (never `part of`), comments blanked. A directive runs from its keyword at
- * a line start or after a `;` to the next `;`, across any number of lines whatever their indentation (a conditional import's
+ * a line start or after a `;`, metadata (`@deprecated`) allowed before it, to the next unquoted `;`, across any number of lines whatever their indentation (a conditional import's
  * `if (…) 'uri'` clause may start a line). The scan resumes after each directive, so it is one linear pass; a directive missing its
  * `;` reads to the end of the file, which can only add edges.
  */
 export function dartDirectiveUris(source: string): string[] {
   const code = blankDartComments(source.replace(/^\uFEFF/, ''));
-  const start = /(?:^|;)[ \t]*(?:import|export|part)\b(?!\s+of\b)/gm;
+  const start = /(?:^|;)[ \t]*(?:@[\w.$]+(?:\([^;]*?\))?\s+)*(?:import|export|part)\b(?!\s+of\b)/gm;
   const uris: string[] = [];
   for (let m = start.exec(code); m; m = start.exec(code)) {
     const from = m.index + m[0].length;
-    const semi = code.indexOf(';', from);
-    const end = semi < 0 ? code.length : semi;
-    for (const u of code.slice(from, end).matchAll(/['"]([^'"\n]+)['"]/g)) uris.push(u[1]!);
+    let end = from;
+    for (let quote = ''; end < code.length && (quote || code[end] !== ';'); end++) {
+      const c = code[end]!;
+      if (quote) { if (c === '\\') end++; else if (c === quote || c === '\n') quote = ''; } else if (c === "'" || c === '"') quote = c;
+    }
+    for (const u of code.slice(from, end).matchAll(/'([^'\n]+)'|"([^"\n]+)"/g)) uris.push((u[1] ?? u[2])!);
     start.lastIndex = Math.max(end, from);
   }
   return uris;
@@ -325,7 +328,7 @@ function pyFromBase(rel: string, spec: string): string | null {
  * stay inert. Backslash escapes are honoured; an unterminated string runs to
  * its line end, or to the end of the file when triple-quoted.
  */
-function pythonCode(source: string): string {
+export function pythonCode(source: string): string {
   const parts: string[] = [];
   let from = 0;
   for (let i = 0; i < source.length;) {
@@ -462,7 +465,7 @@ export function buildGraph(repoRoot: string, opts: BuildOptions = {}): Graph {
     for (const { target, via } of referencesIn(files, dirs, rel, source, config, graph.tests.has(rel) ? unresolved : undefined, packages)) addEdge(graph, target, rel, via);
     if (unresolved.length) graph.unresolved!.set(rel, unresolved);
   }
-  const django = djangoEdges({ files: [...files], tests: graph.tests, read: rel => pySources.get(rel) ?? readRepoFile(repoRoot, rel, maxBytes), resolveDotted: dotted => pythonPatchTarget(files, dotted) });
+  const django = djangoEdges({ files: [...files], tests: graph.tests, read: rel => pySources.get(rel) ?? readRepoFile(repoRoot, rel, maxBytes), code: pythonCode, resolveDotted: dotted => pythonPatchTarget(files, dotted) });
   for (const e of django) addEdge(graph, e.dependency, e.dependent, 'framework');
   for (const test of graph.tests) {
     const m = /^(?:[\w.-]+\/)*?test\/([\w-]+)\.(?:test|spec)\./.exec(test);

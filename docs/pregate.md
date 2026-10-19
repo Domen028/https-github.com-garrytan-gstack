@@ -78,7 +78,8 @@ takes effect. `gstack-pregate validate` / `init` cover the working-tree file.
 `gstack-pregate init` writes a draft built from the repo, not a fixed example.
 It prints the languages it found and the runner each language's tests would
 get, then maps every file the import graph cannot place to the tests of the
-nearest directory above it that holds at most 25 of them. The draft never
+nearest directory above it that holds at most 25 of them, up to the
+256-entry schema limit. The draft never
 writes `[]`, which would clear a file without a test. A file with no nearby
 test, and a lane whose matrix a planner computes, is printed as a `TODO`.
 Review each entry before committing the file on the base branch.
@@ -144,14 +145,15 @@ Two stages with separate clocks, both printed:
   still selects that test. `empty_lanes` adds globs for other documentation;
   it cannot clear a source file or a file under a test directory.
   Files no test runner loads take a second empty lane by the same rule
-  (`no-tests (assets and tool config): …`): images, fonts, media, PDFs and
-  stylesheets, plus dotfile tool configuration (a root dotfile or anything
-  under a top-level dot-directory, such as `.pre-commit-config.yaml` or
-  `.vscode/settings.json`). CI workflows and actions, `.gstack/`, and the
-  dotfiles that change how a runtime or runner behaves (`.env*`, `.nvmrc` and
-  other version pins, `.npmrc`, babel, swc, mocha and coverage config) are not
-  in it and still need a lane.
-  In a Django project (a Python file assigns `INSTALLED_APPS` or
+  (`no-tests (assets and tool config): …`): images, fonts, media and PDFs
+  outside snapshot, golden and fixture directories, plus an allowlist of tool
+  configuration (`.editorconfig`, `.gitignore`, `.pre-commit-config.yaml`,
+  lint and format config, `.vscode/`, `.idea/`, `.impeccable/`, and GitHub
+  issue templates, CODEOWNERS and dependabot config). Stylesheets (they import
+  each other), any other dotfile (`.rspec`, `.husky/` hooks, `.env*`, version
+  pins), CI workflows and actions, and `.gstack/` still need a lane.
+  In a Django project (a manage.py or code importing django, plus Python
+  code, not a string or comment, that assigns `INSTALLED_APPS` or
   `ROOT_URLCONF`, or a config file names `DJANGO_SETTINGS_MODULE`), the files
   Django loads by name get `framework` edges: every Python test depends on
   each settings module; a dotted string in a settings module and an

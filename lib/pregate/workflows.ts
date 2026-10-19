@@ -104,9 +104,10 @@ function commandTestFiles(command: string, start: string | null, scripts: Record
   const out: string[] = [];
   const saved: Array<string | null> = [];
   const segments = command.split(/&&|\|\||[;|\n]/);
-  // A pipeline element, command substitution, or a `)` with text after it (a redirect) runs a `cd` in a scope this walk cannot
-  // track, so in such a command any directory change makes the directory unknown (the lane may run any test).
-  const untracked = /(?<!\|)\|(?!\|)|`|\$\(/.test(command) || segments.some(seg => /\)/.test(seg.replace(/\)+\s*$/, '')));
+  // A pipeline element, a `||` alternative, a background job, a command substitution, shell control flow, or a `)` with text after
+  // it (a redirect) runs a `cd` in a scope or order this walk cannot track, so in such a command any directory change makes the
+  // directory unknown (the lane may run any test).
+  const untracked = /\||(?<!&)&(?!&)|`|\$\(|[{}]|\b(?:if|then|else|elif|case|while|until|for|select|function)\b/.test(command) || segments.some(seg => /\)/.test(seg.replace(/\)+\s*$/, '')));
   for (const raw of segments) {
     // A `( … )` subshell's cds end at its `)`.
     const opens = /^\s*(\(+)/.exec(raw)?.[1]!.length ?? 0;

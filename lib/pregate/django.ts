@@ -4,8 +4,10 @@
  * a project from settings strings and directory conventions, so without these
  * edges a migration, an admin module or a template has no test lane.
  *
- * A repo is a Django project when a Python file assigns INSTALLED_APPS or
- * ROOT_URLCONF, or a config file names DJANGO_SETTINGS_MODULE. Then:
+ * A repo is a Django project when it carries Django evidence (a manage.py, or
+ * Python code that imports django) and a settings module: Python code (strings
+ * and comments excluded) that assigns INSTALLED_APPS or ROOT_URLCONF, or the
+ * module a config file names in DJANGO_SETTINGS_MODULE. Then:
  *   - every Python test depends on each settings module (the test runner
  *     loads it), so a settings change selects the suite;
  *   - a dotted string in a settings module (`"stores.backends.StoreOwnerBackend"`,
@@ -26,6 +28,8 @@ export interface DjangoInput {
   files: readonly string[];
   tests: ReadonlySet<string>;
   read: (rel: string) => string | null;
+  /** Python source with strings blanked and comments dropped. */
+  code: (source: string) => string;
   /** A dotted Python name → the repo files of its longest module prefix ([] outside the repo). */
   resolveDotted: (dotted: string) => string[];
 }
@@ -34,6 +38,7 @@ export interface DjangoInput {
 export interface DjangoEdge { dependency: string; dependent: string }
 
 const SETTINGS_ASSIGN = /^(?:INSTALLED_APPS|ROOT_URLCONF)[ \t]*(?::[^=\n]*)?[+]?=/m;
+const IMPORTS_DJANGO = /^[ \t]*(?:from[ \t]+django[\w.]*[ \t]+import|import[ \t]+django\b)/m;
 const SETTINGS_ENV = /DJANGO_SETTINGS_MODULE['"]?\s*[,=:]\s*['"]?([A-Za-z_][\w.]*)/g;
 const SETTINGS_ENV_FILES = /(?:^|\/)(?:manage\.py|pytest\.ini|pyproject\.toml|setup\.cfg|tox\.ini|conftest\.py|\.env\.example)$/;
 const DOTTED_STRING = /['"]([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+)['"]/g;
@@ -44,16 +49,19 @@ const APP_LOADED = /^(?:migrations\/.+\.py|admin\.py|admin\/.+|templates\/.+|jin
 
 function settingsModules(input: DjangoInput): string[] {
   const out = new Set<string>();
+  let evidence = input.files.some(f => /(?:^|\/)manage\.py$/.test(f));
   for (const f of input.files) {
     if (f.endsWith('.py')) {
       const text = input.read(f);
-      if (text && SETTINGS_ASSIGN.test(text)) out.add(f);
+      const code = text ? input.code(text) : '';
+      if (SETTINGS_ASSIGN.test(code)) out.add(f);
+      if (!evidence && IMPORTS_DJANGO.test(code)) evidence = true;
     }
     if (!SETTINGS_ENV_FILES.test(f)) continue;
     const text = input.read(f) ?? '';
     for (const m of text.matchAll(SETTINGS_ENV)) for (const t of input.resolveDotted(m[1]!)) if (t.endsWith('.py') && !t.endsWith('/__init__.py')) out.add(t);
   }
-  return [...out].sort();
+  return evidence ? [...out].sort() : [];
 }
 
 /** App directories: a directory holding apps.py, models.py, models/__init__.py or migrations/__init__.py. */

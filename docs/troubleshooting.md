@@ -2855,8 +2855,8 @@ test depends on is a docs/no-tests empty lane and is not this error, whether
 or not the name says plan, evidence or redproof. A test that reads one of
 those files (a quoted path or a `join()` of path segments) still selects that
 test. An unmapped source or code file still fails. A file under a test
-directory is not this empty lane. Images, fonts, media, stylesheets and
-dotfile tool config no test names are the assets-and-tool-config empty lane,
+directory is not this empty lane. Images, fonts and media, and
+allowlisted tool config no test names, are the assets-and-tool-config empty lane,
 not this error.
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
