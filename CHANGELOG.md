@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+**Dart and Flutter projects get the right reviewers and the right test command.** A Dart change matched no diff-scope category except its test file, so a Flutter widget PR ran only the testing pass and skipped design, performance and security. Contributed by @arlophoenix (#3284).
+
+### Fixed
+- **`gstack-diff-scope` counts `.dart` as both frontend and backend.** The extension cannot tell a Flutter widget from a repository class or a pure-Dart server, and a skipped reviewer is invisible, so both specialists run. `pubspec.lock` (at the root or in a workspace package) is config. `lib/frontend-scope.ts` mirrors the frontend half, and `gstack-design-detect` still never hands a `.dart` file to the impeccable engine, which reads web sources only.
+- **Test detection knows Dart.** `/ship`'s bootstrap and coverage audit, `/design-review` and `/plan-eng-review` print `RUNTIME:dart` for a `pubspec.yaml` and `FRAMEWORK:flutter` for an indented `sdk: flutter` dependency (a commented-out one or an `environment.sdk` constraint does not count). They treat `dart_test.yaml` and `*_test.dart` files anywhere as existing tests and offer `flutter test` or `dart test`. Review-army reports `STACK: dart` and `TEST_FW: dart-test` or `flutter-test`.
+- **Adversarial `DIFF_SIZE` sums `git diff --numstat`,** the same count review-army's `DIFF_LINES` uses, instead of parsing the `--stat` summary line. Binary files count as zero.
+
+### Changed
+- The test-bootstrap prose is shorter so the generated skills stay inside the parity size cap and `/design-review` stays at its SKILL.md size pin. The rules it states are unchanged. `/design-review`, `/plan-eng-review` and `/review` shrink, so their pins in `test/fixtures/skill-md-size-allowlist.json` go down (31 entries).
+- `test/frontend-scope.test.ts`'s bash parity test gets a 30 s budget. It spawns git six times and the scope script once per sample, and it already ran past Bun's 5 s default on a 4-core machine before this change.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
