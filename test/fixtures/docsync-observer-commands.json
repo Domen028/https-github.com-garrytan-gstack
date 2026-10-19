@@ -1,5 +1,5 @@
 {
-  "_comment": "Bash commands from docsync E2E runs and their mutations. {repo} is the fixture repo, {other} a directory outside it, {home} the fixture home. known_good: read-only forms the observer must accept. known_bad: forms it must keep rejecting. known_bad also keeps genuine model misses from PR gate runs as negative controls: the composed cat; cat of ship-docsync-failure 38984977679 (bash#12). The Bash grep of ship-docsync-missing-asset 38983306684 (bash#13) is a pure read inside the fixture home, so the shared read-only grammar (GSTA-49) accepts it in known_good_posix (the grammar resolves POSIX paths only and accepts nothing on Windows), as it does the Opus slips wc -l (39173752116) and ls with a glob (effort study t10); its tee, outside-path, recursive-credential and denied-glob mutations stay in known_bad. The narrow pwd/ls/cat/stat/sha256sum forms only read inside the fixture home, never the Claude config dir or actor state (GSTA-49 tightening): cat {home}/cc/.claude.json and cat /etc/hostname are known_bad.",
+  "_comment": "Bash commands from docsync E2E runs and their mutations. {repo} is the fixture repo, {other} a directory outside it, {home} the fixture home. known_good: read-only forms the observer must accept. known_bad: forms it must keep rejecting. known_bad also keeps genuine model misses from PR gate runs as negative controls: the composed cat; cat of ship-docsync-failure 38984977679 (bash#12). The Bash grep of ship-docsync-missing-asset 38983306684 (bash#13) is a pure read inside the fixture home, so the shared read-only grammar (GSTA-49) accepts it in known_good_posix (the grammar resolves POSIX paths only and accepts nothing on Windows), as it does the Opus slips wc -l (39173752116) and ls with a glob (effort study t10); its tee, outside-path, recursive-credential and denied-glob mutations stay in known_bad. The narrow pwd/ls/cat/stat/sha256sum forms only read inside the fixture home, never a Claude config file but settings.json, nor actor state (GSTA-49 tightening; the config dir itself stays listable): cat {home}/cc/.claude.json and cat /etc/hostname are known_bad. Fable 5.1 (PR #3288 E2E 39186278010 and a focused rerun): the grammar join applies only to its own reads, so joined Git reads stay known_bad; a trailing ; on a Git read is a harmless wrapper (known_good); a grep paged through sed -n with a line-range print script and an ls of the Claude config dir are known_good_posix; other sed scripts stay known_bad.",
   "known_good": [
     "git status",
     "git -C {repo} status",
@@ -11,12 +11,15 @@
     "git status --porcelain 2>/dev/null",
     "cat docs/guide.md 2>/dev/null || true",
     "git rev-parse HEAD || true",
-    "ls docs 2>/dev/null"
+    "ls docs 2>/dev/null",
+    "git rev-parse HEAD; "
   ],
   "known_good_posix": [
     "grep -n -i \"14.5\\|documentation\\|Step 15\\|Step 16\" {home}/.claude/skills/gstack/ship/SKILL.md",
     "wc -l {home}/.claude/skills/gstack/ship/SKILL.md",
-    "ls -la {home}/.claude/skills/gstack/ship/sections {home}/.claude/skills/gstack/document-release {home}/.claude/skills/gstack/document-release/*"
+    "ls -la {home}/.claude/skills/gstack/ship/sections {home}/.claude/skills/gstack/document-release {home}/.claude/skills/gstack/document-release/*",
+    "grep -n \"Ship-owned\\|^## \\|^### \\|read-only\\|spawned\" {home}/.claude/skills/gstack/document-release/SKILL.md | sed -n 1,200p",
+    "cat {home}/candidate.json; echo; ls -la {home}/state {home}/cc {home}/.claude/skills/gstack/document-release {home}/.claude/skills/gstack/ship"
   ],
   "known_bad": [
     "git -C {other} status",
@@ -41,8 +44,11 @@
     "grep -n -i \"14.5\\|documentation\\|Step 15\\|Step 16\" /etc/passwd",
     "grep -rn apiKey {home}",
     "head -5 {home}/cc/.claude.json",
-    "ls -la {home}/*",
+    "ls -la {home}/cc/.claude*",
     "cat {home}/cc/.claude.json",
-    "cat /etc/hostname"
+    "cat /etc/hostname",
+    "git rev-parse HEAD; git status",
+    "sed -n 1w {repo}/out.txt {repo}/README.md",
+    "sed -i s/a/b/ {repo}/README.md"
   ]
 }

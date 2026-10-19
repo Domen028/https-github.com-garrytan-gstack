@@ -9,7 +9,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fixtureDocs } from './helpers/docsync-fixture';
-import { docsCommandAllowed, docsNativeInterface, docsToolFailures } from './helpers/docsync-observer';
+import { docsCommandAllowed, docsCompletedRead, docsNativeInterface, docsToolFailures } from './helpers/docsync-observer';
 import { readOnlyCommandAllowed, readOnlyCommandRejection, readOnlyInterfaceText, READ_TOOLS, STDIN_TOOLS } from './helpers/read-only-commands';
 import type { SkillTestResult } from './helpers/session-runner';
 
@@ -69,7 +69,7 @@ const ACCEPTED = [
   'cat docs/guide.md | sort | uniq -c', 'ls qa | wc -l', 'grep -rn step qa-only | head -5', 'find qa -type f | sort',
   'wc -l qa-only/SKILL.md; ls qa-only', 'ls docs && wc -l docs/guide.md', 'ls missing || ls docs', 'cd qa && ls sections',
   'cd qa-only; wc -l SKILL.md', 'ls docs;', 'echo ----', 'echo -n done', "printf '%s\\n' done", 'printf -- -x',
-  'cat docs/guide.md; echo ----; cat qa-only/SKILL.md', 'echo done | wc -c',
+  'cat docs/guide.md; echo ----; cat qa-only/SKILL.md', 'echo done | wc -c', 'sed -n 1,2p docs/guide.md', 'grep -n step qa-only/SKILL.md | sed -n 1,5p',
 ];
 
 describe.skipIf(process.platform === 'win32')('accepted pure local reads', () => {
@@ -147,7 +147,12 @@ const REJECTED: Array<[string, string, RegExp]> = [
   ['external program', 'rg -z step', /unsupported rg option: -z/],
   ['sudo', 'sudo cat docs/guide.md', /unlisted tool: sudo/],
   ['unlisted tool', 'python3 -c "print(1)"', /unlisted tool: python3/],
-  ['unlisted tool', 'sed -n 1p docs/guide.md', /unlisted tool: sed/],
+  ['unlisted tool', 'od -c docs/guide.md', /unlisted tool: od/],
+  ['sed', 'sed -i s/a/b/ docs/guide.md', /sed takes only -n and a line-range print script/],
+  ['sed', 'sed -n 1w docs/out.txt docs/guide.md', /sed takes only -n and a line-range print script/],
+  ['sed', 'sed -n -e 1p docs/guide.md', /sed takes only -n and a line-range print script/],
+  ['sed', "sed -n '1p;w docs/out.txt' docs/guide.md", /sed takes only -n and a line-range print script/],
+  ['path escape', 'sed -n 1p escape/secret.txt', /outside root/],
   ['unlisted tool', 'awk 1 docs/guide.md', /unlisted tool: awk/],
   ['unlisted tool', 'tr a-z A-Z', /unlisted tool: tr/],
   ['echo/printf', 'echo hi > docs/new.md', /redirect/],
@@ -258,15 +263,48 @@ describe.skipIf(process.platform === 'win32')('free replays of the captured slip
 
   test('docsync literal reads stay inside the fixture home and off its credentials (tightening)', () => {
     const config = path.join(fixture.env.CLAUDE_CONFIG_DIR, '.claude.json');
-    for (const command of ['cat ' + config, 'sha256sum ' + config, 'stat ' + fixture.env.CLAUDE_CONFIG_DIR, 'ls -la ' + fixture.env.CLAUDE_CONFIG_DIR,
+    for (const command of ['cat ' + config, 'sha256sum ' + config, 'ls -la ' + config, 'cat ' + config + '.backup', 'grep -rn apiKey ' + fixture.env.CLAUDE_CONFIG_DIR,
       'cat /etc/hostname', 'ls -la /', 'cat ../../outside.txt', 'cat ' + config + ' 2>/dev/null || true'])
       expect(docsCommandAllowed(command, fixture), command).toBe(false);
-    for (const command of ['cat README.md', 'ls', 'pwd', 'stat app.ts', 'sha256sum README.md', 'cat ' + path.join(fixture.home, 'candidate.json'), 'ls ..'])
+    for (const command of ['cat README.md', 'ls', 'pwd', 'stat app.ts', 'sha256sum README.md', 'cat ' + path.join(fixture.home, 'candidate.json'), 'ls ..',
+      'ls -la ' + fixture.env.CLAUDE_CONFIG_DIR, 'stat ' + fixture.env.CLAUDE_CONFIG_DIR, 'cat ' + path.join(fixture.env.CLAUDE_CONFIG_DIR, 'settings.json')])
       expect(docsCommandAllowed(command, fixture), command).toBe(true);
   });
 
   test('the docsync interface declares the grammar over the fixture home', () => {
     expect(docsNativeInterface(fixture)).toContain(readOnlyInterfaceText(fixture.home));
+  });
+
+  // PR #3288 E2E run 39186278010 (Fable 5.1): the grammar's join invited joined Git reads, which the docsync
+  // interface keeps separate; the interface now says so, and these reads of the Claude config dir pass.
+  test('docsync keeps Git reads out of grammar lines and lists the Claude config dir (39186278010)', () => {
+    expect(docsNativeInterface(fixture)).toContain('not even to another Git read');
+    for (const command of ['cat {home}/candidate.json; echo; ls -la {home}/state {home}/cc {home}/.claude/skills/gstack/document-release',
+      'ls {home}/.claude/skills/gstack/ship {home}/state {home}/cc; wc -c {home}/.claude/skills/gstack/ship/sections/documentation.md'])
+      expect(docsCommandAllowed(command.replaceAll('{home}', fixture.home), fixture), command).toBe(true);
+    for (const command of ['git status; git branch --show-current; git rev-parse HEAD', 'ls -la {home}/state; git status',
+      'git ls-files -z --cached --others --exclude-standard | tr \'\\0\' \'\\n\''])
+      expect(docsCommandAllowed(command.replaceAll('{home}', fixture.home), fixture), command).toBe(false);
+  });
+
+  // Focused Fable rerun of ship-docsync-current and ship-docsync-failure (2026-10-19): a trailing ; on a Git read, a
+  // grep paged through sed -n, and the phase file read by a composed cat, which the completed-read check must credit.
+  test('docsync accepts the focused Fable slips and credits a composed cat as a completed read', () => {
+    const skill = path.join(fixture.home, '.claude/skills/gstack/document-release/SKILL.md');
+    for (const command of ['git rev-parse HEAD; ', 'grep -n "Ship-owned\\|^## \\|read-only" ' + skill + ' | sed -n 1,200p'])
+      expect(docsCommandAllowed(command, fixture), command).toBe(true);
+    for (const command of ['git rev-parse HEAD; git status', 'git commit -m x;', 'sed -n 1w ' + path.join(fixture.repo, 'out.txt') + ' ' + skill])
+      expect(docsCommandAllowed(command, fixture), command).toBe(false);
+    const phase = path.join(fixture.home, 'phase.md');
+    fs.writeFileSync(phase, '# Phase\nstep one\n');
+    const read = (command: string, output = '# Phase\nstep one\n') =>
+      docsCompletedRead({ toolCalls: [{ tool: 'Bash', input: { command }, output }] } as unknown as SkillTestResult, phase, fixture);
+    const invocation = path.join(fixture.home, 'ship-invocation.md');
+    expect(read('cat ' + invocation + '; echo ----; cat ' + phase + '; echo ----; ls -la ' + fixture.home)).toBe(true);
+    expect(read('cat ' + phase + ' | head -1')).toBe(false);
+    expect(read('cd ' + fixture.repo + ' && cat ../phase.md')).toBe(false);
+    expect(read('cat ' + phase + '; echo ----', '# Phase\n')).toBe(false);
+    expect(read('cat ' + phase + ' > ' + path.join(fixture.home, 'copy.md'))).toBe(false);
   });
 
   test('docsync keeps its git interface and denies credentials and actor state', () => {

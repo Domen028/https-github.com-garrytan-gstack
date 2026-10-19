@@ -65,6 +65,7 @@ export const READ_TOOLS: Readonly<Record<string, ToolSpec>> = {
   file: { flag: /^(?:-[bhiLkNr0]+|--(?:brief|mime|mime-type|mime-encoding|dereference|no-dereference|keep-going|raw|no-pad))$/ },
   du: { flag: /^(?:-[abchkmsSxl0]+|-d\d+|--(?:all|apparent-size|bytes|total|human-readable|summarize|separate-dirs|one-file-system|count-links|null|si)|--max-depth=\d+|--exclude=.+)$/, valued: /^-d$/ },
   find: { flag: /^$/ },
+  sed: { flag: /^$/ },
   grep: {
     flag: /^(?:-[EFGPiywxvcLlnhHoqsrabIUzZT]+|-[mABC]\d+|--(?:extended-regexp|fixed-strings|basic-regexp|perl-regexp|ignore-case|no-ignore-case|word-regexp|line-regexp|invert-match|count|files-with-matches|files-without-match|line-number|no-filename|with-filename|only-matching|quiet|silent|no-messages|recursive|text|byte-offset|null|null-data|initial-tab|colou?r(?:=(?:never|auto|always))?)|--(?:max-count|after-context|before-context|context)=\d+|--(?:include|exclude|exclude-dir|label|binary-files)=.+|--directories=(?:read|skip|recurse)|--devices=(?:read|skip))$/,
     valued: /^-[mABCdD]$/,
@@ -97,7 +98,7 @@ export const READ_TOOLS: Readonly<Record<string, ToolSpec>> = {
 };
 
 /** Tools that may receive a pipe. Each one only prints what it reads. */
-export const STDIN_TOOLS: ReadonlySet<string> = new Set(['wc', 'head', 'tail', 'cat', 'grep', 'rg', 'sort', 'uniq', 'cut', 'nl', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum']);
+export const STDIN_TOOLS: ReadonlySet<string> = new Set(['wc', 'head', 'tail', 'cat', 'grep', 'rg', 'sort', 'uniq', 'cut', 'nl', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'sed']);
 
 const FIND_FLAGS = new Set(['-print', '-print0', '-prune', '-empty', '-true', '-false', '-a', '-o', '-and', '-or', '-not',
   '-readable', '-writable', '-executable', '-depth', '-nowarn', '-xdev', '-mount', '-quit', '-ls', '(', ')', '!', ',']);
@@ -108,7 +109,7 @@ const FIND_PATHS = new Set(['-newer', '-anewer', '-cnewer', '-samefile']);
 
 /** Interface text an opted-in fixture declares to its actor. */
 export function readOnlyInterfaceText(root: string): string {
-  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v). Join them with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
+  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; sed only as -n with a line-range print script such as sed -n 1,200p; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v). Join only these reads with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
 }
 
 export function readOnlyCommandAllowed(command: string, scope: ReadOnlyScope): boolean {
@@ -231,6 +232,13 @@ function commandRejection(words: Word[], piped: boolean, cwds: string[], context
   if (!spec) return `unlisted tool: ${name.text}`;
   if (piped && !STDIN_TOOLS.has(name.text)) return `${name.text} cannot read a pipe`;
   if (name.text === 'find') return findRejection(args, cwds, context);
+  if (name.text === 'sed') {
+    const start = args.findIndex(arg => !/^(?:-n|--quiet|--silent)$/.test(arg.text));
+    const [script, ...files] = start < 0 ? [] : args.slice(start);
+    if (!script || !/^(?:\d+|\$)(?:,(?:\d+|\$))?p$/.test(script.text) || files.some(file => file.text.startsWith('-')))
+      return 'sed takes only -n and a line-range print script';
+    return pathsRejection(files, cwds, context, false);
+  }
   if (spec.literal) {
     if (args.some(arg => arg.glob)) return 'unquoted glob in literal arguments';
     if (name.text === 'printf' && args[0]?.text.startsWith('-') && args[0].text !== '--') return `unsupported printf option: ${args[0].text}`;
