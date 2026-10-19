@@ -1,0 +1,5 @@
+#!/usr/bin/env bun
+// gstack-task-memory: HydraDB task memory for the current repository (lib/task-memory/cli.ts).
+import { main } from '../lib/task-memory/cli';
+
+process.exit(await main(process.argv.slice(2)));

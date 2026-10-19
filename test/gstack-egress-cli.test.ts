@@ -114,6 +114,7 @@ describe('gstack-egress grants', () => {
     for (const grant of ['telemetry', 'brain-sync', 'redact_repo_visibility', 'redact_prepush_hook', 'memorable-recall']) {
       expect(r.stdout).toContain(grant);
     }
+    expect(r.stdout).toContain('hydradb-task-memory: 0 repositories');
     expect(r.stdout).not.toContain('[GRANTED]');
     expect(r.stdout).toContain(path.join(home, 'config.yaml'));
     expect(r.stdout).toContain('revoke:');

@@ -226,7 +226,7 @@ describe('gstack-settings-hook: shared prelude (dedupe key == prune predicate)',
     expect(prelude).not.toContain('`');
   });
 
-  test('KNOWN_HOOKS table carries all six identities with source+event+relpath', () => {
+  test('KNOWN_HOOKS table carries every identity with source+event+relpath', () => {
     for (const [name, source, event] of [
       ['question-log-hook', 'plan-tune-cathedral', 'PostToolUse'],
       ['question-preference-hook', 'plan-tune-cathedral', 'PreToolUse'],
@@ -234,6 +234,8 @@ describe('gstack-settings-hook: shared prelude (dedupe key == prune predicate)',
       ['timeline-stop-hook', 'gstack-timeline-stop', 'Stop'],
       ['gstack-session-update', 'gstack-session-update', 'SessionStart'],
       ['memorable-user-prompt-hook', 'gstack-memorable', 'UserPromptSubmit'],
+      ['task-memory-prompt-hook', 'gstack-task-memory', 'UserPromptSubmit'],
+      ['task-memory-stop-hook', 'gstack-task-memory', 'Stop'],
     ]) {
       const rowStart = hookBinSrc.indexOf(`"${name}":`);
       expect(rowStart).toBeGreaterThan(-1);
@@ -262,6 +264,7 @@ describe('gstack-uninstall: hook cleanup runs before install-root deletion', () 
     expect(uninstallSrc).toContain('remove-source --source auq-error-fallback');
     expect(uninstallSrc).toContain('remove-source --source gstack-timeline-stop');
     expect(uninstallSrc).toContain('remove-source --source gstack-memorable');
+    expect(uninstallSrc).toContain('remove-source --source gstack-task-memory');
     expect(uninstallSrc).toContain('prune-stale --all');
   });
 });

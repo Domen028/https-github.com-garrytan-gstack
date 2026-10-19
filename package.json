@@ -70,6 +70,7 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.0",
+    "@hydradb/sdk": "2.1.7",
     "@ngrok/ngrok": "^1.7.0",
     "cross-spawn": "^7.0.6",
     "diff": "^9.0.0",
