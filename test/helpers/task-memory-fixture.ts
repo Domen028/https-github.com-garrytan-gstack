@@ -25,6 +25,8 @@ interface StoredMemory { id: string; title: string; text: string; additional_met
 export interface FakeBehavior {
   ingestStatus?: number;
   ingestDelayMs?: number;
+  loseIngestResponse?: boolean;
+  deleteError?: string;
   failIndexing?: boolean;
   holdIndexing?: boolean;
   holdDatabase?: boolean;
@@ -96,6 +98,10 @@ export function startFakeHydra(): FakeHydra {
           items.set(m.id, { id: m.id, title: m.title, text: m.text, additional_metadata: m.additional_metadata, stage: 'queued', failIndexing: !!behavior.failIndexing });
           return { id: m.id, title: m.title, status: 'queued', infer: false, error: null, error_code: null };
         });
+        if (behavior.loseIngestResponse) {
+          return new Response(new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{"success":tr')); c.error(new Error('connection reset')); } }),
+            { status: 202, headers: { 'content-type': 'application/json' } });
+        }
         return ok({ success: true, message: 'accepted', results, success_count: payload.length, failed_count: 0 }, 202);
       }
       if (route === 'GET /context/status') {
@@ -116,6 +122,7 @@ export function startFakeHydra(): FakeHydra {
           const m = items.get(id);
           if (!m) return { id, deleted: false, error: 'not found' };
           if (!settled(m)) return { id, deleted: false, error: 'Memory is still processing; retry deletion after ingestion completes' };
+          if (behavior.deleteError) return { id, deleted: false, error: behavior.deleteError };
           items.delete(id);
           return { id, deleted: true, error: null };
         });

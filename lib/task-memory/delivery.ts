@@ -22,6 +22,7 @@ const BACKOFF_MS = { first: 60_000, max: 3_600_000 };
 
 const remaining = (deadline: number) => deadline - Date.now();
 const held = (d: Delivery | null) => d?.remote.kind === 'held' ? d.remote : null;
+const remoteOf = (d: Delivery | null) => d?.remote ?? { kind: 'none' as const };
 
 export function plan(admissions: readonly Admission[], deliveries: readonly Delivery[], ctx: Pick<DeliveryContext, 'grant' | 'dest'>,
   opts: { force: boolean; now: number }): Work[] {
@@ -33,7 +34,7 @@ export function plan(admissions: readonly Admission[], deliveries: readonly Deli
     const backedOff = !opts.force && prior?.retry != null && Date.parse(prior.retry.after) > opts.now;
     const remote = held(prior);
     if (a.procedure === null) {
-      if (remote && !backedOff) work.push({ kind: 'delete', docId: a.docId, prior: prior! });
+      if (prior && prior.remote.kind !== 'none' && !backedOff) work.push({ kind: 'delete', docId: a.docId, prior });
     } else if (a.generation === ctx.grant.generation) {
       const same = remote?.sha256 === a.procedure.sha256;
       if (same && remote!.index === 'processing') work.push({ kind: 'watch', docId: a.docId, prior: prior! });
@@ -71,14 +72,58 @@ function failed(ctx: DeliveryContext, w: Work, problem: Problem | { rejected: nu
   record(ctx, w.docId, w.prior, { retry: { attempts, after, problem } });
 }
 
-function observe(ctx: DeliveryContext, w: Work, state: IndexingState | undefined): Delivery | null {
-  const remote = held(w.prior);
-  if (state === undefined) return w.prior;
-  if (state === 'absent') return remote ? record(ctx, w.docId, w.prior, { remote: { kind: 'none' } }) : w.prior;
-  if (remote?.index === state) return w.prior;
-  const next = record(ctx, w.docId, w.prior, { remote: { kind: 'held', sha256: remote?.sha256 ?? '', index: state } });
+function observe(ctx: DeliveryContext, w: Work, state: IndexingState): Delivery | null {
+  const remote = remoteOf(w.prior);
+  if (state === 'absent') return remote.kind === 'none' ? w.prior : record(ctx, w.docId, w.prior, { remote: { kind: 'none' } });
+  if (remote.kind === 'held' && remote.index === state) return w.prior;
+  const next = record(ctx, w.docId, w.prior, { remote: { kind: 'held', sha256: remote.kind === 'none' ? null : remote.sha256, index: state } });
   if (state === 'failed') failed(ctx, { ...w, prior: next }, 'indexing-failed', null);
   return next;
+}
+
+/** The one content an id can hold after this upload, whatever HydraDB did with it; null when the earlier content may remain. */
+function possible(prior: Delivery | null, sent: string): string | null {
+  const remote = remoteOf(prior);
+  return remote.kind === 'none' || remote.sha256 === sent ? sent : null;
+}
+
+const answerLost = (r: HydraResult<unknown>) => r.kind === 'network' || (r.kind === 'http' && r.status >= 500);
+
+async function upload(ctx: DeliveryContext, upserts: readonly Extract<Work, { kind: 'upsert' }>[], deadline: number, report: DeliveryReport): Promise<boolean> {
+  const unsure = upserts.map(w => record(ctx, w.docId, w.prior, { remote: { kind: 'unsure', sha256: possible(w.prior, w.body.sha256) } }));
+  const sent = await ingest(ctx.send, ctx.dest, ctx.scope, upserts.map(w => ({ docId: w.docId, title: w.body.title, markdown: w.body.markdown,
+    recordedOn: w.body.recordedOn })), Math.min(30_000, remaining(deadline)));
+  let waiting = false;
+  upserts.forEach((w, i) => {
+    const verdict = sent.kind === 'ok' ? sent.value.get(w.docId) : undefined;
+    if (verdict === 'accepted') {
+      record(ctx, w.docId, w.prior, { remote: { kind: 'held', sha256: w.body.sha256, index: 'processing' }, retry: null, rejected: null });
+      report.accepted++;
+      waiting = true;
+    } else if (sent.kind === 'ok' ? verdict === undefined : answerLost(sent)) {
+      failed(ctx, { ...w, prior: unsure[i]! }, 'unavailable', null);
+    } else {
+      const problem = sent.kind === 'ok' ? 'refused' : problemOf(sent);
+      if (problem === 'stop') record(ctx, w.docId, w.prior, {});
+      else failed(ctx, w, problem, w.body.sha256);
+    }
+  });
+  return waiting;
+}
+
+async function retract(ctx: DeliveryContext, deletes: readonly Work[], deadline: number, report: DeliveryReport): Promise<boolean> {
+  const removed = await remove(ctx.send, ctx.dest, deletes.map(w => w.docId), Math.min(15_000, remaining(deadline)));
+  let waiting = false;
+  for (const w of deletes) {
+    const verdict = removed.kind === 'ok' ? removed.value.get(w.docId) : undefined;
+    if (verdict === 'deleted') { record(ctx, w.docId, w.prior, { remote: { kind: 'none' }, retry: null }); report.removed++; }
+    else if (verdict === 'busy') waiting = true;
+    else {
+      const problem = removed.kind === 'ok' ? 'unavailable' : problemOf(removed);
+      if (problem !== 'stop') failed(ctx, w, typeof problem === 'object' ? 'refused' : problem, null);
+    }
+  }
+  return waiting;
 }
 
 async function pass(ctx: DeliveryContext, work: readonly Work[], deadline: number, report: DeliveryReport): Promise<boolean> {
@@ -93,6 +138,10 @@ async function pass(ctx: DeliveryContext, work: readonly Work[], deadline: numbe
   const upserts: Extract<Work, { kind: 'upsert' }>[] = [], deletes: Work[] = [];
   for (const w of batch) {
     const state = states.value.get(w.docId);
+    if (state === undefined) {
+      if (w.kind !== 'watch') failed(ctx, w, 'unavailable', null);
+      continue;
+    }
     const now = observe(ctx, w, state);
     const ready = state === 'absent' || state === 'settled' || state === 'failed';
     if (w.kind === 'watch') {
@@ -105,33 +154,8 @@ async function pass(ctx: DeliveryContext, work: readonly Work[], deadline: numbe
     } else if (ready) upserts.push({ ...w, prior: now });
     else waiting = true;
   }
-  if (upserts.length) {
-    const sent = await ingest(ctx.send, ctx.dest, ctx.scope, upserts.map(w => ({ docId: w.docId, title: w.body.title, markdown: w.body.markdown,
-      recordedOn: w.body.recordedOn })), Math.min(30_000, remaining(deadline)));
-    for (const w of upserts) {
-      const verdict = sent.kind === 'ok' ? sent.value.get(w.docId) : undefined;
-      if (verdict === 'accepted') {
-        record(ctx, w.docId, w.prior, { remote: { kind: 'held', sha256: w.body.sha256, index: 'processing' }, retry: null, rejected: null });
-        report.accepted++;
-        waiting = true;
-      } else {
-        const problem = sent.kind === 'ok' ? (verdict === 'refused' ? 'refused' : 'unavailable') : problemOf(sent);
-        if (problem !== 'stop') failed(ctx, w, problem, w.body.sha256);
-      }
-    }
-  }
-  if (deletes.length) {
-    const removed = await remove(ctx.send, ctx.dest, deletes.map(w => w.docId), Math.min(15_000, remaining(deadline)));
-    for (const w of deletes) {
-      const verdict = removed.kind === 'ok' ? removed.value.get(w.docId) : undefined;
-      if (verdict === 'deleted') { record(ctx, w.docId, w.prior, { remote: { kind: 'none' }, retry: null }); report.removed++; }
-      else if (verdict === 'busy') waiting = true;
-      else {
-        const problem = removed.kind === 'ok' ? 'unavailable' : problemOf(removed);
-        if (problem !== 'stop') failed(ctx, w, typeof problem === 'object' ? 'refused' : problem, null);
-      }
-    }
-  }
+  if (upserts.length && await upload(ctx, upserts, deadline, report)) waiting = true;
+  if (deletes.length && await retract(ctx, deletes, deadline, report)) waiting = true;
   return waiting || work.length > batch.length;
 }
 
@@ -163,8 +187,8 @@ export type Standing = 'pending' | 'processing' | 'searchable' | 'indexed' | 're
 const INDEXED: Record<'processing' | 'searchable' | 'settled', Standing> = { processing: 'processing', searchable: 'searchable', settled: 'indexed' };
 
 export function standing(a: Admission, d: Delivery | null, grant: Grant | null): Standing {
+  if (a.procedure === null) return remoteOf(d).kind === 'none' ? 'retracted' : 'retracting';
   const remote = held(d);
-  if (a.procedure === null) return remote ? 'retracting' : 'retracted';
   if (remote?.sha256 === a.procedure.sha256 && remote.index !== 'failed') return INDEXED[remote.index];
   if (!grant || a.generation !== grant.generation) return 'stale';
   return d?.rejected?.sha256 === a.procedure.sha256 ? 'rejected' : 'pending';

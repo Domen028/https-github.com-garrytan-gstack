@@ -156,14 +156,17 @@ export async function indexing(send: Send, dest: Destination, ids: readonly DocI
 
 const WIRE_INDEXING: Record<string, IndexingState> = { queued: 'processing', processing: 'processing', graph_creation: 'searchable', completed: 'settled' };
 
-/** `deleted` also covers an id HydraDB no longer has; `busy` is an id still being indexed, which HydraDB refuses to delete. */
-export async function remove(send: Send, dest: Destination, ids: readonly DocId[], timeoutMs: number): Promise<HydraResult<Map<DocId, 'deleted' | 'busy'>>> {
+/**
+ * `busy` is an id still being indexed, which HydraDB refuses to delete. Any other refusal is `failed`, including
+ * "not found or deletion failed", which does not say the id is gone; a status read confirms absence.
+ */
+export async function remove(send: Send, dest: Destination, ids: readonly DocId[], timeoutMs: number): Promise<HydraResult<Map<DocId, 'deleted' | 'busy' | 'failed'>>> {
   const result = await request(send, 'DELETE', '/context', 'procedure-ids', timeoutMs,
     json({ database: dest.database, collection: dest.collection, type: 'memory', ids }));
   return map(result, data => {
-    const out = new Map<DocId, 'deleted' | 'busy'>();
+    const out = new Map<DocId, 'deleted' | 'busy' | 'failed'>();
     for (const r of array(object(data) ? data.results : undefined)) {
-      if (isDocId(r.id)) out.set(r.id, r.deleted === true || /not found|does not exist/i.test(String(r.error ?? '')) ? 'deleted' : 'busy');
+      if (isDocId(r.id)) out.set(r.id, r.deleted === true ? 'deleted' : /still processing/i.test(String(r.error ?? '')) ? 'busy' : 'failed');
     }
     return out;
   });

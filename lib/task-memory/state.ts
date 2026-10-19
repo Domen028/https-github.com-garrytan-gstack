@@ -63,9 +63,14 @@ export interface Admission {
 /** HydraDB's progress on an accepted id. Only `settled` and `failed` accept a same-id upsert or a deletion. */
 export type IndexState = 'processing' | 'searchable' | 'settled' | 'failed';
 
+/**
+ * What HydraDB holds for an id. A null sha256 is content gstack cannot name. `unsure` is an upload sent
+ * without an answer: HydraDB may or may not have accepted it, so only a status read can settle it.
+ */
 export type Remote =
   | { readonly kind: 'none' }
-  | { readonly kind: 'held'; readonly sha256: string; readonly index: IndexState };
+  | { readonly kind: 'held'; readonly sha256: string | null; readonly index: IndexState }
+  | { readonly kind: 'unsure'; readonly sha256: string | null };
 
 export type Problem = 'auth' | 'destination' | 'unavailable' | 'refused' | 'indexing-failed';
 
@@ -269,9 +274,11 @@ function parseAdmission(v: unknown, scope: ScopeId, docId: DocId): Admission | n
 }
 
 function parseRemote(v: unknown): Remote | null {
-  if (isRecord(v) && v.kind === 'none') return { kind: 'none' };
-  return isRecord(v) && v.kind === 'held' && typeof v.sha256 === 'string' && INDEX_STATES.has(v.index)
-    ? { kind: 'held', sha256: v.sha256, index: v.index as IndexState } : null;
+  if (!isRecord(v) || (v.sha256 !== undefined && v.sha256 !== null && typeof v.sha256 !== 'string')) return null;
+  const sha256 = (v.sha256 ?? null) as string | null;
+  if (v.kind === 'none') return { kind: 'none' };
+  if (v.kind === 'unsure') return { kind: 'unsure', sha256 };
+  return v.kind === 'held' && INDEX_STATES.has(v.index) ? { kind: 'held', sha256, index: v.index as IndexState } : null;
 }
 
 function parseDelivery(v: unknown, scope: ScopeId, docId: DocId): Delivery | null {

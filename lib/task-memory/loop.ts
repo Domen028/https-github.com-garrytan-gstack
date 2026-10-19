@@ -93,7 +93,7 @@ export async function captureSession(session: NativeSession, deadline: number): 
         if (prior?.generation === ctx.grant.generation && prior.procedure?.sha256 === body.sha256) continue;
         writeAdmission({ ...base, procedure: body });
         admitted++;
-      } else if (prior?.procedure !== null && (prior?.procedure || readDelivery(ctx.scope.id, docId)?.remote.kind === 'held')) {
+      } else if (prior?.procedure !== null && (prior?.procedure || (readDelivery(ctx.scope.id, docId)?.remote.kind ?? 'none') !== 'none')) {
         writeAdmission({ ...base, procedure: null });
         withdrawn++;
       }

@@ -99,6 +99,47 @@ describe('failures are retried, not dropped', () => {
   }, 90_000);
 });
 
+describe('an upload whose answer was lost', () => {
+  test('is checked and deleted after the procedure loses its proof, never assumed absent', async () => {
+    expect((await enable()).status).toBe(0);
+    fake.behavior.loseIngestResponse = true;
+    const session = verifiedTask();
+    await stop(session);
+    expect(stored()).toHaveLength(1);
+    expect(await procedures()).toEqual({ pending: 1 });
+    delete fake.behavior.loseIngestResponse;
+    session.edit('src/math.ts', 'Number(a) + Number(b)', 'Number(a) + Number(b) + 0');
+    await stop(session);
+    expect(await procedures()).toEqual({ retracting: 1 });
+    expect((await prompt('The add helper breaks on negative numbers again')).stdout).toBe('');
+
+    const flushed = await cli(home, repo, ['flush']);
+    expect(flushed.stdout).toContain('1 removed, 0 still outstanding');
+    expect(sent('/context')).toHaveLength(1);
+    expect(stored()).toEqual([]);
+    expect(await procedures()).toEqual({ retracted: 1 });
+  }, 90_000);
+});
+
+describe('a deletion HydraDB answers with an unexplained error', () => {
+  test('is not taken as removed and backs off instead of holding the queue', async () => {
+    expect((await enable()).status).toBe(0);
+    const session = verifiedTask();
+    await stop(session);
+    fake.behavior.deleteError = 'Memory not found or deletion failed';
+    session.edit('src/math.ts', 'Number(a) + Number(b)', 'Number(a) + Number(b) + 0');
+    await stop(session);
+    expect(stored()).toHaveLength(1);
+    expect(await procedures()).toEqual({ retracting: 1 });
+    expect((await status()).retrying).toEqual({ unavailable: 1 });
+
+    delete fake.behavior.deleteError;
+    expect((await cli(home, repo, ['flush'])).status).toBe(0);
+    expect(stored()).toEqual([]);
+    expect(await procedures()).toEqual({ retracted: 1 });
+  }, 90_000);
+});
+
 describe('searchable is not settled', () => {
   test('an update waits until HydraDB has finished the earlier upload of the same id', async () => {
     expect((await enable()).status).toBe(0);

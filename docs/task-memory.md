@@ -104,7 +104,10 @@ it at once, and gstack asks HydraDB to delete it. HydraDB deletes an entry
 only after it finishes indexing it, so the deletion can stay pending for a
 while, and longer if HydraDB is unreachable. Until HydraDB accepts it, other
 machines that share the repository's collection can still recall the
-procedure.
+procedure. An upload whose answer never arrived may still have been stored,
+so gstack asks HydraDB about that id and deletes it if the procedure loses
+its proof. Such a procedure stays `retracting` until HydraDB reports the id
+gone or confirms the deletion.
 
 ## Check, tune and retry
 
