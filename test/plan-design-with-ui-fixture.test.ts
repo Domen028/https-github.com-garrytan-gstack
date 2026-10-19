@@ -83,6 +83,10 @@ const captured = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(ROOT, 'te
 // Run 39199692993 slice 4 (521fd755): the Step 0D title omitted 'design'; its body carried the rating.
 const capturedRated = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(ROOT, 'test/fixtures/design-ui-focus-capture-39199692993.json'))}, 'utf8'))
   .calls.map(({ preReview, observedAtMs, call }) => nativePlanCallFingerprint(call, observedAtMs, preReview));
+// Run 39298269902 slice 4 (072d4b9), attempts 1 and 2: Opus 5.5 titled Step 0D only
+// "Review focus", with the rating in the body and an all-7 option (a2 on one line).
+const captured39298269902 = [1, 2].map(attempt => JSON.parse(fs.readFileSync(${JSON.stringify(ROOT)} + '/test/fixtures/design-ui-focus-capture-39298269902-a' + attempt + '.json', 'utf8'))
+  .calls.map(({ preReview, observedAtMs, call }) => nativePlanCallFingerprint(call, observedAtMs, preReview)));
 const unnumberedFinding = fp('unnumbered-finding', "Which region is the dashboard's primary anchor, and how is the page composed?", false);
 unnumberedFinding.nativeCall.questions[0].options = nativeFinding.nativeCall.questions[0].options;
 const finding = fp('finding', 'Which loading feedback should Save show?', false);
@@ -198,6 +202,22 @@ mock.module(${JSON.stringify(path.join(ROOT, 'test/helpers/claude-pty-runner.ts'
       ['D14 — Record this follow-up?', ['1A) Record a TODO']],
       ['D15 — Want outside design voices before the detailed review?', ['1A) Yes, run outside voices', '1B) No, proceed without']],
     ]) expect(opts.isReviewAUQ(labeled('not-a-finding', question, labels))).toBe(false);
+    const [focusA1, focusA2] = [captured39298269902[0][1], captured39298269902[1][0]];
+    for (const focusCall of [focusA1, focusA2]) {
+      expect(opts.isLastStep0AUQ(focusCall)).toBe(true);
+      expect(opts.isReviewAUQ(focusCall)).toBe(false);
+    }
+    expect(opts.isReviewAUQ(captured39298269902[0][4])).toBe(true);
+    const ratedBody = 'Project/branch/task: main. ELI10: I rated this plan 4/10 on design completeness.';
+    const ratedFinding = labeled('rated-finding', 'D5 — Issue 1: Which panel leads the review focus? ' + ratedBody, ['1A All 7 dimensions first', '1B Activity first']);
+    expect(opts.isLastStep0AUQ(ratedFinding)).toBe(false);
+    expect(opts.isReviewAUQ(ratedFinding)).toBe(true);
+    for (const [label, labels] of [['single-option-focus', ['All 7 dimensions (recommended)']], ['no-all-seven-option', ['Every dimension (recommended)', 'States + hierarchy only']],
+      ['all-seven-not-leading', ['Review all 7 dimensions (recommended)', 'States + hierarchy only']]]) {
+      expect(opts.isLastStep0AUQ(labeled(label, 'D1 — Review focus. ' + ratedBody, labels))).toBe(false);
+    }
+    expect(opts.isLastStep0AUQ(labeled('unrated-focus', 'D1 — Review focus. Project/branch/task: main. ELI10: I rated this plan 4/7 on design completeness.',
+      ['All 7 passes (recommended)', 'States + hierarchy only']))).toBe(false);
     const chosenFocus = mode.startsWith('native-') ? nativeFocus : mode === 'paraphrase' ? paraphrase : fp('focus', focus);
     const pendingCall = {...chosenFocus.nativeCall, answered: false, unansweredQuestionIndices: [0]};
     const pending = nativePlanCallFingerprint(pendingCall, 1000, true);
@@ -240,6 +260,9 @@ mock.module(${JSON.stringify(path.join(ROOT, 'test/helpers/claude-pty-runner.ts'
       : mode === 'captured-rated' ? capturedRated
       : mode === 'captured-rated-no-focus' ? capturedRated.filter((_, index) => index !== 1)
       : mode === 'captured-no-focus' ? captured.filter((_, index) => index !== 1)
+      : mode === 'captured-39298269902' ? captured39298269902[0]
+      : mode === 'captured-39298269902-no-focus' ? captured39298269902[0].filter((_, index) => index !== 1)
+      : mode === 'captured-39298269902-focus-only' ? captured39298269902[1]
       : mode === 'captured-focus-after-finding' ? [...captured.filter((_, index) => index !== 1), captured[1]]
       : mode.startsWith('target-menu') ? [target, fp('other', 'Which artifact should I inspect?', false)]
       : mode === 'early-exit' ? [] : mode === 'focus-only' ? [chosenFocus]
@@ -284,12 +307,12 @@ await import(${JSON.stringify(path.join(ROOT, 'test/skill-e2e-plan-design-with-u
   } finally { fs.rmSync(directory, { recursive: true, force: true }); }
 }
 
-test.each(['source', 'paraphrase', 'native-sequence', 'native-unnumbered', 'native-passes', 'captured', 'captured-rated'])('UI gate seeds the exact target and accepts Design progress with an unselected no-UI alternative (%s)', mode => {
+test.each(['source', 'paraphrase', 'native-sequence', 'native-unnumbered', 'native-passes', 'captured', 'captured-rated', 'captured-39298269902'])('UI gate seeds the exact target and accepts Design progress with an unselected no-UI alternative (%s)', mode => {
   const result = exercise(mode);
   expect(result.code, result.output).toBe(0);
 }, 20_000);
 
-test.each(['target-menu', 'target-menu-design-system', 'focus-only', 'captured-no-focus', 'captured-focus-after-finding', 'captured-rated-no-focus', 'native-setup-only', 'native-voices-only', 'early-exit', 'timeout', 'exited', 'unanswered-finding', 'failed-finding', 'no-native-finding'])('UI gate rejects %s and removes its fixture', mode => {
+test.each(['target-menu', 'target-menu-design-system', 'focus-only', 'captured-no-focus', 'captured-focus-after-finding', 'captured-rated-no-focus', 'captured-39298269902-no-focus', 'captured-39298269902-focus-only', 'native-setup-only', 'native-voices-only', 'early-exit', 'timeout', 'exited', 'unanswered-finding', 'failed-finding', 'no-native-finding'])('UI gate rejects %s and removes its fixture', mode => {
   const result = exercise(mode);
   expect(result.code, result.output).toBe(1);
   expect(result.output).toContain('plan-design-review with UI scope FAILED');
