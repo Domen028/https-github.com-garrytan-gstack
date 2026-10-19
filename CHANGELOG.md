@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+**The weekly marathon's office-hours case can run its review formatter again, and its validator now checks cap fixes the way the formatter does.** Both defects came from #3164 and were in the test, not the skill. The marathon fixture copied `bin/gstack-office-hours-review` with a hand-kept list of two library files; #3164 added a third import (`lib/spec-review-cap.ts`), so every formatter command in the fixture failed at module load, the agent correctly declared the review UNREVIEWED, and the case went red in marathon run 39032308051 (#3246). With the module restored, a focused rerun showed the second defect: when the review stops at the round cap and the agent applies the remaining blocking fixes with `--fixes`, the formatter records them as verified, but the test never gave the validator that list, so it expected "fixes unconfirmed" and rejected a correct report.
+
+### Fixed
+- **Office-hours cap fixes:** `observedSpecFixes()` in `test/helpers/office-hours-completion.ts` returns the last valid `--fixes` list the agent saved with Write, and the marathon test passes it to `validateOfficeHoursReviewArtifacts`. A free test in `test/office-hours-completion.test.ts` runs the real `finalize --fixes` at the cap and checks three cases: the observed list validates, no list fails with the marathon rerun's `Spec Review does not match` error, and a list naming a different finding also fails.
+- **Office-hours marathon fixture:** `test/helpers/office-hours-formatter-fixture.ts` copies the formatter together with every local module it imports, so a new import can no longer be left out. A free test in `test/office-hours-review.test.ts` loads the copied formatter and fails on a missing module; the old three-file list reproduces the exact `Cannot find module '../lib/spec-review-cap.ts'` error. The case's touchfiles now include `lib/spec-review-cap.ts` and the new helper.
+- **Gate integrity:** no threshold, trial count, case kind or judge changed. The marathon assertions are unchanged; only the fixture's file copy changed.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
