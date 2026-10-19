@@ -249,6 +249,14 @@ function docsReadOnlyScope(fixture: ReturnType<typeof fixtureDocs>) {
     deny: (file: string) => path.basename(file) === 'actor-state.json' || (config !== null && within(file, config)) };
 }
 
+/** A literal read operand resolves (symlinks included) inside the fixture home and outside its denied paths. */
+function docsReadablePath(arg: string, fixture: ReturnType<typeof fixtureDocs>): boolean {
+  const raw = path.isAbsolute(arg) ? arg : fixture.repo + path.sep + arg;
+  let actual: string | null;
+  try { actual = fs.realpathSync.native(raw); } catch { actual = /(?:^|[\\/])\.\.(?:[\\/]|$)/.test(arg) ? null : actualWritePath(path.resolve(raw)); }
+  return actual !== null && within(actual, fs.realpathSync(fixture.home)) && !docsReadOnlyScope(fixture).deny(actual);
+}
+
 function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixtureDocs>, scripts: string[]): boolean {
   if (/[\x00-\x08\x0a-\x1f\x7f;&|<>`$\\()]/.test(text)) return false;
   const args: string[] = [];
@@ -266,7 +274,7 @@ function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixt
       /[{}]/.test(arg.replace(/(?:\^|@)\{[^{}]*\}/g, ''))))) return false;
   if (args.some(arg => path.basename(arg) === 'actor-state.json') &&
       !((commandName === 'bun' || commandName === process.execPath) && scripts.includes(rest[0]))) return false;
-  if (DOCS_READ_COMMANDS.includes(commandName)) return true;
+  if (DOCS_READ_COMMANDS.includes(commandName)) return rest.every(arg => arg.startsWith('-') || docsReadablePath(arg, fixture));
   if (commandName === 'git') {
     if (rest.some(arg => /^(?:--output|--ext-diff|--textconv|-w)(?:=|$)/.test(arg))) return false;
     if (rest[0] === 'hash-object' && rest.some(arg => /^-[^-]*w/.test(arg))) return false;

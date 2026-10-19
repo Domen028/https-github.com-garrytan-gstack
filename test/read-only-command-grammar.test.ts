@@ -68,7 +68,8 @@ const ACCEPTED = [
   'md5sum docs/guide.md qa-only/SKILL.md', 'sha1sum docs/guide.md', 'sha512sum --tag docs/guide.md', 'ls qa | sha256sum', 'readlink -f guide-link.md', 'realpath docs/guide.md',
   'cat docs/guide.md | sort | uniq -c', 'ls qa | wc -l', 'grep -rn step qa-only | head -5', 'find qa -type f | sort',
   'wc -l qa-only/SKILL.md; ls qa-only', 'ls docs && wc -l docs/guide.md', 'ls missing || ls docs', 'cd qa && ls sections',
-  'cd qa-only; wc -l SKILL.md', 'ls docs;',
+  'cd qa-only; wc -l SKILL.md', 'ls docs;', 'echo ----', 'echo -n done', "printf '%s\\n' done", 'printf -- -x',
+  'cat docs/guide.md; echo ----; cat qa-only/SKILL.md', 'echo done | wc -c',
 ];
 
 describe.skipIf(process.platform === 'win32')('accepted pure local reads', () => {
@@ -148,7 +149,17 @@ const REJECTED: Array<[string, string, RegExp]> = [
   ['unlisted tool', 'python3 -c "print(1)"', /unlisted tool: python3/],
   ['unlisted tool', 'sed -n 1p docs/guide.md', /unlisted tool: sed/],
   ['unlisted tool', 'awk 1 docs/guide.md', /unlisted tool: awk/],
-  ['unlisted tool', 'echo hi', /unlisted tool: echo/],
+  ['unlisted tool', 'tr a-z A-Z', /unlisted tool: tr/],
+  ['echo/printf', 'echo hi > docs/new.md', /redirect/],
+  ['echo/printf', 'echo hi >> docs/guide.md', /redirect/],
+  ['echo/printf', 'echo $(touch x)', /substitution or variable/],
+  ['echo/printf', 'echo ' + '\x60' + 'touch x' + '\x60', /substitution or variable/],
+  ['echo/printf', 'echo $X', /substitution or variable/],
+  ['echo/printf', 'echo ${X}', /substitution or variable/],
+  ['echo/printf', 'echo "$X"', /substitution or variable/],
+  ['echo/printf', 'printf -v X hi', /unsupported printf option: -v/],
+  ['echo/printf', 'echo *', /unquoted glob in literal arguments/],
+  ['echo/printf', 'echo hi | tee docs/new.md', /unlisted tool: tee/],
   ['unlisted tool', 'env cat docs/guide.md', /unlisted tool: env/],
   ['unlisted tool', '/bin/cat docs/guide.md', /unlisted tool/],
   ['shell syntax', 'ls &', /background job/],
@@ -166,7 +177,7 @@ describe.skipIf(process.platform === 'win32')('rejected classes stay rejected', 
 
   test('every class the brief names has a control', () => {
     const classes = new Set(REJECTED.map(([kind]) => kind.replace(/:.*/, '')));
-    for (const kind of ['write', 'redirect', 'writing pipe', 'substitution', 'network', 'cd out of root', 'path escape', 'sudo', 'unlisted tool'])
+    for (const kind of ['write', 'redirect', 'writing pipe', 'substitution', 'network', 'cd out of root', 'path escape', 'sudo', 'unlisted tool', 'echo/printf'])
       expect(classes.has(kind), kind).toBe(true);
   });
 });
@@ -184,6 +195,43 @@ const DOCSYNC_SLIPS = [
   ['ls -la {home} {home}/.claude/skills/gstack {home}/.claude/skills/gstack/ship',
     'ls -la {home}/.claude/skills/gstack/ship/sections {home}/.claude/skills/gstack/document-release {home}/.claude/skills/gstack/document-release/*'],
 ];
+// PR #3275 E2E run 39181697029, slice 3, ship-docsync-current: its whole Bash stream; the composed
+// cat; echo ----; cat was the only command outside the docsync interface.
+const DOCSYNC_CURRENT_STREAM = [
+  "ls {home}/.claude/skills/gstack/document-release {home}/.claude/skills/gstack/document-release/sections",
+  "git status",
+  "git merge-base main HEAD",
+  "git ls-files",
+  "{home}/.claude/skills/gstack/bin/gstack-docs-candidate --help",
+  "git diff 40d5e4c2069e23a19017c25494636fb8d0bd4c00 HEAD",
+  "cat personal-note.txt",
+  "git check-ignore -v .qa-state",
+  "{home}/.claude/skills/gstack/bin/gstack-docs-candidate snapshot --out {home}/docs-audit-20261019-r2a1.json --audit-id docs-audit-20261019-r2a1 --mode edit --base 40d5e4c2069e23a19017c25494636fb8d0bd4c00 --docs handbook --docs README.md --docs AGENTS.md --docs CHANGELOG.md --docs TODOS.md",
+  "cat {home}/fixture-interface.md; echo ----; cat {home}/docs-audit-20261019-r2a1.json",
+  "GSTACK_SESSION_KIND=spawned {home}/.claude/skills/gstack/bin/gstack-skill-start --skill document-release --model claude",
+  "git status",
+  "git rev-parse HEAD",
+  "git diff 40d5e4c2069e23a19017c25494636fb8d0bd4c00 HEAD",
+  "git diff --cached",
+  "git diff",
+  "git ls-files -z --cached --others --exclude-standard",
+  "git log 40d5e4c2069e23a19017c25494636fb8d0bd4c00..HEAD --oneline",
+  "git ls-files -s",
+  "git hash-object personal-note.txt",
+  "git check-ignore -v .qa-state",
+  "{home}/.claude/skills/gstack/bin/gstack-skill-end --skill document-release --outcome success --session-id 825-1792371119-d40648a8 --tel-start 1792371119 --used-browse no",
+  "{home}/.claude/skills/gstack/bin/gstack-docs-candidate compare {home}/docs-audit-20261019-r2a1.json",
+  "git status",
+  "git rev-parse HEAD",
+  "cat app.ts",
+  "cat handbook/reference/commands/widget.md.tmpl",
+  "cat README.md",
+  "cat personal-note.txt",
+  "{home}/.claude/skills/gstack/bin/gstack-docs-candidate snapshot --out {home}/docs-audit-20261019-r2a1-post.json --audit-id docs-audit-20261019-r2a1 --mode edit --base 40d5e4c2069e23a19017c25494636fb8d0bd4c00 --docs handbook --docs README.md --docs AGENTS.md --docs CHANGELOG.md --docs TODOS.md",
+  "cat {home}/docs-audit-20261019-r2a1-documentation.md >> {home}/ship-report.md",
+  "bun {home}/fixture-publish.ts",
+];
+
 // TM1 focused qa-only-no-fix at e03bfeb: the first Bash call; {dir} is the qa-only fixture root.
 const QA_ONLY_SLIP = 'wc -l {dir}/qa-only/SKILL.md; ls {dir}/qa-only {dir}/qa-only/sections {dir}/qa/sections {dir}/qa/templates';
 
@@ -196,6 +244,25 @@ describe.skipIf(process.platform === 'win32')('free replays of the captured slip
     const commands = stream.map(command => command.replaceAll('{home}', fixture.home));
     expect(docsToolFailures(nativeResult(commands), fixture, [], true)).toEqual([]);
     for (const command of commands) expect(docsCommandAllowed(command, fixture), command).toBe(true);
+  });
+
+  test('the ship-docsync-current stream of 39181697029 passes the observer with no command failure', () => {
+    const current = fixtureDocs('current');
+    try {
+      const publish = path.join(current.home, 'fixture-publish.ts');
+      const commands = DOCSYNC_CURRENT_STREAM.map(command => command.replaceAll('{home}', current.home));
+      expect(commands.filter(command => !docsCommandAllowed(command, current, [publish]))).toEqual([]);
+      expect(docsToolFailures(nativeResult(commands), current, [publish], true)).toEqual([]);
+    } finally { current.clean(); }
+  });
+
+  test('docsync literal reads stay inside the fixture home and off its credentials (tightening)', () => {
+    const config = path.join(fixture.env.CLAUDE_CONFIG_DIR, '.claude.json');
+    for (const command of ['cat ' + config, 'sha256sum ' + config, 'stat ' + fixture.env.CLAUDE_CONFIG_DIR, 'ls -la ' + fixture.env.CLAUDE_CONFIG_DIR,
+      'cat /etc/hostname', 'ls -la /', 'cat ../../outside.txt', 'cat ' + config + ' 2>/dev/null || true'])
+      expect(docsCommandAllowed(command, fixture), command).toBe(false);
+    for (const command of ['cat README.md', 'ls', 'pwd', 'stat app.ts', 'sha256sum README.md', 'cat ' + path.join(fixture.home, 'candidate.json'), 'ls ..'])
+      expect(docsCommandAllowed(command, fixture), command).toBe(true);
   });
 
   test('the docsync interface declares the grammar over the fixture home', () => {

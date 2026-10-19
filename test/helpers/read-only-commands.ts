@@ -44,6 +44,8 @@ type ToolSpec = {
   /** Directory operands are searched by content, so the deny scan applies below them. */
   recursive?: (options: string[]) => boolean;
   maxOperands?: number;
+  /** Arguments are literal text, never paths: no globs, and no option before the first argument except echo's -n/-e/-E. */
+  literal?: boolean;
 };
 
 const HEAD_TAIL: ToolSpec = {
@@ -88,6 +90,8 @@ export const READ_TOOLS: Readonly<Record<string, ToolSpec>> = {
   sha1sum: CHECKSUM,
   sha512sum: CHECKSUM,
   md5sum: CHECKSUM,
+  echo: { flag: /^-[neE]+$/, literal: true },
+  printf: { flag: /^--$/, literal: true },
   readlink: { flag: /^-[efmnqsvz]+$/ },
   realpath: { flag: /^-[eLmPqsz]+$/ },
 };
@@ -104,7 +108,7 @@ const FIND_PATHS = new Set(['-newer', '-anewer', '-cnewer', '-samefile']);
 
 /** Interface text an opted-in fixture declares to its actor. */
 export function readOnlyInterfaceText(root: string): string {
-  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; no output-file, symlink-following or external-program options). Join them with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
+  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v). Join them with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
 }
 
 export function readOnlyCommandAllowed(command: string, scope: ReadOnlyScope): boolean {
@@ -227,6 +231,11 @@ function commandRejection(words: Word[], piped: boolean, cwds: string[], context
   if (!spec) return `unlisted tool: ${name.text}`;
   if (piped && !STDIN_TOOLS.has(name.text)) return `${name.text} cannot read a pipe`;
   if (name.text === 'find') return findRejection(args, cwds, context);
+  if (spec.literal) {
+    if (args.some(arg => arg.glob)) return 'unquoted glob in literal arguments';
+    if (name.text === 'printf' && args[0]?.text.startsWith('-') && args[0].text !== '--') return `unsupported printf option: ${args[0].text}`;
+    return undefined;
+  }
   const options: string[] = [];
   const operands: Word[] = [];
   const paths: Word[] = [];
