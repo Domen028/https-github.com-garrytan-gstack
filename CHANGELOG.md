@@ -22,6 +22,40 @@
 - **…add a bin or a hook:** start it with the isolated shebang, and pass `bun --no-env-file --config=/dev/null` (or `bunIsolationArgs()` in TypeScript) wherever you start Bun. If you don't, the ratchet names the line.
 - **…relied on a repo `.env` to configure gstack:** export the variable in your shell or set it with `gstack-config`.
 
+## [1.91.152.0] - 2026-10-19
+
+**`/cso` now starts and finishes on ordinary repositories that hold a nested Git repository, a long patch history, or a Docker socket on macOS 27.** Three user reports (#3255, #3248) each stopped a run on a normal repo.
+
+### Fixed
+- **An untracked nested Git repository or a registered submodule no longer stops `gstack-cso start` with `UNSAFE_PATH`.** Git lists such a directory as one entry (`inner/` for an untracked repo, `sub` for a gitlink). The snapshot now records it as one explicit `excluded: nested Git repository` entry that is never read or copied, and the snapshot coverage lists it under exclusions. The capture pins the boundary's device, inode and mode, so a directory swapped in during capture fails as `SNAPSHOT_RACE`. A symlink to a directory is still refused. Ported from #3256 by Chao Chen (@surlymochan), who keeps authorship of the fix. (#3255, bug 1)
+- **A patch history over 1 MiB no longer leaves `history-inputs` not assessed.** The helper reads up to 100 commits of patches, then keeps the newest whole commits that fit the 1 MiB redaction bound. It never cuts inside a commit, so a secret can't be split across the cut and escape redaction. When even the newest patch is too large, it keeps commit metadata only. A truncated `history.txt` starts with a `[gstack-cso history truncated: …]` line, `history-status.json` records `truncated` and the retained commit count, and the history coverage becomes `partial` with that gap. The redaction bound is unchanged. (#3255, bug 2)
+
+### For contributors
+- **`test/cso-ordinary-repos.test.ts`** covers each report end to end through the compiled launcher and `capture()`. Its negative controls show that a symlinked directory is still refused, that a nested repository swapped during capture fails as a race (this check fails if the device and inode comparison is removed), that retained and omitted history never shows a credential canary, and that Docker endpoint admission still refuses non-sockets, dangling and looping links, `..` paths and TCP. The #3248 socket fallback (`realpathSocket`) shipped in 1.91.96.0. The new endpoint-level case fails when admission calls plain `realpathSync`.
+
+## [1.91.151.0] - 2026-10-19
+
+**Three contributor fixes: a saved "never ask" now sticks for /plan-eng-review's structure question, /context-save and /context-restore close three checkpoint gaps, and a new how-to covers the first production deploy.** Ported from fork PRs so they can run the paid gate; each commit keeps its author.
+
+### Fixed
+- **/plan-eng-review's complexity-gate structure question has a registered id (`plan-eng-review-structure`).** Each run used to invent its own slug, so a `never-ask` saved through /plan-tune never matched the next run and the question came back every time. On `AUTO_DECIDE` the recommended arrangement is taken; feature cuts are still asked one by one. `gstack-question-preference --check` now also falls back to `$GSTACK_HOME/global-question-preferences.json` (the file the question-preference hook already reads) when the project file has no entry; a project entry still wins and the one-way-door and split-chain guards run first. From #3249 by @bezdekt.
+- **/context-save keeps provenance markers as English literals and backs file claims in Decisions Made; /context-restore treats a translated or unknown marker as `(path assumed)` and asks when no branch can pick between recent checkpoints with different titles.** Fixes #3217. From #3244 by @surlymochan.
+
+### Added
+- **`docs/howto-bring-up-a-first-deploy.md`:** a vendor-neutral walkthrough for when /setup-deploy stops at "Nothing is deployed yet" (host, services, env and secrets, DNS, verification, and what to have ready when you rerun /setup-deploy). Linked from the README and docs/skills.md. Fixes #3150. From #3264 by @szsunyuan.
+## [1.91.150.0] - 2026-10-19
+
+**The paid evals that still pinned older models now run on the current generation, and two cases that went red on the move are repaired at their cause.** Garry's direction (2026-10-18) is to stop testing older frontier models, so these files are re-baselined as a fresh measured reference rather than held to a threshold change.
+
+### Changed
+- **Old-model pins:** the `claude-opus-4-7` pins in `skill-e2e-plan`, `skill-e2e-plan-prosons`, `skill-e2e-design`, `skill-e2e-office-hours-phase4` and `skill-e2e-qa-bugs` now follow `resolveEvalModel('capture')` (Opus 5.5). The overlay benchmark fixtures pin `claude-opus-5-5` and `claude-sonnet-5-5`, the cookie workflow judge pins `claude-sonnet-5-5`, and `codex-sol-scope-termination` runs on `gpt-6.1-sol` while still rendering the `gpt-5.6-sol` overlay.
+- **/setup-browser-cookies:** the workflow is now five ordered steps. It checks for Aside first and ends there on `READY`, since no import is needed. It then asks every decision (source and profile, domains and target, verification, storage reset, all cookies) before any `$B` command, prepares gstack's browser (verification variables before the daemon starts, the fallback, the `Mode: cdp` stop), imports, and reports on three lines: Imported, Storage reset, Sign-in. The `{{BROWSE_SETUP}}` block, which contradicted the Aside probe, is gone from this skill.
+- **Gate integrity:** no threshold, trial count, case kind or assertion changed. Free-test edits follow the new cookie template: two phrase and order assertions, the approval fixture's reverse edits, and the positional-literals checksum list, which no longer includes this skill.
+
+### Fixed
+- **plan-review-prosons-hardstop-neg:** on Opus 5.5 one trial in three stopped with a provider refusal (`stop_reason: refusal`, category `reasoning_extraction`) on the turn that writes the captured question. Replays of the refused request were stopped 7 of 16 times with the capture prompt's "verbatim" and "Do NOT paraphrase. This is a format-capture test." wording and 0 of 24 without it. The shared prosons capture prompt now asks for "the text of the single AskUserQuestion you would have made", with the same required parts. The decision content and every assertion are unchanged; all four prosons cases pass 3/3.
+- **Cookie workflow judge:** on `claude-sonnet-5-5` it scored clarity 3, completeness 4, actionability 3 against the old template. The rewritten template scores 4/4/4 with unchanged thresholds.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
