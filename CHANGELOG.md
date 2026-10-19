@@ -15,12 +15,47 @@
 
 ### Changed
 - **`gstack-evidence run` no longer scrubs dotenv values from the child environment,** and `GSTACK_EVIDENCE_KEEP_DOTENV` is gone. Bun no longer loads those values into the wrapper, so the child sees your shell's environment, as it would if you ran the command by hand. The old value-equality scrub (#2652, @namtrok) also dropped shell-exported variables whose value matched the file.
-- **Raised SKILL.md size pins:** 80 pins in `test/fixtures/skill-md-size-allowlist.json` grew by 33 to 330 characters each, from the isolation flags alone (8,253 characters in total). For the same reason, ten parity caps in `test/helpers/carve-guards.ts` rose by the measured growth: ship, review, autoplan, spec, land-and-deploy and the three plan reviews (at most 132 skeleton bytes and 0.0016 union ratio).
+- **Raised SKILL.md size pins:** 80 pins in `test/fixtures/skill-md-size-allowlist.json` grew by 33 to 330 characters each, from the isolation flags alone (8,253 characters in total).
 - **Directly executed `./scripts/*.ts` files no longer read gstack's own `.env`.** `bun run <script>` and the package scripts (`bun run test`, `bun run eval:bg:pr`) still load it.
 
 ### If you…
 - **…add a bin or a hook:** start it with the isolated shebang, and pass `bun --no-env-file --config=/dev/null` (or `bunIsolationArgs()` in TypeScript) wherever you start Bun. If you don't, the ratchet names the line.
 - **…relied on a repo `.env` to configure gstack:** export the variable in your shell or set it with `gstack-config`.
+
+## [1.91.158.0] - 2026-10-19
+
+**`gstack-config set plan_mode_preamble off` leaves the plan-mode preamble out of every installed skill, for people who never use plan mode.** The "Plan Mode Safe Operations" and "Skill Invocation During Plan Mode" sections add about 1.6 KB to each of 50 Claude skills. With the key off, the next `./setup` renders every host's skills with `gen-skill-docs --plan-mode=off`, and the default Claude install serves that render instead of the committed files. The default is on, and with it on every render and the committed SKILL.md files are byte-for-byte unchanged.
+
+### Added
+- **`gen-skill-docs --plan-mode=off`** drops the two sections at generation time. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" keep their marker. Hosts whose capabilities declare no plan mode already render the sections empty, so in practice the flag matters for Claude, Copilot and OpenCode. Fixes #3168. From #3213 by @xingzihai, finished with the config wiring.
+- **The `plan_mode_preamble` config key** (`on` | `off`, default `on`). It is a closed domain like `explain_level`: an unknown value warns and stores `on`. Setting it outside `./setup` says it applies on the next setup run and prints the `./setup --refresh-registered` command that applies it now.
+- **Every installed render carries the choice:** all 16 `gen:skill-docs` call sites in `setup`, the Claude render helper, `gstack-config gbrain-refresh`, and the router that `gstack-relink` re-renders in place (as it already does for `disabled_skills`). When setup has to build, `scripts/build.sh` renders Factory, OpenCode, Cursor, Copilot and Antigravity without the flag, so with the key off setup renders those hosts again afterwards.
+- **The default Claude install gets a render when the key is off.** Without a working gbrain (absent, or the detector failed), `gstack_claude_render_action` returns `plain` instead of serving the committed files; with gbrain the brain-aware render already runs and now carries the flag too. The activation record (`~/.gstack/render/claude.overlay`) gains `plan_mode=off`. Turning the key back on removes that render on the next setup when gbrain is absent or its detector fails (a failed detector otherwise keeps a render), and re-renders the brain-aware render with the sections when gbrain is present. A failed render with the key off keeps the previous render. Records written with the key on are unchanged.
+
+### Fixed
+- **`gstack-relink` refreshes the `_gstack-command` router alias after it re-renders the router.** It used to copy the router before the re-render, so the alias kept the previous router (with `disabled_skills`, the full skill list) until the next relink.
+
+### Changed
+- **Gate integrity:** new tests `test/plan-mode-off-build.test.ts` (from #3213, unchanged), `test/plan-mode-off-generation.test.ts`, `test/plan-mode-preamble-config.test.ts`, `test/plan-mode-preamble-render.test.ts` and `test/plan-mode-preamble-setup.test.ts`. No existing test was edited, and no threshold, trial count, case kind or judge changed.
+
+## [1.91.157.0] - 2026-10-19
+
+**Claude SKILL.md files no longer carry a "When to invoke" body section, which saves about 20 KB across 56 skills.** Claude Code reads a skill's body only after the skill is invoked, so routing prose there never routed anything. Routing still comes from the catalog description and the CLAUDE.md routing block, and voice triggers move into the root router's routing block. From #3129 by @thanhnguyentung95.
+
+### Changed
+- **Catalog trim (`scripts/gen-skill-docs.ts`):** the Claude render keeps the one-line catalog description and no longer inserts the routing and voice-trigger prose into the body. `--catalog-mode=full` and the other hosts are unchanged: they keep the full description.
+- **Voice triggers in the root router:** a new `{{VOICE_TRIGGER_ROUTING}}` resolver (`scripts/resolvers/voice-triggers.ts`) adds one `- Voice trigger "…" → invoke /<skill>` line per skill to the root `SKILL.md` routing block, Claude only. That's 21 lines, and the root router's eager ceiling rises from 4289 to 4821 tokens.
+- **Context budget:** 54 per-skill eager ceilings go down (net −5,139 tokens). The `claude/design-review` size pin drops by 437 chars, and the claude ship golden is refreshed.
+- **Gate integrity:** the tests that pinned the removed section now assert its absence, or check the template description instead:
+  - `test/catalog-trim.test.ts` (the three `buildWhenToInvokeSection` tests go with the function);
+  - `test/catalog-mode-full.test.ts` and `test/cso-preserved.test.ts`;
+  - `test/gen-skill-docs.test.ts` (the benchmark routing and CSO voice tests read the template);
+  - `test/skill-validation.test.ts` (trigger and proactive phrases are checked in `SKILL.md.tmpl`);
+  - `test/helpers/parity-harness.ts` (no `## When to invoke` heading required);
+  - `test/helpers/skill-fixture.ts` and `test/skill-e2e-retro.test.ts` (the section is dropped from the review, review-army and retro E2E section lists). `scripts/harness-version.json` records the `skill-fixture.ts` change as non-behavioral: `HARNESS_VERSION` stays 6, and the regenerated SKILL.md bytes already start those cases' new series.
+  - `test/helpers/manual-judge-review-fixture.ts` puts the removed section back when it rebuilds the historical cookie-workflow approval, so the approved prompt hash and line range still match. The approval itself is unchanged.
+
+  One new free test checks that the root router routes every voice trigger, and it skips the `connect-chrome` alias symlink. No threshold, trial count, case kind or judge changed. No context-budget ceiling rose except the root router's.
 
 ## [1.91.156.0] - 2026-10-19
 
