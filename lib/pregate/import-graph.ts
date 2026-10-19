@@ -11,7 +11,8 @@
  *      Python, dotted `mock.patch` targets (`'pkg.mod.Class.method'`);
  *   3. the `bin/<name>` → `test/<name>*.test.*` convention (with and without
  *      the `gstack-` prefix);
- *   4. explicit `.gstack/pregate.json` `dependencies` declarations.
+ *   4. explicit `.gstack/pregate.json` `dependencies` declarations;
+ *   5. in a Django project, the files Django loads by name (lib/pregate/django.ts).
  * Dart directives (`import`/`export`/`part`, conditional URIs included) resolve
  * `package:<name>/x` through every tracked pubspec.yaml to `<root>/lib/x`.
  * Uncertainty selects more tests, never fewer: a dependency on a directory
@@ -23,11 +24,12 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { matchesAny } from '../ship-policy';
+import { djangoEdges } from './django';
 
 export const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|py|rb|sh|bash|go|rs|dart)$/;
 export const TEST_FILE_RE = /(?:^|\/)(?:test|tests|spec|__tests__)\/.*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)[^/]*\.(?:test|spec)\.[cm]?[jt]sx?$|(?:^|\/)test_[^/]*\.py$|_test\.(?:py|go|rb)$|_spec\.rb$|(?:^|\/)[^/]*\.bats$|(?:^|\/)test\/(?:.*\/)?[^/]*_test\.dart$/;
 
-export interface Edge { from: string; via: 'import' | 'literal' | 'convention' | 'declared' | 'generated' }
+export interface Edge { from: string; via: 'import' | 'literal' | 'convention' | 'declared' | 'generated' | 'framework' }
 export interface Graph {
   files: Set<string>;
   tests: Set<string>;
@@ -106,15 +108,26 @@ function resolveDartUri(files: Set<string>, packages: Map<string, string[]>, fro
 }
 
 /**
- * A run of directives from a line start: several may share a line (`import 'a'; import 'b';`), and one may span lines
- * (dart format indents the continuation of a conditional import). A body continues only onto an indented line that does not
- * start another directive, or onto a whitespace-only line (a comment line inside the directive, once blanked), and is bounded,
- * so a `;`-less directive cannot scan the file (linear time). Each directive is split out by DART_DIRECTIVE.
+ * The URIs of every `import`/`export`/`part` directive (never `part of`), comments blanked. A directive runs from its keyword at
+ * a line start or after a `;` to the next `;`, across any number of lines whatever their indentation (a conditional import's
+ * `if (…) 'uri'` clause may start a line). The scan resumes after each directive, so it is one linear pass; a directive missing its
+ * `;` reads to the end of the file, which can only add edges.
  */
-const DART_DIRECTIVE_RUN = /^[ \t]*(?:(?:library|import|export|part)\b(?:[^;\n]|\n(?=[ \t]*\n|[ \t]+\S)(?![ \t]*(?:library|import|export|part)\b)){0,4000};[ \t]*)+/gm;
-const DART_DIRECTIVE = /(?:^|;)\s*(?:import|export|part)\b(?!\s+of\b)([^;]*)(?=;)/g;
+export function dartDirectiveUris(source: string): string[] {
+  const code = blankDartComments(source.replace(/^\uFEFF/, ''));
+  const start = /(?:^|;)[ \t]*(?:import|export|part)\b(?!\s+of\b)/gm;
+  const uris: string[] = [];
+  for (let m = start.exec(code); m; m = start.exec(code)) {
+    const from = m.index + m[0].length;
+    const semi = code.indexOf(';', from);
+    const end = semi < 0 ? code.length : semi;
+    for (const u of code.slice(from, end).matchAll(/['"]([^'"\n]+)['"]/g)) uris.push(u[1]!);
+    start.lastIndex = Math.max(end, from);
+  }
+  return uris;
+}
 
-/** Dart source with line and block comments blanked to spaces (newlines kept, so line structure holds), quote-aware, in one linear pass. */
+/** Dart source with line and (nested) block comments blanked to spaces (newlines kept, so line structure holds), quote-aware, in one linear pass. */
 export function blankDartComments(source: string): string {
   let out = '';
   let quote = '';
@@ -124,8 +137,15 @@ export function blankDartComments(source: string): string {
     if (c === "'" || c === '"') { quote = c; out += c; continue; }
     const line = source.startsWith('//', i);
     if (!line && !source.startsWith('/*', i)) { out += c; continue; }
-    const e = line ? source.indexOf('\n', i) : source.indexOf('*/', i + 2);
-    const stop = e < 0 ? source.length : line ? e : e + 2;
+    let stop: number;
+    if (line) { const e = source.indexOf('\n', i); stop = e < 0 ? source.length : e; }
+    else {
+      // Dart block comments nest.
+      let depth = 0;
+      for (stop = i; stop < source.length;) {
+        if (source.startsWith('/*', stop)) { depth++; stop += 2; } else if (source.startsWith('*/', stop)) { depth--; stop += 2; if (!depth) break; } else stop++;
+      }
+    }
     out += source.slice(i, stop).replace(/[^\n]/g, ' ');
     i = stop - 1;
   }
@@ -376,7 +396,7 @@ function addEdge(graph: Graph, dependency: string, dependent: string, via: Edge[
 export function referencesIn(files: Set<string>, dirs: Set<string>, rel: string, source: string, config: PathAliases = NO_ALIASES, unresolved?: string[], packages: Map<string, string[]> = new Map()): Array<{ target: string; via: Edge['via'] }> {
   const out: Array<{ target: string; via: Edge['via'] }> = [];
   if (rel.endsWith('.dart')) {
-    for (const run of blankDartComments(source.replace(/^\uFEFF/, '')).matchAll(DART_DIRECTIVE_RUN)) for (const d of run[0].matchAll(DART_DIRECTIVE)) for (const u of d[1]!.matchAll(/['"]([^'"]+)['"]/g)) for (const t of resolveDartUri(files, packages, rel, u[1]!)) out.push({ target: t, via: 'import' });
+    for (const uri of dartDirectiveUris(source)) for (const t of resolveDartUri(files, packages, rel, uri)) out.push({ target: t, via: 'import' });
   }
   const importOf = (spec: string) => {
     const targets = resolveRefs(files, dirs, rel, spec, false, config);
@@ -432,14 +452,18 @@ export function buildGraph(repoRoot: string, opts: BuildOptions = {}): Graph {
   const graph: Graph = { files, tests: new Set(all.filter(isTestFile)), reverse: new Map(), unresolved: new Map(), aliasNotes: config.notes };
   const maxBytes = opts.maxBytes ?? 2 * 1024 * 1024;
   const packages = dartPackages(repoRoot, all);
+  const pySources = new Map<string, string>();
   for (const rel of all) {
     if (!SOURCE_EXT.test(rel) && !rel.startsWith('bin/')) continue;
     let source: string;
     try { const st = fs.statSync(path.join(repoRoot, rel)); if (!st.isFile() || st.size > maxBytes) continue; source = fs.readFileSync(path.join(repoRoot, rel), 'utf8'); } catch { continue; }
+    if (rel.endsWith('.py')) pySources.set(rel, source);
     const unresolved: string[] = [];
     for (const { target, via } of referencesIn(files, dirs, rel, source, config, graph.tests.has(rel) ? unresolved : undefined, packages)) addEdge(graph, target, rel, via);
     if (unresolved.length) graph.unresolved!.set(rel, unresolved);
   }
+  const django = djangoEdges({ files: [...files], tests: graph.tests, read: rel => pySources.get(rel) ?? readRepoFile(repoRoot, rel, maxBytes), resolveDotted: dotted => pythonPatchTarget(files, dotted) });
+  for (const e of django) addEdge(graph, e.dependency, e.dependent, 'framework');
   for (const test of graph.tests) {
     const m = /^(?:[\w.-]+\/)*?test\/([\w-]+)\.(?:test|spec)\./.exec(test);
     if (!m) continue;

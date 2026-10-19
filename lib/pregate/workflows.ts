@@ -103,7 +103,11 @@ function commandTestFiles(command: string, start: string | null, scripts: Record
   let cur = start;
   const out: string[] = [];
   const saved: Array<string | null> = [];
-  for (const raw of command.split(/&&|\|\||[;|\n]/)) {
+  const segments = command.split(/&&|\|\||[;|\n]/);
+  // A pipeline element, command substitution, or a `)` with text after it (a redirect) runs a `cd` in a scope this walk cannot
+  // track, so in such a command any directory change makes the directory unknown (the lane may run any test).
+  const untracked = /(?<!\|)\|(?!\|)|`|\$\(/.test(command) || segments.some(seg => /\)/.test(seg.replace(/\)+\s*$/, '')));
+  for (const raw of segments) {
     // A `( … )` subshell's cds end at its `)`.
     const opens = /^\s*(\(+)/.exec(raw)?.[1]!.length ?? 0;
     for (let i = 0; i < opens; i++) saved.push(cur);
@@ -123,9 +127,9 @@ function commandTestFiles(command: string, start: string | null, scripts: Record
       }
     }
     const cd = /^\s*(?:cd|pushd)(?:\s+(.*))?$/.exec(seg);
-    if (cd) cur = changeDir(cur, cd[1]);
+    if (cd) cur = untracked ? null : changeDir(cur, cd[1]);
     else if (/(?:^|[\s(){}])(?:cd|pushd|popd)(?=\s|$)/.test(seg)) cur = null;
-    for (let closes = (/(\)+)\s*$/.exec(seg)?.[1]!.length ?? 0); closes > 0 && saved.length; closes--) cur = saved.pop()!;
+    for (let closes = (/(\)+)\s*$/.exec(seg)?.[1]!.length ?? 0); closes > 0 && saved.length; closes--) { const outer = saved.pop()!; if (!untracked) cur = outer; }
   }
   return out;
 }

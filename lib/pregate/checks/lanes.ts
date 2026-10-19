@@ -24,7 +24,7 @@ import { matchesAny } from '../../ship-policy';
 import type { CheckDef, CheckResult, PregateContext, RemoteObligation } from '../types';
 
 /** The test command with `{files}`; detected from the repo when the config does not name one. */
-export function detectRunner(ctx: PregateContext, files: readonly string[]): string | null {
+export function detectRunner(ctx: Pick<PregateContext, 'config' | 'repoRoot'>, files: readonly string[]): string | null {
   if (ctx.config.runner) return ctx.config.runner;
   const has = (f: string) => fs.existsSync(path.join(ctx.repoRoot, f));
   let pkg: { devDependencies?: Record<string, string>; dependencies?: Record<string, string>; scripts?: Record<string, string> } = {};
@@ -230,6 +230,7 @@ function unfinished(ctx: PregateContext, r: Awaited<ReturnType<typeof runLocal>>
 function describe(sel: Selection): string[] {
   const lines = sel.noLane.map(f => `FAIL lanes — ${f} has no test lane`);
   if (sel.emptyLane.length) lines.push(`docs/no-tests (empty lane): ${sel.emptyLane.join(' ')}`);
+  if (sel.inert.length) lines.push(`no-tests (assets and tool config): ${sel.inert.join(' ')}`);
   for (const r of sel.remote) lines.push(`requires-remote ${r.lane} (${r.platform}): ${r.tests.length} test(s) — ${r.tests.slice(0, 8).join(' ')}${r.tests.length > 8 ? ' …' : ''}`);
   lines.push(`Tiers ran: ${sel.tiersRan.join(' ') || '(none)'}; requires-remote: ${[...new Set(sel.remote.map(r => r.platform))].join(' ') || 'none'}`);
   return lines;
@@ -316,8 +317,10 @@ async function run(ctx: PregateContext): Promise<CheckResult> {
     return { ...base, status: 'fail', code: 'PREGATE_NO_LANE', detail: `${sel.noLane.length} touched file(s) with no test lane: ${sel.noLane.join(' ')}`, fix: noLaneFix(sel.noLane) };
   }
   if (sel.tests.length === 0) {
+    const inert = sel.inert.length ? `${sel.inert.length} asset or tool-config file(s)` : '';
     const detail = sel.emptyLane.length
-      ? `docs/no-tests: ${sel.emptyLane.length} documentation file(s); nothing touched selects a test`
+      ? `docs/no-tests: ${sel.emptyLane.length} documentation file(s)${inert ? ` and ${inert}` : ''}; nothing touched selects a test`
+      : inert ? `no-tests: ${inert}; nothing touched selects a test`
       : ctx.touched.length ? 'nothing touched selects a test' : 'no touched files';
     return { ...base, detail };
   }
