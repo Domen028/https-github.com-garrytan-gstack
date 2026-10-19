@@ -19,6 +19,7 @@ let outside: string;
 const scope = () => ({ root, deny: (file: string) => path.basename(file) === 'credentials.json' });
 
 beforeAll(() => {
+  if (process.platform === 'win32') return;
   base = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'ro-grammar-'));
   root = path.join(base, 'root');
   outside = path.join(base, 'outside');
@@ -38,7 +39,13 @@ beforeAll(() => {
   fs.symlinkSync(outside, path.join(root, 'escape'));
   fs.symlinkSync(path.join(root, 'docs/guide.md'), path.join(root, 'guide-link.md'));
 });
-afterAll(() => fs.rmSync(base, { recursive: true, force: true }));
+afterAll(() => { if (base) fs.rmSync(base, { recursive: true, force: true }); });
+
+// Paid fixtures run on Linux; the grammar resolves POSIX paths only, so on Windows it accepts nothing.
+test.if(process.platform === 'win32')('the grammar fails closed on Windows', () => {
+  const root = fs.realpathSync(os.tmpdir());
+  for (const command of ['pwd', 'ls', 'wc -l x']) expect(readOnlyCommandAllowed(command, { root })).toBe(false);
+});
 
 function tree(dir: string): Record<string, string> {
   const out: Record<string, string> = {};
@@ -151,7 +158,7 @@ const REJECTED: Array<[string, string, RegExp]> = [
   ['shell syntax', 'tail -f docs/guide.md', /unsupported tail option: -f/],
 ];
 
-describe('rejected classes stay rejected', () => {
+describe.skipIf(process.platform === 'win32')('rejected classes stay rejected', () => {
   test.each(REJECTED)('%s: %s', (_, command, reason) => {
     expect(readOnlyCommandRejection(command, scope())).toMatch(reason);
     expect(readOnlyCommandAllowed(command, scope())).toBe(false);
