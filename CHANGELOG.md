@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.150.0] - 2026-10-19
 
 **The paid evals that still pinned older models now run on the current generation, and two cases that went red on the move are repaired at their cause.** Garry's direction (2026-10-18) is to stop testing older frontier models, so these files are re-baselined as a fresh measured reference rather than held to a threshold change.
 
