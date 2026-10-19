@@ -9,7 +9,6 @@ export interface DeliveryContext { readonly grant: Grant; readonly scope: ScopeI
 
 export interface DeliveryReport { accepted: number; searchable: number; removed: number; outstanding: number }
 
-/** One id's next step toward what capture admitted. */
 type Work =
   | { kind: 'upsert'; docId: DocId; body: ProcedureBody; prior: Delivery | null }
   | { kind: 'delete'; docId: DocId; prior: Delivery }

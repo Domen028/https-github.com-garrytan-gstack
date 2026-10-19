@@ -96,7 +96,6 @@ function hookState(root: string): Record<string, 'registered' | 'missing' | 'unr
   return out;
 }
 
-/** Runs a short state change under the management lock, which every enable, disable and mode change shares. */
 async function managed<T>(fn: () => T): Promise<T> {
   const result = await withLock(MANAGE_LOCK, { ttlMs: 30_000, waitMs: 5_000 }, fn);
   return result === 'busy' ? refuse('another gstack-task-memory command is running; try again') : result;
