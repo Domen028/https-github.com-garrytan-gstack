@@ -39,7 +39,9 @@ The key is never accepted as an argument. A key you enter is stored in
 read is refused.
 
 Running `enable` again replaces the grant. Work from before the new grant is
-never captured.
+never captured. A procedure an earlier grant sent to the same database is
+still removed if it later loses its proof; a grant for a different database
+leaves the old one alone.
 
 ## What leaves your machine
 
@@ -72,28 +74,49 @@ A task is captured only when the session itself shows that it worked:
 - After the last change, a test command ran and its own output reports a
   complete result with passing tests and no failures. `bun test`, `pytest`,
   `cargo test`, `vitest` and `jest` summaries are recognized. The command
-  must run on its own: a pipe, `||`, `;`, a redirect or an environment prefix
-  hides its real status, so that run does not count.
-- No check after the last change failed without passing again later.
+  must run on its own: a pipe, `||`, `;`, an environment prefix, output sent
+  to `/dev/null` or a `cd` into a subdirectory hides its real status, so that
+  run never counts as a pass.
+- No later run of a check failed or ended without a readable result. This
+  includes masked runs: `bun test || true` that reports a failure, a run that
+  was interrupted, and a run that has not returned yet all cancel the earlier
+  pass until the same check passes again.
 
 A missing exit status, a success message from the agent, and the end of a
-turn are not evidence. Any later change, including a shell command that may
-write files or a tool gstack does not recognize, cancels earlier checks. If a
-captured procedure loses its proof this way, gstack deletes it from HydraDB.
-A new prompt after a verified task starts a new task, so later work never
-cancels an earlier finished one.
+turn are not evidence. Any later change cancels earlier checks. A change is
+an edit, a tool gstack does not recognize, or a shell command that may write
+files: a redirect into a file, a background job (`&`), command substitution,
+`git commit` (its hooks can edit files), `git fetch`, `git remote set-url`, a
+snapshot update such as `bun test -u`, or any command gstack cannot read.
+Reading commands such as `git status`, `git diff`, `ls` and `grep`, and the
+agent's own task-list tools, cancel nothing. A new prompt after a verified
+task starts a new task, so later work never cancels an earlier finished one.
+
+If a captured procedure loses its proof, recall on this machine stops showing
+it at once, and gstack asks HydraDB to delete it. HydraDB deletes an entry
+only after it finishes indexing it, so the deletion can stay pending for a
+while, and longer if HydraDB is unreachable. Until HydraDB accepts it, other
+machines that share the repository's collection can still recall the
+procedure.
 
 ## Check, tune and retry
 
 - `gstack-task-memory status` shows the grant, where the key comes from,
-  the retrieval mode, both hooks, and the delivery state of each procedure.
-  It makes no network call. `queued` means HydraDB accepted a procedure that
-  is not searchable yet.
+  the retrieval mode, both hooks, and the state of each procedure. It makes
+  no network call. `pending` is not yet accepted by HydraDB, `processing` is
+  accepted but not searchable, `searchable` can be recalled while HydraDB
+  finishes indexing, and `indexed` is complete. `retracting` waits for HydraDB
+  to accept a deletion, `rejected` was refused as malformed and is not resent,
+  and `stale` was never sent before the grant was replaced.
 - Recall uses fast retrieval by default and gives up after 2 seconds. To
   trade latency for better matches, run `gstack-task-memory mode thinking`,
   which allows 5 seconds. A slow or unreachable HydraDB never blocks a prompt.
-- A procedure that could not be delivered is retried on the next Stop. To
-  retry now, run `gstack-task-memory flush`.
+- Work that could not be delivered, including a deletion, is retried by a
+  later Stop from any session in the repository, after a wait that doubles
+  with each failure up to an hour. That covers a refused key, a missing
+  database, an outage and failed indexing. After you fix the key or the
+  database, run `gstack-task-memory flush` to retry now. `flush` sends only
+  what capture already recorded and never reads old transcripts.
 - Hook failures are written to `$GSTACK_STATE_ROOT/hook-errors.log`, and
   `status` shows the most recent ones.
 
@@ -101,6 +124,7 @@ cancels an earlier finished one.
 
 Run `gstack-task-memory disable` from inside the repository. It revokes that
 repository's grant first, so the next prompt and the next Stop send nothing.
+An `enable` still waiting for the database is cancelled and enables nothing.
 The hooks stay while another repository still holds a grant. Add
 `--remove-key` to delete the stored key file.
 
