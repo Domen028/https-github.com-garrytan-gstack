@@ -121,10 +121,13 @@ test('Git guidance uses the existing working directory; --git-dir and --work-tre
 
 describe('stored docsync observer commands', () => {
   const stored = JSON.parse(fs.readFileSync(path.join(import.meta.dir, 'fixtures/docsync-observer-commands.json'), 'utf8')) as
-    { known_good: string[]; known_bad: string[] };
+    { known_good: string[]; known_good_posix: string[]; known_bad: string[] };
   const fill = (command: string) => command.replaceAll('{repo}', fixture.repo).replaceAll('{other}', path.dirname(fixture.repo))
     .replaceAll('{home}', fixture.home);
   test.each(stored.known_good)('harmless read form is accepted: %s', command => {
+    expect(docsCommandAllowed(fill(command), fixture)).toBe(true);
+  });
+  test.skipIf(process.platform === 'win32').each(stored.known_good_posix)('shared read-only grammar form is accepted: %s', command => {
     expect(docsCommandAllowed(fill(command), fixture)).toBe(true);
   });
   test.each(stored.known_bad)('known-bad form stays rejected: %s', command => {

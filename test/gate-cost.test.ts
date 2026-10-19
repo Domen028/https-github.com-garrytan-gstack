@@ -6,7 +6,13 @@ import {
   PyRandom, SCREEN_LABEL, caseCostTable, changedLinesByFile, gateCostBreakdown, heuristicPreambleOnly, parseEvalReport,
   prSelectionCost, simulateTrains, summarizeGates, summarizeSelector, type GateRecord, type PrDiff, type SelectionDeps,
 } from '../lib/gate-cost';
-import { buildReport, checkoutSelectionDeps, formatReport, parseArgs, parseMergeLog, parseWindowDate, readGateRecord, type ReplayReport } from '../scripts/gate-cost-replay';
+import {
+  DIAGNOSED_REDS, SCREEN_CANARY_CASES, classifyReds, headGreenAt, parseReportVerdict, percentile, pickTrain, prForRun, readyTimes, screenHit,
+  simulateArrivalTrains, stampFreeSignature, summarizeRedHeads, type GatedRun, type HeadDiff, type RedHeadRow,
+} from '../lib/gate-cost-history';
+import {
+  buildReport, checkoutSelectionDeps, formatHistory, formatReport, parseArgs, parseMergeLog, parseWindowDate, readGateRecord, type HistoryReport, type ReplayReport,
+} from '../scripts/gate-cost-replay';
 
 /**
  * A one-run artifact tree, written to a temporary directory: tracked files
@@ -217,5 +223,181 @@ describe('gate-cost-replay CLI', () => {
     expect(text).toContain(`${SCREEN_LABEL}: its preamble detector is a line-commonality heuristic`);
     expect(body.model!.rows).toHaveLength(12);
     expect(JSON.stringify(body.prs[0])).toContain('"screenProvisional"');
+  });
+});
+
+describe('red attribution (GSTA-47 rule)', () => {
+  test('report verdicts: rule, judge (spaced id) and unbound-shard failure lines', () => {
+    const text = ['[test:paid] VERDICT RED — lane gate/pr, attempt 1', '[test:paid] failures and split verdicts:',
+      '  ✗ tpa-absent-darwin  rule  FAIL  assertion — expected  [slice 14, attempt 1]',
+      '  ✗ canary/SKILL.md monitoring loop  judge  FAIL  score 2 < 3',
+      '  ✗ test/skill-e2e-demo.test.ts  rule shard NOT REPORTED  [slice 3, attempt 1]'].join('\n');
+    expect(parseReportVerdict(text)).toEqual({ verdict: 'RED', failures: [
+      { caseId: 'tpa-absent-darwin', kind: 'rule' }, { caseId: 'canary/SKILL.md monitoring loop', kind: 'judge' }, { caseId: 'test/skill-e2e-demo.test.ts', kind: 'rule' }] });
+    expect(parseReportVerdict('[test:paid] VERDICT GREEN — lane gate/pr').verdict).toBe('GREEN');
+    expect(parseReportVerdict('no report').verdict).toBe('NONE');
+  });
+
+  test('the own-diff signature ignores hunk positions, index lines and the package.json version', () => {
+    const diff = (hunk: string, index: string, version: string, body: string) => ['diff --git a/x.ts b/x.ts', `index ${index}`, '--- a/x.ts', '+++ b/x.ts', hunk, body,
+      'diff --git a/package.json b/package.json', '--- a/package.json', '+++ b/package.json', '@@ -3 +3 @@', `-  "version": "1.0.0",`, `+  "version": "${version}",`].join('\n');
+    const base = stampFreeSignature(diff('@@ -1 +1 @@', 'aaa..bbb', '1.0.1', '+x'));
+    expect(stampFreeSignature(diff('@@ -9 +9 @@', 'ccc..ddd', '1.0.2', '+x'))).toBe(base);
+    expect(stampFreeSignature(diff('@@ -1 +1 @@', 'aaa..bbb', '1.0.1', '+y'))).not.toBe(base);
+    expect(stampFreeSignature(diff('@@ -1 +1 @@', 'aaa..bbb', '1.0.1', '+x').split('\n').slice(0, 6).join('\n'))).toBe(base);
+  });
+
+  const H = (sha: string) => `${sha}000000000000000000000000000000000000000`.slice(0, 40);
+  const run = (id: number, pr: number | null, head: string, hour: number, failures: string[] = []): GatedRun =>
+    ({ id, pr, head: H(head), createdAt: new Date(Date.UTC(2026, 9, 5, hour)).toISOString(), green: failures.length === 0, failures: failures.map(caseId => ({ caseId, kind: 'rule' })) });
+  const heads = new Map<string, HeadDiff>([
+    [H('a1'), { ownSig: 's1', files: ['x/SKILL.md.tmpl'] }], [H('a2'), { ownSig: 's2', files: ['x/SKILL.md.tmpl', 'test/helpers/case-a.ts'] }],
+    [H('b1'), { ownSig: 't1', files: ['docs/b.md'] }], [H('b2'), { ownSig: 't1', files: ['docs/b.md'] }],
+    [H('c1'), { ownSig: 'u1', files: ['docs/c.md'] }], [H('c2'), { ownSig: 'u2', files: ['docs/c.md', 'docs/d.md'] }],
+  ]);
+  const deps = {
+    heads,
+    delta: (from: string, to: string) => (from === H('a1') && to === H('a2') ? ['test/helpers/case-a.ts', 'lib/from-main.ts'] : ['docs/d.md']),
+    touches: (caseId: string, files: string[]) => files.filter(file => file === `test/helpers/${caseId}.ts`),
+  };
+
+  test('own push touching the case inputs is PR-caused; red elsewhere, same own diff, unrelated pushes and no later run are not', () => {
+    const runs = [
+      run(1, 10, 'a1', 0, ['case-a', 'case-shared']), run(2, 10, 'a2', 2),
+      run(3, 11, 'b1', 1, ['case-b']), run(4, 11, 'b2', 3, ['case-b']),
+      run(5, 12, 'c1', 4, ['case-shared', 'case-c']), run(6, 12, 'c2', 5),
+      run(7, 13, 'zz', 6, ['case-z']), run(8, 14, 'zz', 7),
+    ];
+    const reds = classifyReds(runs, deps, { prCaused: [], outside: [] });
+    const byRun = Object.fromEntries(reds.map(r => [r.runId, r]));
+    expect(byRun[1]!.cause).toBe('pr');
+    expect(byRun[1]!.cases.map(c => [c.caseId, c.cause, c.reason])).toEqual([
+      ['case-a', 'pr', 'fixed by own push: test/helpers/case-a.ts'], ['case-shared', 'outside', 'also red in #12']]);
+    expect(byRun[3]!.cases[0]).toMatchObject({ cause: 'outside', reason: 'still red with the same own diff' });
+    expect(byRun[4]!.cases[0]).toMatchObject({ cause: 'unknown', reason: 'no later gated run' });
+    expect(byRun[5]!.cases.map(c => c.reason)).toEqual(['also red in #10', 'passed next after an unrelated push']);
+    expect(byRun[5]!.cause).toBe('outside');
+    expect(byRun[7]!.cause).toBe('unknown');
+    expect(classifyReds([run(9, 15, 'q1', 0, [])].map(r => ({ ...r, green: false })), deps)[0]).toMatchObject({ cause: 'outside', cases: [] });
+  });
+
+  test('transcript diagnoses win, and the 72-hour window bounds "red elsewhere"', () => {
+    const own = DIAGNOSED_REDS.prCaused[0], outside = DIAGNOSED_REDS.outside[0];
+    const reds = classifyReds([run(own, 20, 'a1', 0, ['case-x']), run(outside, 21, 'a1', 0, ['case-y']), run(30, 22, 'b1', 1, ['case-x'])], deps);
+    expect(reds.find(r => r.runId === own)!.cases[0]!.reason).toBe('diagnosed own edit (GSTA-45)');
+    expect(reds.find(r => r.runId === outside)!.cases[0]!.reason).toBe('diagnosed main defect (fix wave 3)');
+    const far = classifyReds([run(40, 30, 'a1', 0, ['case-a']), run(41, 30, 'a2', 1), run(42, 31, 'b1', 80, ['case-a'])], deps, { prCaused: [], outside: [] });
+    expect(far.find(r => r.runId === 40)!.cause).toBe('pr');
+  });
+});
+
+describe('red-head replay', () => {
+  const selection = (e2e: string[], canary: boolean, global = false) => ({ e2e, global, canary, canaryReasons: canary ? ['resolver x'] : [], preambleOnly: [] });
+  const files: Record<string, string> = { 'case-a': 'test/skill-e2e-demo.test.ts', 'case-b': 'test/skill-e2e-other.test.ts', 'auq-format-gate': 'test/auq.test.ts', 'judge x': 'test/skill-llm-eval.test.ts' };
+  const caseFile = (id: string) => files[id] ?? null;
+
+  test('judges always count; touchfiles, unbound shards by file, and canary cases only when the canary set is added', () => {
+    expect(screenHit({ caseId: 'qa/SKILL.md workflow', kind: 'judge' }, selection([], false), caseFile)).toBe('judge');
+    expect(screenHit({ caseId: 'judge x', kind: 'rule' }, selection([], false), caseFile)).toBe('judge');
+    expect(screenHit({ caseId: 'case-a', kind: 'rule' }, selection(['case-a'], false), caseFile)).toBe('touchfiles');
+    expect(screenHit({ caseId: 'test/skill-e2e-demo.test.ts', kind: 'rule' }, selection(['case-a'], false), caseFile)).toBe('touchfiles');
+    expect(screenHit({ caseId: 'case-b', kind: 'rule' }, selection(['case-a'], false), caseFile)).toBeNull();
+    expect(screenHit({ caseId: 'case-b', kind: 'rule' }, selection([], false, true), caseFile)).toBe('global');
+    expect(screenHit({ caseId: 'auq-format-gate', kind: 'rule' }, selection([], true), caseFile)).toBe('canary');
+    expect(screenHit({ caseId: 'auq-format-gate', kind: 'rule' }, selection([], false), caseFile)).toBeNull();
+    expect(Object.values(SCREEN_CANARY_CASES)).toContain('auq-format-gate');
+    const gate = checkoutSelectionDeps().gateCases;
+    for (const id of Object.values(SCREEN_CANARY_CASES)) expect(gate).toContain(id);
+  });
+
+  test('summaries count merged PRs only: P-k numerator, screened misses, and misses without the canary set', () => {
+    const row = (pr: number, hit: RedHeadRow['hit']): RedHeadRow => ({ pr, runId: pr, head: 'h', base: 'b', baseSource: 'tested-merge', files: 1, caseId: 'c', kind: 'rule', hit, canaryReasons: [] });
+    const redRuns = [10, 11, 12, 99].map(pr => ({ runId: pr, pr, head: 'h', createdAt: '', nextRunId: null, cause: 'pr' as const, cases: [] }));
+    const s = summarizeRedHeads([row(10, null), row(10, 'touchfiles'), row(11, 'canary'), row(12, 'judge'), row(99, null)], redRuns,
+      [10, 11, 12, 13].map(pr => ({ pr, paidRelevant: pr !== 13 })));
+    expect(s).toMatchObject({ mergedPrs: 4, paidRelevantPrs: 3, prsWithPrRed: [10, 11, 12], prCausedRuns: 3, prCausedCases: 4, missedPrs: [10], missedCases: 1,
+      missedPrsWithoutCanary: [10, 11], otherPrCausedRuns: 1, byHit: { missed: 1, touchfiles: 1, canary: 1, judge: 1 } });
+  });
+});
+
+describe('READY arrivals and trains', () => {
+  const at = (hour: number) => new Date(Date.UTC(2026, 9, 10, hour)).toISOString();
+
+  test('READY is the first green head with the merged own diff before the merge; fallback the final head', () => {
+    const green = headGreenAt([
+      { head: 'h1', workflow: 'free', createdAt: at(0), completedAt: at(1), conclusion: 'success' },
+      { head: 'h1', workflow: 'evals', createdAt: at(0), completedAt: at(2), conclusion: 'success' },
+      { head: 'h2', workflow: 'free', createdAt: at(3), completedAt: at(4), conclusion: 'success' },
+      { head: 'h2', workflow: 'evals', createdAt: at(3), completedAt: at(4), conclusion: 'failure' },
+      { head: 'h2', workflow: 'evals', createdAt: at(5), completedAt: at(6), conclusion: 'success' },
+      { head: 'h3', workflow: 'free', createdAt: at(7), completedAt: at(8), conclusion: 'success' },
+      { head: 'h4', workflow: 'free', createdAt: at(7), completedAt: at(8), conclusion: 'failure' },
+    ]);
+    expect([...green]).toEqual([['h1', at(2)], ['h2', at(6)], ['h3', at(8)], ['h4', null]]);
+    const rows = readyTimes([
+      { pr: 1, mergedAt: at(10), finalHead: 'h3', heads: [{ sha: 'h1', ownSig: 'old' }, { sha: 'h2', ownSig: 's' }, { sha: 'h3', ownSig: 's' }], gatedRuns: [at(0), at(3), at(5), at(7)] },
+      { pr: 2, mergedAt: at(10), finalHead: 'h1', heads: [{ sha: 'h1', ownSig: null }], gatedRuns: [] },
+      { pr: 3, mergedAt: at(7), finalHead: 'h3', heads: [{ sha: 'h3', ownSig: 's' }], gatedRuns: [] },
+    ], green);
+    expect(rows.map(r => [r.pr, r.ready, r.source, r.readyToMergeHours, r.gatesAfterReady])).toEqual([
+      [1, at(6), 'final-own-diff', 4, 1], [2, at(2), 'final-head', 8, 0], [3, null, 'none', null, 0]]);
+    expect([percentile([5, 1, 3, 2, 4], 0.5), percentile([5, 1, 3, 2, 4], 0.9), percentile([], 0.5)]).toEqual([3, 5, 0]);
+  });
+
+  test('train composition: unscreened PRs form their own train at five, else screened first, else the fill limit', () => {
+    const item = (enqueuedMs: number, screened: boolean) => ({ enqueuedMs, screened });
+    const pool = [item(0, true), item(1, true), ...[2, 3, 4, 5, 6].map(t => item(t, false))];
+    expect(pickTrain(pool, 10, 5, 100)).toEqual(pool.slice(2));
+    const mixed = [item(5, false), item(0, true), item(1, false), item(2, true), item(3, true)];
+    expect(pickTrain(mixed, 10, 5, 100)?.map(x => x.screened)).toEqual([true, true, true, false, false]);
+    expect(pickTrain([item(0, false), item(1, true)], 99, 5, 100)).toBeNull();
+    expect(pickTrain([item(0, false), item(1, true)], 100, 5, 100)?.map(x => x.enqueuedMs)).toEqual([1, 0]);
+  });
+
+  test('deterministic controls: a fill-limit train, a full train, and a repeated defect red', () => {
+    const arrivals = (n: number, paidRelevant: boolean) => Array.from({ length: n }, (_, i) => ({ pr: i + 1, readyMs: 0, paidRelevant, screenUsd: 1 }));
+    const base = { policy: { kind: 'all' } as const, windowDays: 7, outsideRed: 0, redScreened: 0, redUnscreened: 0, reps: 3 };
+    const full = simulateArrivalTrains({ ...base, arrivals: arrivals(5, true) });
+    expect(full).toMatchObject({ trainsWeekly: 1, meanOccupancy: 5, fullTrainShare: 1, gateAttemptsWeekly: 1, bisectsWeekly: 0, occupancy: [0, 0, 0, 0, 1] });
+    expect(full.readyToMerge).toMatchObject({ prs: 15, p50Hours: 0.75, p90Hours: 0.75 });
+    const short = simulateArrivalTrains({ ...base, arrivals: arrivals(2, false) });
+    expect(short.readyToMerge.p90Hours).toBe(3.75);
+    const red = simulateArrivalTrains({ ...base, arrivals: arrivals(2, true), redScreened: 1 });
+    expect(red).toMatchObject({ trainsWeekly: 2, gateAttemptsWeekly: 3, bisectsWeekly: 2, attributedRebuildsWeekly: 1, rebuildOnceWeekly: 0, occupancy: [0, 2, 0, 0, 0] });
+    expect(red.readyToMerge.p50Hours).toBe(8.25);
+    const unscreened = simulateArrivalTrains({ ...base, policy: { kind: 'none' }, arrivals: arrivals(2, true), redUnscreened: 1 });
+    expect(unscreened.bisectsWeekly).toBe(2);
+    expect(simulateArrivalTrains({ ...base, arrivals: arrivals(7, true), outsideRed: 0.15, redUnscreened: 0.25, seed: 4 }))
+      .toEqual(simulateArrivalTrains({ ...base, arrivals: arrivals(7, true), outsideRed: 0.15, redUnscreened: 0.25, seed: 4 }));
+  });
+
+  test('runs map to PRs by pull_requests, else by head branch while the PR was open', () => {
+    const pulls = [{ number: 5, ref: 'feat', createdAt: at(0), mergedAt: at(5), closedAt: at(5) }, { number: 6, ref: 'feat', createdAt: at(8), mergedAt: null, closedAt: null }];
+    expect(prForRun({ branch: 'x', createdAt: at(1), prNumbers: [9] }, pulls)).toBe(9);
+    expect(prForRun({ branch: 'feat', createdAt: at(2), prNumbers: [] }, pulls)).toBe(5);
+    expect(prForRun({ branch: 'feat', createdAt: at(9), prNumbers: [] }, pulls)).toBe(6);
+    expect(prForRun({ branch: 'feat', createdAt: at(7), prNumbers: [] }, pulls)).toBeNull();
+  });
+
+  test('--history needs a window, and every history line naming the screen carries the screen-provisional label', () => {
+    expect(() => parseArgs(['--runs', '1', '--history'])).toThrow('--history needs a window');
+    expect(parseArgs(['--runs', '1', '--history', '--since', '2026-10-03', '--until', '2026-10-04']).history).toBe(true);
+    const history: HistoryReport = {
+      window: { since: at(0), until: at(24) }, runs: { evals: 3, gated: 2, red: 1, free: 4, unmapped: 0 },
+      redRuns: [{ runId: 1, pr: 10, head: 'h', createdAt: at(0), nextRunId: 2, cause: 'pr', cases: [{ caseId: 'case-a', kind: 'rule', cause: 'pr', reason: 'fixed by own push: x' }] }],
+      redHeads: [{ pr: 10, runId: 1, head: 'h', base: 'b', baseSource: 'tested-merge', files: 2, caseId: 'case-a', kind: 'rule', hit: null, canaryReasons: [] }],
+      redSummary: summarizeRedHeads([{ pr: 10, runId: 1, head: 'h', base: 'b', baseSource: 'tested-merge', files: 2, caseId: 'case-a', kind: 'rule', hit: null, canaryReasons: [] }],
+        [{ runId: 1, pr: 10, head: 'h', createdAt: at(0), nextRunId: 2, cause: 'pr', cases: [] }], [{ pr: 10, paidRelevant: true }, { pr: 11, paidRelevant: false }]),
+      perPr: [{ pr: 10, paidRelevant: true, prCausedRed: true, screenedMiss: true }, { pr: 11, paidRelevant: false, prCausedRed: false, screenedMiss: false }],
+      ready: [], baseline: { prs: 2, p50Hours: 1, p90Hours: 2, meanHours: 1.5, gatesAfterReady: 1, sources: { 'final-own-diff': 2 } },
+      trainParams: { trainSize: 5, fillLimitHours: 3, gateMinutes: 45, bisectMinutes: 45, redScreened: 0.06, redUnscreened: 0.25, reps: 3, seed: 1 },
+      trains: [simulateArrivalTrains({ arrivals: [{ pr: 10, readyMs: 0, paidRelevant: true, screenUsd: 1 }], policy: { kind: 'all' }, windowDays: 7, reps: 3 })],
+    };
+    const text = formatHistory(history);
+    expect(text).toContain('P-k (merged PRs with any PR-caused red run): 1 of 2 (50.0%): #10');
+    expect(text).toContain('misses: 1 of 1 (100.0%) merged PRs with a PR-caused red (1 of 1 case results): #10');
+    const screenLines = text.split('\n').filter(line => /\bscreen\b/i.test(line));
+    expect(screenLines.length).toBeGreaterThan(2);
+    for (const line of screenLines) expect(line).toContain(SCREEN_LABEL);
   });
 });
