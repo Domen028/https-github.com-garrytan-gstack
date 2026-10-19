@@ -244,8 +244,8 @@ describe('cookie workflow judge input', () => {
       expect(body).toContain('Use this checkout as the gstack root if it contains `BROWSER.md` and `browse/SKILL.md`');
       expect(body).toContain('the installed root containing `bin/gstack-skill-start`, never a generated host stub');
       expect(body).toContain("Read that root's `browse/SKILL.md`");
-      expect(body).toContain('On `READY`, stop importing');
-      expect(body.indexOf('**BROWSER SETUP**')).toBeLessThan(body.indexOf('## SETUP'));
+      expect(body).toContain('**Aside probe prints `READY`:** no import is needed');
+      expect(body.indexOf('**BROWSER SETUP**')).toBeLessThan(body.indexOf('**Browser fallback**'));
       expect(body).toContain("Read that same root's `BROWSER.md`, **Choosing a source and checking sign-in**");
       expect(body).not.toContain('../BROWSER.md');
     }
