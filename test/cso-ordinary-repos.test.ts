@@ -21,8 +21,11 @@ const OLD_CANARY = ['ghp_', 'zyxwvutsrqponmlkjihgfedcba0987654321'].join('');
 const MARKER = '[gstack-cso history truncated:';
 const roots: string[] = [];
 const originalHome = process.env.GSTACK_HOME;
-const state = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cso-ordinary-state-')));
-process.env.GSTACK_HOME = state;
+let state = '';
+beforeAll(() => {
+  state = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'cso-ordinary-state-')));
+  process.env.GSTACK_HOME = state;
+});
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
