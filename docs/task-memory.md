@@ -11,6 +11,31 @@ It is off by default, works one repository at a time, and needs a
 [HydraDB](https://docs.hydradb.com/get-started/v2/introduction) API key. It
 supports Claude Code only.
 
+## What it unlocks
+
+A new session can reuse the steps that worked in an earlier session. For
+example, after an agent fixes a negative-number bug and passes its tests,
+gstack records the edited paths and passing commands automatically. When
+the bug returns, a related prompt brings that history into the agent's
+context. The same repository identity lets another clone recall it too.
+
+This helps answer "How did we fix this before?" and "Which files and checks
+were involved?" without asking the agent to write a separate memory entry.
+Capture runs after the turn; recall runs before the next prompt. The agent
+receives readable Markdown and decides how the history applies to today's code.
+
+Task history complements GBrain's code, documentation and session knowledge.
+The [GBrain HydraDB integration](https://github.com/garrytan/gbrain/pull/6695)
+adds cloud retrieval with graph context over that content. Together, these
+give an agent the relevant source knowledge and a record of how earlier work
+was verified. For a migration, keep the dated design decisions in GBrain and
+recall the migration's edited paths and passing checks through task memory.
+An agent can then use the old and current decisions to explain the change,
+and the procedure to find how it was implemented and tested. Questions about
+how facts or relationships changed over time need those dated versions and
+relationship evidence from the knowledge corpus; task memory records
+procedures rather than a complete temporal graph.
+
 ## Turn it on
 
 Run `enable` from inside the repository you want remembered:
