@@ -14,6 +14,7 @@ import {
   snapshotPathId,
   MAX_OUTPUT,
 } from './contracts';
+import { withholdHistory } from './history';
 import { childEnvironment, executable, git, redact, runProcess } from './process';
 import { boundedList, readJson, secureDirectory, writeHelperJson, writeJson } from './state';
 import { scan } from '../redact-engine';
@@ -952,7 +953,9 @@ export async function capture(
           if (!(error instanceof CsoError) || error.code !== 'MISSING_INPUT') throw error;
         }
         guard();
-        const commits = (patched ?? '').split(/^(?=commit [0-9a-f]{40}(?:[0-9a-f]{24})?$)/m).filter(Boolean),
+        const commits = withholdHistory(patched ?? '', exclusion)
+            .split(/^(?=commit [0-9a-f]{40}(?:[0-9a-f]{24})?$)/m)
+            .filter(Boolean),
           sizes = commits.map((commit) => Buffer.byteLength(commit)),
           whole = sizes.reduce((sum, size) => sum + size, 0) <= MAX_OUTPUT;
         let kept = 0,
