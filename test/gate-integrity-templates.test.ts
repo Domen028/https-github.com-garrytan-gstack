@@ -17,6 +17,8 @@ import { generateGateScanBlock } from '../scripts/resolvers/gate-scan';
 import { RESOLVERS } from '../scripts/resolvers/index';
 import { HOST_PATHS, type TemplateContext } from '../scripts/resolvers/types';
 import { between, compact, expectAbsent, expectMentions, expectOrdered, expectTokens } from './helpers/prompt-structure';
+import { reportsGateDisposition } from './helpers/gate-disposition';
+import opusReports from './fixtures/review-gate-integrity-opus-reports.json';
 
 const root = join(import.meta.dir, '..');
 const read = (rel: string) => readFileSync(join(root, rel), 'utf8');
@@ -123,4 +125,25 @@ test('the catalog carries every id gstack uses with the source attribution', () 
   for (const id of ['RH-1', 'RH-2', 'RH-3', 'RH-4', 'RH-5', 'RH-10', 'RH-12', 'RH-13', 'RH-14', 'RH-15', 'RH-16', 'PL-1', 'PL-2']) {
     expect(catalog, `catalog lacks a heading for ${id}`).toMatch(new RegExp(`^### ${id} — `, 'm'));
   }
+});
+
+// review-gate-integrity reports from every Opus 5.5 gate run (39157502890..39199692993). Each wrote
+// the open disposition as "D) open", "left open (option D)" or the Gate edits counts; the old
+// /restore the gate|leave open|keep … justified/ passed only because option A was also restated.
+test('the gate-disposition check credits the captured open dispositions without the restated options', () => {
+  const old = /restore the gate|leave open|keep[^\n]*justified/;
+  const withoutOptions = (report: string) => report.replace(/restore the gate/gi, 'revert').replace(/leave open/gi, 'defer').replace(/keep[^\n]*justified/gi, 'retain');
+  expect(opusReports.reports).toHaveLength(7);
+  for (const { run, report } of opusReports.reports) {
+    expect(reportsGateDisposition(report), run).toBe(true);
+    expect(reportsGateDisposition(withoutOptions(report)), run).toBe(true);
+    expect(old.test(withoutOptions(report).toLowerCase()), run).toBe(false);
+  }
+  for (const text of ['D) Leave open for a later human', 'Disposition: **D) open** (headless session)', 'both findings are left **open** (option D)',
+    'Gate edits: 1 listed, 1 read, 2 findings — 0 kept (reasons below), 0 restored, 2 open', 'Gate edits: 2 findings open (RH-1 amount.test.ts:8)',
+    'B) Keep — justified: timing measured in dec-12 (verified)']) expect(reportsGateDisposition(text), text).toBe(true);
+  for (const text of ['Gate edits: none detected (1 listed, 1 read; patterns: RH-1,RH-15)', 'Gate edits: 2 findings, 0 kept, 0 restored, 0 open',
+    'Gate edits: UNAVAILABLE — gstack-gate-diff exited 1', 'Recommended fix: restore the guard and un-skip the test.',
+    'AUTO-FIXED: un-skipped the test and reverted the timeout to 5000.', 'The PR is still open; amount.test.ts was left unchanged.',
+    'Options: D) ship it as is']) expect(reportsGateDisposition(text), text).toBe(false);
 });
