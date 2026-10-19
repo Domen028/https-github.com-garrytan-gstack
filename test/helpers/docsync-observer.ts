@@ -367,12 +367,31 @@ function docsPrivateArtifact(file: string, fixture: ReturnType<typeof fixtureDoc
     path.basename(file) !== 'actor-state.json' && path.basename(actual) !== 'actor-state.json';
 }
 
+/** A candidate call at a wrong binary path that does not exist exited 127 before anything ran; it is ignored only when the same command at the declared path follows and runs. */
+function candidateNotFound(calls: SkillTestResult['toolCalls'], index: number, fixture: ReturnType<typeof fixtureDocs>, scripts: string[]): boolean {
+  const command = String(calls[index].input?.command ?? '').trim();
+  const binary = command.split(' ')[0]!;
+  const candidate = path.join(fixture.skills, 'bin/gstack-docs-candidate').split(path.sep).join('/');
+  if (!/^\/[\w.\/-]+\/gstack-docs-candidate$/.test(binary) || binary === candidate) return false;
+  if (calls[index].output.trimEnd() !== `Exit code 127\n(eval):1: no such file or directory: ${binary}`) return false;
+  try {
+    fs.lstatSync(binary);
+    return false;
+  } catch (error) {
+    if (!['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
+  }
+  const retry = candidate + command.slice(binary.length);
+  return docsCommandAllowed(retry, fixture, scripts) && calls.slice(index + 1).some(call =>
+    call.tool === 'Bash' && String(call.input?.command ?? '').trim() === retry && !call.output.startsWith('Exit code'));
+}
+
 export function docsToolFailures(result: SkillTestResult, fixture: ReturnType<typeof fixtureDocs>, scripts: string[] = [], readOnly = false): string[] {
   const failures: string[] = [];
   const repo = fs.realpathSync(fixture.repo);
   const authoredDoc = path.join(repo, DOC_PATH);
-  for (const call of result.toolCalls) {
-    if (call.tool === 'Bash' && !docsCommandAllowed(String(call.input?.command ?? ''), fixture, scripts)) failures.push('command outside declared docs observation interface');
+  for (const [index, call] of result.toolCalls.entries()) {
+    if (call.tool === 'Bash' && !docsCommandAllowed(String(call.input?.command ?? ''), fixture, scripts) &&
+      !candidateNotFound(result.toolCalls, index, fixture, scripts)) failures.push('command outside declared docs observation interface');
     if (['Write', 'Edit'].includes(call.tool)) {
       const file = path.resolve(fixture.repo, call.input?.file_path ?? '');
       const actual = actualWritePath(file);

@@ -14,7 +14,7 @@ import { test, expect } from 'bun:test';
 import { formatTable, formatJson, formatMarkdown, type BenchmarkReport } from './helpers/benchmark-runner';
 import { estimateCostUsd, PRICING } from './helpers/pricing';
 import { missingTools, TOOL_COMPATIBILITY } from './helpers/tool-map';
-import { CLAUDE_FRONTIER_EVAL_MODEL } from '../lib/eval-model';
+import { CLAUDE_CAPTURE_EVAL_MODEL, CLAUDE_JUDGE_EVAL_MODEL } from '../lib/eval-model';
 import { CODEX_FRONTIER_MODEL } from '../scripts/resolvers/constants';
 
 test('estimateCostUsd returns 0 for unknown model (no crash)', () => {
@@ -29,10 +29,10 @@ test('estimateCostUsd computes correctly for known Claude model', () => {
   expect(cost).toBeCloseTo(17.50, 2);
 });
 
-for (const model of [CLAUDE_FRONTIER_EVAL_MODEL, CODEX_FRONTIER_MODEL]) {
+// Opus 5.5 costs $4/MTok input and $20/MTok output; Fable 5.1 (the judge) and Astra $10 and $50.
+for (const [model, usd] of [[CLAUDE_CAPTURE_EVAL_MODEL, 0.008], [CLAUDE_JUDGE_EVAL_MODEL, 0.02], [CODEX_FRONTIER_MODEL, 0.02]] as const) {
   test(`estimateCostUsd prices the current ${model} default at its standard rate`, () => {
-    // Current default models both cost $10/MTok input and $50/MTok output.
-    expect(estimateCostUsd({ input: 1000, output: 200 }, model)).toBe(0.02);
+    expect(estimateCostUsd({ input: 1000, output: 200 }, model)).toBe(usd);
   });
 }
 

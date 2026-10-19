@@ -332,9 +332,9 @@ describe.skipIf(process.platform === 'win32')('provider model selection', () => 
     expect(await selected(adapter, 'custom-codex')).toBe('custom-codex');
   });
 
-  test('Claude defaults to Fable and preserves the full override chain', async () => {
+  test('Claude defaults to Opus 5.5 and preserves the full override chain', async () => {
     const adapter = new ClaudeAdapter();
-    expect(await selected(adapter)).toBe('claude-fable-5-1');
+    expect(await selected(adapter)).toBe('claude-opus-5-5');
     process.env.GSTACK_EVAL_MODEL = 'global-model';
     expect(await selected(adapter)).toBe('global-model');
     process.env.GSTACK_EVAL_MODEL_CAPTURE = 'capture-model';

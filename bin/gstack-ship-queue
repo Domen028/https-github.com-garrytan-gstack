@@ -11,11 +11,15 @@
  *   gstack-ship-queue gate-ahead --after <pr> --pr <n> [--predecessor-ref <ref>] [--allow-repo-commands]
  *   gstack-ship-queue gate-ahead --record --pr <n> --attempt <id> --exit <rc> --log <file>
  *   gstack-ship-queue gate-ahead --list --pr <n>
+ *   gstack-ship-queue train build|status|verdict|bisect|rebuild|prune ...   (merge trains; train --help)
  *
  * Every subcommand takes --base <branch> (default origin/HEAD, else main) and
  * ends with GSTACK_RESULT: skill=ship-queue status=complete|refused run=<path>.
- * gstack-restamp stays the primitive. Nothing here pushes. Logic:
- * lib/ship-queue.ts, lib/ship-queue-gate.ts.
+ * gstack-restamp stays the primitive. Nothing here pushes, except under a
+ * ship policy with a `train` block: merge trains push train/<nonce> branches
+ * and the refs/notes/gstack-trains records, and dispatch through eval-bg.
+ * Logic: lib/ship-queue.ts, lib/ship-queue-gate.ts, lib/ship-queue-train*.ts
+ * (loaded only on the train paths).
  */
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
@@ -41,6 +45,9 @@ const HELP = `gstack-ship-queue — the shared merge queue's protocol steps (doc
   gate-ahead --record --pr <n> --attempt <id> --exit <rc> --log <file>
                                            bind the gate result to that attempt's gated tree; removes its worktree
   gate-ahead --list --pr <n>               attempts for a PR, newest last (the current one)
+  train build|status|verdict|bisect|rebuild|prune ...
+                                           merge trains, when the base policy declares a train block (train --help;
+                                           docs/ship-policy.md#run-a-merge-train); ready then takes --screen|--no-screen
 
 --base <branch>: base branch (default: origin/HEAD, else main). Nothing here pushes.
 ${exitTableHelp()}`;
@@ -122,7 +129,7 @@ function gateAhead(ctx: QueueContext, args: string[]): number {
   });
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const [cmd, ...args] = argv;
   if (!cmd || cmd === '--help' || cmd === '-h' || cmd === 'help') { process.stdout.write(HELP + '\n'); return cmd ? EXIT.ok : EXIT.usage; }
   const probe = spawnSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8', timeout: 15_000 });
@@ -132,11 +139,21 @@ function main(argv: string[]): number {
   const ctx: QueueContext = { repoRoot, base: resolveBaseBranch(repoRoot, flag(args, '--base')), gh };
   const pr = flag(args, '--pr');
   if (cmd === 'gate-ahead') return gateAhead(ctx, args);
+  if (cmd === 'train') {
+    const train = await import('../lib/ship-queue-train-cli');
+    if (!args[0] || args[0].startsWith('-')) { process.stdout.write(train.TRAIN_HELP + '\n'); return args.includes('--help') || args.includes('-h') ? EXIT.ok : EXIT.usage; }
+    return train.trainMain(ctx, args);
+  }
   if (!pr || !/^\d+$/.test(pr)) return usage(`${cmd} needs --pr <number>`);
   const gateExit = flag(args, '--gate-exit');
   if (gateExit !== undefined && !/^-?\d+$/.test(gateExit)) return usage('--gate-exit needs an exit code');
   const gate = { gateExit: gateExit === undefined ? undefined : Number(gateExit), gateLog: flag(args, '--gate-log') };
-  if (cmd === 'ready') return finish('ready', ready(ctx, { pr, pregate: flag(args, '--pregate'), ...gate }));
+  if (cmd === 'ready') {
+    const loaded = loadBasePolicy(ctx);
+    if (!('message' in loaded) && loaded.policy.train) return (await import('../lib/ship-queue-train-cli')).readyMain(ctx, args, { pr, pregate: flag(args, '--pregate'), ...gate });
+    if (['--screen', '--no-screen', '--broad'].some(f => args.includes(f))) process.stderr.write('gstack-ship-queue ready: --screen/--no-screen/--broad ignored: the base policy declares no train block\n');
+    return finish('ready', ready(ctx, { pr, pregate: flag(args, '--pregate'), ...gate }));
+  }
   if (cmd === 'stamp') {
     const version = flag(args, '--version');
     const expectGated = flag(args, '--expect-gated');
@@ -149,6 +166,7 @@ function main(argv: string[]): number {
     }));
   }
   if (cmd === 'verify') {
+    if (flag(args, '--train')) return (await import('../lib/ship-queue-train-cli')).verifyMain(ctx, args, pr);
     const record = flag(args, '--record');
     return finish('verify', verify(ctx, {
       pr, gated: flag(args, '--gated'), record: record ? path.resolve(record) : undefined, receipt: flag(args, '--receipt'),
@@ -158,4 +176,4 @@ function main(argv: string[]): number {
   return usage(`unknown subcommand ${cmd}`);
 }
 
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));

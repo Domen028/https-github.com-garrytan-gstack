@@ -8,7 +8,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import * as path from 'node:path';
-import { decide, formatDrift, harnessDrift, hasDrift, readManifest, serializeManifest, workingHarnessFiles,
+import { decide, formatDrift, harnessDrift, hasDrift, MANIFEST, readManifest, serializeManifest, workingHarnessFiles,
   type HarnessManifest } from '../scripts/bump-harness-version';
 import { caseSeriesIdentitiesV2, globRegex, HARNESS_PATTERNS, HARNESS_VERSION, isCaseOwnedFile, skillDirs, stampTrialSeries, treeEntries,
   type TreeEntry } from '../scripts/eval-trial-series';
@@ -23,6 +23,7 @@ const ROOT = path.resolve(import.meta.dir, '..');
 
 describe('HARNESS_VERSION guard', () => {
   test('every pinned shared-harness file matches scripts/harness-version.json', () => {
+    expect(MANIFEST).toBe('scripts/harness-version.json');
     const manifest = readManifest(ROOT);
     expect(manifest.version).toBe(HARNESS_VERSION);
     expect(manifest.patterns).toEqual([...HARNESS_PATTERNS]);
