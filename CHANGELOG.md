@@ -1,6 +1,6 @@
 # Changelog
 
-## [1.91.148.0] - 2026-10-19
+## [1.91.149.0] - 2026-10-19
 
 **Claude Code can recall verified task history with HydraDB.** Enable task memory for a repository to capture observed edits and passing checks, then recall relevant procedures on later prompts. The feature is optional and supports fast and thinking retrieval.
 
@@ -12,6 +12,14 @@
 - **Hook lifecycle.** Setup preserves the opt-in hooks. Disable revokes the repository and cancels pending setup. Uninstall removes the hooks and grants.
 
 Contributed by @SohamRatnaparkhi.
+
+## [1.91.148.0] - 2026-10-19
+
+**Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.
+
+### Changed
+- **`free-durations-record.yml` also dispatches Quality gate** on `bot/free-duration-seeds`, next to Free Tests (the required `free-tests` check) and Windows Free Tests.
+- **The seed PR body says the dispatched runs are its checks** and explains why its pull_request runs wait for approval.
 
 ## [1.91.147.0] - 2026-10-19
 
