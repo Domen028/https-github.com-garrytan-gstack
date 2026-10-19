@@ -26,6 +26,20 @@ The second Opus gate (run 39161502626) went 127/132. Each of the five reds is no
 - **…compare pass rates across the switch:** Fable trials carry `harness_version: 5` and Opus trials `6`; they are separate series.
 - **…need Fable for one run:** set `GSTACK_EVAL_MODEL_CAPTURE=claude-fable-5-1` (or `EVALS_MODEL`).
 
+## [1.91.141.0] - 2026-10-18
+
+**Daily `/cso` reports now leave out candidates without demonstrated in-scope impact.** The daily rubric already required an attacker-controlled entrypoint, a security-boundary crossing, demonstrated impact, and challenged protective controls. It now says what to omit: candidates whose impact needs code outside the snapshot or a future change, or that expose nothing sensitive. Those stay coverage evidence instead of supported findings. Comprehensive reports are unchanged and keep unresolved candidates as labeled hypotheses. In the third paid runtime qualification, daily precision was 47/53, below the 0.95 bar, and four of its five false-positive classes were findings of this kind. In a preregistered 12-cell pilot, 5 of the 6 false positives disappeared, every seeded issue was kept, and no new false positive appeared. Daily reports also drop low and informational real issues: 4 of the 13 pilot controls were lost this way. Garry accepted that trade-off. Comprehensive mode still reports them.
+
+### Changed
+- **`cso/SKILL.md.tmpl`: the daily supported-finding paragraph names what to omit.** The generated `cso/SKILL.md` is 18,097 bytes, under the 18,100 parity cap. This changes no gate, scorer, threshold, sample count, recall definition, baseline or answer key.
+
+## [1.91.140.0] - 2026-10-18
+
+**/cso evaluation cells that run a repair no longer fail on helper dependency-closure names that use the helper's own 32-character finding IDs.** In the third paid runtime qualification, one comprehensive cell failed with REDACTION_FAILED again, on `dependency-closures/<finding id>-after-<plan hash>.json`. 1.91.135.0 taught the producer this name shape with a 64-character finding ID. The helper actually names closures with its 32-character finding IDs, so real names still fell through to the secret redactor, which reads some of them as wallet addresses.
+
+### Fixed
+- **The eval producer recognizes dependency-closure names with 32- or 64-character finding IDs.** Any other word in the phase position still goes through the redactor. The test now uses a real-length, redactor-flagged 32-character name and fails on the 1.91.135.0 pattern.
+
 ## [1.91.139.0] - 2026-10-18
 
 **The docs-sync fixture's declared Git interface now includes read-only `git describe`, so `ship-docsync-store` no longer goes red when the /document-release child checks for release tags.** PR #3272's gate run 39153452209 failed that case on one command, `git describe --tags --always`, which the observer did not list. A focused paid rerun of `ship-docsync-store` on this tree passed ($3.83); the child ran the same command twice and the observer accepted it.

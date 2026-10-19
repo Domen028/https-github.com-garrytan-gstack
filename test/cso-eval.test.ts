@@ -1218,8 +1218,11 @@ describe('CSO matched producer orchestration', () => {
     const repo = 'e'.repeat(24);
     let closure = '';
     while (!closure) { const name = `${randomHex(32)}-before-${randomHex(8)}.json`; if (redact(name) !== name) closure = name; }
+    let helperFindingClosure = '';
+    while (!helperFindingClosure) { const name = `${randomHex(16)}-after-${randomHex(8)}.json`; if (redact(name) !== name) helperFindingClosure = name; }
     const accepted = [`${repo}/${runId}/report.json`, `${repo}/${runId}/reviews/${walletShaped}.json`, `${repo}/${runId}/scanner-outcomes/gitleaks-${randomHex(8)}-${randomHex(8)}.json`,
       `${repo}/${runId}/dependency-closures/${closure}`, `${repo}/${runId}/dependency-closures/${closure.replace('-before-', '-after-')}`,
+      `${repo}/${runId}/dependency-closures/${helperFindingClosure}`, `${repo}/${runId}/dependency-closures/${helperFindingClosure.replace('-after-', '-before-')}`,
       `${repo}/${runId}/snapshot/test/fixtures/cso-canary-token.txt`, 'public-cache/osv/index.json'];
     for (const path of accepted) expect(() => assertProducerArtifactPath(path)).not.toThrow();
     for (const [path, message] of [
@@ -1228,6 +1231,7 @@ describe('CSO matched producer orchestration', () => {
       [`${repo}/${runId}/bad name.json`, 'INVALID_PRODUCER_ARTIFACTS: an artifact path has a component outside'],
     ] as const) expect(() => assertProducerArtifactPath(path)).toThrow(message);
     expect(() => assertProducerArtifactPath(`${repo}/${runId}/dependency-closures/${closure.replace('-before-', '-during-')}`)).toThrow('looks like a secret');
+    expect(() => assertProducerArtifactPath(`${repo}/${runId}/dependency-closures/${helperFindingClosure.replace('-after-', '-during-')}`)).toThrow('looks like a secret');
     const planted = `sk-ant-api03-${randomHex(24)}`;
     expect(redact(planted)).not.toBe(planted);
     let failure: unknown;
