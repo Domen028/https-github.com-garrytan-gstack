@@ -76,7 +76,14 @@ A task is captured only when the session itself shows that it worked:
   `cargo test`, `vitest` and `jest` summaries are recognized. The command
   must run on its own: a pipe, `||`, `;`, an environment prefix, output sent
   to `/dev/null` or a `cd` into a subdirectory hides its real status, so that
-  run never counts as a pass.
+  run never counts as a pass. The shell stays in a subdirectory after a `cd`,
+  so later runs count again only after a `cd` back to the repository root.
+- The check started after every earlier change had finished. A check that
+  overlapped a change, even an edit that returned after the check started,
+  proves nothing.
+- The procedure records each check exactly as it was typed. A check that
+  expands a shell variable such as `$TEST_FILE` is not recorded, though a
+  failure it reports still counts.
 - No later run of a check failed or ended without a readable result. This
   includes masked runs: `bun test || true` that reports a failure, a run that
   was interrupted, and a run that has not returned yet all cancel the earlier

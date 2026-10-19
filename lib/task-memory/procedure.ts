@@ -82,15 +82,18 @@ const READ_ONLY_COMMANDS: Record<string, (args: readonly string[]) => boolean> =
   git: ([sub, ...args]) => sub !== undefined && Object.hasOwn(GIT_READ_ONLY, sub) && !args.some(a => /^--output(?:=|$)/.test(a)) && GIT_READ_ONLY[sub]!(args),
 };
 
-interface Shell { readonly segments: string[][]; readonly joins: string[]; readonly hidden: boolean }
+interface Segment { readonly words: string[]; source: string; expands: boolean }
+interface Shell { readonly segments: Segment[]; readonly joins: string[]; readonly hidden: boolean }
 
 export function parseShell(command: string): Shell | null {
-  const segments: string[][] = [[]];
+  const segments: Segment[] = [{ words: [], source: '', expands: false }];
   const joins: string[] = [];
   let word: string | null = null;
   let hidden = false;
-  const end = () => { if (word !== null) segments.at(-1)!.push(word); word = null; };
-  const join = (op: string) => { end(); joins.push(op); segments.push([]); };
+  let from = 0;
+  const end = () => { if (word !== null) segments.at(-1)!.words.push(word); word = null; };
+  const seal = (at: number) => { segments.at(-1)!.source = command.slice(from, at).trim(); };
+  const join = (op: string, at: number, next: number) => { end(); seal(at); joins.push(op); segments.push({ words: [], source: '', expands: false }); from = next; };
   const target = (from: number): [string, number] => {
     let i = from;
     while (command[i] === ' ') i++;
@@ -109,6 +112,7 @@ export function parseShell(command: string): Shell | null {
       let text = '';
       for (i++; i < command.length && command[i] !== '"'; i++) {
         if (command[i] === '`' || (command[i] === '$' && command[i + 1] === '(')) return null;
+        if (command[i] === '$') segments.at(-1)!.expands = true;
         if (command[i] === '\\') i++;
         text += command[i] ?? '';
       }
@@ -132,14 +136,16 @@ export function parseShell(command: string): Shell | null {
       i = last;
     } else if (c === '|' || c === '&' || c === ';' || c === '\n') {
       const two = command.slice(i, i + 2);
-      if (two === '&&' || two === '||' || two === '|&') { join(two === '|&' ? '|' : two); i++; } else if (c === '&') return null;
-      else join(c === '\n' ? ';' : c);
+      if (two === '&&' || two === '||' || two === '|&') { join(two === '|&' ? '|' : two, i, i + 2); i++; } else if (c === '&') return null;
+      else join(c === '\n' ? ';' : c, i, i + 1);
     } else {
+      if (c === '$') segments.at(-1)!.expands = true;
       word = (word ?? '') + c;
     }
   }
   end();
-  return segments.some(s => s.length === 0) ? null : { segments, joins, hidden };
+  seal(command.length);
+  return segments.some(s => s.words.length === 0) ? null : { segments, joins, hidden };
 }
 
 type SegmentKind = 'check' | 'cd-root' | 'cd' | 'read-only' | 'change';
@@ -152,29 +158,34 @@ function segmentKind(words: readonly string[], repoRoot: string): SegmentKind {
   return Object.hasOwn(READ_ONLY_COMMANDS, name) && READ_ONLY_COMMANDS[name]!(args) ? 'read-only' : 'change';
 }
 
-const shellWord = (w: string) => /^[\w./:=@%+,-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`;
+/** Where the shell is after a command: Claude Code's Bash tool keeps its working directory between calls. */
+type ShellDir = 'root' | 'elsewhere' | 'unchanged';
 
-type ShellKind =
+type ShellKind = (
   | { kind: 'read-only' }
-  | { kind: 'check'; literal: string }
-  | { kind: 'masked-check'; key: string }
-  | { kind: 'change' };
+  | { kind: 'check'; literal: string; rooted: boolean }
+  | { kind: 'masked-check'; key: string; rooted: boolean }
+  | { kind: 'change' }) & { readonly after: ShellDir };
+
+const MOVES_DIR = new Set(['cd', 'pushd', 'popd']);
 
 export function classifyShell(raw: string, repoRoot: string): ShellKind {
   const command = raw.trim();
   const shell = command ? parseShell(command) : null;
-  if (!shell) return { kind: 'change' };
-  const parts = shell.segments.map(words => {
+  if (!shell) return { kind: 'change', after: /\b(?:cd|pushd|popd)\b/.test(command) ? 'elsewhere' : 'unchanged' };
+  const parts = shell.segments.map(({ words, source, expands }) => {
     const at = words.findIndex(w => !ASSIGNMENT.test(w));
     const bare = at < 0 ? [] : words.slice(at);
-    return { prefixed: at !== 0, words: bare, kind: segmentKind(bare, repoRoot) };
+    return { prefixed: at !== 0, words: bare, source, expands, kind: segmentKind(bare, repoRoot) };
   });
-  if (parts.some(p => p.kind === 'change')) return { kind: 'change' };
-  if (!parts.some(p => p.kind === 'check')) return { kind: 'read-only' };
-  const lone = parts.length === 1 ? parts[0]
-    : parts.length === 2 && parts[0]!.kind === 'cd-root' && !parts[0]!.prefixed && shell.joins[0] === '&&' ? parts[1] : undefined;
-  if (lone?.kind === 'check' && !lone.prefixed && !shell.hidden) return { kind: 'check', literal: lone.words.map(shellWord).join(' ') };
-  return { kind: 'masked-check', key: command };
+  const moves = parts.flatMap((p, i) => MOVES_DIR.has(p.words[0] ?? '') ? [i] : []);
+  const rooted = parts[0]!.kind === 'cd-root' && !parts[0]!.prefixed;
+  const after: ShellDir = !moves.length ? 'unchanged' : moves.length === 1 && moves[0] === 0 && rooted ? 'root' : 'elsewhere';
+  if (parts.some(p => p.kind === 'change')) return { kind: 'change', after };
+  if (!parts.some(p => p.kind === 'check')) return { kind: 'read-only', after };
+  const lone = parts.length === 1 ? parts[0] : parts.length === 2 && rooted && shell.joins[0] === '&&' ? parts[1] : undefined;
+  if (lone?.kind === 'check' && !lone.prefixed && !lone.expands && !shell.hidden) return { kind: 'check', literal: lone.source, rooted, after };
+  return { kind: 'masked-check', key: command, rooted, after };
 }
 
 function sameDir(dir: string, root: string): boolean {
@@ -317,7 +328,7 @@ export function readSessionSteps(session: NativeSession, repoRoot: string, claud
     },
   });
   if (read.transcript.status !== 'ready') return { kind: 'unreadable', reason: read.transcript.reason ?? read.transcript.status };
-  return { kind: 'ok', steps: toSteps(read.events, repoRoot, (e) => {
+  return { kind: 'ok', steps: toSteps(read.events, repoRoot, session.cwd, (e) => {
     const record = prompts.get(e);
     return record?.uuid ? { key: record.uuid, text: promptText(file, record) } : null;
   }) };
@@ -337,28 +348,56 @@ function promptText(file: string, record: IndexedRecord | undefined): string | n
 
 type ToolUse = { name: string; input: Record<string, unknown> | undefined };
 
-export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: string,
-  promptOf: (prompt: ClaudeParentPublicEvent) => { key: string; text: string | null } | null): Step[] {
-  const slots: (Step | null)[] = [];
-  const open = new Map<string, { slot: number; use: ToolUse }>();
-  for (const e of events) {
-    if (e.kind === 'user_turn') {
-      const prompt = promptOf(e);
-      if (prompt) slots.push({ kind: 'prompt', key: prompt.key, at: e.timestamp, goal: prompt.text === null ? null : deriveGoal(prompt.text) });
-    } else if (e.kind === 'use') {
-      if (!READ_ONLY_TOOLS.has(e.name ?? '')) open.set(e.toolUseId, { slot: slots.push(null) - 1, use: { name: e.name ?? '', input: e.input } });
-    } else if (e.kind === 'result') {
-      const pending = open.get(e.toolUseId);
-      if (!pending) continue;
-      open.delete(e.toolUseId);
-      slots[pending.slot] = resultStep(pending.use, { isError: e.isError === true, text: toolText(e.content) }, repoRoot);
-    }
-  }
-  for (const { slot, use } of open.values()) slots[slot] = resultStep(use, null, repoRoot);
-  return slots.filter((s): s is Step => s !== null);
+interface Call {
+  readonly use: ToolUse;
+  readonly shell: ShellKind | null;
+  /** 0 when the command ran at the repository root, otherwise the number of the directory change it ran after. */
+  readonly away: number;
+  readonly start: number;
+  end: number;
+  result: { isError: boolean; text: string } | null;
 }
 
-function resultStep(use: ToolUse, result: { isError: boolean; text: string } | null, repoRoot: string): Step | null {
+/**
+ * Steps in the order their effects are known: an edit when it returns, a check when it returns.
+ * A check that overlapped a change in time cannot show which state it tested, so it proves nothing.
+ */
+export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: string, startDir: string,
+  promptOf: (prompt: ClaudeParentPublicEvent) => { key: string; text: string | null } | null): Step[] {
+  const placed: { at: number; step: Step }[] = [];
+  const calls: Call[] = [];
+  const open = new Map<string, Call>();
+  let dir = sameDir(startDir, repoRoot) ? 0 : 1, moves = dir;
+  events.forEach((e, at) => {
+    if (e.kind === 'user_turn') {
+      const prompt = promptOf(e);
+      if (prompt) placed.push({ at, step: { kind: 'prompt', key: prompt.key, at: e.timestamp, goal: prompt.text === null ? null : deriveGoal(prompt.text) } });
+    } else if (e.kind === 'use' && !READ_ONLY_TOOLS.has(e.name ?? '')) {
+      const shell = e.name === 'Bash' ? classifyShell(String(e.input?.command ?? ''), repoRoot) : null;
+      const away = shell && 'rooted' in shell && shell.rooted ? 0 : dir;
+      if (shell?.after === 'root') dir = 0; else if (shell?.after === 'elsewhere') dir = ++moves;
+      const call: Call = { use: { name: e.name ?? '', input: e.input }, shell, away, start: at, end: Infinity, result: null };
+      calls.push(call);
+      open.set(e.toolUseId, call);
+    } else if (e.kind === 'result') {
+      const call = open.get(e.toolUseId);
+      if (!call) return;
+      open.delete(e.toolUseId);
+      call.end = at;
+      call.result = { isError: e.isError === true, text: toolText(e.content) };
+    }
+  });
+  const resolved = calls.map(call => ({ call, step: resultStep(call, repoRoot) }));
+  const changes = resolved.filter(r => r.step?.kind === 'edit' || r.step?.kind === 'change').map(r => r.call);
+  for (const { call, step } of resolved) {
+    if (!step) continue;
+    const overlapped = step.kind === 'check' && step.outcome.kind === 'passed' && changes.some(c => c.start < call.end && c.end > call.start);
+    placed.push({ at: Number.isFinite(call.end) ? call.end : call.start, step: overlapped ? { ...step, outcome: { kind: 'unknown' } } : step });
+  }
+  return placed.sort((a, b) => a.at - b.at).map(p => p.step);
+}
+
+function resultStep({ use, shell, away, result }: Call, repoRoot: string): Step | null {
   if (EDIT_TOOLS.has(use.name)) {
     if (result?.isError) return null;
     if (!result) return { kind: 'change' };
@@ -367,14 +406,13 @@ function resultStep(use: ToolUse, result: { isError: boolean; text: string } | n
     const target = renderable(rel);
     return target ? { kind: 'edit', tool: use.name as EditTool, target } : { kind: 'change' };
   }
-  if (use.name !== 'Bash') return { kind: 'change' };
-  const shell = classifyShell(String(use.input?.command ?? ''), repoRoot);
+  if (!shell) return { kind: 'change' };
   if (shell.kind === 'read-only') return null;
   if (shell.kind === 'change') return { kind: 'change' };
   const outcome: CheckOutcome = !result || use.input?.run_in_background === true ? { kind: 'unknown' } : checkOutcome(result.text, result.isError);
-  return shell.kind === 'check'
-    ? { kind: 'check', key: shell.literal, literal: literalCheck(shell.literal), outcome }
-    : { kind: 'check', key: shell.key, literal: null, outcome };
+  const key = shell.kind === 'check' ? shell.literal : shell.key;
+  if (away) return { kind: 'check', key: `${away}\0${key}`, literal: null, outcome };
+  return { kind: 'check', key, literal: shell.kind === 'check' ? literalCheck(shell.literal) : null, outcome };
 }
 
 export function episodes(steps: readonly Step[]): Episode[] {

@@ -25,7 +25,15 @@ const tool = (name: string, input: Record<string, unknown>, result: { content?: 
 };
 const edit = (file: string) => tool('Edit', { file_path: path.join(root, file) }, { content: 'updated' });
 const bash = (command: string, content: string, isError = false) => tool('Bash', { command }, { content, isError });
-const steps = (...events: E[][]) => toSteps(events.flat(), root, e => ({ key: `p${e.order}`, text: (e as unknown as { text: string }).text }));
+const promptOf = (e: E) => ({ key: `p${e.order}`, text: (e as unknown as { text: string }).text });
+const steps = (...events: E[][]) => toSteps(events.flat(), root, root, promptOf);
+const call = (name: string, input: Record<string, unknown>) => {
+  const id = `toolu_${n}`;
+  return {
+    use: { kind: 'use', ...base(), toolUseId: id, name, input } as E,
+    result: (content = '', isError = false) => ({ kind: 'result', ...base(), toolUseId: id, content, isError } as E),
+  };
+};
 
 describe('a check proves success only with a complete, positive, zero-failure runner summary', () => {
   test('supported summaries', () => {
@@ -50,12 +58,20 @@ describe('a check proves success only with a complete, positive, zero-failure ru
 
 describe('shell commands', () => {
   test('a simple test command is a check; masked status or output is not', () => {
-    expect(classifyShell('bun test', root)).toEqual({ kind: 'check', literal: 'bun test' });
-    expect(classifyShell(`cd ${root} && bun test src`, root)).toEqual({ kind: 'check', literal: 'bun test src' });
-    expect(classifyShell('pytest -q 2>&1', root)).toEqual({ kind: 'check', literal: 'pytest -q' });
-    expect(classifyShell('bun test -t "adds zero"', root)).toEqual({ kind: 'check', literal: "bun test -t 'adds zero'" });
+    expect(classifyShell('bun test', root)).toMatchObject({ kind: 'check', literal: 'bun test' });
+    expect(classifyShell(`cd ${root} && bun test src`, root)).toMatchObject({ kind: 'check', literal: 'bun test src' });
+    expect(classifyShell('pytest -q 2>&1', root)).toMatchObject({ kind: 'check', literal: 'pytest -q 2>&1' });
     for (const masked of ['bun test | tail -3', 'bun test || true', 'bun test; echo done', 'CI=1 bun test', 'bun test 2>/dev/null', 'cd /tmp && bun test', 'cd test && bun test'])
       expect(classifyShell(masked, root).kind).toBe('masked-check');
+  });
+
+  test('a check keeps the spelling that ran; a check that expands a variable has no literal', () => {
+    for (const literal of ['bun test test/*.test.ts', 'bun test -t "adds zero"', "bun test -t 'a b'", 'bun test src/{a,b}.test.ts'])
+      expect(classifyShell(literal, root)).toMatchObject({ kind: 'check', literal });
+    for (const expanding of ['bun test "$TEST_FILE"', 'bun test $TEST_FILE', 'bun test ${DIR}/a.test.ts'])
+      expect(classifyShell(expanding, root).kind).toBe('masked-check');
+    expect(verdict(steps(edit('src/a.ts'), bash('bun test', BUN_PASS), bash('bun test "$TEST_FILE"', `Exit code 1\n${BUN_FAIL}`, true))))
+      .toEqual({ kind: 'unverified', reason: 'failed-check' });
   });
 
   test('read-only commands change nothing; anything else may write', () => {
@@ -114,6 +130,48 @@ describe('verdict', () => {
     expect(verdict(steps(edit('src/a.ts'), bash('bun test | tail -5', BUN_PASS)))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
     expect(verdict(steps(edit('src/a.ts'), tool('Bash', { command: 'bun test' }, null)))).toEqual({ kind: 'unverified', reason: 'unconfirmed-check' });
     expect(verdict(steps(bash('bun test', BUN_PASS)))).toEqual({ kind: 'unverified', reason: 'no-edits' });
+  });
+});
+
+describe('a check proves only the edits that finished before it started', () => {
+  type Call = ReturnType<typeof call>;
+  const pass = (e: Call) => e.result(BUN_PASS);
+  const verdictOf = (...events: E[]) => verdict(toSteps(events, root, root, promptOf)).kind;
+  const orders: [string, (ed: Call, ck: Call) => E[], 'verified' | 'unverified'][] = [
+    ['edit done, then check', (ed, ck) => [ed.use, ed.result('updated'), ck.use, pass(ck)], 'verified'],
+    ['check passes before the edit returns', (ed, ck) => [ed.use, ck.use, pass(ck), ed.result('updated')], 'unverified'],
+    ['edit returns while the check runs', (ed, ck) => [ed.use, ck.use, ed.result('updated'), pass(ck)], 'unverified'],
+    ['edit starts and ends while the check runs', (ed, ck) => [ck.use, ed.use, ed.result('updated'), pass(ck)], 'unverified'],
+    ['edit never returns', (ed, ck) => [ed.use, ck.use, pass(ck)], 'unverified'],
+  ];
+  test.each(orders)('%s', (_name, order, expected) => {
+    const ed = call('Edit', { file_path: path.join(root, 'src/a.ts') });
+    const ck = call('Bash', { command: 'bun test' });
+    expect(verdictOf(...order(ed, ck))).toBe(expected);
+  });
+
+  test('a shell write during the check unconfirms it; parallel checks after the edit both count', () => {
+    const [ed, ck, install] = [call('Edit', { file_path: path.join(root, 'src/a.ts') }), call('Bash', { command: 'bun test' }), call('Bash', { command: 'bun install' })];
+    expect(verdictOf(ed.use, ed.result('updated'), ck.use, install.use, install.result('done'), pass(ck))).toBe('unverified');
+    const [e2, a, b] = [call('Edit', { file_path: path.join(root, 'src/a.ts') }), call('Bash', { command: 'bun test' }), call('Bash', { command: 'pytest' })];
+    const v = verdict(toSteps([e2.use, e2.result('updated'), a.use, b.use, b.result('==== 2 passed in 0.10s ===='), pass(a)], root, root, promptOf));
+    expect(v).toMatchObject({ kind: 'verified', checks: [{ command: 'pytest' }, { command: 'bun test' }] });
+  });
+});
+
+describe('the shell keeps its directory between commands', () => {
+  test('a pass from a subdirectory never replaces a failure from the root', () => {
+    const failed = bash('bun test', `Exit code 1\n${BUN_FAIL}`, true);
+    expect(verdict(steps(edit('src/a.ts'), failed, bash('cd packages/ok', ''), bash('bun test', BUN_PASS))))
+      .toEqual({ kind: 'unverified', reason: 'failed-check' });
+    expect(verdict(steps(edit('src/a.ts'), bash('cd packages/ok && bun test', BUN_PASS), bash('bun test', BUN_PASS))))
+      .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    expect(verdict(steps(edit('src/a.ts'), failed, bash('cd packages/ok', ''), bash(`cd ${root}`, ''), bash('bun test', BUN_PASS))).kind).toBe('verified');
+  });
+
+  test('a session that starts in a subdirectory records no literal check', () => {
+    const events = [edit('src/a.ts'), bash('bun test', BUN_PASS)].flat();
+    expect(verdict(toSteps(events, root, path.join(root, 'src'), promptOf))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
   });
 });
 
