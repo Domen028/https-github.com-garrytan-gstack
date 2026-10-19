@@ -2,15 +2,16 @@
 
 ## [1.91.148.0] - 2026-10-19
 
-**Claude Code can now remember how earlier tasks in a repository were done.** `gstack-task-memory enable` turns on HydraDB task memory for one repository. After a turn in which the agent edited files and then ran a test command that passed, a Stop hook records the procedure in HydraDB: the task's goal line, the edited paths in order, and the passing checks with their counts. On a later prompt in the same repository, the closest matching procedures appear as untrusted reference context. Nothing is recorded unless the session's own test output shows passing tests after the last change and no later run failed or went unreported. A procedure that later work invalidates stops appearing on this machine at once and is deleted from HydraDB once HydraDB accepts the deletion. It is off by default, needs a HydraDB API key, and supports Claude Code only.
+**Claude Code can recall verified task history with HydraDB.** Enable task memory for a repository to capture observed edits and passing checks, then recall relevant procedures on later prompts. The feature is optional and supports fast and thinking retrieval.
 
 ### Added
-- **`gstack-task-memory enable | status | mode | flush | disable`.** `enable` asks for capture and recall consent separately (`--capture`, `--recall`), reads the key from `HYDRA_DB_API_KEY`, a 0600 key file or a hidden prompt (`--key-stdin` for scripts, never an argument), creates the database and registers both hooks. `status` is local only. `mode thinking` trades recall latency (2 s fast, 5 s thinking) for better matches. Undelivered work, including deletions, is retried by a later Stop from any session after a back-off, and `flush` retries it now. `disable` revokes the repository first, cancels an `enable` still provisioning, and keeps the hooks while another repository still uses them.
-- **What is sent.** Capture sends one Markdown procedure per verified task; recall sends the prompt as a redacted query of 512 characters at most, with code blocks removed. Transcripts, file contents, diffs, tool output and credentials are never sent, and every request is receipted first (`gstack-egress list --sink hydradb-task-memory`). Each repository gets its own HydraDB collection, and recall shows only results whose metadata names that repository. Guide: `docs/task-memory.md`.
+- **HydraDB task-memory commands.** Enable capture and recall separately, inspect local status, change retrieval mode, retry deliveries, or disable the repository. Enter the API key through hidden input, standard input, or the environment.
+- **Automatic capture and Markdown recall.** Native hooks record verified task history and return scoped Markdown as untrusted reference context. Credentials, file contents, and raw transcripts stay local. Each outbound request has an egress receipt. See [HydraDB task memory](docs/task-memory.md).
 
 ### Changed
-- **`gstack-egress grants`** lists the HydraDB task-memory grant with the number of repositories that hold one.
-- **`./setup --no-team`** keeps the task-memory hooks, as it keeps other opt-in hooks. **`gstack-uninstall`** removes the hooks and every task-memory grant.
+- **Hook lifecycle.** Setup preserves the opt-in hooks. Disable revokes the repository and cancels pending setup. Uninstall removes the hooks and grants.
+
+Contributed by @SohamRatnaparkhi.
 
 ## [1.91.147.0] - 2026-10-19
 

@@ -133,7 +133,7 @@ gone or confirms the deletion.
 ## Turn it off
 
 Run `gstack-task-memory disable` from inside the repository. It revokes that
-repository's grant first, so the next prompt and the next Stop send nothing.
+repository's grant first, so the next prompt and the next eligible Stop send nothing.
 An `enable` still waiting for the database is cancelled and enables nothing.
 The hooks stay while another repository still holds a grant. Add
 `--remove-key` to delete the stored key file.

@@ -351,17 +351,12 @@ type ToolUse = { name: string; input: Record<string, unknown> | undefined };
 interface Call {
   readonly use: ToolUse;
   readonly shell: ShellKind | null;
-  /** 0 when the command ran at the repository root, otherwise the number of the directory change it ran after. */
   readonly away: number;
   readonly start: number;
   end: number;
   result: { isError: boolean; text: string } | null;
 }
 
-/**
- * Steps in the order their effects are known: an edit when it returns, a check when it returns.
- * A check that overlapped a change in time cannot show which state it tested, so it proves nothing.
- */
 export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: string, startDir: string,
   promptOf: (prompt: ClaudeParentPublicEvent) => { key: string; text: string | null } | null): Step[] {
   const placed: { at: number; step: Step }[] = [];

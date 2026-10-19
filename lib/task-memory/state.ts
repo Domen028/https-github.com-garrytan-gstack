@@ -63,10 +63,6 @@ export interface Admission {
 /** HydraDB's progress on an accepted id. Only `settled` and `failed` accept a same-id upsert or a deletion. */
 export type IndexState = 'processing' | 'searchable' | 'settled' | 'failed';
 
-/**
- * What HydraDB holds for an id. A null sha256 is content gstack cannot name. `unsure` is an upload sent
- * without an answer: HydraDB may or may not have accepted it, so only a status read can settle it.
- */
 export type Remote =
   | { readonly kind: 'none' }
   | { readonly kind: 'held'; readonly sha256: string | null; readonly index: IndexState }

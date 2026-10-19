@@ -81,7 +81,6 @@ function observe(ctx: DeliveryContext, w: Work, state: IndexingState): Delivery 
   return next;
 }
 
-/** The one content an id can hold after this upload, whatever HydraDB did with it; null when the earlier content may remain. */
 function possible(prior: Delivery | null, sent: string): string | null {
   const remote = remoteOf(prior);
   return remote.kind === 'none' || remote.sha256 === sent ? sent : null;
