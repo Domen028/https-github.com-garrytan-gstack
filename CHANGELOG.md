@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+**Three contributor fixes: a saved "never ask" now sticks for /plan-eng-review's structure question, /context-save and /context-restore close three checkpoint gaps, and a new how-to covers the first production deploy.** Ported from fork PRs so they can run the paid gate; each commit keeps its author.
+
+### Fixed
+- **/plan-eng-review's complexity-gate structure question has a registered id (`plan-eng-review-structure`).** Each run used to invent its own slug, so a `never-ask` saved through /plan-tune never matched the next run and the question came back every time. On `AUTO_DECIDE` the recommended arrangement is taken; feature cuts are still asked one by one. `gstack-question-preference --check` now also falls back to `$GSTACK_HOME/global-question-preferences.json` (the file the question-preference hook already reads) when the project file has no entry; a project entry still wins and the one-way-door and split-chain guards run first. From #3249 by @bezdekt.
+- **/context-save keeps provenance markers as English literals and backs file claims in Decisions Made; /context-restore treats a translated or unknown marker as `(path assumed)` and asks when no branch can pick between recent checkpoints with different titles.** Fixes #3217. From #3244 by @surlymochan.
+
+### Added
+- **`docs/howto-bring-up-a-first-deploy.md`:** a vendor-neutral walkthrough for when /setup-deploy stops at "Nothing is deployed yet" (host, services, env and secrets, DNS, verification, and what to have ready when you rerun /setup-deploy). Linked from the README and docs/skills.md. Fixes #3150. From #3264 by @szsunyuan.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
