@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { nativeCalls, readQACheckpointFiles } from './qa-checkpoint-evidence';
+import { readOnlyCommandAllowed, readOnlyInterfaceText } from './read-only-commands';
 
 type Call = { tool: string; input: any; output: string };
 type Options = { directory: string; guard: string; browse: string; started: number; ended: number };
@@ -24,12 +25,13 @@ export function qaDeadlineShellPolicy(directory: string, guard: string, browse: 
   const file = path.join(directory, 'qa-reports/deadline.json');
   return { allowed, file, prompt: `This native fixture accepts a deliberately narrow executable outer form. Run the BROWSER SETUP Aside readiness bash block verbatim, as its own Bash call (no appended commands). The fallback binary is already supplied. Other than that block, these standalone setup/bookkeeping Bash calls are allowed:
 ${allowed.slice(1).join('\n')}
-Use Read/Glob for local inspection and Write only inside ${path.join(directory, 'qa-reports')}; the report and screenshots directories already exist. Memory files and learning stores outside that directory are not authorized. Write the initial charters and final report to the same caller-owned file ${path.join(directory, 'qa-reports/qa-only-report.md')}, not a separate charter file.
+${readOnlyInterfaceText(directory)}
+Use Read/Glob for any other local inspection and Write only inside ${path.join(directory, 'qa-reports')}; the report and screenshots directories already exist. Memory files and learning stores outside that directory are not authorized. Write the initial charters and final report to the same caller-owned file ${path.join(directory, 'qa-reports/qa-only-report.md')}, not a separate charter file.
 Every other Bash call must be exactly one invocation of bun ${quote(guard)}, with literal arguments, no outer assignments, substitutions, globs, pipes, redirects, prefixes, suffixes or shell operators. The exact runtime path ${quote(process.execPath)} may replace bun; no other launcher is accepted.
-Start exactly once with: bun ${quote(guard)} start ${quote(file)} 30
+Start exactly once, and only after you have read the workflow sections you need and your Write of the initial charter to ${path.join(directory, 'qa-reports/qa-only-report.md')} has completed; the 30-second deadline begins at start: bun ${quote(guard)} start ${quote(file)} 30
 Then use bun ${quote(guard)} status ${quote(file)} or bun ${quote(guard)} run ${quote(file)} -- COMMAND ARGS. Use the absolute guard path directly, not $G.
 For browser scripts, put all assignments, pipelines and scripts INSIDE the child: bun ${quote(guard)} run ${quote(file)} -- bash -c 'B="${browse}"; "$B" goto URL; "$B" snapshot -i'. Literal argv and single/double quoted literal arguments are accepted; expansions are only allowed inside the single-quoted child script.
-Do not write, reset, replace, chmod or remove deadline.json, invoke the guard recursively, or print QA_DEADLINE receipts yourself. Browser cleanup also goes inside the guard; after expiry only local report bookkeeping is allowed. Fallback screenshots must be saved directly in the owned screenshots directory; retain them and write the report after expiry without new browser calls. This fixture does not accept a separate post-expiry shell copy from Aside's session directory; mark that artifact unavailable rather than launching new browser work.
+Do not write, reset, replace, chmod or remove deadline.json, invoke the guard recursively, or print QA_DEADLINE receipts yourself. Browser cleanup also goes inside the guard, as a whole child that is exactly "$B" closetab or "$B" stop (B set to the supplied browse binary); any other child counts as a probe; after expiry only local report bookkeeping is allowed. Fallback screenshots must be saved directly in the owned screenshots directory; retain them and write the report after expiry without new browser calls. This fixture does not accept a separate post-expiry shell copy from Aside's session directory; mark that artifact unavailable rather than launching new browser work.
 An expired refusal is not an executed probe or a pass. Report unfinished coverage honestly; do not try to finish every page after expiry.` };
 }
 
@@ -108,13 +110,13 @@ export function assertQaBrowserPreparation(transcript: unknown[], options: Pick<
 
 /**
  * The fixture prompt routes browser cleanup through the guard, and a probe
- * excludes bookkeeping. Only closing the tab with the supplied browse binary,
- * as the whole child, is cleanup; anything else in the child is a probe.
+ * excludes bookkeeping. Only closing the tab or stopping the supplied browse
+ * binary, as the whole child, is cleanup; anything else in the child is a probe.
  */
 function browserCleanupChild(child: string[], browse: string): boolean {
-  if (child.length === 2) return child[0] === browse && child[1] === 'closetab';
-  return child.length === 3 && child[0] === 'bash' && child[1] === '-c'
-    && [`B="${browse}"; "$B" closetab`, `"${browse}" closetab`].includes(child[2].trim());
+  if (child.length === 2) return child[0] === browse && ['closetab', 'stop'].includes(child[1]);
+  return child.length === 3 && child[0] === 'bash' && child[1] === '-c' && ['closetab', 'stop'].some(verb =>
+    [`B="${browse}"; "$B" ${verb}`, `B="${browse}"; $B ${verb}`, `"${browse}" ${verb}`].includes(child[2].trim()));
 }
 
 export function assertQaBrowserCheckpoints(transcript: unknown[], options: Pick<Options, 'directory' | 'guard' | 'browse'>) {
@@ -211,6 +213,10 @@ export function assertQaBrowserDeadline(calls: Call[], options: Options & { expe
     const command = call.input.command.trim();
     if (allowed.includes(command)) {
       if ((call.output ?? '').includes('QA_DEADLINE ')) fail('receipt outside trusted guard invocation');
+      continue;
+    }
+    if (readOnlyCommandAllowed(command, { root: directory })) {
+      if ((call.output ?? '').split('\n').some(line => line.startsWith('QA_DEADLINE '))) fail('receipt outside trusted guard invocation');
       continue;
     }
     const outer = literalArgv(command);

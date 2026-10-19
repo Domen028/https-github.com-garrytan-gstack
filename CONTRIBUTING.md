@@ -165,8 +165,10 @@ never touches a symlinked or non-gstack directory.
 ## Testing & evals
 
 Codex evals and the GPT benchmark adapter default to `gpt-6-astra`:
-explicit model > `GSTACK_CODEX_MODEL` > default. Claude capture and judge
-defaults are `claude-fable-5-1`, resolved through `lib/eval-model.ts`:
+explicit model > `GSTACK_CODEX_MODEL` > default. The Claude model under test
+(capture) defaults to `claude-opus-5-5` and the judge to `claude-fable-5-1`,
+resolved through `lib/eval-model.ts`. The judge stays put when the model under
+test moves, because its calibration fixtures are keyed to it:
 
 - Claude session, PTY, and Agent SDK eval runners and the Claude benchmark adapter: explicit model > `EVALS_MODEL` > `GSTACK_EVAL_MODEL_CAPTURE` > `GSTACK_EVAL_MODEL` > default.
 - Shared judge calls (including benchmark quality scoring): explicit model > `GSTACK_EVAL_MODEL_JUDGE` > `GSTACK_EVAL_MODEL` > default. `EVALS_MODEL` applies to capture runners, not judges.
