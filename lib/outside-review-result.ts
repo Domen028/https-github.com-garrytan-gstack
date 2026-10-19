@@ -151,7 +151,7 @@ const WHOLE_CHANGE_SCOPE = /^(?:in|within|across|throughout|with|from|for)\s.*\b
 
 /**
  * The review's conclusion says it found nothing: its last prose sentence or
- * ", and" clause (wrapped lines joined), or the because-clause of its
+ * ", and" clause (a wrapped line that continues in lowercase joined), or the because-clause of its
  * Recommendation line, is an unqualified no-findings statement. When other
  * prose precedes it, anything after the statement other than a predicate
  * ("were found", "is evident") or a colon explanation must scope it to the
@@ -174,7 +174,7 @@ function concludesNoFindings(code: string): boolean {
       if (clause) { because = clause; recommendationOpen = !/[.!?]$/.test(clause); }
       prose += '\n';
     } else if (/^[\t ]*#{1,6}[\t ]/.test(line)) prose += `\n${text}\n`;
-    else prose += listed || prose.endsWith('\n') || /[.!?;:]$/.test(prose) ? `\n${text}` : ` ${text}`;
+    else prose += listed || prose.endsWith('\n') || /[.!?;:]$/.test(prose) || !/^[a-z]/.test(text) ? `\n${text}` : ` ${text}`;
   }
   const sentences = prose.split(/(?<=[.!?;])\s+|\n|,\s+and\s+/i).map(sentence => sentence.trim()).filter(Boolean);
   const total = sentences.length + (because ? 1 : 0);

@@ -82,6 +82,7 @@ describe('a no-findings statement counts only as the reply\'s conclusion (#3294)
       'NO_FINDINGS', '**NO_FINDINGS**', '`NO_FINDINGS`', '- NO_FINDINGS',
       `The change adds a retry cap and its tests.\n${REPORTER}`, 'Reviewed the retry helper.\n\nNo issues found in this change.',
       'After reviewing the patch, I found no issues.', 'I found no issues in this read-only change.',
+      'Summary of the retry helper\nNo issues found.', 'I found no actionable regressions in the staged\nchanges.',
       // Clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol.
       'The change validates the retry limit before execution. No actionable regression was found.',
       'The change validates `max` before retrying. No affected callers or tests are present in the repository, and no actionable regression is evident.']) {
