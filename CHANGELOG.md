@@ -10,6 +10,32 @@
 
 ### For contributors
 - **`test/cso-ordinary-repos.test.ts`** covers each report end to end through the compiled launcher and `capture()`. Its negative controls show that a symlinked directory is still refused, that a nested repository swapped during capture fails as a race (this check fails if the device and inode comparison is removed), that retained and omitted history never shows a credential canary, and that Docker endpoint admission still refuses non-sockets, dangling and looping links, `..` paths and TCP. The #3248 socket fallback (`realpathSocket`) shipped in 1.91.96.0. The new endpoint-level case fails when admission calls plain `realpathSync`.
+## [1.91.149.0] - 2026-10-19
+
+**Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
+
+### Added
+- **Codex host adapter:** `test/helpers/e2e-hosts.ts` holds the `EVALS_HOST` switch (`claude` default, `codex`) and the per-case host metadata. `test/helpers/codex-host-runner.ts` adds:
+  - the case runner, with sandbox settings and a reasoning effort (the model default unless set);
+  - file-change event mapping;
+  - a transcript translated into the Claude stream-json shape that existing assertions read;
+  - the native-lifecycle hooks.
+
+  The 26 rework cases stay Claude-only.
+- **Census arms (`scripts/census-arms.ts`):** `evals-periodic.yml` gets two census schedules.
+  - **Monday:** a two-arm gate census, `claude-opus` and `codex-sol`.
+  - **Monthly (`0 6 1 * *`):** census jobs only, with `claude-fable` (claude-fable-5-1) and `codex-astra` (gpt-6-astra) arms and a `-monthly` concurrency key.
+
+  A `census_arms` dispatch input picks arms by hand. Artifact names and run IDs carry the arm, and a census-only run executes no periodic slice. Every arm keeps the census's `--skip-judges`.
+
+### Changed
+- **Codex cost is real:** `cost_known: false` is gone. Codex sessions price their `turn.completed` usage (input, cached input, cache-write input and output tokens) through `lib/pricing.ts`. The shared `execCodex` keeps the old runner's events and verdicts.
+- **Plans, reports and the ledger carry the host** when it is not Claude. On Codex, the Anthropic preflight skips its `claude -p` ping.
+- **Gate integrity:** no threshold, trial count, case kind, judge or Claude-host verdict changed. `HARNESS_VERSION` stays 6, and the changed harness files are recorded as non-behavioral. Five workflow tests now assert the census matrix per arm (one row per arm and slice, per-arm plan and report paths, a `periodic_lane` guard) in place of the single-arm shape; no assertion was dropped.
+
+### If you…
+- **…want one case on Codex:** `EVALS_HOST=codex GSTACK_CODEX_MODEL=gpt-6.1-sol bun run scripts/test-paid-shards.ts --tier gate --case <id> --trials 1`.
+- **…want the monthly arms now:** dispatch `evals-periodic.yml` with `census_arms=claude-fable,codex-astra`.
 
 ## [1.91.148.0] - 2026-10-19
 

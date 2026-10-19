@@ -17,6 +17,8 @@ import { hermeticChildEnv, isHermeticEnabled } from './hermetic-env';
 import { killProcessGroup } from '../../scripts/test-strict-output';
 import { resolveEvalModel } from '../../lib/eval-model';
 import { SessionObserver, appendSessionLedger, sessionKey, type SessionEnd } from './session-ledger';
+import { resolveEvalHost } from './e2e-hosts';
+import type { CodexTokenUsage } from './codex-session-runner';
 
 const GSTACK_DEV_DIR = path.join(os.homedir(), '.gstack-dev');
 const HEARTBEAT_PATH = path.join(GSTACK_DEV_DIR, 'e2e-live.json'); // heartbeat stays global
@@ -55,6 +57,10 @@ export interface SkillTestResult {
   firstResponseMs: number;
   /** Peak latency between consecutive tool calls, in ms */
   maxInterTurnMs: number;
+  /** Codex host: token classes behind costEstimate.estimatedCost. */
+  tokenUsage?: CodexTokenUsage;
+  /** Codex host: false when the session completed no turn or its model has no price row. */
+  costKnown?: boolean;
 }
 
 /** Local default startup grace: 90s covers observed API queue latency
@@ -75,6 +81,14 @@ const BROWSE_ERROR_PATTERNS = [
   /Server failed to start/,
   /no such file or directory.*\bbrowse(?:\.exe)?(?=$|[\s'":),])/i,
 ];
+
+/** First match of each browse failure pattern in tool output plus stderr. */
+export function scanBrowseErrors(text: string): string[] {
+  return BROWSE_ERROR_PATTERNS.flatMap(pattern => {
+    const match = text.match(pattern);
+    return match ? [match[0].slice(0, 200)] : [];
+  });
+}
 
 // --- Testable NDJSON parser ---
 
@@ -300,6 +314,7 @@ Setup, CLI startup and API queueing consume this same window; it never resets.
 Before source Reads, use Bash to run exactly \`date -u +%Y-%m-%dT%H:%M:%SZ\`. After each saved checkpoint, compare the latest evidence capture's printed completedAt with the times above; run that clock read again only when no capture has completed since your last clock read. When remaining time is at most ${reserve / 1000} seconds, prioritize the remaining required completion outputs and verification. No required content or gate may be skipped. If the clock read fails, report timing unavailable; do not invent remaining time or restart the deadline.`;
     systemPrompt = systemPrompt ? `${systemPrompt}\n\n${notice}` : notice;
   }
+  if (resolveEvalHost() === 'codex') return (await import('./codex-host-runner')).runCodexHostSkillTest({ ...options, appendSystemPrompt: systemPrompt, completionReserveMs: undefined });
 
   // Set up per-run log directory if runId is provided
   let runDir: string | null = null;
@@ -661,13 +676,7 @@ Before source Reads, use Bash to run exactly \`date -u +%Y-%m-%dT%H:%M:%SZ\`. Af
   const { transcript, resultLine, toolCalls } = parsed;
   const browseErrors: string[] = [];
 
-  const allText = toolCalls.filter(call => call.tool === 'Bash').map(call => call.output).join('\n') + '\n' + stderr;
-  for (const pattern of BROWSE_ERROR_PATTERNS) {
-    const match = allText.match(pattern);
-    if (match) {
-      browseErrors.push(match[0].slice(0, 200));
-    }
-  }
+  browseErrors.push(...scanBrowseErrors(toolCalls.filter(call => call.tool === 'Bash').map(call => call.output).join('\n') + '\n' + stderr));
 
   // Native Claude uses exit 1 for its structured max-turns result. Preserve
   // that existing semantic outcome only after a complete, uncancelled drain;
