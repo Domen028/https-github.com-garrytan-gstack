@@ -24,6 +24,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { bunIsolationArgs } from './bun-isolation';
 import { checkChangelog, mergeChangelogs, parseChangelog, reheadChangelog } from './changelog-check';
 import { type ResultCodeName } from './result-codes';
 import { runScriptSync, wtreeFingerprint } from './script-invocation';
@@ -178,7 +179,7 @@ function planVersions(o: RestampOptions, loaded: LoadedPolicy, policyLabel: stri
     newVersion = bumped(atBase.version, level);
     claims = 'ignored (stamp-at-merge)';
   } else {
-    const r = spawnSync(process.execPath, [path.join(BIN_DIR, 'gstack-next-version'), '--base', o.base, '--bump', level, '--current-version', atBase.version], { cwd: o.repoRoot, encoding: 'utf8', timeout: 120_000, env: o.env ?? process.env });
+    const r = spawnSync(process.execPath, [...bunIsolationArgs(), path.join(BIN_DIR, 'gstack-next-version'), '--base', o.base, '--bump', level, '--current-version', atBase.version], { cwd: o.repoRoot, encoding: 'utf8', timeout: 120_000, env: o.env ?? process.env });
     let q: any = null;
     try { q = JSON.parse(r.stdout ?? ''); } catch {}
     const usable = r.status === 0 && q && typeof q.version === 'string' && parseVersion(q.version) && (q.offline === false || q.fallback === 'git');
@@ -354,7 +355,7 @@ function runStages(o: RestampOptions, plan: Plan, staging: string, since: string
   const v = stage('version');
   if (command) { v.status = 'skipped'; v.detail = 'restamp_command owns the version'; }
   else {
-    const w = spawnSync(process.execPath, [path.join(BIN_DIR, 'gstack-version-bump'), 'write', '--version', plan.newVersion], { cwd: staging, encoding: 'utf8', timeout: 120_000, env });
+    const w = spawnSync(process.execPath, [...bunIsolationArgs(), path.join(BIN_DIR, 'gstack-version-bump'), 'write', '--version', plan.newVersion], { cwd: staging, encoding: 'utf8', timeout: 120_000, env });
     if (w.status !== 0) { v.status = 'failed'; v.detail = (w.stderr ?? '').trim().slice(0, 300); throw new Refusal('RESTAMP_VERSION_SOURCE', `gstack-version-bump write failed: ${v.detail}; nothing written`); }
     v.status = 'done'; v.detail = `wrote ${plan.newVersion}`;
   }

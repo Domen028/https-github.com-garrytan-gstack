@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * Stop hook: close dangling "started" timeline entries (#2553).
  *
@@ -54,6 +54,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 import { runBin } from './spawn-bin';
 import { resolveStateRoot } from '../../../lib/state-root';
+import { bunIsolationArgs } from '../../../lib/bun-isolation';
 import { readVersionedSlugCache } from '../../../lib/bin-context';
 import { logHookError as sharedLogHookError } from './hook-log';
 
@@ -185,7 +186,7 @@ function spawnRepair(cwd: string): void {
   if (isFresh(marker, MISS_TTL_MS)) return;
   fs.mkdirSync(path.dirname(marker), { recursive: true });
   fs.writeFileSync(marker, `${cwd}\n`);
-  const child = spawn(process.execPath, [fileURLToPath(import.meta.url), '--repair', cwd], {
+  const child = spawn(process.execPath, [...bunIsolationArgs(), fileURLToPath(import.meta.url), '--repair', cwd], {
     detached: true,
     stdio: 'ignore',
     windowsHide: true,

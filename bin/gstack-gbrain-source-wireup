@@ -222,7 +222,7 @@ ensure_worktree() {
 # is not JSON.
 source_local_path() {
   gbrain sources list --json 2>/dev/null \
-    | GB_SOURCE_ID="$1" bun -e '
+    | GB_SOURCE_ID="$1" bun --no-env-file --config=/dev/null -e '
         const raw = await Bun.stdin.text();
         try {
           const s = (JSON.parse(raw).sources || []).find((x) => x.id === process.env.GB_SOURCE_ID);

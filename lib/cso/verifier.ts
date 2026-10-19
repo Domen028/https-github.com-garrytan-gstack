@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 import * as fs from 'node:fs';
 import { connect } from 'node:net';
 import {

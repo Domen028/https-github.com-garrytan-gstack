@@ -71,7 +71,7 @@ elif [ "$_CODEX_EXIT" != "0" ]; then
   head -20 "$TMPERR" 2>/dev/null | sed 's/^/  /' || true
   "$_CODEX_PROBE" log-event codex_nonzero_exit "review:$_CODEX_EXIT"
 fi
-bun ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" structured "$TMPOUT"
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" structured "$TMPOUT"
 ```
 
 
@@ -132,7 +132,7 @@ if [ "$_CODEX_EXIT" = "124" ]; then
   "$_CODEX_PROBE" log-hang "review" "$(wc -c < "$TMPERR" 2>/dev/null || echo 0)"
   echo "Codex stalled past 5.5 minutes."
 fi
-bun ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" --events "$TMPOUT.events" structured "$TMPOUT"
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" --events "$TMPOUT.events" structured "$TMPOUT"
 ```
 
 When you take this path, say so in the output header — `CODEX SAYS (code review — custom

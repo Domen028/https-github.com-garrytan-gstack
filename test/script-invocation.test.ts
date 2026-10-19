@@ -9,6 +9,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { bunIsolationArgs } from '../lib/bun-isolation';
 import {
   bashCommandInvocation, resolveWindowsBash, resolveWindowsBashCached, runBashSync, runScriptSync, scriptInvocation, wtreeFingerprint,
   type BashProbe,
@@ -75,7 +76,7 @@ describe('scriptInvocation', () => {
   test('a bun-shebang bin runs under Bun on every platform', () => {
     for (const platform of ['win32', 'linux', 'darwin']) {
       const inv = scriptInvocation(path.join(BIN, 'gstack-redact'), ['--json'], { ...win, platform });
-      expect(inv).toEqual({ ok: true, cmd: process.execPath, argv: [path.join(BIN, 'gstack-redact'), '--json'] });
+      expect(inv).toEqual({ ok: true, cmd: process.execPath, argv: [...bunIsolationArgs(platform as NodeJS.Platform), path.join(BIN, 'gstack-redact'), '--json'] });
     }
   });
 

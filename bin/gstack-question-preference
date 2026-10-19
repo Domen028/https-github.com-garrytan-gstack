@@ -101,7 +101,7 @@ do_check() {
   fi
   ensure_file
   cd "$ROOT_DIR"
-  PREF_FILE_PATH="$PREF_FILE" QID="$QID" QSUMMARY="$QSUMMARY" bun -e "
+  PREF_FILE_PATH="$PREF_FILE" QID="$QID" QSUMMARY="$QSUMMARY" bun --no-env-file --config=/dev/null -e "
     import('./scripts/one-way-doors.ts').then((oneway) => {
       const fs = require('fs');
       const qid = process.env.QID;
@@ -187,7 +187,7 @@ do_write() {
 
   set +e
   local RESULT
-  RESULT=$(cd "$ROOT_DIR" && printf '%s' "$INPUT" | PREF_FILE_PATH="$PREF_FILE" EVENT_FILE_PATH="$EVENT_FILE" FREE_TEXT="$FREE_TEXT" HAS_FREE_TEXT="$HAS_FREE_TEXT" bun -e "
+  RESULT=$(cd "$ROOT_DIR" && printf '%s' "$INPUT" | PREF_FILE_PATH="$PREF_FILE" EVENT_FILE_PATH="$EVENT_FILE" FREE_TEXT="$FREE_TEXT" HAS_FREE_TEXT="$HAS_FREE_TEXT" bun --no-env-file --config=/dev/null -e "
     const fs = require('fs');
     const raw = await Bun.stdin.text();
     let j;
@@ -306,7 +306,7 @@ do_clear() {
     echo '{}' > "$PREF_FILE"
     echo "OK: cleared all preferences"
   else
-    PREF_FILE_PATH="$PREF_FILE" QID="$QID" bun -e "
+    PREF_FILE_PATH="$PREF_FILE" QID="$QID" bun --no-env-file --config=/dev/null -e "
       const fs = require('fs');
       const prefs = JSON.parse(fs.readFileSync(process.env.PREF_FILE_PATH, 'utf-8'));
       if (prefs[process.env.QID] !== undefined) {
@@ -325,7 +325,7 @@ do_clear() {
 # -----------------------------------------------------------------------
 do_stats() {
   ensure_file
-  (cd "$ROOT_DIR" && PREF_FILE_PATH="$PREF_FILE" bun -e "
+  (cd "$ROOT_DIR" && PREF_FILE_PATH="$PREF_FILE" bun --no-env-file --config=/dev/null -e "
     import('./scripts/one-way-doors.ts').then((oneway) => {
       const fs = require('fs');
       const prefs = JSON.parse(fs.readFileSync(process.env.PREF_FILE_PATH, 'utf-8'));

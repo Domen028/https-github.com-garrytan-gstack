@@ -362,7 +362,7 @@ _runtime_root_refused() {
 # --claude-model is validated before anything is written, and persisted once
 # Claude is known to be selected (below, and in the --refresh-registered parent).
 if [ "$CLAUDE_MODEL_SET" -eq 1 ]; then
-  if ! _CLAUDE_MODEL_RESOLVED="$(cd "$SOURCE_GSTACK_DIR" && bun run scripts/models.ts claude-overlay "$CLAUDE_MODEL_ARG" 2>&1)"; then
+  if ! _CLAUDE_MODEL_RESOLVED="$(cd "$SOURCE_GSTACK_DIR" && bun --no-env-file --config=/dev/null run scripts/models.ts claude-overlay "$CLAUDE_MODEL_ARG" 2>&1)"; then
     printf 'Error: --claude-model %s\n' "$_CLAUDE_MODEL_RESOLVED" | sed '2,$s/^/  /' >&2
     echo "  Nothing was installed or changed." >&2
     exit 1
@@ -1317,7 +1317,7 @@ if [ "$LOCAL_INSTALL" -eq 0 ]; then
     _CODEX_PREFLIGHT_SELECTED=1
   fi
 fi
-bun "$SOURCE_GSTACK_DIR/scripts/preflight-codex-overlap.ts" \
+bun --no-env-file --config=/dev/null "$SOURCE_GSTACK_DIR/scripts/preflight-codex-overlap.ts" \
   --source "$SOURCE_GSTACK_DIR" --namespace "$CODEX_SKILLS" \
   --selected "$_CODEX_PREFLIGHT_SELECTED" --local "$CODEX_REPO_LOCAL" \
   --windows "$IS_WINDOWS" --relocation "$HOME/.gstack/repos/gstack" || exit 1
@@ -1579,7 +1579,7 @@ ensure_playwright_browser() {
     echo "gstack setup failed: Node.js is required on Windows" >&2
     return 1
   else
-    probe_cmd="bun --eval 'import { chromium } from \"playwright\"; const browser = await chromium.launch(); await browser.close();'"
+    probe_cmd="bun --no-env-file --config=/dev/null --eval 'import { chromium } from \"playwright\"; const browser = await chromium.launch(); await browser.close();'"
   fi
   (
     cd "$SOURCE_GSTACK_DIR"

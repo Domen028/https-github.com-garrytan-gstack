@@ -38,7 +38,7 @@ categories that fired plus a sha256 of the body. Substitute the printed name for
 ```bash
 REDACT_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.gstack/tmp/<redact-file-name>"
 [ -s "$REDACT_FILE" ] || { echo "No audit record: $REDACT_FILE is missing or empty; write the draft into it first." >&2; exit 1; }
-bun ~/.claude/skills/gstack/lib/redact-audit-log.ts \
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/redact-audit-log.ts \
   "{\"repo_visibility\":\"$REDACT_VIS\",\"outcome\":\"<clean|flagged>\",\"categories_flagged\":[<...>],\"spec_archive_path\":\"\"}" \
   "$REDACT_FILE"
 ```

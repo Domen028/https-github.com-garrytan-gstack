@@ -265,7 +265,7 @@ test("rendered /ship handles every version-source outcome the classifier emits",
   const prBody = readFileSync(join(import.meta.dir, "../ship/sections/pr-body.md"), "utf8");
   const step18 = prBody.slice(prBody.indexOf("### Prepare the title (Step 18)"), prBody.indexOf("## Step 19:")).replace(/\s+/g, " ");
   expect(step18.length).toBeGreaterThan(0);
-  const classifyCmd = step12.match(/bun run \S+gstack-version-bump classify --base <base>/);
+  const classifyCmd = step12.match(/bun --no-env-file --config=\/dev\/null run \S+gstack-version-bump classify --base <base>/);
   expect(classifyCmd).not.toBeNull();
   const bin = join(import.meta.dir, "../bin/gstack-version-bump");
   const fixtures: Record<string, Record<string, string>> = {

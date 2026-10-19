@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-state-matrix — the round-trip matrix for proposal, hold and approval state machines (field list 2, W3).
  *

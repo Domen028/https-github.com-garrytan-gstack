@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * test:exercised-map — maintain test/helpers/exercised-commands.json, the
  * observed half of the exercised-path consumer map (scripts/pr-dependencies.ts

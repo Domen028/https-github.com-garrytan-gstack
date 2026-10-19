@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /** Trusted corpus preparation, producer receipt collection, and objective result accounting. */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';

@@ -2718,7 +2718,7 @@ describe('DESIGN_DETECTOR resolver', () => {
         expect(block).not.toContain('npx impeccable');
         for (const line of block.split('\n')) {
           if (!line.includes('gstack-design-detect.ts')) continue;
-          expect(line).toContain('bun --no-env-file run ');
+          expect(line).toContain('bun --no-env-file --config=/dev/null run ');
           if (/gstack-design-detect\.ts scan /.test(line)) expect(line).toContain('echo "DETECT_EXIT_CODE=$?"');
         }
       }
@@ -2778,7 +2778,7 @@ describe('DESIGN_MD_CHECK resolver and open DESIGN.md adoption', () => {
   test('every rendered gstack-design-md invocation uses bun --no-env-file', () => {
     for (const content of [readSkillUnion('design-consultation'), fs.readFileSync(path.join(ROOT, 'design-review', 'SKILL.md'), 'utf-8'), readSkillUnion('ship')]) {
       for (const line of content.split('\n')) {
-        if (line.includes('gstack-design-md.ts')) expect(line).toContain('bun --no-env-file run ');
+        if (line.includes('gstack-design-md.ts')) expect(line).toContain('bun --no-env-file --config=/dev/null run ');
       }
     }
   });

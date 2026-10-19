@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * Generate bin/gstack-doctor-components.sh — the Bash render of the doctor's
  * component table (lib/doctor-components.ts) and result-code anchors

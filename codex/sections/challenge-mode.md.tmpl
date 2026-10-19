@@ -98,7 +98,7 @@ if grep -qiE "auth|login|unauthorized" "$TMPERR" 2>/dev/null; then
   echo "[codex auth error] $(head -1 "$TMPERR")"
   "$_CODEX_PROBE" log-event codex_auth_failed
 fi
-bun ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex challenge' --exit "$_CODEX_EXIT" --stderr "$TMPERR" --events "$TMPRESP.events" execution "$TMPRESP"
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex challenge' --exit "$_CODEX_EXIT" --stderr "$TMPERR" --events "$TMPRESP.events" execution "$TMPRESP"
 rm -f "$TMPRESP" "$TMPRESP.events" "$PROMPT_FILE"
 ```
 

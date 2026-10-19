@@ -181,7 +181,7 @@ HOOK_EOF
   if ! command -v bun >/dev/null 2>&1; then
     echo "  ! bun not found — manually add this PreToolUse hook (matcher Skill|skill) to .claude/settings.json:"
     echo "    $HOOK_COMMAND"
-  elif GSTACK_SETTINGS_PATH="$SETTINGS" GSTACK_HOOK_COMMAND="$HOOK_COMMAND" bun -e "
+  elif GSTACK_SETTINGS_PATH="$SETTINGS" GSTACK_HOOK_COMMAND="$HOOK_COMMAND" bun --no-env-file --config=/dev/null -e "
       const fs = require('fs');
       const settingsPath = process.env.GSTACK_SETTINGS_PATH;
       const command = process.env.GSTACK_HOOK_COMMAND;

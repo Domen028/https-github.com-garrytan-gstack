@@ -2,4 +2,4 @@
 # Bash shim — Claude Code runs hook commands through /bin/sh; this runs the
 # TypeScript hook with bun.
 HERE="$(cd "$(dirname "$0")" && pwd)"
-exec bun "$HERE/mode-handoff-hook.ts"
+exec bun --no-env-file --config=/dev/null "$HERE/mode-handoff-hook.ts"

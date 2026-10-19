@@ -134,6 +134,6 @@ export function generateAutoplanReviewFile(ctx: TemplateContext, args?: string[]
 export function generateAutoplanSnapshotTool(ctx: TemplateContext): string {
   return `\`\`\`bash
 ${runtimeRootPrelude(ctx)}
-bun -e 'console.log(require("fs").realpathSync(process.argv[1]))' "${toShellPath(ctx.paths.binDir)}/gstack-autoplan-snapshot.ts"
+bun --no-env-file --config=/dev/null -e 'console.log(require("fs").realpathSync(process.argv[1]))' "${toShellPath(ctx.paths.binDir)}/gstack-autoplan-snapshot.ts"
 \`\`\``;
 }

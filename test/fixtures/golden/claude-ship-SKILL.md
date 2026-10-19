@@ -772,7 +772,7 @@ chooses it in item 2 and ALREADY_BUMPED derives it in item 1.
 
 1. **Classify state** — pure reader, never writes:
    ```bash
-   bun run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base <base>
+   bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base <base>
    ```
    Save the JSON `baseVersion` as `BASE_VERSION`, then read `state` and dispatch:
    - **FRESH** → use the recorded level or choose it in item 2, then check the queue and write.
@@ -802,7 +802,7 @@ chooses it in item 2 and ALREADY_BUMPED derives it in item 1.
 
 3. **Queue-aware pick** (workspace-aware ship):
    ```bash
-   QUEUE_JSON=$(bun run ~/.claude/skills/gstack/bin/gstack-next-version --base <base> --bump "$BUMP_LEVEL" --current-version "$BASE_VERSION" 2>/dev/null || echo '{"offline":true}')
+   QUEUE_JSON=$(bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-next-version --base <base> --bump "$BUMP_LEVEL" --current-version "$BASE_VERSION" 2>/dev/null || echo '{"offline":true}')
    CANDIDATE_VERSION=$(echo "$QUEUE_JSON" | jq -r '.version // empty')
    ```
    **Qualify first:** require successful utility output and a nonempty valid version.
@@ -821,7 +821,7 @@ chooses it in item 2 and ALREADY_BUMPED derives it in item 1.
 
 4. **Write the bump** (FRESH, or an approved rebump):
    ```bash
-   bun run ~/.claude/skills/gstack/bin/gstack-version-bump write --version "$NEW_VERSION" --regen-digest
+   bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-version-bump write --version "$NEW_VERSION" --regen-digest
    ```
    The CLI validates `MAJOR.MINOR.PATCH.MICRO` (or pinned 3-digit semver), writes
    VERSION, the manifest (`--package-json-path` → `.gstack/package-json-path` →
@@ -831,7 +831,7 @@ chooses it in item 2 and ALREADY_BUMPED derives it in item 1.
 
    `--regen-digest` runs repo code (`scripts/gen-agents-digest.ts`) with Step 5's privileges
    only when it and committed `agents-digest/gstack-AGENTS.md` exist; if `agentsDigest` is
-   false, run `bun scripts/gen-agents-digest.ts` and stage the digest with the bump. Before
+   false, run `bun --no-env-file --config=/dev/null scripts/gen-agents-digest.ts` and stage the digest with the bump. Before
    push, verify the committed digest matches generation for the selected VERSION.
 
 5. **Record the release decision after a version was written**, including

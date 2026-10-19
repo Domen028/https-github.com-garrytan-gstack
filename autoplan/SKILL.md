@@ -676,7 +676,7 @@ Send phase announcements and the final approval request (the brief) in the conve
 Resolve SNAPSHOT_TOOL once:
 ```bash
 
-bun -e 'console.log(require("fs").realpathSync(process.argv[1]))' "$HOME/.claude/skills/gstack/bin/gstack-autoplan-snapshot.ts"
+bun --no-env-file --config=/dev/null -e 'console.log(require("fs").realpathSync(process.argv[1]))' "$HOME/.claude/skills/gstack/bin/gstack-autoplan-snapshot.ts"
 ```
 
 Fresh RESTORE_PATH, beside its phase artifacts in the git-excluded `.gstack/tmp/autoplan/`:

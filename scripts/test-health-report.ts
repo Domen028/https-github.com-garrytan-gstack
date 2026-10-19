@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * test:health — the audit's success metrics as one command, read from CI
  * history (scripts/lib/ci-history.ts, the same reader pass-rates uses) plus

@@ -233,7 +233,7 @@ corrupt it):
 
 ```bash
 SRC=$(base64 < <outdir>/<slug>.mmd | tr -d '\n')
-bun run ~/.claude/skills/gstack/bin/gstack-render.ts "<staged>" --wait-selector '#done' \
+bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-render.ts "<staged>" --wait-selector '#done' \
   --eval "window.__renderMermaid('diagram-1', atob('$SRC')).then(s => (window.__svg = s))" --out <outdir>/<slug>.svg \
   --eval "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png \
   --eval "window.__mermaidToExcalidraw(atob('$SRC')).then(j => (window.__scene = j))" --out <outdir>/<slug>.excalidraw
@@ -279,7 +279,7 @@ JSON is full of quotes and backslashes:
 
 ```bash
 SCENE=$(base64 < <outdir>/<slug>.excalidraw | tr -d '\n')
-bun run ~/.claude/skills/gstack/bin/gstack-render.ts "<staged>" --wait-selector '#done' \
+bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-render.ts "<staged>" --wait-selector '#done' \
   --eval "window.__excalidrawToSvg(atob('$SCENE')).then(s => (window.__svg = s))" --out <outdir>/<slug>.svg \
   --eval "window.__rasterize(window.__svg, 1950)" --out <outdir>/<slug>.png
 ```
