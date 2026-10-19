@@ -133,8 +133,12 @@ describe('teardown', () => {
     expect((await enable()).status).toBe(0);
     expect(hookCommands(home, 'Stop')).toEqual(['/opt/other-tool/bin/session-stop-hook', OWN(home, 'task-memory-stop-hook')]);
 
-    expect(settingsHook(['prune-stale', '--all'], { GSTACK_SWEEP_EXCLUDE_SOURCES: 'gstack-task-memory' }).exitCode).toBe(0);
+    expect(settingsHook(['prune-stale', '--all'], { GSTACK_SWEEP_KEEP_USER_OPT_INS: '1' }).exitCode).toBe(0);
     expect(hookCommands(home, 'UserPromptSubmit')).toContain(OWN(home, 'task-memory-prompt-hook'));
+    expect(hookCommands(home, 'Stop')).toContain(OWN(home, 'task-memory-stop-hook'));
+    expect(settingsHook(['prune-stale', '--all']).exitCode).toBe(0);
+    expect(JSON.stringify(readSettings(home))).not.toContain('task-memory');
+    expect((await enable()).status).toBe(0);
     expect(settingsHook(['remove-source', '--source', 'gstack-task-memory']).exitCode).toBe(0);
     expect(JSON.stringify(readSettings(home))).not.toContain('task-memory');
     foreignIntact();

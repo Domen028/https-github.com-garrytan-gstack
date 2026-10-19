@@ -267,6 +267,12 @@ describe('gstack-uninstall: hook cleanup runs before install-root deletion', () 
     expect(uninstallSrc).toContain('remove-source --source gstack-task-memory');
     expect(uninstallSrc).toContain('prune-stale --all');
   });
+
+  test('the --no-team sweep keeps user opt-in rows; the uninstall sweep does not', () => {
+    const sweep = setupSrc.split('\n').findIndex(l => l.includes('"$SETTINGS_HOOK" prune-stale --all'));
+    expect(setupSrc.split('\n')[sweep - 1]!.trim()).toBe('GSTACK_SWEEP_KEEP_USER_OPT_INS=1 \\');
+    expect(uninstallSrc).not.toContain('GSTACK_SWEEP_KEEP_USER_OPT_INS');
+  });
 });
 
 describe('the defect-class warning is written down where the next author will see it', () => {
