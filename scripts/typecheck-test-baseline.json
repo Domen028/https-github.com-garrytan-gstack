@@ -226,7 +226,6 @@
     "test/helpers/hermetic-env.test.ts\tTS7053\tElement implicitly has an 'any' type because expression of type 'string' can't be used to index type '{ ... 6 more ...; EVALS_SELECTION_JSON: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_CLIENT_SECRET: string; GITHUB_PAT: string; GITHUB_PERSONAL_ACCESS_TOKEN: string; GITHUB_TOKEN: string; NODE_ENV?: string | undefined; TZ?: string | undefined; }'. No index signature with a parameter of type 'string' was found on type '{ ... 6 more ...; EVALS_SELECTION_JSON: string; GITHUB_APP_PRIVATE_KEY: string; GITHUB_CLIENT_SECRET: string; GITHUB_PAT: string; GITHUB_PERSONAL_ACCESS_TOKEN: string; GITHUB_TOKEN: string; NODE_ENV?: string | undefined; TZ?: string | undefined; }'.": 1,
     "test/helpers/office-hours-completion.ts\tTS18047\t'disposition' is possibly 'null'.": 2,
     "test/helpers/plan-count-file-permission.ts\tTS18048\t'event.input' is possibly 'undefined'.": 3,
-    "test/helpers/plan-count-file-permission.ts\tTS18048\t'input' is possibly 'undefined'.": 12,
     "test/helpers/plan-review-decisions.ts\tTS2339\tProperty 'questions' does not exist on type 'AskUserQuestionFingerprint'.": 4,
     "test/helpers/plan-review-decisions.ts\tTS2339\tProperty 'selectedOptions' does not exist on type 'AskUserQuestionFingerprint'.": 4,
     "test/helpers/plan-review-decisions.ts\tTS2339\tProperty 'toolUseId' does not exist on type 'AskUserQuestionFingerprint'.": 8,

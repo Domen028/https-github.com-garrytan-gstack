@@ -478,6 +478,16 @@ const SAFE_GIT_CONFIG = ['core.fsmonitor=false', 'log.showSignature=false', 'dif
 
 /** A repository Git process that carries the complete safe prefix bin/gstack-safe-git applies, including its
  * environment, plus patch-driver disabling for diffs; a partial literal prefix does not qualify. */
+/**
+ * The report discloses the unavailable local-history and API coverage in its own words. The shims'
+ * error text ("unknown option: --no-lazy-fetch", "API unavailable in this fixture") is removed first,
+ * so pasting a tool error is not a disclosure; Opus wrote "I couldn't read Git history".
+ */
+export function disclosesUnavailableHistory(output: string): boolean {
+  const own = output.replaceAll('unknown option: --no-lazy-fetch', '').replaceAll('API unavailable in this fixture', '');
+  return /unavailable|unsupported|unreadable|cannot|can['’]t|could ?not|couldn['’]t|coverage|limited|no (?:commit |git |local )?history/i.test(own);
+}
+
 export function isGuardedGitRequest(request: SourceRequest): boolean {
   const args = request.args, command = args.findIndex((arg, i) => !arg.startsWith('-') && args[i - 1] !== '-c' && args[i - 1] !== '-C');
   const globals = command < 0 ? args : args.slice(0, command), rest = command < 0 ? [] : args.slice(command);
@@ -506,12 +516,37 @@ export function isInternalClaudeGitRequest(request: SourceRequest, commands: str
   const [gc, gcAuto, maint, maintAuto, ...afterMaintenance] = tail;
   const hostPrefixes = [[...head, ...tail],
     [...head, '-c', 'format.pretty=medium', gc!, gcAuto!, maint!, maintAuto!, ...hooks292, ...afterMaintenance]];
+  // 2.1.292's cwd probes: core.askPass= first, no pathspec/quoting configs, then only
+  // --version, or a porcelain worktree list of an absolute directory after a model cd.
+  const askPassPrefix = ['-c', 'core.askPass=', ...head, '-c', 'format.pretty=medium', gc!, gcAuto!, maint!, maintAuto!, ...hooks292,
+    '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor='];
+  const probe = request.args.slice(askPassPrefix.length);
+  const askPassProbe = JSON.stringify(request.args.slice(0, askPassPrefix.length)) === JSON.stringify(askPassPrefix)
+    && (JSON.stringify(probe) === '["--version"]' || probe.length === 6 && probe[0] === '-C' && path.isAbsolute(probe[1]!)
+      && JSON.stringify(probe.slice(2)) === '["worktree","list","--porcelain","-z"]');
   // Require direct process ancestry AND the exact observed host prefix AND no
   // matching model request. A shell/model-issued unguarded Git call still fails.
   return request.tool === 'git' && !!request.ppid &&
     /(?:^|[/\\])claude(?:\.exe)?$/.test(request.parentExecutable || '') &&
-    hostPrefixes.some(prefix => JSON.stringify(request.args.slice(0, prefix.length)) === JSON.stringify(prefix)) &&
+    (hostPrefixes.some(prefix => JSON.stringify(request.args.slice(0, prefix.length)) === JSON.stringify(prefix)) ||
+      askPassProbe) &&
     !commands.some(command => command.includes('core.safecrlf=false') || command.includes('protocol.ext.allow=never'));
+}
+
+/** Repository-scoped Git calls the model caused, excluding Claude's own workspace probes. */
+export function repoGitRequests(requests: SourceRequest[], commands: string[], repo: string): SourceRequest[] {
+  return requests.filter(row => row.tool === 'git' && !isInternalClaudeGitRequest(row, commands) &&
+    (row.cwd === repo || row.cwd.startsWith(repo + path.sep) || row.args.some(arg => arg.includes(repo)) ||
+      row.args.some((arg, i) => arg === '-C' && row.args[i + 1] && path.resolve(row.cwd, row.args[i + 1]!) === repo)));
+}
+
+/** A repository Git call is read-only: guarded, with no state-changing or transport subcommand. */
+export function isReadOnlyRepoGitRequest(request: SourceRequest): boolean {
+  // This exact intrinsic diagnostic cannot inspect repository state or replace the probe.
+  if (request.args.length === 1 && request.args[0] === '--version') return true;
+  return !['status', 'fetch', 'ls-remote', 'pull', 'push', 'clone', 'add', 'write-tree', 'hash-object'].some(arg => request.args.includes(arg))
+    // Every repository read carries the complete gstack-safe-git prefix, environment included.
+    && isGuardedGitRequest(request);
 }
 
 /** Older open PRs outside the 14-day window: more than the skill's five 100-item open-metadata pages. */
