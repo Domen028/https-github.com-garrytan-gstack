@@ -148,7 +148,10 @@ test('native literal argv, status, scripts, readiness and artifact bookkeeping a
 
 // PR gate run 38969924945 (qa-only-no-fix): after saving fallback screenshots into the owned
 // directory the prompt names, the agent listed it with this exact spelling.
-test.each(['captured-screenshots-listing', 'parent-escape', 'other-subdirectory', 'operator', 'extra-option'])
+// GSTA-49: qa-only-no-fix opts into the shared read-only grammar, so pure reads inside the fixture root
+// (parent-escape stays inside it, other-subdirectory, extra-option) are accepted; leaving the root or
+// composing with a non-read tool is not.
+test.each(['captured-screenshots-listing', 'parent-escape', 'other-subdirectory', 'operator', 'extra-option', 'root-escape', 'absolute-outside'])
   ('listing the owned screenshots directory is bookkeeping; nothing wider is: %s', scenario => {
     const f = fixture();
     f.run();
@@ -159,9 +162,11 @@ test.each(['captured-screenshots-listing', 'parent-escape', 'other-subdirectory'
       'other-subdirectory': `ls -la ${quote(path.join(f.directory, 'qa/sections'))}`,
       operator: `ls -la ${quote(screenshots)}; ${quote(browse)} --version`,
       'extra-option': `ls -laR ${quote(screenshots)}`,
+      'root-escape': `ls -la ${quote(screenshots + '/../../..')}`,
+      'absolute-outside': 'ls -la /etc',
     };
     f.calls.push({ tool: 'Bash', input: { command: commands[scenario as keyof typeof commands] }, output: 'total 0' });
-    if (scenario === 'captured-screenshots-listing') expect(f.check()).toEqual({ launchedRuns: 1, completedRuns: 1, refusedRuns: 0, timedOutRuns: 0 });
+    if (['captured-screenshots-listing', 'parent-escape', 'other-subdirectory', 'extra-option'].includes(scenario)) expect(f.check()).toEqual({ launchedRuns: 1, completedRuns: 1, refusedRuns: 0, timedOutRuns: 0 });
     else expect(() => f.check()).toThrow(scenario === 'operator' ? 'QA deadline: unsupported outer shell composition' : 'QA deadline: untrusted runtime or unguarded command');
   });
 

@@ -11,7 +11,8 @@
  * inside the root. Every path operand, path-valued option and unquoted glob
  * match must resolve physically (symlinks and .. applied) inside the fixture
  * root and outside its denied paths.
- * Rejected: every other tool, redirects, substitutions, variables, tilde and
+ * Stderr may be discarded with 2>/dev/null or merged with 2>&1 after a word.
+ * Rejected: every other tool, every other redirect, substitutions, variables, tilde and
  * brace expansion, backgrounding, multi-line input, and the write, exec,
  * symlink-following and output-file options of the listed tools.
  */
@@ -109,7 +110,7 @@ const FIND_PATHS = new Set(['-newer', '-anewer', '-cnewer', '-samefile']);
 
 /** Interface text an opted-in fixture declares to its actor. */
 export function readOnlyInterfaceText(root: string): string {
-  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; sed only as -n with a line-range print script such as sed -n 1,200p; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v). Join only these reads with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
+  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; sed only as -n with a line-range print script such as sed -n 1,200p; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v). Join only these reads with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects other than 2>/dev/null or 2>&1 right after a read's arguments, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
 }
 
 export function readOnlyCommandAllowed(command: string, scope: ReadOnlyScope): boolean {
@@ -199,6 +200,9 @@ function tokenize(command: string): Token[] | string {
       continue;
     }
     if (c === '$' || c === '`') return 'substitution or variable';
+    const discard = c === '>' && word?.text === '2' && !word.quoted && tokens.length > 0 && !('op' in tokens.at(-1)!)
+      ? /^>(?:\/dev\/null|&1)(?=[ \t;|&]|$)/.exec(command.slice(i)) : null;
+    if (discard) { word = undefined; i += discard[0].length - 1; continue; }
     if (c === '>' || c === '<') return 'redirect';
     if ('(){}'.includes(c)) return 'subshell, grouping or brace expansion';
     if (!word && (c === '~' || c === '#')) return 'tilde expansion or comment';

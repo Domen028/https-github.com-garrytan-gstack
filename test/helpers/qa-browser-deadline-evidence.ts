@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { nativeCalls, readQACheckpointFiles } from './qa-checkpoint-evidence';
+import { readOnlyCommandAllowed, readOnlyInterfaceText } from './read-only-commands';
 
 type Call = { tool: string; input: any; output: string };
 type Options = { directory: string; guard: string; browse: string; started: number; ended: number };
@@ -24,7 +25,8 @@ export function qaDeadlineShellPolicy(directory: string, guard: string, browse: 
   const file = path.join(directory, 'qa-reports/deadline.json');
   return { allowed, file, prompt: `This native fixture accepts a deliberately narrow executable outer form. Run the BROWSER SETUP Aside readiness bash block verbatim, as its own Bash call (no appended commands). The fallback binary is already supplied. Other than that block, these standalone setup/bookkeeping Bash calls are allowed:
 ${allowed.slice(1).join('\n')}
-Use Read/Glob for every other local inspection (no other ls, wc, cat or find Bash calls) and Write only inside ${path.join(directory, 'qa-reports')}; the report and screenshots directories already exist. Memory files and learning stores outside that directory are not authorized. Write the initial charters and final report to the same caller-owned file ${path.join(directory, 'qa-reports/qa-only-report.md')}, not a separate charter file.
+${readOnlyInterfaceText(directory)}
+Use Read/Glob for any other local inspection and Write only inside ${path.join(directory, 'qa-reports')}; the report and screenshots directories already exist. Memory files and learning stores outside that directory are not authorized. Write the initial charters and final report to the same caller-owned file ${path.join(directory, 'qa-reports/qa-only-report.md')}, not a separate charter file.
 Every other Bash call must be exactly one invocation of bun ${quote(guard)}, with literal arguments, no outer assignments, substitutions, globs, pipes, redirects, prefixes, suffixes or shell operators. The exact runtime path ${quote(process.execPath)} may replace bun; no other launcher is accepted.
 Start exactly once, and only after you have read the workflow sections you need and your Write of the initial charter to ${path.join(directory, 'qa-reports/qa-only-report.md')} has completed; the 30-second deadline begins at start: bun ${quote(guard)} start ${quote(file)} 30
 Then use bun ${quote(guard)} status ${quote(file)} or bun ${quote(guard)} run ${quote(file)} -- COMMAND ARGS. Use the absolute guard path directly, not $G.
@@ -211,6 +213,10 @@ export function assertQaBrowserDeadline(calls: Call[], options: Options & { expe
     const command = call.input.command.trim();
     if (allowed.includes(command)) {
       if ((call.output ?? '').includes('QA_DEADLINE ')) fail('receipt outside trusted guard invocation');
+      continue;
+    }
+    if (readOnlyCommandAllowed(command, { root: directory })) {
+      if ((call.output ?? '').split('\n').some(line => line.startsWith('QA_DEADLINE '))) fail('receipt outside trusted guard invocation');
       continue;
     }
     const outer = literalArgv(command);
