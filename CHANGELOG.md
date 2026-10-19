@@ -27,6 +27,41 @@
 - **…want one case on Codex:** `EVALS_HOST=codex GSTACK_CODEX_MODEL=gpt-6.1-sol bun run scripts/test-paid-shards.ts --tier gate --case <id> --trials 1`.
 - **…want the monthly arms now:** dispatch `evals-periodic.yml` with `census_arms=claude-fable,codex-astra`.
 
+## [1.91.148.0] - 2026-10-19
+
+**Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.
+
+### Changed
+- **`free-durations-record.yml` also dispatches Quality gate** on `bot/free-duration-seeds`, next to Free Tests (the required `free-tests` check) and Windows Free Tests.
+- **The seed PR body says the dispatched runs are its checks** and explains why its pull_request runs wait for approval.
+
+## [1.91.147.0] - 2026-10-19
+
+**The free-suite duration seeds are current again.** This is the first refresh from the weekly recorder. It adds 14 Linux and 6 Windows test files that the shard packers had been placing at the 99th-percentile estimate.
+
+### Changed
+- **Seed allowlist:** `test/brain-sync.test.ts` (89 s) and `test/setup-codex-scope.test.ts` (64 s) are allowlisted with the existing split todo. `test/host-renders-prune.test.ts` (now 57 s) leaves the allowlist.
+- **Editing the seed allowlist no longer selects paid evals.** Only the free seed ratchet reads `scripts/free-test-seed-allowlist.json`, but an edit to it used to pull in all 246 dependent gate cases. It is now classified free-only, like the two seeds.
+
+## [1.91.146.0] - 2026-10-19
+
+**`gstack-ship-queue` can run merge trains: several READY PRs share one full gate, merge one by one only while main's tree matches the prefix that gate tested, and a red train is bisected on its red cases alone.** The surface is off unless the base revision's `.gstack/ship-policy.json` declares a `train` block. Without one, `ready --pr <n>` prints exactly the block it prints today. gstack's own policy does not turn trains on yet: that waits for the workflow side (the train-nonce record, the `cases` and `prefix_shas` inputs and the dispatched screen) and one dry-run train. Walkthrough: [docs/ship-policy.md#run-a-merge-train](docs/ship-policy.md#run-a-merge-train). Plan GSTA-49, lane T1.
+
+### Added
+- **`train build --prs <n>@<sha>,…`** merges the pinned, unstamped heads in slot order onto main inside object storage (version files take the prefix's side, the CHANGELOG merges by section) and records every prefix tree T0..Tk. Screened PRs go first in READY order. When `max_size` or more unscreened PRs wait, they form their own train. A train below `max_size` waits up to `fill_hours` for its oldest READY, unless `--urgent`. It writes `train.json` before pushing `train/<nonce>`, requires a green `free_workflow` run on that exact SHA, then dispatches one full gate through eval-bg's nonce. `--dry-run` writes, pushes and dispatches nothing. Fork heads, moved heads, PRs without a READY receipt and conflicts are refused before any spend; a conflict line names the build without that PR.
+- **`train status`** never spends. It rebuilds local records from `refs/notes/gstack-trains`, where every train, attempt, READY receipt and freeze is mirrored before any remote effect. It reconciles an unconfirmed dispatch by nonce, and only a dispatch it finds absent is sent again, under the same nonce. **`train verdict`** is GREEN only for a complete census bound to the train's nonce, head and tree, with the `full_gate_check` check run published. INFRA/INCOMPLETE panels, unbound, partial or cancelled shards, slices killed before upload and missing records are never green.
+- **`train bisect --spend-cap <usd>`** runs only the red cases on every prefix, after an ancestry check against `train/<nonce>`. It reserves every case×prefix trial, launches what fits the cap and resumes without repeating a prefix. `ATTRIBUTED #<pr>` is reported only for a monotone pattern, and red on every prefix with T0 included is red on main. An all-green bisect earns exactly one unchanged `train rebuild`, with both runs reported. An INFRA/INCOMPLETE-only census earns the single re-dispatch `EVAL_POLICY.infraRedispatch` allows (`--infra`). A second red stays red.
+- **`verify --pr <n> --train <nonce>`** prints `MERGE_CONDITION` only when main's tree equals the prefix before the PR modulo stamps and the PR is still at its pin, and confirms each merge against the prefix after it. When a train stops partway after earlier slots merged, the queue freezes. The freeze is recorded locally and on the notes ref first, then the backstop gate runs on main's SHA. One `train build --repair` PR is admitted, and verify clears the freeze when it lands.
+- **`ready --screen [--broad] | --no-screen`** under a train policy. Without a choice, `ready` prints the screen selection and recommendation, then refuses. `--screen` dispatches one screen on the PR's merge SHA with `screen_pr`, `screen_merge_sha` and `screen_policy`. Dollar figures arrive with the cost replay. **`train prune`** deletes the branches of merged, superseded and dropped trains.
+- **The `train` policy key** (introduced in 1.91.146.0; needs `min_gstack_version`) and 18 result codes with troubleshooting anchors: `QUEUE_TRAIN_*` and `READY_SCREEN_CHOICE_REQUIRED`.
+
+### Changed
+- **eval-bg's nonce key** can carry a purpose (screen, train, bisect, backstop) and a screen policy, so a broad screen never adopts a narrow run and a train never adopts a bisect. Plain lane keys are unchanged. Every dispatch input name now lives in `DISPATCH_INPUTS`.
+- **Gate integrity:** `test/ship-policy-compat.test.ts` now reads the newest version in `POLICY_KEY_INTRODUCED` instead of hard-coding the ship-queue keys' version, so each new key doesn't need another edit. It is exactly as strict: an unknown key is still `POLICY_INVALID`, naming the newest version this gstack reads. The rebuild-once count is defined in the train module (`REBUILD_ONCE = 1`) until `EVAL_POLICY` records it. No threshold, trial count or case kind changed.
+
+### If you…
+- **…coordinate a queue:** add a `train` block with `min_gstack_version` on the base branch only after every lane runs this gstack. Remove it to return every lane to the per-PR queue at once.
+
 ## [1.91.145.0] - 2026-10-19
 
 **The qa-only deadline fixture accepts pure local reads, so `qa-only-no-fix` no longer fails when the agent checks a skill file with `wc -l …; ls …`.** Opus 5.5's first Bash call in TM1's focused `qa-only-no-fix` run at e03bfeb was `wc -l qa-only/SKILL.md; ls qa-only qa-only/sections qa/sections qa/templates`. The fixture's narrow list rejected it with `QA deadline: unsupported outer shell composition`, though it only read inside the fixture. The fixture now opts into the shared read-only grammar from 1.91.143.0, as the docs-sync fixture did. A focused Opus run with the opt-in then failed on one more read, `ls; ls qa/templates; cat TODOS.md 2>/dev/null | head -20`, so the grammar now also lets a read discard or merge its stderr. PR #3272's Opus gate (run 39217387697) then failed the case after the agent stopped the browser inside the guard with `"$B" stop`, which the checkpoint rule counted as a third probe. This PR's own gate (run 39223031058) failed `ship-docsync-current` after Opus called the docs candidate helper at a path that does not exist, got exit 127, and reran the same command at the declared path.

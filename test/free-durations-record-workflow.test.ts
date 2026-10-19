@@ -81,7 +81,11 @@ test('the propose step touches only the two seeds, never the allowlist, on one b
   expect(script).not.toContain('free-test-seed-allowlist.json');
   expect(script).toContain('branch=bot/free-duration-seeds');
   expect(script).toContain('bun test test/free-seed-ratchet.test.ts');
-  expect(script).toContain('gh workflow run free-tests.yml');
+  for (const workflow of ['free-tests.yml', 'windows-free-tests.yml', 'quality-gate.yml']) {
+    expect(script).toContain(`gh workflow run ${workflow} --repo "$GITHUB_REPOSITORY" --ref "$branch"`);
+    expect(load(workflow).on).toHaveProperty('workflow_dispatch');
+  }
+  expect(script).toContain('those are this PR\'s checks');
   expect(proposeStep.env.OPEN_PR).toBe("${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || inputs.open_pr) }}");
   expect(script.indexOf('if [ "$OPEN_PR" != true ]')).toBeLessThan(script.indexOf('git push'));
   expect(recorder.on.workflow_dispatch.inputs.open_pr).toMatchObject({ type: 'boolean', default: true });

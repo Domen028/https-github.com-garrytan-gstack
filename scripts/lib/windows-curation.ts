@@ -277,6 +277,11 @@ export const KNOWN_WINDOWS_INCOMPATIBLE: Array<{ file: string; reason: string }>
     file: 'test/gstack-ship-queue.test.ts',
     reason: 'spawns bin/gstack-ship-queue (shebang) and a #!/bin/sh gh shim through test/helpers/restamp-fixture.ts and test/helpers/ship-queue-fixture.ts',
   },
+  // GSTA-49 T1 (merge trains): the train lib logic runs on Windows in test/ship-queue-train-logic.test.ts.
+  {
+    file: 'test/ship-queue-train.test.ts',
+    reason: 'drives bin/gstack-ship-queue against the stateful #!/bin/sh gh shim in test/helpers/ship-queue-train-fixture.ts; on windows-latest spawnSync(\'gh\') resolves the runner\'s gh.exe instead of the shim (windows-free-shard run 39152702056)',
+  },
   {
     file: 'test/ship-policy-compat.test.ts',
     reason: 'spawns bin/gstack-ship-policy, bin/gstack-restamp and bin/gstack-tree-receipt (shebangs) through test/helpers/restamp-fixture.ts',

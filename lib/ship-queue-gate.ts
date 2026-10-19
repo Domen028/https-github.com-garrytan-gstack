@@ -129,7 +129,7 @@ export function applyStampPatch(repoRoot: string, mergeTree: string, patch: stri
   });
 }
 
-function withIndex<T>(repoRoot: string, tree: string, fn: (env: NodeJS.ProcessEnv) => T): T | { error: string } {
+export function withIndex<T>(repoRoot: string, tree: string, fn: (env: NodeJS.ProcessEnv) => T): T | { error: string } {
   const gitDir = git(repoRoot, ['rev-parse', '--absolute-git-dir']).out;
   const indexFile = path.join(gitDir, `gstack-ship-queue-${process.pid}-${randomBytes(4).toString('hex')}.index`);
   const env = { ...process.env, GIT_INDEX_FILE: indexFile };

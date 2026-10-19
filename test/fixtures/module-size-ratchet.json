@@ -122,6 +122,13 @@
     { "file": "lib/autoplan-budget.ts", "movedFrom": "(new: round cap, default host estimate, budget_exhausted stop and the budget verb, field list 2 W5)" },
     { "file": "lib/autoplan-confirm.ts", "movedFrom": "(new: confirm-round plan delta, revision-qualified correlation and settled findings, field list 2 W5)" },
     { "file": "lib/autoplan-public.ts", "movedFrom": "(new: machine-path-free public run copy and validate --public, field list 2 W6)" },
+    { "file": "lib/ship-queue-train.ts", "movedFrom": "(new: train build, status and prune, slot order, fill and prefix merges, plan GSTA-49 T1)" },
+    { "file": "lib/ship-queue-train-record.ts", "movedFrom": "(new: versioned train, attempt, bisect, freeze and READY records mirrored to refs/notes/gstack-trains, plan GSTA-49 T1)" },
+    { "file": "lib/ship-queue-train-github.ts", "movedFrom": "(new: gh reads for train runs, check runs and PR facts, plan GSTA-49 T1)" },
+    { "file": "lib/ship-queue-train-verdict.ts", "movedFrom": "(new: train verdict, bisect and rebuild-once, plan GSTA-49 T1)" },
+    { "file": "lib/ship-queue-train-verify.ts", "movedFrom": "(new: verify --train, the queue freeze and its backstop, plan GSTA-49 T1)" },
+    { "file": "lib/ship-queue-train-ready.ts", "movedFrom": "(new: ready --screen|--no-screen and the READY receipt, plan GSTA-49 T1)" },
+    { "file": "lib/ship-queue-train-cli.ts", "movedFrom": "(new: merge-train argument parsing and output, plan GSTA-49 T1)" },
     { "file": "lib/gate-cost.ts", "movedFrom": "(new: paid gate cost by model and token class, per-case costs, selection replays and the merge-train model, GSTA-49 T0)" },
     { "file": "scripts/gate-cost-replay.ts", "movedFrom": "(new: CLI behind lib/gate-cost.ts: cached report artifacts, merged-PR replay and the train model table, GSTA-49 T0)" },
     { "file": "lib/gate-cost-history.ts", "movedFrom": "(new: red attribution, red-head screen replay, READY times and the READY-arrival train replay, GSTA-49 T0b)" }
