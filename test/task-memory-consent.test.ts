@@ -5,7 +5,7 @@ import * as path from 'node:path';
 import { egressLedgerPath, resolveEgressHome } from '../lib/egress-receipt';
 import { indexing, type Send } from '../lib/task-memory/hydradb';
 import { docIdFor, grantStillCurrent, newGrant, saveGrant, stateDir, type ScopeId } from '../lib/task-memory/state';
-import { cli, makeHome, makeRepo, nativeSession, runRegisteredHook, startFakeHydra, type FakeHydra, type Home } from './helpers/task-memory-fixture';
+import { cli, hookCommands, makeHome, makeRepo, nativeSession, runRegisteredHook, startFakeHydra, waitFor, type FakeHydra, type Home } from './helpers/task-memory-fixture';
 
 describe('a grant revoked while a request waits for its receipt', () => {
   const saved = { root: process.env.GSTACK_STATE_ROOT, fetch: globalThis.fetch };
@@ -53,7 +53,7 @@ describe('a grant revoked while a request waits for its receipt', () => {
   });
 });
 
-describe('no receipt, no request', () => {
+describe('requests need a current grant or enable', () => {
   let fake: FakeHydra;
   let home: Home;
   let repo: string;
@@ -77,4 +77,22 @@ describe('no receipt, no request', () => {
     await ask();
     expect(fake.requests.filter(r => r.path === '/query')).toHaveLength(1);
   }, 60_000);
+
+  test('a disable that lands while enable waits for the database cancels the enable and stops its requests', async () => {
+    fake.behavior.holdDatabase = true;
+    const enabling = cli(home, repo, ['enable', '--yes', '--key-stdin'], { input: 'fixture-key-for-consent\n' });
+    await waitFor(() => fake.requests.some(r => r.path === '/databases/status'), 30_000);
+    const off = await cli(home, repo, ['disable']);
+    expect(off.status).toBe(0);
+    expect(off.stdout).toContain('cancelled: an enable still provisioning');
+    const afterDisable = fake.requests.length;
+    delete fake.behavior.holdDatabase;
+    const enabled = await enabling;
+    expect(enabled.status).toBe(1);
+    expect(enabled.stderr).toContain('nothing was enabled');
+    expect(fake.requests.length).toBe(afterDisable);
+    expect(JSON.parse((await cli(home, repo, ['status', '--json'])).stdout).grant).toBeNull();
+    expect(hookCommands(home, 'Stop')).toEqual([]);
+    expect(fs.readdirSync(path.join(home.state, 'task-memory', 'repos'))).toEqual([]);
+  }, 90_000);
 });

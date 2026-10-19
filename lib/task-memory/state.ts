@@ -198,7 +198,34 @@ export function saveGrant(grant: Grant): void {
 }
 
 export function removeGrant(scope: ScopeId): boolean {
-  try { fs.unlinkSync(grantPath(scope)); return true; } catch { return false; }
+  const had = fs.existsSync(grantPath(scope));
+  safeUnlink(grantPath(scope));
+  return had;
+}
+
+const enablingPath = (scope: ScopeId) => path.join(stateDir(), 'repos', `${scope}.enabling`);
+
+/**
+ * Marks an enable in progress for this repository and returns its token. The
+ * enable's provisional consent, and its right to publish a grant, last only
+ * while this token is the current one; disable or a newer enable replaces it.
+ */
+export function beginEnable(scope: ScopeId): string {
+  const token = randomBytes(16).toString('hex');
+  writePrivate(enablingPath(scope), `${token}\n`);
+  return token;
+}
+
+export function enableStillCurrent(scope: ScopeId, token: string): boolean {
+  try { return fs.readFileSync(enablingPath(scope), 'utf8').trim() === token; } catch { return false; }
+}
+
+/** Ends an enable: its own token only, or any token when `token` is null. True when one was ended. */
+export function endEnable(scope: ScopeId, token: string | null): boolean {
+  if (token !== null && !enableStillCurrent(scope, token)) return false;
+  const had = fs.existsSync(enablingPath(scope));
+  safeUnlink(enablingPath(scope));
+  return had;
 }
 
 export function grantStillCurrent(held: Grant, capability: Capability): boolean {

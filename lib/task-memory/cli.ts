@@ -8,7 +8,7 @@ import { ensureDatabase, SINK } from './hydradb';
 import { standing } from './delivery';
 import { flushRepository } from './loop';
 import {
-  DEFAULT_DATABASE, MANAGE_LOCK, API_KEY_ENV, isDatabaseName, isPlausibleKey, listAdmissions, listDeliveries, listGrants, newGrant, policyAllows,
+  DEFAULT_DATABASE, MANAGE_LOCK, API_KEY_ENV, beginEnable, enableStillCurrent, endEnable, isDatabaseName, isPlausibleKey, listAdmissions, listDeliveries, listGrants, newGrant, policyAllows,
   readGrant, readMode, removeCredential, removeGrant, resolveCredential, resolveScope, saveGrant, storeCredential, withLock, writeMode,
   type Capability, type Mode, type RepoScope,
 } from './state';
@@ -96,6 +96,14 @@ function hookState(root: string): Record<string, 'registered' | 'missing' | 'unr
   return out;
 }
 
+/** Runs a short state change under the management lock, which every enable, disable and mode change shares. */
+async function managed<T>(fn: () => T): Promise<T> {
+  const result = await withLock(MANAGE_LOCK, { ttlMs: 30_000, waitMs: 5_000 }, fn);
+  return result === 'busy' ? refuse('another gstack-task-memory command is running; try again') : result;
+}
+
+const SUPERSEDED = 'disable or another enable ran while this one was provisioning; nothing was enabled';
+
 async function ask(question: string): Promise<boolean> {
   const rl = createInterface({ input: process.stdin, output: process.stderr });
   try { return /^y(es)?$/i.test((await rl.question(question)).trim()); } finally { rl.close(); }
@@ -178,25 +186,31 @@ async function enable(args: string[]): Promise<number> {
   const key = existing.kind === 'ok' ? existing.key : entered!;
 
   const final = { ...grant, capture: granted.includes('capture'), recall: granted.includes('recall') };
-  const send = { key, capability: final.capture ? 'capture' as const : 'recall' as const, grant: final, stillAllowed: () => true };
-  const provisioned = await ensureDatabase(send, database, DATABASE_WAIT_MS);
-  if (provisioned.kind === 'http') refuse(provisioned.status === 401 || provisioned.status === 403
-    ? `HydraDB refused the key (HTTP ${provisioned.status}); nothing was enabled` : `HydraDB answered HTTP ${provisioned.status}; nothing was enabled`);
-  if (provisioned.kind !== 'ok') refuse(`could not reach HydraDB (${provisioned.reason}); nothing was enabled`);
-
-  const result = await withLock(MANAGE_LOCK, { ttlMs: 30_000, waitMs: 5_000 }, () => {
-    if (entered) io.out(`key: stored in ${storeCredential(entered)} (mode 0600)`);
-    for (const hook of HOOKS) {
-      const r = settingsHook(root, ['ensure-event', '--event', hook.event, '--command', path.join(root, hook.rel), '--source', SOURCE, '--timeout', hook.timeout]);
-      if (r.status === 0) continue;
-      if (!listGrants().length) settingsHook(root, ['remove-source', '--source', SOURCE]);
-      refuse(`could not register the ${hook.event} hook: ${(r.stderr || r.stdout || '').trim().split('\n')[0]}; nothing was enabled`);
-    }
-    if (mode) writeMode(mode as Mode);
-    saveGrant(final);
-    return 0;
-  });
-  if (result === 'busy') refuse('another gstack-task-memory command is running; try again');
+  const token = await managed(() => beginEnable(scope.id));
+  let provisioned: Awaited<ReturnType<typeof ensureDatabase>>;
+  try {
+    const send = { key, capability: final.capture ? 'capture' as const : 'recall' as const, grant: final, stillAllowed: () => enableStillCurrent(scope.id, token) };
+    provisioned = await ensureDatabase(send, database, DATABASE_WAIT_MS);
+    if (provisioned.kind === 'refused' && provisioned.reason === 'consent') refuse(SUPERSEDED);
+    if (provisioned.kind === 'http') refuse(provisioned.status === 401 || provisioned.status === 403
+      ? `HydraDB refused the key (HTTP ${provisioned.status}); nothing was enabled` : `HydraDB answered HTTP ${provisioned.status}; nothing was enabled`);
+    if (provisioned.kind !== 'ok') refuse(`could not reach HydraDB (${provisioned.reason}); nothing was enabled`);
+    await managed(() => {
+      if (!enableStillCurrent(scope.id, token)) refuse(SUPERSEDED);
+      if (entered) io.out(`key: stored in ${storeCredential(entered)} (mode 0600)`);
+      for (const hook of HOOKS) {
+        const r = settingsHook(root, ['ensure-event', '--event', hook.event, '--command', path.join(root, hook.rel), '--source', SOURCE, '--timeout', hook.timeout]);
+        if (r.status === 0) continue;
+        if (!listGrants().length) settingsHook(root, ['remove-source', '--source', SOURCE]);
+        refuse(`could not register the ${hook.event} hook: ${(r.stderr || r.stdout || '').trim().split('\n')[0]}; nothing was enabled`);
+      }
+      if (mode) writeMode(mode as Mode);
+      saveGrant(final);
+      endEnable(scope.id, token);
+    });
+  } finally {
+    await withLock(MANAGE_LOCK, { ttlMs: 30_000, waitMs: 5_000 }, () => endEnable(scope.id, token));
+  }
   io.out(`enabled: ${granted.join(' and ')} for ${scope.remote}${provisioned.value === 'provisioning' ? ' (database still provisioning; capture retries until it is ready)' : ''}`);
   io.out(`mode: ${readMode()}. Check with: gstack-task-memory status. Turn off with: gstack-task-memory disable`);
   return 0;
@@ -206,7 +220,8 @@ async function disable(args: string[]): Promise<number> {
   const removeKey = flag(args, '--remove-key');
   if (args.length) refuse(`unknown argument: ${args[0]}`);
   const scope = scopeHere();
-  const result = await withLock(MANAGE_LOCK, { ttlMs: 30_000, waitMs: 5_000 }, () => {
+  await managed(() => {
+    if (endEnable(scope.id, null)) io.out(`cancelled: an enable still provisioning for ${scope.remote}`);
     io.out(removeGrant(scope.id) ? `revoked: capture and recall for ${scope.remote}` : `no grant for ${scope.remote}`);
     const others = listGrants().length;
     if (others) io.out(`hooks: kept, ${others} other repositor${others === 1 ? 'y uses' : 'ies use'} them`);
@@ -216,9 +231,7 @@ async function disable(args: string[]): Promise<number> {
       io.out('hooks: removed');
     }
     if (removeKey) io.out(removeCredential() ? 'key: stored key file removed' : 'key: no stored key file');
-    return 0;
   });
-  if (result === 'busy') refuse('another gstack-task-memory command is running; try again');
   io.out('Procedures already stored in HydraDB stay there.');
   return 0;
 }
@@ -276,8 +289,7 @@ async function setMode(args: string[]): Promise<number> {
   if (args.length) refuse(`unknown argument: ${args[0]}`);
   if (value === undefined) { io.out(readMode()); return 0; }
   if (value !== 'fast' && value !== 'thinking') refuse('mode takes fast or thinking');
-  const r = await withLock(MANAGE_LOCK, { ttlMs: 30_000, waitMs: 5_000 }, () => writeMode(value as Mode));
-  if (r === 'busy') refuse('another gstack-task-memory command is running; try again');
+  await managed(() => writeMode(value as Mode));
   io.out(`mode: ${value}`);
   return 0;
 }
