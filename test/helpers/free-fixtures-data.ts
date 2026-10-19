@@ -74,6 +74,7 @@ export const FREE_FIXTURES: Readonly<Record<string, readonly string[]>> = {
   'test/fixtures/design-handoff-n-calls.json': ['test/design-completion-handoff-scored.test.ts'],
   'test/fixtures/design-handoff-q-calls.json': ['test/design-completion-handoff-scored.test.ts'],
   'test/fixtures/design-md-legacy.md': ['test/design-md.test.ts'],
+  'test/fixtures/design-ui-focus-capture-39199692993.json': ['test/plan-design-with-ui-fixture.test.ts'],
   'test/fixtures/design-ui-focus-capture.json': ['test/plan-design-with-ui-fixture.test.ts'],
   'test/fixtures/detector-corpora/auto-decide-preserved/**': ['test/detector-corpus-auto-decide-preserved.test.ts'],
   'test/fixtures/detector-corpora/plan-ceo-section-loading/**': ['test/detector-corpus-plan-ceo-section-loading.test.ts'],
