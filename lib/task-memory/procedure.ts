@@ -169,7 +169,25 @@ type ShellKind = (
 
 const MOVES_DIR = new Set(['cd', 'pushd', 'popd']);
 const BUILTIN_WRAPPERS = new Set(['builtin', 'command']);
-const movesDir = (words: readonly string[]) => MOVES_DIR.has(words[BUILTIN_WRAPPERS.has(words[0] ?? '') ? 1 : 0] ?? '');
+function movesDir(words: readonly string[]): boolean {
+  let at = 0;
+  while (BUILTIN_WRAPPERS.has(words[at] ?? '')) {
+    const wrapper = words[at++];
+    if (wrapper === 'builtin') {
+      if (words[at] === '--') at++;
+      continue;
+    }
+    let lookup = false;
+    while (words[at]?.startsWith('-') && words[at] !== '-') {
+      const option = words[at++]!;
+      if (option === '--') break;
+      if (!/^-[pvV]+$/.test(option)) return false;
+      if (/[vV]/.test(option)) lookup = true;
+    }
+    if (lookup) return false;
+  }
+  return MOVES_DIR.has(words[at] ?? '');
+}
 
 export function classifyShell(raw: string, repoRoot: string): ShellKind {
   const command = raw.trim();
@@ -353,7 +371,6 @@ type ToolUse = { name: string; input: Record<string, unknown> | undefined };
 interface Call {
   readonly use: ToolUse;
   readonly shell: ShellKind | null;
-  /** Where every cd that returned before this call began left the shell: 0 is the root, each other number a distinct elsewhere. */
   readonly dir: number;
   readonly start: number;
   end: number;
@@ -366,7 +383,6 @@ export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: st
   const calls: Call[] = [];
   const open = new Map<string, Call>();
   let dir = sameDir(startDir, repoRoot) ? 0 : 1, moves = dir;
-  /** A failed or interrupted cd may not have run, so it keeps the shell at the root only if it could land nowhere else. */
   const settle = ({ shell, result }: Call) => {
     if (!shell || shell.after === 'unchanged') return;
     dir = shell.after === 'root' && (!result!.isError || dir === 0) ? 0 : ++moves;

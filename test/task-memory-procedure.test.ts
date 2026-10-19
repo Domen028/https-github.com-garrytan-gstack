@@ -180,6 +180,23 @@ describe('the shell keeps its directory between commands', () => {
     expect(verdict(steps(edit('src/a.ts'), bash('command cd packages/ok', ''), bash('bun test', BUN_PASS))))
       .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
   });
+
+  test('wrapper options and nested wrappers cannot hide a directory change', () => {
+    for (const command of ['command -- cd src', 'command -p cd src', 'command -p -- cd src',
+      'builtin command cd src', 'command builtin cd src', 'command command -p cd src', 'builtin -- cd src']) {
+      expect(classifyShell(command, root)).toMatchObject({ kind: 'change', after: 'elsewhere' });
+      expect(verdict(steps(edit('src/a.ts'), bash(command, ''), bash('bun test', BUN_PASS))))
+        .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    }
+  });
+
+  test('command lookup flags and command arguments do not move the shell', () => {
+    for (const command of ['command -v cd', 'command -V cd', 'command -pv cd', 'command -p -v -- cd',
+      'builtin command -V cd', 'command -- echo cd']) {
+      expect(classifyShell(command, root).after).toBe('unchanged');
+      expect(verdict(steps(edit('src/a.ts'), bash(command, ''), bash('bun test', BUN_PASS))).kind).toBe('verified');
+    }
+  });
 });
 
 describe('the shell is back at the root only once a cd there has succeeded', () => {
