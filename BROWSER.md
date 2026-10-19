@@ -584,7 +584,7 @@ SITE=app.example.com
 DOMAIN=example.com
 $B goto "https://$SITE"
 $B cookie-import-browser opera-gx --domain "$DOMAIN" --profile Default   # or: opera
-$B reload                                                               # confirm the intended account
+$B reload                                                               # view the page; only --verify-auth proves sign-in
 ```
 
 Run `$B cookie-import-browser` with no flags to see which browsers were detected. `--profile` can be omitted when only one profile has cookies for the domain. If the receipt reports App-Bound Encryption, run `$B handoff`, sign in to the intended account in the window that opens, then `$B resume` (needs a display).

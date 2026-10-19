@@ -18,7 +18,7 @@ interface Config {
 }
 function matches(status: number, body: string, oracle: HttpAssertion['expected']): boolean {
   return (
-    status === oracle.status &&
+    (Array.isArray(oracle.status) ? oracle.status.includes(status) : status === oracle.status) &&
     (oracle.includes === undefined || body.includes(oracle.includes)) &&
     (oracle.excludes === undefined || !body.includes(oracle.excludes))
   );
