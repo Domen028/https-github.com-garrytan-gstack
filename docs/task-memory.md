@@ -77,7 +77,8 @@ A task is captured only when the session itself shows that it worked:
   must run on its own: a pipe, `||`, `;`, an environment prefix, output sent
   to `/dev/null` or a `cd` into a subdirectory hides its real status, so that
   run never counts as a pass. The shell stays in a subdirectory after a `cd`,
-  so later runs count again only after a `cd` back to the repository root.
+  so later runs count again only after a `cd` back to the repository root
+  has returned successfully, and not while one is still running.
 - The check started after every earlier change had finished. A check that
   overlapped a change, even an edit that returned after the check started,
   proves nothing.
@@ -122,7 +123,7 @@ gone or confirms the deletion.
   trade latency for better matches, run `gstack-task-memory mode thinking`,
   which allows 5 seconds. A slow or unreachable HydraDB never blocks a prompt.
 - Work that could not be delivered, including a deletion, is retried by a
-  later Stop from any session in the repository, after a wait that doubles
+  later eligible Stop from any session in the repository, after a wait that doubles
   with each failure up to an hour. That covers a refused key, a missing
   database, an outage and failed indexing. After you fix the key or the
   database, run `gstack-task-memory flush` to retry now. `flush` sends only

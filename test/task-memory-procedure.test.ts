@@ -173,6 +173,56 @@ describe('the shell keeps its directory between commands', () => {
     const events = [edit('src/a.ts'), bash('bun test', BUN_PASS)].flat();
     expect(verdict(toSteps(events, root, path.join(root, 'src'), promptOf))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
   });
+
+  test('a wrapped cd moves the shell too', () => {
+    for (const command of ['builtin cd packages/ok', 'command cd packages/ok', `builtin cd ${root}`])
+      expect(classifyShell(command, root)).toMatchObject({ kind: 'change', after: 'elsewhere' });
+    expect(verdict(steps(edit('src/a.ts'), bash('command cd packages/ok', ''), bash('bun test', BUN_PASS))))
+      .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+  });
+});
+
+describe('the shell is back at the root only once a cd there has succeeded', () => {
+  const fromSub = (...events: E[]) => verdict(toSteps(events, root, path.join(root, 'src'), promptOf));
+  const edited = () => { const ed = call('Edit', { file_path: path.join(root, 'src/a.ts') }); return [ed.use, ed.result('updated')]; };
+  const check = () => call('Bash', { command: 'bun test' });
+  const cdRoot = () => call('Bash', { command: `cd ${root}` });
+
+  test('a cd that returned before the check started', () => {
+    const [cd, ck] = [cdRoot(), check()];
+    expect(fromSub(...edited(), cd.use, cd.result(), ck.use, ck.result(BUN_PASS)).kind).toBe('verified');
+  });
+
+  test('a cd that never returned, failed or was interrupted', () => {
+    const [cd, ck] = [cdRoot(), check()];
+    expect(fromSub(...edited(), cd.use, ck.use, ck.result(BUN_PASS))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    for (const answer of ['cd: no such file or directory', '[Request interrupted by user for tool use]']) {
+      const [cd2, ck2] = [cdRoot(), check()];
+      expect(fromSub(...edited(), cd2.use, cd2.result(answer, true), ck2.use, ck2.result(BUN_PASS)))
+        .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    }
+  });
+
+  test('a cd that returned while the check ran', () => {
+    const [cd, ck] = [cdRoot(), check()];
+    expect(fromSub(...edited(), cd.use, ck.use, cd.result(), ck.result(BUN_PASS))).toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+    const [away, ck2] = [call('Bash', { command: 'cd packages/ok' }), check()];
+    expect(verdict(toSteps([...edited(), ck2.use, away.use, away.result(), ck2.result(BUN_PASS)], root, root, promptOf)))
+      .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+  });
+
+  test('a check that cds to the root itself, and a failed one that leaves the shell where it was', () => {
+    const rooted = call('Bash', { command: `cd ${root} && bun test` });
+    expect(fromSub(...edited(), rooted.use, rooted.result(BUN_PASS))).toMatchObject({ kind: 'verified', checks: [{ command: 'bun test' }] });
+    const failed = call('Bash', { command: `cd ${root} && bun test` });
+    const ck = check();
+    expect(verdict(toSteps([failed.use, failed.result(`Exit code 1\n${BUN_FAIL}`, true), ...edited(), ck.use, ck.result(BUN_PASS)], root, root, promptOf)).kind)
+      .toBe('verified');
+    const failedFromSub = call('Bash', { command: `cd ${root} && bun test` });
+    const ck2 = check();
+    expect(fromSub(failedFromSub.use, failedFromSub.result(`Exit code 1\n${BUN_FAIL}`, true), ...edited(), ck2.use, ck2.result(BUN_PASS)))
+      .toEqual({ kind: 'unverified', reason: 'no-passing-check' });
+  });
 });
 
 describe('episodes', () => {

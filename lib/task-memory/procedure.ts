@@ -168,6 +168,8 @@ type ShellKind = (
   | { kind: 'change' }) & { readonly after: ShellDir };
 
 const MOVES_DIR = new Set(['cd', 'pushd', 'popd']);
+const BUILTIN_WRAPPERS = new Set(['builtin', 'command']);
+const movesDir = (words: readonly string[]) => MOVES_DIR.has(words[BUILTIN_WRAPPERS.has(words[0] ?? '') ? 1 : 0] ?? '');
 
 export function classifyShell(raw: string, repoRoot: string): ShellKind {
   const command = raw.trim();
@@ -178,7 +180,7 @@ export function classifyShell(raw: string, repoRoot: string): ShellKind {
     const bare = at < 0 ? [] : words.slice(at);
     return { prefixed: at !== 0, words: bare, source, expands, kind: segmentKind(bare, repoRoot) };
   });
-  const moves = parts.flatMap((p, i) => MOVES_DIR.has(p.words[0] ?? '') ? [i] : []);
+  const moves = parts.flatMap((p, i) => movesDir(p.words) ? [i] : []);
   const rooted = parts[0]!.kind === 'cd-root' && !parts[0]!.prefixed;
   const after: ShellDir = !moves.length ? 'unchanged' : moves.length === 1 && moves[0] === 0 && rooted ? 'root' : 'elsewhere';
   if (parts.some(p => p.kind === 'change')) return { kind: 'change', after };
@@ -351,7 +353,8 @@ type ToolUse = { name: string; input: Record<string, unknown> | undefined };
 interface Call {
   readonly use: ToolUse;
   readonly shell: ShellKind | null;
-  readonly away: number;
+  /** Where every cd that returned before this call began left the shell: 0 is the root, each other number a distinct elsewhere. */
+  readonly dir: number;
   readonly start: number;
   end: number;
   result: { isError: boolean; text: string } | null;
@@ -363,15 +366,18 @@ export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: st
   const calls: Call[] = [];
   const open = new Map<string, Call>();
   let dir = sameDir(startDir, repoRoot) ? 0 : 1, moves = dir;
+  /** A failed or interrupted cd may not have run, so it keeps the shell at the root only if it could land nowhere else. */
+  const settle = ({ shell, result }: Call) => {
+    if (!shell || shell.after === 'unchanged') return;
+    dir = shell.after === 'root' && (!result!.isError || dir === 0) ? 0 : ++moves;
+  };
   events.forEach((e, at) => {
     if (e.kind === 'user_turn') {
       const prompt = promptOf(e);
       if (prompt) placed.push({ at, step: { kind: 'prompt', key: prompt.key, at: e.timestamp, goal: prompt.text === null ? null : deriveGoal(prompt.text) } });
     } else if (e.kind === 'use' && !READ_ONLY_TOOLS.has(e.name ?? '')) {
       const shell = e.name === 'Bash' ? classifyShell(String(e.input?.command ?? ''), repoRoot) : null;
-      const away = shell && 'rooted' in shell && shell.rooted ? 0 : dir;
-      if (shell?.after === 'root') dir = 0; else if (shell?.after === 'elsewhere') dir = ++moves;
-      const call: Call = { use: { name: e.name ?? '', input: e.input }, shell, away, start: at, end: Infinity, result: null };
+      const call: Call = { use: { name: e.name ?? '', input: e.input }, shell, dir, start: at, end: Infinity, result: null };
       calls.push(call);
       open.set(e.toolUseId, call);
     } else if (e.kind === 'result') {
@@ -380,19 +386,26 @@ export function toSteps(events: readonly ClaudeParentPublicEvent[], repoRoot: st
       open.delete(e.toolUseId);
       call.end = at;
       call.result = { isError: e.isError === true, text: toolText(e.content) };
+      settle(call);
     }
   });
-  const resolved = calls.map(call => ({ call, step: resultStep(call, repoRoot) }));
+  const overlaps = (a: Call, b: Call) => a !== b && a.start < b.end && a.end > b.start;
+  const movers = calls.filter(c => c.shell && c.shell.after !== 'unchanged');
+  const resolved = calls.map(call => {
+    const rooted = call.shell !== null && 'rooted' in call.shell && call.shell.rooted;
+    const away = rooted ? 0 : movers.some(m => overlaps(m, call)) ? ++moves : call.dir;
+    return { call, step: resultStep(call, away, repoRoot) };
+  });
   const changes = resolved.filter(r => r.step?.kind === 'edit' || r.step?.kind === 'change').map(r => r.call);
   for (const { call, step } of resolved) {
     if (!step) continue;
-    const overlapped = step.kind === 'check' && step.outcome.kind === 'passed' && changes.some(c => c.start < call.end && c.end > call.start);
+    const overlapped = step.kind === 'check' && step.outcome.kind === 'passed' && changes.some(c => overlaps(c, call));
     placed.push({ at: Number.isFinite(call.end) ? call.end : call.start, step: overlapped ? { ...step, outcome: { kind: 'unknown' } } : step });
   }
   return placed.sort((a, b) => a.at - b.at).map(p => p.step);
 }
 
-function resultStep({ use, shell, away, result }: Call, repoRoot: string): Step | null {
+function resultStep({ use, shell, result }: Call, away: number, repoRoot: string): Step | null {
   if (EDIT_TOOLS.has(use.name)) {
     if (result?.isError) return null;
     if (!result) return { kind: 'change' };
