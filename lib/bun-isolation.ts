@@ -14,6 +14,9 @@
  * Windows gets an empty bunfig created exclusively in a private directory and
  * re-checked to be a zero-byte regular file before each spawn; anything else
  * is replaced, so the file cannot become a preload vector.
+ * browse/src/bun-child-config.ts keeps its own copy of emptyBunConfig(): the
+ * Windows native cookie qualification binds that file's bytes and bundles it
+ * without lib/.
  */
 import * as fs from 'fs';
 import * as os from 'os';

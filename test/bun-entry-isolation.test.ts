@@ -22,6 +22,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { bunIsolationArgs, emptyBunConfig } from '../lib/bun-isolation';
 import { scriptInvocation } from '../lib/script-invocation';
+import { emptyBunConfig as browseEmptyBunConfig } from '../browse/src/bun-child-config';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const FLAGS = '--no-env-file --config=/dev/null';
@@ -154,6 +155,9 @@ describe('GSTA-56: gstack never takes configuration from the audited repository'
     expect(inv).toEqual({ ok: true, cmd: 'bun', argv: [...bunIsolationArgs(), path.join(ROOT, 'bin', 'gstack-decision-log'), '--help'] });
     expect(bunIsolationArgs('linux')).toEqual(['--no-env-file', '--config=/dev/null']);
     expect(bunIsolationArgs('win32')).toEqual(['--no-env-file', `--config=${emptyBunConfig('win32')}`]);
+    expect(browseEmptyBunConfig('linux')).toBe(emptyBunConfig('linux'));
+    expect(fs.statSync(browseEmptyBunConfig('win32')).size).toBe(0);
+    expect(fs.statSync(emptyBunConfig('win32')).size).toBe(0);
   });
 
   test('every bun build --compile disables .env and bunfig autoload', () => {
