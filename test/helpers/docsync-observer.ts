@@ -6,6 +6,7 @@ import { nativeCalls } from './qa-checkpoint-evidence';
 import type { SkillTestResult } from './session-runner';
 import { DOC_PATH, type DocsScenario, type fixtureDocs } from './docsync-fixture';
 import { sliceBetween } from './skill-fixture';
+import { readOnlyCommandAllowed, readOnlyInterfaceText } from './read-only-commands';
 
 export async function observeDocsWrites(fixture: ReturnType<typeof fixtureDocs>) {
   return observeQAWrites(fixture.repo, { atomicTargets: [DOC_PATH] });
@@ -226,6 +227,7 @@ function unwrapHarmlessRead(text: string, fixture: ReturnType<typeof fixtureDocs
 export function docsCommandAllowed(command: string, fixture: ReturnType<typeof fixtureDocs>, scripts: string[] = []): boolean {
   const text = command.trim();
   if (docsPreambleCommands(fixture).some(block => block.trim() === text)) return true;
+  if (readOnlyCommandAllowed(text, docsReadOnlyScope(fixture))) return true;
   const insert = /^cat (['"]?)([^\s'"]+)\1 >> (['"]?)([^\s'"]+)\3$/.exec(text);
   if (insert) return [insert[2], insert[4]].every(file => path.isAbsolute(file) && /\.md$/i.test(file) &&
     !/[\x00-\x1f\x7f;&|<>`$\\()*?\[\]{}~#]/.test(file) && docsPrivateArtifact(file, fixture, scripts));
@@ -238,6 +240,13 @@ export function docsCommandAllowed(command: string, fixture: ReturnType<typeof f
     return DOCS_READ_COMMANDS.includes(name) || name === 'git';
   }
   return literalDocsCommandAllowed(text, fixture, scripts);
+}
+
+/** The shared read-only grammar inside the owned fixture home; Claude config (credentials) and private actor state stay unreadable. */
+function docsReadOnlyScope(fixture: ReturnType<typeof fixtureDocs>) {
+  const config = actualWritePath(fixture.env.CLAUDE_CONFIG_DIR);
+  return { root: fixture.home, cwd: fixture.repo,
+    deny: (file: string) => path.basename(file) === 'actor-state.json' || (config !== null && within(file, config)) };
 }
 
 function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixtureDocs>, scripts: string[]): boolean {
@@ -293,7 +302,7 @@ function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixt
 
 export function docsNativeInterface(fixture: Pick<ReturnType<typeof fixtureDocs>, 'home' | 'repo' | 'skills'>, scripts: string[] = [], transport = false, insert = false, file?: string): string {
   const skills = fixture.skills.split(path.sep).join('/');
-  return `Fixture observation interface (applies to parent and every child; ${file ? `saved at ${file}: each child prompt tells the child to Read that file first instead of copying this text` : 'include this interface in child prompts'}): Bash may execute only separate literal pwd, ls, cat, stat, sha256sum, Git read commands (status, diff, show, log, ls-files, ls-tree, check-ignore, rev-parse, merge-base, hash-object without -w, branch --show-current, describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision), the exact generated Preamble block with its spawned prefix, literal installed gstack-skill-start/gstack-skill-end commands for document-release (start requires GSTACK_SESSION_KIND=spawned) or their own --help, or the literal installed ${skills}/bin/gstack-docs-candidate snapshot (its --out a private .json under ${fixture.home}), compare <that .json> and --help commands. No shell composition, custom interpreters, arbitrary scripts, inline eval or memory-mapped writes. The only additional scripts are ${scripts.length ? scripts.join(', ') : 'none'}.${insert ? ` To insert one saved private Markdown artifact into another (a saved section file into a report), Bash may also run the single literal command cat SOURCE.md >> TARGET.md with absolute paths under ${fixture.home}.` : ''} Read/Glob/Grep remain available; Read skill and section files with Read (offset/limit for ranges), because Bash output over 30KB becomes a preview that no permitted Bash command can page. Use Write/Edit for permitted docs and private JSON/Markdown artifacts under ${fixture.home}; do not rewrite installed skills, config, actor state or scripts. No effects outside the owned fixture. The owner preserves evidence and cleans up. Missing observer coverage blocks acceptance; the Linux kernel monitor covers syscall writes in the product tree, not hostile processes or arbitrary external destinations.
+  return `Fixture observation interface (applies to parent and every child; ${file ? `saved at ${file}: each child prompt tells the child to Read that file first instead of copying this text` : 'include this interface in child prompts'}): Bash may execute only separate literal pwd, ls, cat, stat, sha256sum, Git read commands (status, diff, show, log, ls-files, ls-tree, check-ignore, rev-parse, merge-base, hash-object without -w, branch --show-current, describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision), the exact generated Preamble block with its spawned prefix, literal installed gstack-skill-start/gstack-skill-end commands for document-release (start requires GSTACK_SESSION_KIND=spawned) or their own --help, or the literal installed ${skills}/bin/gstack-docs-candidate snapshot (its --out a private .json under ${fixture.home}), compare <that .json> and --help commands. ${readOnlyInterfaceText(fixture.home)} Otherwise no shell composition, custom interpreters, arbitrary scripts, inline eval or memory-mapped writes. The only additional scripts are ${scripts.length ? scripts.join(', ') : 'none'}.${insert ? ` To insert one saved private Markdown artifact into another (a saved section file into a report), Bash may also run the single literal command cat SOURCE.md >> TARGET.md with absolute paths under ${fixture.home}.` : ''} Read/Glob/Grep remain available; Read skill and section files with Read (offset/limit for ranges), because Bash output over 30KB becomes a truncated preview. Use Write/Edit for permitted docs and private JSON/Markdown artifacts under ${fixture.home}; do not rewrite installed skills, config, actor state or scripts. No effects outside the owned fixture. The owner preserves evidence and cleans up. Missing observer coverage blocks acceptance; the Linux kernel monitor covers syscall writes in the product tree, not hostile processes or arbitrary external destinations.
 
 The working directory for parent and child Bash calls is already ${fixture.repo}. Run Git reads directly, for example: git status, git diff --cached, git merge-base main HEAD, git rev-parse HEAD. Do not use Git global options such as -C, -c, --git-dir or --work-tree, and do not prepend cd or another shell wrapper. The literal git subcommand must immediately follow git; an absolute owned repository path does not make git -C an allowed command.
 
