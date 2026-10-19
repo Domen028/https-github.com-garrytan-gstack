@@ -14,6 +14,7 @@ import {
   snapshotPathId,
   MAX_OUTPUT,
 } from './contracts';
+import { withholdHistory } from './history';
 import { childEnvironment, executable, git, redact, runProcess } from './process';
 import { boundedList, readJson, secureDirectory, writeHelperJson, writeJson } from './state';
 import { scan } from '../redact-engine';
@@ -895,7 +896,7 @@ export async function capture(
           home,
         );
         guard();
-        const safe = redact(raw);
+        const safe = redact(withholdHistory(raw, exclusion));
         atomicWriteSync(join(runDir, 'history.txt'), safe, { mode: 0o600 });
         writeJson(join(runDir, 'history-status.json'), {
           status: 'captured',

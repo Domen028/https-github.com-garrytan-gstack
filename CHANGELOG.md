@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+**/cso's retained Git history no longer brings back credential files the snapshot leaves out, and a repair whose external assertions fail is now reported as `ASSERTION_FAILED` instead of a misleading `INCOMPATIBLE_INPUT`.** The helper keeps `.env`, `master.key`, keys and agent configuration out of the readable tree, but `history.txt` captured `git log -p` in full, so a committed `.env` came back through its diff whenever the value wasn't credential-shaped enough for the redactor. Paid qualification run 39186328569 caught this when the private corpus's planted `.env` value showed up in the judge's helper state.
+
+### Fixed
+- **`history.txt`:** every diff section that touches a path the snapshot excludes (`exclusion()`, the same rule the readable tree uses) is replaced with `diff withheld: <path> (<reason>)`. This covers either side of a rename and any diff header that can't be parsed. Commit preambles and other files' diffs stay.
+- **`verify` with an authenticated witness:** a receipt or observation mismatch is still `INCOMPATIBLE_INPUT`. Receipts that bind correctly but record failed external assertions now raise `ASSERTION_FAILED`, with the phase and the booted, legitimate and security outcome. Nothing new is certified either way. In run 39186328569, three repairs that rejected the attack with a different status than the oracle expected surfaced as `INCOMPATIBLE_INPUT`.
+
 ## [1.91.147.0] - 2026-10-19
 
 **The free-suite duration seeds are current again.** This is the first refresh from the weekly recorder. It adds 14 Linux and 6 Windows test files that the shard packers had been placing at the 99th-percentile estimate.
