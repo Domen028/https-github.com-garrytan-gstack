@@ -584,7 +584,7 @@ SITE=app.example.com
 DOMAIN=example.com
 $B goto "https://$SITE"
 $B cookie-import-browser opera-gx --domain "$DOMAIN" --profile Default   # or: opera
-$B reload                                                               # confirm the intended account
+$B reload                                                               # view the page; only --verify-auth proves sign-in
 ```
 
 Run `$B cookie-import-browser` with no flags to see which browsers were detected. `--profile` can be omitted when only one profile has cookies for the domain. If the receipt reports App-Bound Encryption, run `$B handoff`, sign in to the intended account in the window that opens, then `$B resume` (needs a display).
@@ -625,6 +625,14 @@ Storage stays intact by default. With explicit approval on a Chromium target, `-
 | `closetab [id]` | Close tab |
 | `tab-each <command> [args...]` | Fan out a command across every open tab; returns JSON |
 | `frame <sel\|@ref\|--name n\|--url pattern\|main>` | Switch to iframe context (or back to main); clears refs |
+
+**A busy tab is not a busy daemon.** `/health` `status` is daemon liveness
+(Chromium connected); the active tab's main thread is reported separately as
+`activeTab: { id, responsive }`, probed for at most 1s. While one page is stuck
+in a long script, `status`, `tabs`, `tab <id>`, `newtab`, `closetab`,
+`state save` and `stop` keep working, and `status` and `tabs` mark the tab as
+not responding. A command that needs the stuck tab times out after 30s and
+names it, so you can switch away or close it without `--force-restart`.
 
 ### Extraction
 

@@ -19,6 +19,83 @@
 
   One new free test checks that the root router routes every voice trigger, and it skips the `connect-chrome` alias symlink. No threshold, trial count, case kind or judge changed. No context-budget ceiling rose except the root router's.
 
+## [1.91.156.0] - 2026-10-19
+
+**The weekly marathon's office-hours case can run its review formatter again, and its validator now checks cap fixes the way the formatter does.** Both defects came from #3164 and were in the test, not the skill. The marathon fixture copied `bin/gstack-office-hours-review` with a hand-kept list of two library files; #3164 added a third import (`lib/spec-review-cap.ts`), so every formatter command in the fixture failed at module load, the agent correctly declared the review UNREVIEWED, and the case went red in marathon run 39032308051 (#3246). With the module restored, a focused rerun showed the second defect: when the review stops at the round cap and the agent applies the remaining blocking fixes with `--fixes`, the formatter records them as verified, but the test never gave the validator that list, so it expected "fixes unconfirmed" and rejected a correct report.
+
+### Fixed
+- **Office-hours cap fixes:** `observedSpecFixes()` in `test/helpers/office-hours-completion.ts` returns the last valid `--fixes` list the agent saved with Write, and the marathon test passes it to `validateOfficeHoursReviewArtifacts`. A free test in `test/office-hours-completion.test.ts` runs the real `finalize --fixes` at the cap and checks three cases: the observed list validates, no list fails with the marathon rerun's `Spec Review does not match` error, and a list naming a different finding also fails.
+- **Office-hours marathon fixture:** `test/helpers/office-hours-formatter-fixture.ts` copies the formatter together with every local module it imports, so a new import can no longer be left out. A free test in `test/office-hours-review.test.ts` loads the copied formatter and fails on a missing module; the old three-file list reproduces the exact `Cannot find module '../lib/spec-review-cap.ts'` error. The case's touchfiles now include `lib/spec-review-cap.ts` and the new helper.
+- **Gate integrity:** no threshold, trial count, case kind or judge changed. The marathon assertions are unchanged; only the fixture's file copy changed.
+
+## [1.91.155.0] - 2026-10-19
+
+**A busy page no longer locks up the browse daemon.** When one tab kept its main thread busy (a heavy dev bundle, a big grid render, a runaway script), every `browse` command, including `status`, `tabs`, `tab <id>`, `closetab` and `stop`, failed with "Daemon busy" after about 9.6 s, and the only way out was `--force-restart`, which threw away cookies, tabs and logins. Fixes #3247. From #3250 by @AndreIntelas.
+
+### Fixed
+- **`/health` `status` reports daemon liveness (Chromium connected)**, and the active tab's responsiveness is reported separately as `activeTab: {id, responsive}`. The CLI no longer gates every command on a 2 s `page.evaluate` race against the active tab.
+- **`tabs` and `state save` bound their per-tab reads**, so a stuck tab shows as `(not responding)` instead of hanging the command, and one pending probe is shared per stuck tab rather than one per poll. A busy tab keeps its last good storage in saved state.
+- **A command that really needs the stuck tab times out with an error naming that tab** and how to get out (switch tabs or close it). The CLI's timeout branch now matches Bun's `TimeoutError`; the old `AbortError` check never fired.
+
+### Changed
+- **Gate integrity:** `browse/test/terminal-agent.test.ts` adds `activeTab` to the exact `/health` keys and updates its stub for the now-synchronous `isHealthy` and the new `probeActiveTab`; its no-token assertions are unchanged. `browse/test/busy-active-tab.test.ts` and `browse/test/command-timeout-report.test.ts` are new. No threshold, trial count or case kind changed.
+## [1.91.154.0] - 2026-10-19
+
+**/cso can verify Rails repairs in a read-only checkout, its retained Git history no longer brings back credential files the snapshot leaves out, a repair whose external assertions fail is now reported as `ASSERTION_FAILED` instead of a misleading `INCOMPATIBLE_INPUT`, and a security assertion can accept several safe rejection statuses while still requiring the secret to be absent.** The helper keeps `.env`, `master.key`, keys and agent configuration out of the readable tree, but `history.txt` captured `git log -p` in full, so a committed `.env` came back through its diff whenever the value wasn't credential-shaped enough for the redactor. Paid qualification run 39186328569 caught this when the private corpus's planted `.env` value showed up in the judge's helper state.
+
+### Fixed
+- **Rails `verify` on read-only sources:** the helper writes its own test `config/database.yml` (plus an initializer and `storage.yml`) into the execution copy. The copy keeps the source's file modes, so in a read-only checkout (the eval producer seals every source file at 0444, and Nix or Bazel trees are the same) the write failed with `EACCES`. That surfaced as the generic `INVALID_SCHEMA` "unexpected or unsafe input", and no Rails repair could reach `runtime_tested`. Each helper file now replaces the copied file instead of opening it for writing, so it also never writes through a copied symlink.
+- **`history.txt`:** every diff section that touches a path the snapshot excludes (`exclusion()`, the same rule the readable tree uses) is replaced with `diff withheld: <path> (<reason>)`. This covers either side of a rename and any diff header that can't be parsed. Commit preambles and other files' diffs stay.
+- **`verify` with an authenticated witness:** a receipt or observation mismatch is still `INCOMPATIBLE_INPUT`. Receipts that bind correctly but record failed external assertions now raise `ASSERTION_FAILED`, with the phase and the booted, legitimate and security outcome. Nothing new is certified either way. In run 39186328569, three repairs that rejected the attack with a different status than the oracle expected surfaced as `INCOMPATIBLE_INPUT`.
+
+### Changed
+- **A security assertion's `expected.status` may list up to eight safe statuses** (for example `[403, 404]`), so a repair that refuses an attack with a different reasonable rejection still passes. A set is accepted only on a security assertion that also carries a `vulnerable` expectation, and only with `excludes` set, so the response must still withhold the vulnerable marker. The fixed and vulnerable oracles must stay provably mutually exclusive: a set that contains the vulnerable status is accepted only when the vulnerable response's `includes` contains the excluded marker. Legitimate controls and `vulnerable` expectations still take exactly one status, so a patch that answers every route with 403 still fails its controls. A no-op patch, a listed rejection that still leaks the marker, and an unlisted status all stay `inconclusive`.
+
+## [1.91.153.0] - 2026-10-19
+
+**An outside review whose findings are untagged prose no longer reads `clean` because a "no issues" phrase appears somewhere in it, and a clean Codex review that says "no actionable regressions" no longer reads `unverified`.** Reported in #3294 by @SchizasNik, with the false-pass half pointed out by @xg-gh-25. `lib/outside-review-result.ts` matched its no-findings vocabulary anywhere in the reply, so "The parser change has no new issues. However, … drops users_email_idx" passed /ship's structured gate. It also lacked `regressions`, so `codex review --uncommitted`'s "I found no actionable regressions in the staged, unstaged, or untracked changes." was missing coverage.
+
+### Fixed
+- **A no-findings statement counts only as the review's conclusion.** It must open the reply's last sentence or last ", and" clause (or the `because` clause of a review's `Recommendation:` line) and carry no contrast or exception ("but", "however", "except", "other than", "elsewhere"). When other prose comes first, anything after the statement other than a predicate ("were found", "is evident") or a colon explanation must scope it to the change as a whole, so "No issues in the parser." and "No regressions were found by the existing tests." do not conclude the review. Anything else stays `unverified` / `untagged_review`, the same reason code and troubleshooting anchor as before.
+- **`regressions` and `defects` join the vocabulary**, and `NO_FINDINGS` written as inline code still counts.
+
+### Gate integrity
+- The structured and review gates' no-findings check (`classifyOutsideReview`) is stricter about position and wider in vocabulary. New free regressions in `test/outside-review-result.test.ts` cover the reporter's exact reply through their CLI invocation, two clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol (both read `unverified` before), fifteen mixed replies that must stay `unverified` under both gates (the two strings from the issue, the phrase before, after and inside untagged findings, exception conclusions, conclusions scoped to one place or to the tests, a quoted `NO_FINDINGS`, a no-issues line inside a code fence), and Recommendation-clause cases including a wrapped clause with "but". A GPT-6.1 Sol outside review probed the classifier; its false passes are among those controls. A known residual, unchanged from before: untagged findings followed by "No issues found in the changed parser." still read `clean`, because "changed" names the change and the parser cannot tell a finding from a summary without tags. All four new tests fail on the previous classifier. Every existing negative control passes unchanged, including the stored Codex clean review that still reads `unverified` ("no actionable correctness issues"). No threshold, trial count or case kind changed.
+
+## [1.91.152.0] - 2026-10-19
+
+**`/cso` now starts and finishes on ordinary repositories that hold a nested Git repository, a long patch history, or a Docker socket on macOS 27.** Three user reports (#3255, #3248) each stopped a run on a normal repo.
+
+### Fixed
+- **An untracked nested Git repository or a registered submodule no longer stops `gstack-cso start` with `UNSAFE_PATH`.** Git lists such a directory as one entry (`inner/` for an untracked repo, `sub` for a gitlink). The snapshot now records it as one explicit `excluded: nested Git repository` entry that is never read or copied, and the snapshot coverage lists it under exclusions. The capture pins the boundary's device, inode and mode, so a directory swapped in during capture fails as `SNAPSHOT_RACE`. A symlink to a directory is still refused. Ported from #3256 by Chao Chen (@surlymochan), who keeps authorship of the fix. (#3255, bug 1)
+- **A patch history over 1 MiB no longer leaves `history-inputs` not assessed.** The helper reads up to 100 commits of patches, then keeps the newest whole commits that fit the 1 MiB redaction bound. It never cuts inside a commit, so a secret can't be split across the cut and escape redaction. When even the newest patch is too large, it keeps commit metadata only. A truncated `history.txt` starts with a `[gstack-cso history truncated: …]` line, `history-status.json` records `truncated` and the retained commit count, and the history coverage becomes `partial` with that gap. The redaction bound is unchanged. (#3255, bug 2)
+
+### For contributors
+- **`test/cso-ordinary-repos.test.ts`** covers each report end to end through the compiled launcher and `capture()`. Its negative controls show that a symlinked directory is still refused, that a nested repository swapped during capture fails as a race (this check fails if the device and inode comparison is removed), that retained and omitted history never shows a credential canary, and that Docker endpoint admission still refuses non-sockets, dangling and looping links, `..` paths and TCP. The #3248 socket fallback (`realpathSocket`) shipped in 1.91.96.0. The new endpoint-level case fails when admission calls plain `realpathSync`.
+
+## [1.91.151.0] - 2026-10-19
+
+**Three contributor fixes: a saved "never ask" now sticks for /plan-eng-review's structure question, /context-save and /context-restore close three checkpoint gaps, and a new how-to covers the first production deploy.** Ported from fork PRs so they can run the paid gate; each commit keeps its author.
+
+### Fixed
+- **/plan-eng-review's complexity-gate structure question has a registered id (`plan-eng-review-structure`).** Each run used to invent its own slug, so a `never-ask` saved through /plan-tune never matched the next run and the question came back every time. On `AUTO_DECIDE` the recommended arrangement is taken; feature cuts are still asked one by one. `gstack-question-preference --check` now also falls back to `$GSTACK_HOME/global-question-preferences.json` (the file the question-preference hook already reads) when the project file has no entry; a project entry still wins and the one-way-door and split-chain guards run first. From #3249 by @bezdekt.
+- **/context-save keeps provenance markers as English literals and backs file claims in Decisions Made; /context-restore treats a translated or unknown marker as `(path assumed)` and asks when no branch can pick between recent checkpoints with different titles.** Fixes #3217. From #3244 by @surlymochan.
+
+### Added
+- **`docs/howto-bring-up-a-first-deploy.md`:** a vendor-neutral walkthrough for when /setup-deploy stops at "Nothing is deployed yet" (host, services, env and secrets, DNS, verification, and what to have ready when you rerun /setup-deploy). Linked from the README and docs/skills.md. Fixes #3150. From #3264 by @szsunyuan.
+## [1.91.150.0] - 2026-10-19
+
+**The paid evals that still pinned older models now run on the current generation, and two cases that went red on the move are repaired at their cause.** Garry's direction (2026-10-18) is to stop testing older frontier models, so these files are re-baselined as a fresh measured reference rather than held to a threshold change.
+
+### Changed
+- **Old-model pins:** the `claude-opus-4-7` pins in `skill-e2e-plan`, `skill-e2e-plan-prosons`, `skill-e2e-design`, `skill-e2e-office-hours-phase4` and `skill-e2e-qa-bugs` now follow `resolveEvalModel('capture')` (Opus 5.5). The overlay benchmark fixtures pin `claude-opus-5-5` and `claude-sonnet-5-5`, the cookie workflow judge pins `claude-sonnet-5-5`, and `codex-sol-scope-termination` runs on `gpt-6.1-sol` while still rendering the `gpt-5.6-sol` overlay.
+- **/setup-browser-cookies:** the workflow is now five ordered steps. It checks for Aside first and ends there on `READY`, since no import is needed. It then asks every decision (source and profile, domains and target, verification, storage reset, all cookies) before any `$B` command, prepares gstack's browser (verification variables before the daemon starts, the fallback, the `Mode: cdp` stop), imports, and reports on three lines: Imported, Storage reset, Sign-in. The `{{BROWSE_SETUP}}` block, which contradicted the Aside probe, is gone from this skill.
+- **Gate integrity:** no threshold, trial count, case kind or assertion changed. Free-test edits follow the new cookie template: two phrase and order assertions, the approval fixture's reverse edits, and the positional-literals checksum list, which no longer includes this skill.
+
+### Fixed
+- **plan-review-prosons-hardstop-neg:** on Opus 5.5 one trial in three stopped with a provider refusal (`stop_reason: refusal`, category `reasoning_extraction`) on the turn that writes the captured question. Replays of the refused request were stopped 7 of 16 times with the capture prompt's "verbatim" and "Do NOT paraphrase. This is a format-capture test." wording and 0 of 24 without it. The shared prosons capture prompt now asks for "the text of the single AskUserQuestion you would have made", with the same required parts. The decision content and every assertion are unchanged; all four prosons cases pass 3/3.
+- **Cookie workflow judge:** on `claude-sonnet-5-5` it scored clarity 3, completeness 4, actionability 3 against the old template. The rewritten template scores 4/4/4 with unchanged thresholds.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
