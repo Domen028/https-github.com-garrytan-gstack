@@ -13,6 +13,49 @@
 - **plan-review-prosons-hardstop-neg:** on Opus 5.5 one trial in three stopped with a provider refusal (`stop_reason: refusal`, category `reasoning_extraction`) on the turn that writes the captured question. Replays of the refused request were stopped 7 of 16 times with the capture prompt's "verbatim" and "Do NOT paraphrase. This is a format-capture test." wording and 0 of 24 without it. The shared prosons capture prompt now asks for "the text of the single AskUserQuestion you would have made", with the same required parts. The decision content and every assertion are unchanged; all four prosons cases pass 3/3.
 - **Cookie workflow judge:** on `claude-sonnet-5-5` it scored clarity 3, completeness 4, actionability 3 against the old template. The rewritten template scores 4/4/4 with unchanged thresholds.
 
+## [1.91.149.0] - 2026-10-19
+
+**Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
+
+### Added
+- **Codex host adapter:** `test/helpers/e2e-hosts.ts` holds the `EVALS_HOST` switch (`claude` default, `codex`) and the per-case host metadata. `test/helpers/codex-host-runner.ts` adds:
+  - the case runner, with sandbox settings and a reasoning effort (the model default unless set);
+  - file-change event mapping;
+  - a transcript translated into the Claude stream-json shape that existing assertions read;
+  - the native-lifecycle hooks.
+
+  The 26 rework cases stay Claude-only.
+- **Census arms (`scripts/census-arms.ts`):** `evals-periodic.yml` gets two census schedules.
+  - **Monday:** a two-arm gate census, `claude-opus` and `codex-sol`.
+  - **Monthly (`0 6 1 * *`):** census jobs only, with `claude-fable` (claude-fable-5-1) and `codex-astra` (gpt-6-astra) arms and a `-monthly` concurrency key.
+
+  A `census_arms` dispatch input picks arms by hand. Artifact names and run IDs carry the arm, and a census-only run executes no periodic slice. Every arm keeps the census's `--skip-judges`.
+
+### Changed
+- **Codex cost is real:** `cost_known: false` is gone. Codex sessions price their `turn.completed` usage (input, cached input, cache-write input and output tokens) through `lib/pricing.ts`. The shared `execCodex` keeps the old runner's events and verdicts.
+- **Plans, reports and the ledger carry the host** when it is not Claude. On Codex, the Anthropic preflight skips its `claude -p` ping.
+- **Gate integrity:** no threshold, trial count, case kind, judge or Claude-host verdict changed. `HARNESS_VERSION` stays 6, and the changed harness files are recorded as non-behavioral. Five workflow tests now assert the census matrix per arm (one row per arm and slice, per-arm plan and report paths, a `periodic_lane` guard) in place of the single-arm shape; no assertion was dropped.
+
+### If you…
+- **…want one case on Codex:** `EVALS_HOST=codex GSTACK_CODEX_MODEL=gpt-6.1-sol bun run scripts/test-paid-shards.ts --tier gate --case <id> --trials 1`.
+- **…want the monthly arms now:** dispatch `evals-periodic.yml` with `census_arms=claude-fable,codex-astra`.
+
+## [1.91.148.0] - 2026-10-19
+
+**Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.
+
+### Changed
+- **`free-durations-record.yml` also dispatches Quality gate** on `bot/free-duration-seeds`, next to Free Tests (the required `free-tests` check) and Windows Free Tests.
+- **The seed PR body says the dispatched runs are its checks** and explains why its pull_request runs wait for approval.
+
+## [1.91.147.0] - 2026-10-19
+
+**The free-suite duration seeds are current again.** This is the first refresh from the weekly recorder. It adds 14 Linux and 6 Windows test files that the shard packers had been placing at the 99th-percentile estimate.
+
+### Changed
+- **Seed allowlist:** `test/brain-sync.test.ts` (89 s) and `test/setup-codex-scope.test.ts` (64 s) are allowlisted with the existing split todo. `test/host-renders-prune.test.ts` (now 57 s) leaves the allowlist.
+- **Editing the seed allowlist no longer selects paid evals.** Only the free seed ratchet reads `scripts/free-test-seed-allowlist.json`, but an edit to it used to pull in all 246 dependent gate cases. It is now classified free-only, like the two seeds.
+
 ## [1.91.146.0] - 2026-10-19
 
 **`gstack-ship-queue` can run merge trains: several READY PRs share one full gate, merge one by one only while main's tree matches the prefix that gate tested, and a red train is bisected on its red cases alone.** The surface is off unless the base revision's `.gstack/ship-policy.json` declares a `train` block. Without one, `ready --pr <n>` prints exactly the block it prints today. gstack's own policy does not turn trains on yet: that waits for the workflow side (the train-nonce record, the `cases` and `prefix_shas` inputs and the dispatched screen) and one dry-run train. Walkthrough: [docs/ship-policy.md#run-a-merge-train](docs/ship-policy.md#run-a-merge-train). Plan GSTA-49, lane T1.

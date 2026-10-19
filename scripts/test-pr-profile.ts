@@ -231,6 +231,7 @@ export const FREE_ONLY_PR_FILES = [
   'test/helpers/auq-parallel-worker.ts',
   'test/helpers/stored-zip.ts', // Read only by the free test-health report tests.
   'scripts/free-test-durations.json',
+  'scripts/free-test-seed-allowlist.json', // Read only by the free seed ratchet (test/free-seed-ratchet.test.ts).
   'scripts/paid-test-durations.json',
   'scripts/ubicloud/**',
   'capy/skill/**', // The vendored Capy skill (Drive bootstrapper): run by Capy agents, read by no paid case; test/capy-skill-wrapper.test.ts covers it.
