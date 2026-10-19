@@ -1645,19 +1645,24 @@ and `test/dx-selected-navigation-ap.test.ts`. One shared table run once against 
 only after `engFirstReviewAUQ` checks native completion once at entry; today each branch gates it
 separately, so the change alters a paid verdict and needs its own paid run.
 
-### P3: Re-pin the five remaining claude-opus-4-7 paid files
+### P3: Follow-ups from re-baselining the old-model paid pins on the current generation
 
-**What:** The 2026-09 audit moved seven paid evals to the default capture model (`resolveEvalModel('capture')`).
-`skill-e2e-design`, `skill-e2e-office-hours-phase4`, `skill-e2e-plan-prosons` and `skill-e2e-plan` keep
-`claude-opus-4-7` because six cases failed on the default model in one run (plan-design-review-plan-mode timeout,
-office-hours-phase4-fork format, plan-review-prosons-neutral-neg missing output, plan-ceo-review-selective and
-plan-eng-review 600 s timeouts, plan-ceo-review-expansion-energy posture score 3). plan-review-report, the one PR-gate
-case in `skill-e2e-plan`, left the pin on 2026-10-18 and follows the capture default. `skill-e2e-qa-bugs` returned
-to `claude-opus-4-7` after `qa-b6-static` timed out on the default model in two of three runs (census 36597762183
-and a targeted local rerun): each time the stream stopped mid-message, with no pending tool, right after the model
-found the disabled submit button, and emitted nothing until the 300 s case deadline. They measure an old model.
+**What:** GSTA-49 TM3 (2026-10-18) moved every remaining old-model paid pin to the current generation: the
+`claude-opus-4-7` pins in `skill-e2e-{plan,plan-prosons,design,office-hours-phase4,qa-bugs}` follow
+`resolveEvalModel('capture')`, the overlay fixtures pin `claude-opus-5-5` and `claude-sonnet-5-5`, the cookie workflow
+judge pins `claude-sonnet-5-5`, and `codex-sol-scope-termination` runs on `gpt-6.1-sol` (still rendering the
+`gpt-5.6-sol` overlay). Three things remain:
 
-**Re-entry:** fix the prompt, budget or rubric so each case passes on the default model in one run, then drop the pin.
+- The base `claude-dedicated-tools-vs-bash` fixture now duplicates `claude-dedicated-tools-vs-bash-opus-5-5`.
+- The `opus-4-7-*` fixtures measure `model-overlays/opus-4-7.md` on Opus 5.5, which gets the generic `claude`
+  overlay in product.
+- Opus 5.5 refuses (stop category `reasoning_extraction`) capture prompts that ask for the "verbatim text" of a
+  question "you would have made" with "Do NOT paraphrase"; that wording stopped 7 of 16 replays of a prosons
+  request and 0 of 24 without it. `skill-e2e-plan-prosons` dropped it; `skill-e2e-plan-format` and
+  `skill-e2e-office-hours-phase4` still use it.
+
+**Re-entry:** retire one dedicated-tools fixture, decide the opus-4-7 overlay's future, and drop the extraction
+wording from the remaining capture prompts with a paid run each.
 
 ### P3: Retire the unused CEO payment seeder
 
