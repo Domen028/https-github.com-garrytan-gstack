@@ -107,6 +107,16 @@ describe('PR selection over the W1a single-file fallbacks', () => {
     }
   });
 
+  test('seed data and the seed allowlist select no paid case; a derived paid-surface file still selects its dependents (#3289)', () => {
+    // #3289: the allowlist edit derived 246 gate cases, though only test/free-seed-ratchet.test.ts reads it.
+    const seed = select(['scripts/free-test-seed-allowlist.json', 'scripts/free-test-durations.json', 'scripts/free-test-durations-windows.json']);
+    expect({ mode: seed.mode, unknown: seed.unknownFiles, derived: seed.derivedFiles, e2e: seed.e2e, judges: seed.judges })
+      .toEqual({ mode: 'pr', unknown: [], derived: [], e2e: [], judges: [] });
+    const paid = select(['design/src/evolve.ts']);
+    expect(paid.derivedFiles.map(entry => entry.file)).toEqual(['design/src/evolve.ts']);
+    expect(paid.e2e.length).toBeGreaterThan(0);
+  });
+
   test('the paid workflow itself still restores the full gate (36493452542)', () => {
     const result = select(['.github/workflows/evals.yml']);
     expect(result.mode).toBe('full-fallback');

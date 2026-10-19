@@ -16,7 +16,7 @@
     "scripts/lib/published-text.ts": {"blob":"3f2e4d616b5dd0204035710c66b64d49055c5714","since":6},
     "scripts/lib/shard-engine.ts": {"blob":"3cd0b1aaa84018b00bf9ea0ce48093f3c8492f66","since":6},
     "scripts/test-paid-shards.ts": {"blob":"8ddee5f11ed7856876135520dd8025ab989e2db9","since":6},
-    "scripts/test-pr-profile.ts": {"blob":"c03f3298a51ac04a182dc6a3bbaf286644ab59fd","since":6,"nonBehavioral":"classify the new evals-main-backstop.yml workflow as free-lane only: it dispatches evals.yml on main and runs inside no case, so no case's selection on a PR, input or verdict changes"},
+    "scripts/test-pr-profile.ts": {"blob":"d334195b0d0393622e2c380dc3e2feebe099b6e6","since":6,"nonBehavioral":"classify the new evals-main-backstop.yml workflow as free-lane only: it dispatches evals.yml on main and runs inside no case, so no case's selection on a PR, input or verdict changes"},
     "scripts/test-strict-output.ts": {"blob":"01185d20dc9761b04b9b2f751ec98664fe0eaf93","since":6},
     "test/helpers/agent-sdk-runner.ts": {"blob":"210bba92d241a90df578b2c7fc943ac5755d0025","since":6},
     "test/helpers/auq-substance-panel.ts": {"blob":"4881260ef793668e4963a062db6d06a5e1f7a40f","since":6},
