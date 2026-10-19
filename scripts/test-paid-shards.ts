@@ -73,6 +73,7 @@ import { readSessionLedger, type SessionLedgerRow } from '../test/helpers/sessio
 import { preflightAnthropicApi } from '../test/helpers/anthropic-preflight';
 import { e2eReuseLaneProblem, prepareE2EShardReuse, selectPlanReceipts } from './e2e-shard-reuse';
 import { E2E_TOUCHFILES, E2E_TIERS } from '../test/helpers/touchfiles';
+import { resolveEvalHost } from '../test/helpers/e2e-hosts';
 import { scopeCodexAccess, shardFile, shardCaseId, shardTrial, trialShardKey, type CaseTrialPlan, caseTrialPlan, excludedCasesNamePattern, caseTestNamePattern, expandCaseShards, expandTrialShards, fileCaseRegistration, partitionCaseExclusions } from './lib/paid-cases';
 import { retriesForFiles, trialPanelKey, sliceExecutionOrder, buildRunManifest, parseRunManifest, type SliceResult, sliceExitCode, guardTrialRecords, formatSlicePlan, formatCapacityPreflight, sliceDeadlineMs } from './lib/paid-plan';
 import { caseSelection, runCaseDiagnosis, formatPanelLine, runPaidReport } from './lib/paid-report';
@@ -908,6 +909,9 @@ async function main(): Promise<number> {
     const manifest = parseRunManifest(fs.readFileSync(options.planPath, 'utf-8'));
     if (manifest.tier !== options.tier) {
       throw new Error(`manifest tier ${manifest.tier} != requested tier ${options.tier} — refusing a cross-tier run`);
+    }
+    if ((manifest.host ?? 'claude') !== resolveEvalHost()) {
+      throw new Error(`manifest host ${manifest.host ?? 'claude'} != EVALS_HOST ${resolveEvalHost()} — refusing a cross-host run`);
     }
     const profile = manifest.profile ?? 'full';
     if (options.profileExplicit && options.profile !== profile) throw new Error(`manifest profile ${profile} != requested profile ${options.profile}`);
