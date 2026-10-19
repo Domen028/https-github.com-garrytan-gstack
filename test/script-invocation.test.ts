@@ -79,6 +79,16 @@ describe('scriptInvocation', () => {
     }
   });
 
+  // Value: protects=a bin whose shebang says --no-env-file keeps that flag when launched as `bun <script>`, which ignores
+  //   shebang flags; fails_when=the flag is dropped and a checkout's .env reaches gstack-pregate (it can redirect the user
+  //   policy); why_new=the carry-over is new; seam=none; no_claim=Bun's own dotenv rules
+  test('a bun shebang that says --no-env-file keeps it under Bun', () => {
+    for (const platform of ['win32', 'linux', 'darwin']) {
+      const inv = scriptInvocation(path.join(BIN, 'gstack-pregate'), ['--json'], { ...win, platform });
+      expect(inv).toEqual({ ok: true, cmd: process.execPath, argv: ['--no-env-file', path.join(BIN, 'gstack-pregate'), '--json'] });
+    }
+  });
+
   test('no bash on Windows: an actionable refusal, not a spawn error', () => {
     const inv = scriptInvocation(path.join(BIN, 'gstack-wtree'), [], noBash);
     expect(inv.ok).toBe(false);

@@ -2357,7 +2357,10 @@ fetch that never happened). The tool exits 3 and never falls back to the
 working-tree file silently. For `gstack-pregate` the same refusal covers a base
 `.gstack/pregate.json` git cannot read (a timeout, an oversized blob, a missing
 or corrupt object) that `git ls-tree` cannot confirm is absent; it never falls
-through to the user-owned file.
+through to the user-owned file. It also refuses when Bun loaded a `.env` file
+from the working directory (a bare `bun gstack-pregate`), since a branch could
+then pick the user policy: run `gstack-pregate` directly or as
+`bun --no-env-file`.
 
 **Fix.** `git fetch origin <base> --depth=1`, then rerun. To run against the
 branch's own file deliberately, pass `--policy-from head --allow-repo-commands`;
@@ -2923,7 +2926,9 @@ file with `--receipt`, or let `gstack-pregate --stage tests --remote --spend-cap
 ### `PREGATE_STALE`
 
 **Meaning.** `pregate.json` was recorded against a different working-tree
-fingerprint than the one being published (the final stamp, a regen, any edit).
+fingerprint than the one being published (the final stamp, a regen, any edit),
+or the user-owned policy it ran under was edited or deleted (or one appeared
+after a run under the defaults).
 
 **Fix.** Rerun `gstack-pregate` after the final generation and stamp; Step 18
 refuses to write the ship receipt otherwise.

@@ -7,6 +7,7 @@
  * fixture selects is either named in `local` or asserted only by label.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -14,7 +15,8 @@ import { EXIT } from '../lib/headless-artifacts';
 import { loadConfigFromUser, validateConfig } from '../lib/pregate/config';
 import { buildContext, sha256, userConfigRejection } from '../lib/pregate/context';
 import { runPregate } from '../lib/pregate/index';
-import { BASE_PREGATE, cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
+import { BASE_PREGATE, BIN, cleanup, commit, makeFixtureRepo, runBin, type FixtureRepo } from './helpers/pregate-fixture';
+import { runScriptSync } from '../lib/script-invocation';
 
 const repos: FixtureRepo[] = [];
 afterEach(() => { while (repos.length) cleanup(repos.pop()!); });
@@ -314,4 +316,48 @@ describe('gstack-pregate with a user-owned policy', () => {
     writePolicy(userPolicy, { local: LOCAL_ALL });
     expect(runBin(repo, 'gstack-pregate', ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'], noSlug).out).toContain(`policy user ${userPolicy}`);
   }, 60_000);
+
+  // Value: protects=a branch's committed .env cannot choose the slug or state root behind the user policy, whether pregate is
+  //   launched through scriptInvocation, by its shebang, or as a bare `bun <bin>` (which refuses on any loaded dotenv file,
+  //   since Bun's syntax admits `KEY: value` and bare-CR lines a key scan misses); fails_when=Bun's dotenv
+  //   loading reaches slugFromEnvironment and a branch picks which pregate.json governs it; why_new=maintainer review of #3286;
+  //   seam=none; no_claim=a .env in a parent of the working directory (Bun reads the launch directory only)
+  test('a committed .env cannot redirect the user policy', () => {
+    const { repo } = setup();
+    const env: Record<string, string | undefined> = { ...process.env, ...repo.env };
+    delete env.GSTACK_PROJECT_SLUG;
+    const slug = /^SLUG=(.+)$/m.exec(runScriptSync(BIN('gstack-slug'), [], { cwd: repo.work, encoding: 'utf8', env }).stdout)?.[1];
+    expect(slug).toBeTruthy();
+    const userPolicy = path.join(repo.home, 'projects', slug!, 'pregate.json');
+    fs.mkdirSync(path.dirname(userPolicy), { recursive: true });
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    commit(repo, { '.env': 'GSTACK_PROJECT_SLUG=elsewhere\n' });
+    const args = ['--base', 'main', '--allow-repo-commands', '--stage', 'tests'];
+    expect(runScriptSync(BIN('gstack-pregate'), args, { cwd: repo.work, encoding: 'utf8', env, timeout: 120_000 }).stdout).toContain(`policy user ${userPolicy}`);
+    if (process.platform !== 'win32') expect(spawnSync(BIN('gstack-pregate'), args, { cwd: repo.work, encoding: 'utf8', env, timeout: 120_000 }).stdout).toContain(`policy user ${userPolicy}`);
+    const bare = spawnSync(process.execPath, [BIN('gstack-pregate'), ...args], { cwd: repo.work, encoding: 'utf8', env, timeout: 120_000 });
+    expect(bare.status).toBe(EXIT.refused);
+    expect(bare.stderr).toContain('POLICY_SOURCE_UNAVAILABLE');
+    expect(bare.stderr).toContain('bun loaded .env from the working directory');
+  }, 120_000);
+
+  // Value: protects=a recorded pass stops verifying once the user-owned policy behind it is edited or deleted, or once a user
+  //   file appears where the run used the defaults; fails_when=verify checks only the tree and a weakened or removed policy
+  //   keeps an old pass publishable; why_new=maintainer review of #3286; seam=none; no_claim=a base-branch copy that changes
+  //   (pinned by the recorded base, not re-read); both paths come from the record, so the verifier's environment is not read
+  test('verify goes stale when the user-owned policy changes, disappears, or appears after a defaults run', () => {
+    const { repo, userPolicy, run } = setup();
+    const verify = () => JSON.parse(runBin(repo, 'gstack-pregate', ['verify', '--json'], { GSTACK_PROJECT_SLUG: SLUG }).out);
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    expect(run().status).toBe(EXIT.ok);
+    expect(verify().ok).toBe(true);
+    writePolicy(userPolicy, { local: ['free-tests.yml/unit'] });
+    expect([verify().code, verify().message]).toEqual(['PREGATE_STALE', `the user-owned policy ${userPolicy} changed after pregate.json was recorded; rerun gstack-pregate`]);
+    fs.rmSync(userPolicy);
+    expect(verify().message).toContain('is gone or unreadable');
+    run();
+    expect(verify().code).toBe('PREGATE_REMOTE_UNCLEARED');
+    writePolicy(userPolicy, { local: LOCAL_ALL });
+    expect([verify().code, verify().message]).toEqual(['PREGATE_STALE', `${userPolicy} now holds a user-owned policy, and pregate.json was recorded under the defaults; rerun gstack-pregate`]);
+  }, 120_000);
 });

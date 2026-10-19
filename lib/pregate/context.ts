@@ -12,7 +12,9 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { slugFromEnvironment } from '../bin-context';
 import { isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type Registry } from '../regen';
+import { resolveStateRoot } from '../state-root';
 import { RESULT_CODES, TROUBLESHOOTING_DOC, resultLine } from '../result-codes';
 import { runScriptSync, wtreeFingerprint, type InvocationOptions, type WtreeResult } from '../script-invocation';
 import { policyUnavailableLine } from '../ship-policy';
@@ -114,6 +116,23 @@ function realish(p: string): string {
 }
 const within = (root: string, p: string) => { const rel = path.relative(root, p); return rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); };
 
+/** Dotenv files Bun loads from the launch directory unless started with --no-env-file. */
+const DOTENV_FILES = ['.env', '.env.local', '.env.development', '.env.development.local', '.env.production', '.env.production.local', '.env.test', '.env.test.local'];
+
+/**
+ * The dotenv files in `cwd` that Bun loaded (no --no-env-file in `execArgv`). Any of them could set the slug or state
+ * root that picks the user policy, and Bun's dotenv syntax is looser than a key scan can follow, so any one refuses.
+ */
+export function loadedDotenvFiles(cwd: string, execArgv: readonly string[]): string[] {
+  if (execArgv.includes('--no-env-file')) return [];
+  return DOTENV_FILES.filter(f => fs.existsSync(path.join(cwd, f)));
+}
+
+/** `<state root>/projects/<slug>/pregate.json` for the repository at `root`, from the caller's environment. */
+export function defaultUserConfigPath(root: string): string {
+  return path.join(resolveStateRoot(), 'projects', slugFromEnvironment(undefined, root), 'pregate.json');
+}
+
 /** Why a user policy path must not be read, or null: a relative path (no HOME) or one a PR could commit is never trusted. */
 export function userConfigRejection(repoRoot: string, file: string): string | null {
   if (!path.isAbsolute(file)) return 'not an absolute path';
@@ -130,11 +149,13 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   const mergeBase = git(o.repoRoot, ['merge-base', baseSha.out, 'HEAD']).out || baseSha.out;
   let configLoad: ConfigLoad = o.policyFrom === 'head' ? loadConfigFromHead(o.repoRoot, o.knownChecks) : loadConfigFromBase(o.repoRoot, base, o.knownChecks);
   const explain: string[] = [];
+  let absentUserPolicy: string | undefined;
   if (o.policyFrom === 'base' && o.userConfigPath && !isConfigUnavailable(configLoad) && configLoad.kind === 'none') {
     const rejected = userConfigRejection(o.repoRoot, o.userConfigPath);
     const user = rejected ? null : loadConfigFromUser(o.userConfigPath, o.knownChecks);
     if (user) configLoad = user;
     else explain.push(`user policy: ${o.userConfigPath} ${rejected ? `ignored (${rejected})` : '(absent)'}`);
+    if (!user && !rejected) absentUserPolicy = o.userConfigPath;
   }
   if (isConfigUnavailable(configLoad)) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: configLoad.detail } };
   if (configLoad.errors.length) return { refused: { code: 'PREGATE_CONFIG_INVALID', message: `${configLoad.label}: ${configLoad.errors.map(e => `${e.message} at ${e.path}`).join('; ')}`, errors: configLoad.errors, ...(configLoad.kind === 'user' ? { fix: `edit ${o.userConfigPath} directly at each path the message names, then rerun gstack-pregate; it lives outside the repository, so a base-branch change does not reach it` } : {}) } };
@@ -153,7 +174,7 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   return {
     ctx: {
       repoRoot: o.repoRoot, base, baseRef, baseSha: baseSha.out, mergeBase, head, wtree, touched: touchedFiles(o.repoRoot, mergeBase),
-      config, configLabel: configLoad.label, configFile: configLoad.kind === 'user' && o.userConfigPath ? o.userConfigPath : PREGATE_CONFIG_PATH, ...(configLoad.kind === 'user' && configLoad.digest ? { configDigest: configLoad.digest } : {}), registry: registryLoad.registry as Registry, registryLabel: registryLoad.source.label,
+      config, configLabel: configLoad.label, configFile: configLoad.kind === 'user' && o.userConfigPath ? o.userConfigPath : PREGATE_CONFIG_PATH, ...(configLoad.kind === 'user' && configLoad.digest ? { configDigest: configLoad.digest } : {}), ...(absentUserPolicy ? { absentUserPolicy } : {}), registry: registryLoad.registry as Registry, registryLabel: registryLoad.source.label,
       lanes, platform, allowRepoCommands: o.allowRepoCommands, timeoutMs: o.timeoutMs ?? 600_000,
       stallTimeoutMs: o.stallTimeoutMs ?? (config.stall_timeout_s ?? DEFAULT_STALL_TIMEOUT_S) * 1000,
       progress: o.progress ?? (line => process.stderr.write(`${line}\n`)),

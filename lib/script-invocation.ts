@@ -205,7 +205,9 @@ function windowsBash(o: InvocationOptions): { ok: true; bash: string } | { ok: f
 
 /** How to run a gstack shebang bin on this platform. */
 export function scriptInvocation(script: string, args: readonly string[], o: InvocationOptions = {}): Invocation {
-  if (/^#!.*\bbun\b/.test(readShebang(script))) return { ok: true, cmd: o.bunExe ?? bunExecutable(), argv: [script, ...args] };
+  const shebang = readShebang(script);
+  // `bun <script>` ignores the shebang's flags, so a --no-env-file there (a checkout's .env must not reach the bin) is carried over.
+  if (/^#!.*\bbun\b/.test(shebang)) return { ok: true, cmd: o.bunExe ?? bunExecutable(), argv: [...(/\s--no-env-file(\s|$)/.test(shebang) ? ['--no-env-file'] : []), script, ...args] };
   if ((o.platform ?? process.platform) !== 'win32') return { ok: true, cmd: script, argv: [...args] };
   const bash = windowsBash(o);
   return bash.ok ? { ok: true, cmd: bash.bash, argv: [slash(script), ...args] } : bash;

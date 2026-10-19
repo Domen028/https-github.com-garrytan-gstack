@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file
 /**
  * gstack-pregate — cheap checks before anything paid or remote (plan C8).
  *
@@ -28,7 +28,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { EXIT, exitTableHelp, formatResult, type PregateFile } from '../lib/headless-artifacts';
 import { PREGATE_CONFIG_PATH, exampleConfigJson, explainConfig, loadConfigFromHead } from '../lib/pregate/config';
-import { buildContext, describeRefusal } from '../lib/pregate/context';
+import { buildContext, defaultUserConfigPath, describeRefusal, loadedDotenvFiles } from '../lib/pregate/context';
 import { CHECKS, CHECK_IDS, PREGATE_OUT_REL, PREGATE_TIER2, clearDecision, clearObligation, readPregateFile, renderTable, runPregate, verifyPregate, writePregateFile } from '../lib/pregate/index';
 import { describeLane, discoverLanes } from '../lib/pregate/workflows';
 import { REMOTE_GATE_LANE } from '../lib/pregate/checks/lanes';
@@ -36,8 +36,6 @@ import { ensureTmpExcluded } from '../lib/restamp';
 import { RESULT_CODES, resultCodeSuffix, resultLine } from '../lib/result-codes';
 import { DEFAULT_STALL_TIMEOUT_S } from '../lib/pregate/context';
 import { cancelActive } from '../lib/pregate/supervise';
-import { slugFromEnvironment } from '../lib/bin-context';
-import { resolveStateRoot } from '../lib/state-root';
 import { defaultGh, evaluateRegate, renderRegate } from '../lib/pregate/regate';
 import { GATE_AHEAD_REL } from '../lib/restamp';
 import { evaluateSealed, publishedCommits, rangeCommits, renderSealed } from '../lib/sealed-guard';
@@ -147,7 +145,7 @@ async function cmdRun(root: string, rest: string[], json: boolean): Promise<numb
     remote = { spendCapUsd: cap };
   } else if (flag(rest, '--spend-cap') !== undefined) { process.stderr.write('gstack-pregate: --spend-cap applies only with --remote\n'); return EXIT.usage; }
   const base = resolveBaseBranch(root, flag(rest, '--base'));
-  const userConfigPath = path.join(resolveStateRoot(), 'projects', slugFromEnvironment(undefined, root), 'pregate.json');
+  const userConfigPath = defaultUserConfigPath(root);
   const loaded = buildContext({ repoRoot: root, base, policyFrom, allowRepoCommands: allow, timeoutMs, stallTimeoutMs, remote, knownChecks: [...CHECK_IDS, ...PREGATE_TIER2], userConfigPath });
   if ('refused' in loaded) {
     const refusal = describeRefusal(loaded.refused, base);
@@ -283,6 +281,8 @@ async function main(argv: string[]): Promise<number> {
   if (bad) { process.stderr.write(`gstack-pregate: ${bad}; see gstack-pregate --help\n`); return EXIT.usage; }
   const root = repoRoot();
   if (!root) { process.stderr.write('gstack-pregate: not inside a git repository\n'); return EXIT.usage; }
+  const dotenv = loadedDotenvFiles(process.cwd(), process.execArgv);
+  if (dotenv.length) { process.stderr.write(resultLine('gstack-pregate', 'POLICY_SOURCE_UNAVAILABLE', `bun loaded ${dotenv.join(', ')} from the working directory, and a checkout's .env must not choose the state root or slug behind the policy; run gstack-pregate directly (its shebang passes --no-env-file) or as bun --no-env-file`) + '\n'); return EXIT.refused; }
   if (cmd === 'run') return await cmdRun(root, rest, json);
   if (cmd === 'verify') return cmdVerify(root, rest, json);
   if (cmd === 'clear') return cmdClear(root, rest);

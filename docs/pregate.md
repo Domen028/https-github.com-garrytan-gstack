@@ -84,9 +84,15 @@ else a gstack plugin's data directory, else `~/.gstack` ([docs/state-root.md](st
 (`GSTACK_PROJECT_SLUG` overrides it). It is read only when the base carries none
 (never under `--policy-from head`), it lives outside the repository so a PR still
 cannot reach it, and the record names it (`policy user <path>`) and fingerprints
-its bytes in each check's `inputs.policy`. A path that is relative or resolves
+its bytes (`policy_digest`, and each check's `inputs.policy`); `verify` and the
+ship receipt treat an edited or deleted user file, or one that appears after a
+run under the defaults, as `PREGATE_STALE`. A path that is relative or resolves
 inside the repository is ignored, since a PR could commit it; `--explain` says
-so, or says `(absent)` when no file is there.
+so, or says `(absent)` when no file is there. The slug and state root come from
+the caller's environment, never the checkout's `.env`: the bin's shebang passes
+`--no-env-file`, and a bare `bun gstack-pregate` launched beside any `.env` file
+refuses (`POLICY_SOURCE_UNAVAILABLE`). `verify` reads both paths from the
+record, not from its own environment.
 It covers `gstack-pregate run` only: `sealed` and `price_file` are read from the
 base branch's copy, so the user file refuses them (`PREGATE_CONFIG_INVALID`)
 rather than holding a policy nothing reads. A user file that exists but cannot
