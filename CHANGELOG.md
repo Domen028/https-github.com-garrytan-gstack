@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased]
+
+**`gstack-config set plan_mode_preamble off` leaves the plan-mode preamble out of every installed skill, for people who never use plan mode.** The "Plan Mode Safe Operations" and "Skill Invocation During Plan Mode" sections add about 1.6 KB to each of 50 Claude skills. With the key off, the next `./setup` renders every host's skills with `gen-skill-docs --plan-mode=off`, and the default Claude install serves that render instead of the committed files. The default is on, and with it on every render and the committed SKILL.md files are byte-for-byte unchanged.
+
+### Added
+- **`gen-skill-docs --plan-mode=off`** drops the two sections at generation time. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" keep their marker. Hosts whose capabilities declare no plan mode already render the sections empty, so in practice the flag matters for Claude, Copilot and OpenCode. Fixes #3168. From #3213 by @xingzihai, finished with the config wiring.
+- **The `plan_mode_preamble` config key** (`on` | `off`, default `on`). It is a closed domain like `explain_level`: an unknown value warns and stores `on`. Setting it outside `./setup` says it applies on the next setup run and prints the `./setup --refresh-registered` command that applies it now.
+- **Every installed render carries the choice:** all 16 `gen:skill-docs` call sites in `setup`, the Claude render helper, `gstack-config gbrain-refresh`, and the router that `gstack-relink` re-renders in place (as it already does for `disabled_skills`).
+- **The default Claude install gets a render when the key is off.** `gstack_claude_render_action` returns `plain` whatever gbrain detection says, and the activation record (`~/.gstack/render/claude.overlay`) gains `plan_mode=off`. Turning the key back on removes that render on the next setup, including when the gbrain detector fails, which otherwise keeps a render. Records written with the key on are unchanged.
+
+### Changed
+- **Gate integrity:** new tests `test/plan-mode-off-build.test.ts` (from #3213, unchanged), `test/plan-mode-off-generation.test.ts`, `test/plan-mode-preamble-config.test.ts`, `test/plan-mode-preamble-render.test.ts` and `test/plan-mode-preamble-setup.test.ts`. No existing test was edited, and no threshold, trial count, case kind or judge changed.
+
 ## [1.91.149.0] - 2026-10-19
 
 **Paid eval cases can now run on the Codex host, and the Monday census runs two arms: Claude Opus 5.5 and Codex gpt-6.1-sol.** `EVALS_HOST=codex` runs the 52 adapter-only gate cases through a full Codex runtime per case. On its first pilot gpt-6.1-sol passed 48 of 52 with no retries, at $4.63 for the 52 cases, against $28.93 for the same cases on Fable (0.16×). Claude-only cases are skipped on Codex with a recorded reason and never count as failed. GSTA-49 TM2.
