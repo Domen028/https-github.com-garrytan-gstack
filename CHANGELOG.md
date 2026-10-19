@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+**Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.
+
+### Changed
+- **`free-durations-record.yml` also dispatches Quality gate** on `bot/free-duration-seeds`, next to Free Tests (the required `free-tests` check) and Windows Free Tests.
+- **The seed PR body says the dispatched runs are its checks** and explains why its pull_request runs wait for approval.
+
 ## [1.91.147.0] - 2026-10-19
 
 **The free-suite duration seeds are current again.** This is the first refresh from the weekly recorder. It adds 14 Linux and 6 Windows test files that the shard packers had been placing at the 99th-percentile estimate.
