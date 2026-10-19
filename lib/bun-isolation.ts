@@ -11,9 +11,11 @@
  *
  * POSIX passes /dev/null. Native Windows has no /dev/null and `--config=NUL`
  * panicked Bun 1.3.10 while parsing the flag (#3085), so a TypeScript spawn on
- * Windows gets an empty bunfig created exclusively in a private directory and
- * re-checked to be a zero-byte regular file before each spawn; anything else
- * is replaced, so the file cannot become a preload vector.
+ * Windows gets an empty bunfig in a fixed directory under the per-user temp
+ * root, re-checked to be a zero-byte regular file before each spawn; anything
+ * else is replaced, so the file cannot become a preload vector. The file is
+ * never removed: a detached child (the timeline hook's repair) reads it after
+ * the parent that named it has exited.
  * browse/src/bun-child-config.ts keeps its own copy of emptyBunConfig(): the
  * Windows native cookie qualification binds that file's bytes and bundles it
  * without lib/.
@@ -21,8 +23,6 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-
-let emptyConfig: string | null = null;
 
 function isEmptyRegularFile(file: string): boolean {
   try {
@@ -35,13 +35,18 @@ function isEmptyRegularFile(file: string): boolean {
 
 export function emptyBunConfig(platform: NodeJS.Platform = process.platform): string {
   if (platform !== 'win32') return '/dev/null';
-  if (emptyConfig && isEmptyRegularFile(emptyConfig)) return emptyConfig;
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gstack-bunfig-'));
+  const dir = path.join(os.tmpdir(), 'gstack-empty-bunfig');
   const file = path.join(dir, 'bunfig.toml');
-  fs.closeSync(fs.openSync(file, 'wx', 0o600));
+  if (isEmptyRegularFile(file)) return file;
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  if (!fs.lstatSync(dir).isDirectory()) throw new Error(`empty Bun config directory ${dir} is not a directory`);
+  fs.rmSync(file, { recursive: true, force: true });
+  try {
+    fs.closeSync(fs.openSync(file, 'wx', 0o600));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  }
   if (!isEmptyRegularFile(file)) throw new Error(`empty Bun config ${file} is not a zero-byte file`);
-  process.once('exit', () => fs.rmSync(dir, { recursive: true, force: true }));
-  emptyConfig = file;
   return file;
 }
 

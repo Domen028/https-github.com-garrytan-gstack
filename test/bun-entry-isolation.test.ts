@@ -160,6 +160,18 @@ describe('GSTA-56: gstack never takes configuration from the audited repository'
     expect(fs.statSync(emptyBunConfig('win32')).size).toBe(0);
   });
 
+  test('the Windows empty bunfig outlives the process that named it, so a detached child can still read it', () => {
+    const lib = path.join(ROOT, 'lib', 'bun-isolation.ts');
+    const made = spawnSync(process.execPath, [...bunIsolationArgs(), '-e', `const { emptyBunConfig } = await import(${JSON.stringify(lib)}); console.log(emptyBunConfig('win32'));`], { encoding: 'utf8', timeout: 30_000 });
+    expect(made.status).toBe(0);
+    const file = made.stdout.trim();
+    expect(fs.lstatSync(file).isFile()).toBe(true);
+    expect(fs.statSync(file).size).toBe(0);
+    fs.writeFileSync(file, 'preload = ["./x.ts"]\n');
+    expect(emptyBunConfig('win32')).toBe(file);
+    expect(fs.statSync(file).size).toBe(0);
+  });
+
   test('every bun build --compile disables .env and bunfig autoload', () => {
     const offenders: string[] = [];
     for (const f of TRACKED) {
