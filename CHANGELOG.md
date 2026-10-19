@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.148.0] - 2026-10-19
 
 **Weekly seed PRs now get the credential scan as well as the free suites.** A pull request the recorder opens with the workflow token never starts its own `pull_request` checks. GitHub holds them as "action required". So the recorder dispatches its checks on the bot branch instead.
 
