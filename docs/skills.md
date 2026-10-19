@@ -1162,6 +1162,8 @@ Claude: Detected: Fly.io (fly.toml found)
         Written to CLAUDE.md. Run /land-and-deploy when ready.
 ```
 
+If you answer "Nothing is deployed yet", `/setup-deploy` stops and writes nothing, because there is no production deploy to record. [How to bring up your first production deploy](./howto-bring-up-a-first-deploy.md) covers that first step; run `/setup-deploy` again once the app is live.
+
 ---
 
 ## `/codex`
