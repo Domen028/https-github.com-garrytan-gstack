@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.167.0] - 2026-10-20
 
 **Two paid detectors now accept the rewordings Opus 5.5 actually uses, with their negative controls kept (daily flaky-fix pass, GSTA-57).** `plan-design-with-ui-scope` went red three times on the ledger with "no acknowledged Design focus" while the agent had asked Step 0D and a numbered finding; `tpa-absent-darwin` went red once on a valid download pitch.
 
