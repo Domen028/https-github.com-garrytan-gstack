@@ -10,6 +10,23 @@
 - **QA-callers prompt (`qaCallerSessionOptions`):** the handoff freshness check is one rule. Read HANDOFF.md and reports/HANDOFF.md and wait for the results in an earlier message than each of three things: `materialize` (it runs once per report root and freezes the verdict), every `completed:true` review record including `adversarial-review`, and the completion report. `review-exploratory-small-cli` failed twice when the agent wrote the adversarial-review record in the same response as its first HANDOFF Read (39320737890) or before any Read (39332134395); the detector was right, and a free replay of both captured event sets keeps them failing and passes them reordered. `ship-exploratory-late-input` failed twice when the agent materialized before reading the late reports/HANDOFF.md, so a refused second `materialize` left a stale `pass` verdict beside an honest `inconclusive` receipt.
 - **Focused paid runs (Opus 5.5, gate tier, this tree):** `qa-only-no-fix`, `review-exploratory-small-cli`, `ship-exploratory-plan-checks` and `ship-exploratory-late-input` each passed 5 of 5 ($14.98 total). One `qa-only-no-fix` trial used two bookkeeping joins that the previous helper would have failed.
 
+## [1.91.167.0] - 2026-10-20
+
+**Two paid detectors now accept the rewordings Opus 5.5 actually uses, with their negative controls kept (daily flaky-fix pass, GSTA-57).** `plan-design-with-ui-scope` went red three times on the ledger with "no acknowledged Design focus" while the agent had asked Step 0D and a numbered finding; `tpa-absent-darwin` went red once on a valid download pitch.
+
+### Fixed
+- **`plan-design-with-ui-scope` focus detector (test/skill-e2e-plan-design-with-ui.test.ts).** The Step 0A rating now counts as any sentence that scores design completeness out of 10 (run 39363705692 wrote "I rated this plan 4/10 for design completeness"; the 0A example says "This plan is a 3/10 on design completeness"), and the all-seven option may name the seven any way ("All 7 areas (recommended)"). The title, focus and option-order requirements are unchanged. Replays of all three ledger failures (runs 39315041557, 39344306426, 39363705692, attempt 1) and their passing reruns now pass the detector; 39363705692's captured calls are a fixture (`test/fixtures/design-ui-focus-capture-39363705692.json`). New negative controls: a score and "design completeness" in different sentences, a score out of 7, a non-design completeness score, an all-seven option without a focus title, a non-leading or issue-labelled all-seven option, a bare "All 7" option, and the run without its focus question all still fail.
+- **`tpa-absent-darwin` pitch detector (test/helpers/third-party-actions.ts).** The canonical phrase may name Aside as "it" once the macOS 15+ floor follows ("If you want to use Aside: download it (macOS 15+) at aside.com", run 39315041557, now a capture in `test/fixtures/third-party-actions-pitch-captures.json`). It keeps the canonical phrase's guards: clause start, no negation before it, no quoted or reported mention. The short forms without the floor still count only at a sentence start.
+- **Gate integrity:** test-only detector edits. No threshold, trial count, case kind, quarantine or budget changed.
+
+## [1.91.166.0] - 2026-10-20
+
+**Two load-sensitive free tests from the flaky ledger now measure what they test.** Daily flaky-fix pass, 2026-10-20, free and load-sensitive group.
+
+### Fixed
+- **`test/setup-ps1.test.ts` PowerShell 5.1 cases (windows-setup, 2026-10-17 and 2026-10-20).** The workflow runs the file with plain `bun test`, so each case has Bun's 5 s default. The first `powershell.exe` launch on a runner pays a cold start that later launches do not. Over 94 windows-setup jobs, the first legacy launch (the space-in-TMPDIR case) took p50 1.46 s, p95 3.42 s and max 5.04 s, while the second launch (the empty-argument case) had p95 1.41 s. Both reds were that first launch killed at 5 s with exit null. A `beforeAll` now launches the legacy interpreter once on the stub checkout, with a 60 s hook budget matching the spawns' own bound. No per-test timeout changed. On Linux, a pwsh wrapper that adds 6 s to the first launch reproduces the CI symptom on main and passes with the warm-up. One that adds 6 s to every launch still fails three cases (negative control).
+- **`browse/test/xvfb.test.ts` spawn → cleanup round trip (Ubicloud full run, 2026-10-18).** It picked a display from `:99-:110` and then spawned on it, inside the default range that headed daemons in parallel shards allocate from. Six default-range allocators reproduced "X display :N was reserved by another X server during startup" in 9 of 20 and 5 of 20 runs. The case now uses `:25000-:25100`, a range no other allocator uses, like the file's other private-range cases. It now fails instead of silently returning when no display is free. 30 of 30 runs pass under the same load.
+
 ## [1.91.165.0] - 2026-10-20
 
 **The Version Gate accepts an unstamped READY head under merge trains.** Under the train policy a lane's head keeps VERSION, package.json and the agents digest at main's version and writes its CHANGELOG entry under `[Unreleased]`. The gate still demanded a bump, so every unstamped PR showed "VERSION not bumped", and `gstack-ship-queue ready` refused it with `QUEUE_NOT_READY` (#3320, #3321). That blocked every train. Plan GSTA-49, S1 for the queue.
@@ -66,6 +83,7 @@
 - **Gate integrity (train block only):** under a `train` block, PR pushes no longer start paid slices; trains, screens and the backstop gate instead. Train and bisect runs never reuse a verdict and never bind one for reuse. No threshold, trial count, case kind or selection changed.
 - **Gate integrity (always, GSTA-48 P3-1):** when the readiness job blocks a PR head, a new `readiness-comment` job replaces an existing `## E2E Evals` comment with "NOT RUN on <head>", so an earlier PASS no longer stands beside a head that never ran. It posts nothing when no such comment exists. A slice killed before its upload step counts as incomplete.
 - **Gate integrity, widening (`plan-design-with-ui-scope` focus detector, GStack Minder-approved):** the Step 0D focus question also counts when its title names the focus (the title ends at the first line break or before `Project/branch/task:`), its body carries the step's own rating sentence ("I('ve) rated this plan N/10 on design completeness"), and it offers at least two options, one of which starts "All 7" or "All seven" (design or review) dimensions or passes. Opus 5.5 titled the question only "Review focus" in both attempts of run 39298269902, so the detector missed it. In the second attempt the finding detector also counted the focus question as the review finding, because its one-line title names hierarchy and panels. A recognized focus question can no longer count as a finding. Free replays of both captured attempts (`test/fixtures/design-ui-focus-capture-39298269902-a1.json` and `-a2.json`, registered in the case's touchfiles) pass. Every existing negative control still fails, as do these new ones: an issue-labeled finding that carries the rating, a single-option focus question, a focus question without a leading all-7 option, and a 4/7 rating. No threshold, trial count, case kind or ceiling changed.
+
 ## [1.91.161.0] - 2026-10-19
 
 **`gstack-pregate` works on Django, Dart and Flutter repos, and on branches that only touch assets or tool config.** Before, a Django migration, an `admin.py`, a template, a font, a vendored licence or `.pre-commit-config.yaml` stopped `/ship` with `PREGATE_NO_LANE` in a repo that had never opted in, and every touched `_test.dart` file did the same. `gstack-pregate init` now drafts a policy from the repo instead of writing a fixed example. Contributed by @arlophoenix (#3285) and @szsunyuan (#3290); reported by @dgrant (#3266, #3267, #3268, #3269).
@@ -80,7 +98,6 @@
 - **`gstack-pregate init` drafts from the repo (#3268).** It prints the languages it found and the runner each language's tests get, maps each file the import graph cannot place to the tests of the nearest directory above it, and lists the rest as `TODO` (as it does past the 256-entry schema limit). It never writes `[]`, which would clear a file without a test.
 - **Review fixes on the Dart port.** A `cd` inside a pipeline, an alternative, a background job, shell control flow, a command substitution or a redirected subshell now leaves a CI lane's test set unknown (it may run any test) instead of resolving later paths against the wrong directory, which could drop a platform obligation. Dart directives are read to their `;` whatever the line indentation, metadata before a directive and semicolons inside a URI are handled, and nested block comments are skipped, so an unindented conditional import or a long `show` list no longer loses its edges.
 - **Gate integrity:** new free regressions in `test/pregate-non-js.test.ts` (Django, assets and licence, init, and the two review fixes, each with a negative control) and `test/pregate-dart.test.ts`. Each new positive case fails on the tree before this change. No existing test, threshold, trial count or case kind changed; `test/helpers/pregate-fixture.ts` only reports more about a failed git spawn. `test/pregate-dart.test.ts` and `test/pregate-non-js.test.ts` join the other pregate fixture files in `scripts/lib/windows-curation.ts`'s known-incompatible list: the Dart stand-ins are bash scripts on a colon-joined PATH, and the bin cases expect the Linux-host lanes verdict.
-
 
 ## [1.91.160.0] - 2026-10-19
 
@@ -172,6 +189,7 @@
 
 ### Changed
 - **Gate integrity:** `browse/test/terminal-agent.test.ts` adds `activeTab` to the exact `/health` keys and updates its stub for the now-synchronous `isHealthy` and the new `probeActiveTab`; its no-token assertions are unchanged. `browse/test/busy-active-tab.test.ts` and `browse/test/command-timeout-report.test.ts` are new. No threshold, trial count or case kind changed.
+
 ## [1.91.154.0] - 2026-10-19
 
 **/cso can verify Rails repairs in a read-only checkout, its retained Git history no longer brings back credential files the snapshot leaves out, a repair whose external assertions fail is now reported as `ASSERTION_FAILED` instead of a misleading `INCOMPATIBLE_INPUT`, and a security assertion can accept several safe rejection statuses while still requiring the secret to be absent.** The helper keeps `.env`, `master.key`, keys and agent configuration out of the readable tree, but `history.txt` captured `git log -p` in full, so a committed `.env` came back through its diff whenever the value wasn't credential-shaped enough for the redactor. Paid qualification run 39186328569 caught this when the private corpus's planted `.env` value showed up in the judge's helper state.
@@ -216,6 +234,7 @@
 
 ### Added
 - **`docs/howto-bring-up-a-first-deploy.md`:** a vendor-neutral walkthrough for when /setup-deploy stops at "Nothing is deployed yet" (host, services, env and secrets, DNS, verification, and what to have ready when you rerun /setup-deploy). Linked from the README and docs/skills.md. Fixes #3150. From #3264 by @szsunyuan.
+
 ## [1.91.150.0] - 2026-10-19
 
 **The paid evals that still pinned older models now run on the current generation, and two cases that went red on the move are repaired at their cause.** Garry's direction (2026-10-18) is to stop testing older frontier models, so these files are re-baselined as a fresh measured reference rather than held to a threshold change.
@@ -1331,6 +1350,7 @@ The first full paid v2 baseline produced 64 receipts and 64 judge records, then 
 ## [1.91.83.0] - 2026-10-11
 
 **gstack ships itself under `stamp-at-merge`.** `.gstack/ship-policy.json` flips `queue_mode` to `stamp-at-merge`, `bump` to `patch` and names `garrytan` under `maintainers`. The version is now allocated once, when the PR is next in the queue (`gstack-restamp --next --expect-base --expect-order`), instead of claimed at open and re-slotted on every reorder; every bump is PATCH, so unattended ships never meet the MINOR/MAJOR prompt; and `/review` contributor mode reads the maintainer set from the file instead of calling the collaborators API. `docs/ship-policy.md` gains the queue-side procedure: what a PR carries before its stamp, who runs the restamp and when, and what the merging thread verifies on the exact SHA instead of "VERSION above main".
+
 ## [1.91.82.0] - 2026-10-11
 
 **Plan-review reality rows name their inputs.** The `{{PLAN_REALITY_ROWS}}` prose in plan-eng-review, plan-ceo-review and the autoplan CEO/Eng phases wrote `gstack-plan-reality check --phase <p> <review>` without saying what `<review>` is, and the completion summary cited a `PLAN_REALITY` line no step produced. The check now reads `<review-file|->` (the review you wrote, or stdin) and says it prints the `PLAN_REALITY:` line the summary cites. Found by the plan-eng-review workflow judge on an unrelated PR (clarity 3 / actionability 3 median, both citing these two references).
@@ -2798,6 +2818,7 @@ Run `bun run typecheck` and `bun run typecheck:test` before you push; both are f
 - Open PRs touching `lib/cso` should run `bun run format:cso` before rebasing.
 - Builds on the typecheck work in #2447, contributed by @laddtnov.
 - Coordinated with #2994 (v1.91.8.0), which retired the never-green finding-count evals this wave had been repairing.
+
 ## [1.91.11.0] - 2026-09-30
 
 gstack now looks up its state folder one way everywhere, and the five most copy-pasted or oversized parts of the codebase each have a single owner. Before, about 50 scripts, hooks and libraries each resolved the state folder with their own rule, and the rules disagreed. If you set `GSTACK_HOME`, `GSTACK_STATE_DIR` or `GSTACK_STATE_ROOT`, telemetry, analytics, update-check snoozes, the egress ledger and hook logs now all land in the folder you chose. Nothing is moved for you. Run `~/.claude/skills/gstack/bin/gstack-paths --explain` to see the active folder and whether `~/.gstack` still holds older state; [docs/state-root.md](docs/state-root.md) has the move recipe.
@@ -3906,6 +3927,7 @@ Run /review on a branch you suspect is over-built and read the `[ADVISORY]` rows
 - Eval-store schema v2: harvest records carry `{insertions, deletions, net}`; `recordE2E` now populates `tokens_used`.
 - Touchfiles dep lists closed gaps (fixtures, judge helper, harness, ship render) and the context-budget ratchet fixture was re-captured, locking the AskUserQuestion reduction so it cannot silently regress.
 - New coverage: TEMP_DIRS widening + remote-serving asymmetry, shortcut-marker writer/harvester grammar joint, sandbox-doctor shell guards, GSTACK_FREE_JOBS parsing, laundered-ls-remote shims, digest freshness/budget/writer tripwires, and a real generator round-trip through the version bump.
+
 ## [1.74.0.0] - 2026-08-29
 
 **Green now means green: every test runs somewhere, provably.**
@@ -4518,6 +4540,7 @@ If you run gstack from a build that pulled in community or fork-ported code, thi
 
 #### For contributors
 - New regression guards pin each security property against a silent revert: a static tripwire for the constant-time `validateAuth`, a table-driven suppression test over the exported `URL_PASSWORD_PLACEHOLDER_WORDS`, an unconditional-write test for the state-dir ignore, a static tripwire for the iOS Release compile-out, and the restored `Bun.spawn` contract tests.
+
 ## [1.67.0.0] - 2026-08-16
 
 **The tracker wave: browse survives macOS, installs are complete,**
@@ -6833,6 +6856,7 @@ A `/ship` run starts ~3x lighter and pulls in each heavy step's instructions onl
 #### For contributors
 - `setup` links `sections/` into the prefixed Claude + Kiro skill dirs; `--host all` now fails the build on any host failure, not just claude.
 - New section templates live at `<skill>/sections/*.md.tmpl`; regenerate with `bun run gen:skill-docs`.
+
 ## [1.53.1.0] - 2026-05-30
 
 ## **Workspace and scripted setup never hang on a hidden prompt again. Installing the plan-tune hooks is now flag-driven with safe defaults.**
@@ -6940,6 +6964,7 @@ If you generate PDFs on Linux or inside a container, emoji in section headers an
 
 #### Fixed
 - make-pdf no longer renders emoji as `.notdef` tofu (▯) on Linux.
+
 ## [1.52.1.0] - 2026-05-27
 
 ## **Brain-aware planning lands. Five planning skills read structured context from any personal gbrain before asking — same questions, smarter answers, no token tax.**

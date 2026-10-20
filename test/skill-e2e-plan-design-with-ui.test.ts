@@ -32,16 +32,21 @@ const designFocusBoundary = (fp: AskUserQuestionFingerprint): boolean =>
     // count may be a numeral or a word; the title must name design, unless the
     // body carries the step's own design-completeness rating (run 39199692993).
     const title = text.split(/\r?\n/, 1)[0]!;
-    const rated = /\bI(?:['’]ve| have)? rated this plan (?:10(?:\.0+)?|[0-9](?:\.\d+)?)\/10 on design completeness\b/i;
+    // Step 0A's rating is a sentence that scores design completeness out of 10,
+    // however it is worded ("rated this plan 4/10 for design completeness", run
+    // 39363705692; "This plan is a 3/10 on design completeness", the 0A example).
+    const rated = (body: string) => body.split(/(?<=[.!?])\s+|\r?\n/).some(sentence =>
+      /\bdesign completeness\b/i.test(sentence) && /(?<![\d./])(?:10(?:\.0+)?|[0-9](?:\.\d+)?)\/10(?!\d|\.\d)/.test(sentence));
     // Runs 39298269902 a1/a2: a title that only names the focus ("Review focus.",
     // on one line before Project/branch/task:), with the step's own rating in the
     // body and an option that offers all seven dimensions against a narrower one.
+    // The option leads with all seven, whatever it calls them ("All 7 areas", run 39363705692).
     const lead = text.split(/\r?\n|\s+(?=Project\/branch\/task:)/, 1)[0]!;
     return /^I(?:['’]ve| have) rated this plan (?:10(?:\.0+)?|[0-9](?:\.\d+)?)\/10 on design completeness\.[\s\S]*\bWant me to focus on specific areas instead(?: of all (?:7|seven))?\?/i.test(text)
       || (/\ball (?:7|seven) (?:design )?(?:dimensions|passes)\b/i.test(title) && /\bfocus\b/i.test(title)
-        && (/\bdesign\b/i.test(title) || rated.test(text.slice(title.length))) && /\?\s*$/.test(title))
-      || (/\bfocus\b/i.test(lead) && rated.test(text) && options.length >= 2
-        && options.some(({ label }) => /^\s*all (?:7|seven) (?:design |review )?(?:dimensions|passes)\b/i.test(label)));
+        && (/\bdesign\b/i.test(title) || rated(text.slice(title.length))) && /\?\s*$/.test(title))
+      || (/\bfocus\b/i.test(lead) && rated(text) && options.length >= 2
+        && options.some(({ label }) => /^\s*all (?:7|seven)\s+[a-z]/i.test(label)));
   });
 
 // Require a choice about the supplied UI, not a workflow offer after focus.

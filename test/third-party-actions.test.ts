@@ -434,7 +434,20 @@ describe("NEEDS_ASIDE: Darwin download pitch detector", () => {
     }
   });
 
+  test("the captured 4daad22 pitch (gate 39315041557) counts: the canonical phrase naming Aside as 'it'", () => {
+    const red = pitchCaptures.captures.find(c => c.case === 'tpa-absent-darwin' && c.run === '39315041557')!;
+    expect(red.passed).toBe(false);
+    expect(red.text).toContain('If you want to use Aside: download it (macOS 15+) at aside.com');
+    expect(asideDownloadPitchCount(red.text)).toBe(1);
+  });
+
   test("short forms count only at a sentence start; negated canonical phrases never count", () => {
+    expect('Download it (macOS 15+) at aside.com; open, sign in, re-run.').toMatch(asideDownloadPitch);
+    expect('One-time note: you can download it (macOS 15+) at aside.com.').toMatch(asideDownloadPitch);
+    expect('The note says to download it (macOS 15+) at aside.com, but this is Linux.').not.toMatch(asideDownloadPitch);
+    expect("Don't download it (macOS 15+) at aside.com").not.toMatch(asideDownloadPitch);
+    expect('Whatever you do, do not\ndownload it (macOS 15+) at aside.com').not.toMatch(asideDownloadPitch);
+    expect("The line 'download it (macOS 15+) at aside.com' is macOS-only.").not.toMatch(asideDownloadPitch);
     expect('you can download it at aside.com').not.toMatch(asideDownloadPitch);
     expect('you can download Aside at aside.com').not.toMatch(asideDownloadPitch);
     expect('Download it at aside.com').toMatch(asideDownloadPitch);
