@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gate-cost-replay — what the paid PR gate costs and what each selection
  * policy would have cost on recent merges (GSTA-49 plan lane T0). Free and

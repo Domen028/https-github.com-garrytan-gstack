@@ -70,7 +70,7 @@ do_migrate() {
   TMPOUT=$(mktemp "$GSTACK_HOME/developer-profile.json.tmp.XXXXXX")
   trap 'rm -f "$TMPOUT"' EXIT
 
-  cat "$LEGACY_FILE" | bun -e "
+  cat "$LEGACY_FILE" | bun --no-env-file --config=/dev/null -e "
     const lines = (await Bun.stdin.text()).trim().split('\n').filter(Boolean);
     const sessions = [];
     const signalsAcc = {};
@@ -127,7 +127,7 @@ do_migrate() {
   mv "$LEGACY_FILE" "$LEGACY_FILE.migrated-$TS"
 
   local COUNT
-  COUNT=$(PROFILE_FILE_PATH="$PROFILE_FILE" bun -e "console.log(JSON.parse(require('fs').readFileSync(process.env.PROFILE_FILE_PATH,'utf-8')).sessions.length)" 2>/dev/null || echo "?")
+  COUNT=$(PROFILE_FILE_PATH="$PROFILE_FILE" bun --no-env-file --config=/dev/null -e "console.log(JSON.parse(require('fs').readFileSync(process.env.PROFILE_FILE_PATH,'utf-8')).sessions.length)" 2>/dev/null || echo "?")
   echo "MIGRATE: ok — migrated $COUNT sessions from builder-profile.jsonl"
 }
 
@@ -184,7 +184,7 @@ do_log_session() {
   fi
 
   # Validate: input must be parseable JSON with required fields (date, mode).
-  if ! printf '%s' "$INPUT" | bun -e "
+  if ! printf '%s' "$INPUT" | bun --no-env-file --config=/dev/null -e "
     const j = JSON.parse(await Bun.stdin.text());
     if (!j.date || !j.mode) process.exit(1);
   " 2>/dev/null; then
@@ -197,7 +197,7 @@ do_log_session() {
   TMPOUT=$(mktemp "$GSTACK_HOME/developer-profile.json.tmp.XXXXXX")
   trap 'rm -f "$TMPOUT"' EXIT
 
-  PROFILE_FILE_PATH="$PROFILE_FILE" RECORD_INPUT="$INPUT" TMPOUT_PATH="$TMPOUT" bun -e "
+  PROFILE_FILE_PATH="$PROFILE_FILE" RECORD_INPUT="$INPUT" TMPOUT_PATH="$TMPOUT" bun --no-env-file --config=/dev/null -e "
     const fs = require('fs');
     const entry = JSON.parse(process.env.RECORD_INPUT);
     if (!entry.ts) entry.ts = new Date().toISOString();
@@ -244,7 +244,7 @@ do_reconcile() {
   TMPOUT=$(mktemp "$GSTACK_HOME/developer-profile.json.tmp.XXXXXX")
   trap 'rm -f "$TMPOUT"' EXIT
 
-  PROFILE_FILE_PATH="$PROFILE_FILE" PROJECTS_DIR="$GSTACK_HOME/projects" TMPOUT_PATH="$TMPOUT" bun -e "
+  PROFILE_FILE_PATH="$PROFILE_FILE" PROJECTS_DIR="$GSTACK_HOME/projects" TMPOUT_PATH="$TMPOUT" bun --no-env-file --config=/dev/null -e "
     const fs = require('fs');
     const path = require('path');
     const profile = JSON.parse(fs.readFileSync(process.env.PROFILE_FILE_PATH, 'utf-8'));
@@ -314,7 +314,7 @@ do_reconcile() {
 # -----------------------------------------------------------------------
 do_read() {
   ensure_profile
-  cat "$PROFILE_FILE" | bun -e "
+  cat "$PROFILE_FILE" | bun --no-env-file --config=/dev/null -e "
     const p = JSON.parse(await Bun.stdin.text());
     const sessions = p.sessions || [];
 
@@ -388,7 +388,7 @@ do_profile() {
 # -----------------------------------------------------------------------
 do_gap() {
   ensure_profile
-  cat "$PROFILE_FILE" | bun -e "
+  cat "$PROFILE_FILE" | bun --no-env-file --config=/dev/null -e "
     const p = JSON.parse(await Bun.stdin.text());
     const declared = p.declared || {};
     const inferred = (p.inferred && p.inferred.values) || {};
@@ -417,7 +417,7 @@ do_derive() {
   fi
 
   cd "$ROOT_DIR"
-  PROFILE_FILE_PATH="$PROFILE_FILE" EVENTS_PATH="$EVENTS" bun -e "
+  PROFILE_FILE_PATH="$PROFILE_FILE" EVENTS_PATH="$EVENTS" bun --no-env-file --config=/dev/null -e "
     import('./scripts/question-registry.ts').then(async (regmod) => {
       const sigmod = await import('./scripts/psychographic-signals.ts');
       const fs = require('fs');
@@ -504,7 +504,7 @@ do_trace() {
     return 0
   fi
   cd "$ROOT_DIR"
-  EVENTS_PATH="$EVENTS" TRACE_DIM="$DIM" bun -e "
+  EVENTS_PATH="$EVENTS" TRACE_DIM="$DIM" bun --no-env-file --config=/dev/null -e "
     import('./scripts/question-registry.ts').then(async (regmod) => {
       const sigmod = await import('./scripts/psychographic-signals.ts');
       const fs = require('fs');
@@ -542,7 +542,7 @@ do_trace() {
 # -----------------------------------------------------------------------
 do_check_mismatch() {
   ensure_profile
-  cat "$PROFILE_FILE" | bun -e "
+  cat "$PROFILE_FILE" | bun --no-env-file --config=/dev/null -e "
     const p = JSON.parse(await Bun.stdin.text());
     const declared = p.declared || {};
     const inferred = (p.inferred && p.inferred.values) || {};
@@ -586,7 +586,7 @@ do_narrative() {
 do_vibe() {
   ensure_profile
   cd "$ROOT_DIR"
-  cat "$PROFILE_FILE" | PROFILE_DATA="$(cat "$PROFILE_FILE")" bun -e "
+  cat "$PROFILE_FILE" | PROFILE_DATA="$(cat "$PROFILE_FILE")" bun --no-env-file --config=/dev/null -e "
     import('./scripts/archetypes.ts').then(async (mod) => {
       const p = JSON.parse(process.env.PROFILE_DATA);
       const dims = (p.inferred && p.inferred.values) || {

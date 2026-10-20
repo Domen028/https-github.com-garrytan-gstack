@@ -168,7 +168,7 @@ _gstack_codex_select_model() {
   [ -n "$_role" ] && set -- "$@" --role "$_role"
   [ -n "$_explicit" ] && set -- "$@" --explicit "$_explicit"
   [ -n "$_cwd" ] && set -- "$@" --cwd "$_cwd"
-  _line=$(bun run "$_GSTACK_CODEX_BIN/../scripts/resolve-codex-generation-model.ts" "$@")
+  _line=$(bun --no-env-file --config=/dev/null run "$_GSTACK_CODEX_BIN/../scripts/resolve-codex-generation-model.ts" "$@")
   _rc=$?
   _GSTACK_CODEX_SEL="${_line%%$'\t'*}"
   _rest="${_line#*$'\t'}"

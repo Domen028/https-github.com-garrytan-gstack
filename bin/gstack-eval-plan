@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-eval-plan — the tier-1 machinery behind /eval-plan (plan E1).
  *

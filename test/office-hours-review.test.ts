@@ -9,6 +9,7 @@ import {
 } from '../lib/office-hours-review';
 import { parseSpecFixes, verifySpecFixesAtCap, renderSpecCap } from '../lib/spec-review-cap';
 import { expectMentions } from './helpers/prompt-structure';
+import { copyOfficeHoursFormatter } from './helpers/office-hours-formatter-fixture';
 
 const cli = path.resolve(import.meta.dir, '../bin/gstack-office-hours-review');
 function review(round = 1, count = 1, severity: 'blocking' | 'minor' = 'blocking'): OfficeHoursReview {
@@ -637,4 +638,18 @@ describe('office-hours review CLI', () => {
       expect(fs.readFileSync(data.artifacts[0], 'utf8')).toBe(before);
     }
   }));
+});
+
+describe('office-hours formatter fixture copy', () => {
+  test('the copied formatter loads every local module it imports (marathon 39032308051)', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'office-hours-formatter-copy-'));
+    try {
+      const formatter = copyOfficeHoursFormatter(dir);
+      const result = Bun.spawnSync([process.execPath, formatter], { cwd: dir, stdout: 'pipe', stderr: 'pipe', timeout: 5000 });
+      expect(result.stderr.toString()).not.toContain('Cannot find module');
+      expect(result.stderr.toString()).toContain('gstack-office-hours-review: usage:');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

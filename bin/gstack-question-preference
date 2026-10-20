@@ -2,6 +2,9 @@
 # gstack-question-preference — read/write/check explicit per-question preferences.
 #
 # Preference file: ~/.gstack/projects/{SLUG}/question-preferences.json
+# Global fallback: ~/.gstack/global-question-preferences.json, the file the
+#   question-preference hook reads (--check only; a project entry for the same
+#   id wins). Hand-edited; --write stays per-project.
 # Schema: { "<question_id>": "always-ask" | "never-ask" | "ask-only-for-one-way" }
 #
 # Subcommands:
@@ -42,6 +45,7 @@ GSTACK_HOME="$_gstack_sr_root"
 eval "$("$SCRIPT_DIR/gstack-slug" 2>/dev/null || true)"
 SLUG="${SLUG:-unknown}"
 PREF_FILE="$GSTACK_HOME/projects/$SLUG/question-preferences.json"
+GLOBAL_PREF_FILE="$GSTACK_HOME/global-question-preferences.json"
 EVENT_FILE="$GSTACK_HOME/projects/$SLUG/question-events.jsonl"
 mkdir -p "$GSTACK_HOME/projects/$SLUG"
 
@@ -101,13 +105,23 @@ do_check() {
   fi
   ensure_file
   cd "$ROOT_DIR"
-  PREF_FILE_PATH="$PREF_FILE" QID="$QID" QSUMMARY="$QSUMMARY" bun -e "
+  PREF_FILE_PATH="$PREF_FILE" GLOBAL_PREF_FILE_PATH="$GLOBAL_PREF_FILE" QID="$QID" QSUMMARY="$QSUMMARY" bun --no-env-file --config=/dev/null -e "
     import('./scripts/one-way-doors.ts').then((oneway) => {
       const fs = require('fs');
       const qid = process.env.QID;
       const summary = process.env.QSUMMARY || undefined;
       const prefs = JSON.parse(fs.readFileSync(process.env.PREF_FILE_PATH, 'utf-8'));
-      const pref = prefs[qid];
+      let globalPrefs = {};
+      try {
+        if (fs.existsSync(process.env.GLOBAL_PREF_FILE_PATH)) {
+          const parsed = JSON.parse(fs.readFileSync(process.env.GLOBAL_PREF_FILE_PATH, 'utf-8'));
+          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('not an object');
+          globalPrefs = parsed;
+        }
+      } catch (e) {
+        console.error('NOTE: global-question-preferences.json is unreadable; ignoring it.');
+      }
+      const pref = qid in prefs ? prefs[qid] : globalPrefs[qid];
 
       // Always check one-way status first — safety overrides preferences.
       // summary (when piped) lets the keyword net catch ad-hoc destructive
@@ -187,7 +201,7 @@ do_write() {
 
   set +e
   local RESULT
-  RESULT=$(cd "$ROOT_DIR" && printf '%s' "$INPUT" | PREF_FILE_PATH="$PREF_FILE" EVENT_FILE_PATH="$EVENT_FILE" FREE_TEXT="$FREE_TEXT" HAS_FREE_TEXT="$HAS_FREE_TEXT" bun -e "
+  RESULT=$(cd "$ROOT_DIR" && printf '%s' "$INPUT" | PREF_FILE_PATH="$PREF_FILE" EVENT_FILE_PATH="$EVENT_FILE" FREE_TEXT="$FREE_TEXT" HAS_FREE_TEXT="$HAS_FREE_TEXT" bun --no-env-file --config=/dev/null -e "
     const fs = require('fs');
     const raw = await Bun.stdin.text();
     let j;
@@ -306,7 +320,7 @@ do_clear() {
     echo '{}' > "$PREF_FILE"
     echo "OK: cleared all preferences"
   else
-    PREF_FILE_PATH="$PREF_FILE" QID="$QID" bun -e "
+    PREF_FILE_PATH="$PREF_FILE" QID="$QID" bun --no-env-file --config=/dev/null -e "
       const fs = require('fs');
       const prefs = JSON.parse(fs.readFileSync(process.env.PREF_FILE_PATH, 'utf-8'));
       if (prefs[process.env.QID] !== undefined) {
@@ -325,7 +339,7 @@ do_clear() {
 # -----------------------------------------------------------------------
 do_stats() {
   ensure_file
-  (cd "$ROOT_DIR" && PREF_FILE_PATH="$PREF_FILE" bun -e "
+  (cd "$ROOT_DIR" && PREF_FILE_PATH="$PREF_FILE" bun --no-env-file --config=/dev/null -e "
     import('./scripts/one-way-doors.ts').then((oneway) => {
       const fs = require('fs');
       const prefs = JSON.parse(fs.readFileSync(process.env.PREF_FILE_PATH, 'utf-8'));

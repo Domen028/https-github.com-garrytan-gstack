@@ -210,8 +210,8 @@ describe('setup: heal-first ordering + visibility', () => {
 describe('gstack-settings-hook: shared prelude (dedupe key == prune predicate)', () => {
   test('every bun script call site uses the shared JS prelude concatenation', () => {
     const codeLines = hookBinSrc.split('\n').filter((l) => !l.trim().startsWith('#'));
-    const bunCalls = codeLines.filter((l) => l.includes('bun -e '));
-    const preludeCalls = codeLines.filter((l) => l.includes(`bun -e "$_HOOK_JS_PRELUDE"'`));
+    const bunCalls = codeLines.filter((l) => l.includes('bun --no-env-file --config=/dev/null -e '));
+    const preludeCalls = codeLines.filter((l) => l.includes(`bun --no-env-file --config=/dev/null -e "$_HOOK_JS_PRELUDE"'`));
     expect(bunCalls.length).toBeGreaterThanOrEqual(6);
     expect(preludeCalls.length).toBe(bunCalls.length);
   });

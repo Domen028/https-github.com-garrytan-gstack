@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-redact-prepush — git pre-push hook that scans the diff being pushed for
  * HIGH-severity credentials and blocks the push on a hit.

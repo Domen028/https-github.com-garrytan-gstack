@@ -656,6 +656,7 @@ Other references: [docs/gbrain-sync.md](docs/gbrain-sync.md) (sync-specific guid
 |-----|---------------|
 | [Skill Deep Dives](docs/skills.md) | Philosophy, examples, and workflow for every skill (includes Greptile integration) |
 | [Diagrams & Document Formats](docs/howto-diagrams-and-formats.md) | Mermaid/excalidraw fences in PDFs, image sizing and safety defaults, `--to html\|docx`, `/diagram` triplets |
+| [First Production Deploy](docs/howto-bring-up-a-first-deploy.md) | What to do when `/setup-deploy` says nothing is deployed yet: hosting, env and secrets, DNS, checking it works, then back to `/setup-deploy` |
 | [Builder Ethos](ETHOS.md) | Builder philosophy: Boil the Ocean, Search Before Building, three layers of knowledge |
 | [Using GBrain with GStack](USING_GBRAIN_WITH_GSTACK.md) | Every path, flag, bin helper, and troubleshooting step for `/setup-gbrain` |
 | [GBrain Sync](docs/gbrain-sync.md) | Cross-machine memory setup, privacy modes, troubleshooting |
@@ -795,6 +796,8 @@ types into that element; bare `browse type <text>` types into whatever has focus
 **Want shorter commands?** `cd ~/.claude/skills/gstack && ./setup --no-prefix` — switches from `/gstack-qa` to `/qa`. Your choice is remembered for future upgrades.
 
 **Don't use some skills?** `gstack-config set disabled_skills make-pdf,pair-agent` stops registering them on every host, so their descriptions stop loading into each session. Claude Code updates right away; other hosts on their next `./setup --host <name>` or `/gstack-upgrade`. Their files stay installed, so a skill that calls a disabled one still works (you get a warning). Typos are rejected with the closest skill name, `gstack-upgrade` can't be disabled, and `gstack-config set disabled_skills ""` re-enables everything.
+
+**Never use plan mode?** `gstack-config set plan_mode_preamble off` leaves the "Plan Mode Safe Operations" and "Skill Invocation During Plan Mode" sections (about 1.6 KB per skill) out of every installed skill on the next `./setup` run; the command prints the exact `./setup --refresh-registered` line that applies it. Claude Code then serves a render under `~/.gstack/render/claude` instead of the committed files. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" keep their marker. `gstack-config set plan_mode_preamble on` (the default) and another `./setup` bring the sections back. It matters for Claude Code, Copilot and OpenCode: hosts without plan mode (Codex and others) never carry these sections.
 
 **Want namespaced commands?** `cd ~/.claude/skills/gstack && ./setup --prefix` — switches from `/qa` to `/gstack-qa`. Useful if you run other skill packs alongside gstack.
 

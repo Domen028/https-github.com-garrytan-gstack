@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * ship-measure — /ship's measure-then-fix runner for a red eval case or a red
  * free-suite shard, and the weekly off-ship qualification sweep. Every trial

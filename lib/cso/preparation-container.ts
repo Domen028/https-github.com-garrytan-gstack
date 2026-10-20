@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * Runtime-image half of the CSO preparation contract.  This executable runs
  * only inside a qualified, network-none container.  Acquisition egress is a

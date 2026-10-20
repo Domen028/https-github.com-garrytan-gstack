@@ -11,6 +11,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { bunIsolationArgs } from './bun-isolation';
 import { readScopeMarker, scopeMarker, scopeTokens, type ScopeFlags, type UiEvidence } from './autoplan-scope';
 import { COORDINATOR_CONTRACT } from './coordinator-contract';
 import { capyBootstrapCommand } from './doctor-components';
@@ -41,7 +42,7 @@ export interface Scope {
 }
 
 export function snapshotTool(args: string[], cwd: string): any {
-  const r = spawnSync(process.execPath, [SNAPSHOT_TOOL, ...args], { cwd, encoding: 'utf8', timeout: 120_000, env: process.env });
+  const r = spawnSync(process.execPath, [...bunIsolationArgs(), SNAPSHOT_TOOL, ...args], { cwd, encoding: 'utf8', timeout: 120_000, env: process.env });
   if (r.status !== 0) throw new Error(`gstack-autoplan-snapshot ${args[0]}: ${(r.stderr || r.stdout).trim()}`);
   return JSON.parse(r.stdout);
 }

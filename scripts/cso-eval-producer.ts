@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /** Generic producer runner. Compile this file before moving it to a clean producer host. */
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';

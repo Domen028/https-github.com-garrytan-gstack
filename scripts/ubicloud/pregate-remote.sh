@@ -66,7 +66,7 @@ log="$logs/run.log"
 # evals); the paid PR gate covers those, and test-free-shards --files-from
 # rejects them, so only the free files go on.
 files="$logs/free-files.txt"
-paid=$(cd "$root" && bun -e 'import { isPaidTestFile } from "./test/helpers/paid-test-set.ts"; import * as fs from "node:fs";
+paid=$(cd "$root" && bun --no-env-file --config=/dev/null -e 'import { isPaidTestFile } from "./test/helpers/paid-test-set.ts"; import * as fs from "node:fs";
 const lines = fs.readFileSync(process.argv[1], "utf8").split(/\r?\n/).filter(Boolean);
 fs.writeFileSync(process.argv[2], lines.filter(f => !isPaidTestFile(f)).map(f => f + "\n").join(""));
 console.log(lines.filter(f => isPaidTestFile(f)).join("\n"));' "$PREGATE_FILES_FILE" "$files") || stop 2 PREGATE_REMOTE_USAGE "could not split $PREGATE_FILES_FILE into free and paid test files"
@@ -86,7 +86,7 @@ field() { sed -n "s/.* $1=\([0-9][0-9]*\).*/\1/p" <<<"$2"; }
 if [ -z "${UBICLOUD_API_KEY:-${UBICLOUD_API_TOKEN:-}}" ]; then
   say "no UBICLOUD_API_KEY: running $count files locally in parallel shards"
   set +e
-  (cd "$root" && bun run scripts/test-free-shards.ts --files-from "$files") 2>&1 | tee "$log"
+  (cd "$root" && bun --no-env-file --config=/dev/null run scripts/test-free-shards.ts --files-from "$files") 2>&1 | tee "$log"
   rc=${PIPESTATUS[0]}
   set -e
   after=$(wtree) || after=unavailable
@@ -158,7 +158,7 @@ prelude="$logs/vm-setup.sh"
     "cat > ~/.pregate-files.txt <<'PREGATE_FILES'"
   tr -d '\r' <"$files" | grep .
   printf '%s\n' 'PREGATE_FILES' "cat > ~/.pregate-run.sh <<'PREGATE_RUN'" \
-    'planned=$(bun run scripts/test-free-shards.ts --files-from ~/.pregate-files.txt --dry-run | sed -n "s/^\[test:free\] files-from .*: [0-9]* files, sha256=\([0-9a-f]*\)$/\1/p")' \
+    'planned=$(bun --no-env-file --config=/dev/null run scripts/test-free-shards.ts --files-from ~/.pregate-files.txt --dry-run | sed -n "s/^\[test:free\] files-from .*: [0-9]* files, sha256=\([0-9a-f]*\)$/\1/p")' \
     "if [ \"\$planned\" != $digest ]; then echo \"PREGATE_VM_PLAN_MISMATCH planned=\${planned:-none} expected=$digest\"; exit 3; fi" \
     'xvfb-run -a bun run test:free --files-from ~/.pregate-files.txt' \
     'rc=$?' \

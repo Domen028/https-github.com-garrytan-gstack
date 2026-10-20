@@ -173,7 +173,7 @@ if [ -n "$ENTRIES" ]; then
   # up below (lib/path-spelling.ts shellPath; test/path-spelling.test.ts keeps
   # the two equal).
   # shellcheck disable=SC2086 # newline-split list (IFS is set to a newline below)
-  (cd "$ROOT" && IFS=$NL && "$BUN" -e '
+  (cd "$ROOT" && IFS=$NL && "$BUN" --no-env-file --config=/dev/null -e '
     const shellPath = (value) => process.platform === "win32"
       ? String(value).replace(/\\/g, "/").replace(/^([A-Za-z]):(?=\/|$)/, (_, drive) => `/${drive.toLowerCase()}`)
       : String(value);

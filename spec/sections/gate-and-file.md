@@ -47,7 +47,7 @@ categories that fired plus a sha256 of the body. Substitute the printed name for
 ```bash
 REDACT_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.gstack/tmp/<redact-file-name>"
 [ -s "$REDACT_FILE" ] || { echo "No audit record: $REDACT_FILE is missing or empty; write the draft into it first." >&2; exit 1; }
-bun ~/.claude/skills/gstack/lib/redact-audit-log.ts \
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/redact-audit-log.ts \
   "{\"repo_visibility\":\"$REDACT_VIS\",\"outcome\":\"<clean|flagged>\",\"categories_flagged\":[<...>],\"spec_archive_path\":\"\"}" \
   "$REDACT_FILE"
 ```
@@ -188,7 +188,7 @@ cat "$_OUTSIDE_TMP/text" 2>/dev/null || tail -n 20 "$_OUTSIDE_TMP/events"
 
 cat "$_OUTSIDE_TMP/stderr" >&2 || { [ "$_OUTSIDE_EXIT" -ne 0 ] || _OUTSIDE_EXIT=1; }
 _OUTSIDE_RC=0
-bun "$HOME/.claude/skills/gstack/lib/outside-review-result.ts" --label 'Codex outside review' --exit "$_OUTSIDE_EXIT" --stderr "$_OUTSIDE_TMP/stderr" --events "$_OUTSIDE_TMP/events" spec "$_OUTSIDE_TMP/text" || _OUTSIDE_RC=$?
+bun --no-env-file --config=/dev/null "$HOME/.claude/skills/gstack/lib/outside-review-result.ts" --label 'Codex outside review' --exit "$_OUTSIDE_EXIT" --stderr "$_OUTSIDE_TMP/stderr" --events "$_OUTSIDE_TMP/events" spec "$_OUTSIDE_TMP/text" || _OUTSIDE_RC=$?
 case "$_OUTSIDE_RC" in
   0|3) ;;
   4) echo 'OUTSIDE_STATUS: unverified provider=codex host=claude'; exit 4 ;;
