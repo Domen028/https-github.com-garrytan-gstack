@@ -1,5 +1,22 @@
 # Changelog
 
+## [Unreleased]
+
+**The Version Gate accepts an unstamped READY head under merge trains.** Under the train policy a lane's head keeps VERSION, package.json and the agents digest at main's version and writes its CHANGELOG entry under `[Unreleased]`. The gate still demanded a bump, so every unstamped PR showed "VERSION not bumped", and `gstack-ship-queue ready` refused it with `QUEUE_NOT_READY` (#3320, #3321). That blocked every train. Plan GSTA-49, S1 for the queue.
+
+### Fixed
+- **`scripts/compare-pr-version.ts`** passes an unstamped head when the base's `.gstack/ship-policy.json` declares `train`. A head counts as unstamped (`lib/version-gate-train.ts`) when, against its merge base with main, it changes neither `VERSION`, the `package.json` version nor any release output, and its CHANGELOG change is confined to one `[Unreleased]` section at the top. An older merge base is fine, because the train merges the head onto current main and rule 14 forbids lane main merges.
+- **A stamped head under a train policy must carry exactly base + bump**, the version `gstack-restamp --next` allocates when the slot is called. Without a train block the gate is unchanged.
+- **`.github/workflows/version-gate.yml`** runs the gate's code from the PR's merge commit (`github.sha`) rather than its head. A PR that edits the gate runs its own edit, and an open PR picks up a gate fix from main at its next `pull_request` event. It also fetches the base with full history so the merge base resolves.
+
+### Gate integrity
+- The unstamped pass is new and applies only under a train policy. Negative controls in `test/compare-pr-version.test.ts` cover:
+  - a stamped head at any version other than base + bump;
+  - a changed `package.json` version or release output, which is treated as a stamp;
+  - a CHANGELOG edit to a released section;
+  - a second `[Unreleased]` section, or one that isn't at the top;
+  - an unstamped head without a train block, which still fails hard rule 1.
+
 ## [1.91.164.0] - 2026-10-19
 
 **Merge trains are on for gstack: `.gstack/ship-policy.json` now carries the `train` block.** READY PRs merge in trains of up to 5 (or once the oldest READY is 3 hours old) behind one full gate on the train head, instead of one full gate per PR. Plan GSTA-49, go-live after lanes T1 and T1b. Garry approved going live once one dry-run train passed.
