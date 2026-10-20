@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.169.0] - 2026-10-20
 
 **The docs-sync fixture now accepts joined Git reads, `for` loops over literal file names and a pipe into `tr` as reads, and tells the actor that the Claude config dir is off-limits. The late-result fixture now says what its one repair corrects.** In the last 20 Opus gates, `ship-docsync-current` went red 3 times. Two of those were pure reads the validator rejected: `cat personal-note.txt; echo ---; git diff main HEAD` (run 39347827595) and `for f in …; do echo "=== $f"; cat $f; done` (run 39344306426). The third (run 39338691964) was a real deviation: a stray `for_none=1;` assignment, plus the parent reading its child's session transcript under the fixture's CLAUDE_CONFIG_DIR. Both still fail. Focused trials then hit `git ls-files -z … | tr '\0' '\n'` twice, a form Fable also used in run 39186278010. `ship-docsync-late-result` went red once (run 39367310001): the parent stopped the hung child and judged that no concrete correction was available, because the prompt never said what the declared repair corrects. Focused Opus 5.5 trials: on the final tree, `ship-docsync-current` 4/5 and `ship-docsync-completion` 5/5. The current red was an unquoted `--include=*` that the shared grammar rejects as a globbed option, which is outside this change, and it passed its rule-16 rerun. Earlier trees: `ship-docsync-current` 5/5 (before `tr`), `ship-docsync-late-result` 5/5 (first repair), and one trial each of the other nine docs-sync cases, all passing.
 
