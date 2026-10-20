@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+**Two paid detectors now accept the rewordings Opus 5.5 actually uses, with their negative controls kept (daily flaky-fix pass, GSTA-57).** `plan-design-with-ui-scope` went red three times on the ledger with "no acknowledged Design focus" while the agent had asked Step 0D and a numbered finding; `tpa-absent-darwin` went red once on a valid download pitch.
+
+### Fixed
+- **`plan-design-with-ui-scope` focus detector (test/skill-e2e-plan-design-with-ui.test.ts).** The Step 0A rating now counts as any sentence that scores design completeness out of 10 (run 39363705692 wrote "I rated this plan 4/10 for design completeness"; the 0A example says "This plan is a 3/10 on design completeness"), and the all-seven option may name the seven any way ("All 7 areas (recommended)"). The title, focus and option-order requirements are unchanged. Replays of all three ledger failures (runs 39315041557, 39344306426, 39363705692, attempt 1) and their passing reruns now pass the detector; 39363705692's captured calls are a fixture (`test/fixtures/design-ui-focus-capture-39363705692.json`). New negative controls: a score and "design completeness" in different sentences, a score out of 7, a non-design completeness score, an all-seven option without a focus title, a non-leading or issue-labelled all-seven option, a bare "All 7" option, and the run without its focus question all still fail.
+- **`tpa-absent-darwin` pitch detector (test/helpers/third-party-actions.ts).** The canonical phrase may name Aside as "it" once the macOS 15+ floor follows ("If you want to use Aside: download it (macOS 15+) at aside.com", run 39315041557, now a capture in `test/fixtures/third-party-actions-pitch-captures.json`). It keeps the canonical phrase's guards: clause start, no negation before it, no quoted or reported mention. The short forms without the floor still count only at a sentence start.
+- **Gate integrity:** test-only detector edits. No threshold, trial count, case kind, quarantine or budget changed.
+
 ## [1.91.164.0] - 2026-10-19
 
 **Merge trains are on for gstack: `.gstack/ship-policy.json` now carries the `train` block.** READY PRs merge in trains of up to 5 (or once the oldest READY is 3 hours old) behind one full gate on the train head, instead of one full gate per PR. Plan GSTA-49, go-live after lanes T1 and T1b. Garry approved going live once one dry-run train passed.
