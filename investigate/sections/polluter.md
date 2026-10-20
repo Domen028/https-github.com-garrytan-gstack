@@ -8,14 +8,14 @@ passes alone and fails in the suite or in one shard.
 1. **File order from the CI log.** The shard runner prints its file list in
    execution order. Take the files that ran before the victim in the failing
    shard (`gh run view <run-id> --log`, or the local shard listing
-   `bun run scripts/ship-measure.ts free --shard <I>` which reproduces the exact
+   `bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --shard <I>` which reproduces the exact
    packing `bun run test` used).
 2. **Confirm the dependency.** The victim alone passes; the victim after the
    earlier files fails (`<affected-files>` is the earlier files then the victim,
    comma-joined, in shard order):
    ```bash
-   bun run scripts/ship-measure.ts free --files <failing-test-file> --reruns 3
-   bun run scripts/ship-measure.ts free --files <affected-files> --reruns 3
+   bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --files <failing-test-file> --reruns 3
+   bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --files <affected-files> --reruns 3
    ```
 3. **Bisect the earlier files.** Halve the earlier list, keep the half that
    still fails the victim, repeat until one file remains. Each step is one

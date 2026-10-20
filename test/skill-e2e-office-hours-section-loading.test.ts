@@ -14,7 +14,8 @@ import * as path from 'node:path';
 import { describeE2ETier } from './helpers/e2e-gate';
 import { setupSkillDir, skillFromWorktree, captureSectionReads } from './helpers/auq-sdk-capture';
 import { CARVE_GUARDS } from './helpers/carve-guards';
-import { validateOfficeHoursCompletion, validateOfficeHoursReviewerHandoffs, validateOfficeHoursReviewArtifacts, validateOfficeHoursReviewPreservation } from './helpers/office-hours-completion';
+import { copyOfficeHoursFormatter } from './helpers/office-hours-formatter-fixture';
+import { observedSpecFixes, validateOfficeHoursCompletion, validateOfficeHoursReviewerHandoffs, validateOfficeHoursReviewArtifacts, validateOfficeHoursReviewPreservation } from './helpers/office-hours-completion';
 
 const describeMarathon = describeE2ETier('marathon');
 const runId = `office-hours-section-loading-${process.env.EVALS_RUN_ID ?? 'local'}`;
@@ -42,15 +43,9 @@ describeMarathon('/office-hours full section-loading workflow (marathon)', () =>
     const planDir = setupSkillDir({
       skillName: guard.skill, skillMd, sectionsFrom, tmpPrefix: 'gstack-office-hours-secload-',
     });
-    // Copy the real formatter and its small dependency set into the fixture.
+    // Copy the real formatter and its local imports into the fixture.
     // This exercises production code while keeping all outputs in the sandbox.
-    for (const relative of ['bin/gstack-office-hours-review', 'lib/office-hours-review.ts', 'lib/fs-atomic.ts']) {
-      const target = path.join(planDir, relative);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(path.resolve(__dirname, '..', relative), target);
-    }
-    const formatter = path.join(planDir, 'bin/gstack-office-hours-review');
-    fs.chmodSync(formatter, 0o755);
+    const formatter = copyOfficeHoursFormatter(planDir);
     // Two rounds keep the live run inside its budget: round 1 (full) and round 2 (delta) run here; round 3 and CONVERGENCE are covered by free validator tests.
     const reviewRounds = 2;
     const capture = await captureSectionReads({
@@ -83,6 +78,7 @@ Completion delivery, after the full workflow and design approval:
     const reviewEvidence = validateOfficeHoursReviewArtifacts({
       ...capture, designPath,
       designContent: fs.existsSync(designPath) ? fs.readFileSync(designPath, 'utf-8') : null,
+      fixes: observedSpecFixes(capture.toolCalls),
     }, artifacts, snapshots, reviewRounds);
     validateOfficeHoursReviewerHandoffs({
       ...capture, designPath,

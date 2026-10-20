@@ -5,7 +5,7 @@ verdict of the run that failed, its artifacts are labeled `diagnostic` under
 `.context/ship-measure/` (never the eval history), and the lane verdict comes
 only from the one full gate run at the end. Never raise a budget, lower a
 threshold, add a verdict retry or skip a case to get a pass.
-`ship-measure` below means `bun run ~/.claude/skills/gstack/scripts/ship-measure.ts`.
+`ship-measure` below means `bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/scripts/ship-measure.ts`.
 
 **Failed free-suite shard (Step 5).** Before calling the failure pre-existing or
 pushing, rerun that shard's exact file list (in run order) with

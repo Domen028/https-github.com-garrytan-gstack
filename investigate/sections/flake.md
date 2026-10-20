@@ -9,7 +9,7 @@ skip until the cause is named and probed.
 1. **Reproduce on main.** Check out `origin/<base>` in a worktree
    (`git worktree add <dir> origin/<base>`) and run the failing file alone N
    times (N ≥ 10). On gstack:
-   `bun run scripts/ship-measure.ts free --files <file> --reruns N`; elsewhere a
+   `bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --files <file> --reruns N`; elsewhere a
    loop over the project's single-file test command. Record `failed/N` on main,
    then the same on the branch. A failure that reproduces on main is outside the
    PR; one that appears only on the branch is inside it.

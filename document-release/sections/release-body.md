@@ -160,7 +160,7 @@ If TODOS.md does not exist, skip this step.
 
 1. **Read the version source** (the same signal `/ship` uses):
    ```bash
-   bun run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base <base>
+   bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base <base>
    ```
    `state: NO_VERSION` means no version source is configured or release automation owns
    it: print `VERSION: not applicable (<versionSource.reason>)`, skip this step, and never
@@ -362,7 +362,7 @@ cat "$_OUTSIDE_TMP/text" 2>/dev/null || tail -n 20 "$_OUTSIDE_TMP/events"
 
 cat "$_OUTSIDE_TMP/stderr" >&2 || { [ "$_OUTSIDE_EXIT" -ne 0 ] || _OUTSIDE_EXIT=1; }
 _OUTSIDE_RC=0
-bun "$HOME/.claude/skills/gstack/lib/outside-review-result.ts" --label 'Codex outside review' --exit "$_OUTSIDE_EXIT" --stderr "$_OUTSIDE_TMP/stderr" --events "$_OUTSIDE_TMP/events" review "$_OUTSIDE_TMP/text" || _OUTSIDE_RC=$?
+bun --no-env-file --config=/dev/null "$HOME/.claude/skills/gstack/lib/outside-review-result.ts" --label 'Codex outside review' --exit "$_OUTSIDE_EXIT" --stderr "$_OUTSIDE_TMP/stderr" --events "$_OUTSIDE_TMP/events" review "$_OUTSIDE_TMP/text" || _OUTSIDE_RC=$?
 case "$_OUTSIDE_RC" in
   0|3) ;;
   4) echo 'OUTSIDE_STATUS: unverified provider=codex host=claude'; exit 4 ;;
@@ -581,7 +581,7 @@ PR titles must start with `v<VERSION>` whenever the project has a version source
 Run this entire block in one shell, substituting `github` or `gitlab` for `<platform>` from Step 0 and the base branch for `<base>`. No variables cross tool calls. No version source (NO_VERSION) or no PR/MR skips title sync; an update failure warns and continues.
 
 ```bash
-VB=$(bun run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base "<base>") || { echo "Title sync: not run (the version source is broken; see the error above)."; exit 0; }
+VB=$(bun --no-env-file --config=/dev/null run ~/.claude/skills/gstack/bin/gstack-version-bump classify --base "<base>") || { echo "Title sync: not run (the version source is broken; see the error above)."; exit 0; }
 V=$(echo "$VB" | jq -r '.currentVersion // empty')
 [ -n "$V" ] || { echo "Title sync: not applicable (no version source is configured)."; exit 0; }
 case "<platform>" in

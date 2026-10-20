@@ -227,7 +227,7 @@ cso_build_evaluation_candidate() {
   cp -R lib scripts "$source_root/"
   cp -R test/helpers "$source_root/test/"
   cp "$candidate_catalog" "$source_root/lib/cso/runtime-catalog.json"
-  (cd "$source_root" && "$BUN_CMD" scripts/cso-runtime-promotion.ts check-evaluation lib/cso/runtime-catalog.json)
+  (cd "$source_root" && "$BUN_CMD" --no-env-file --config=/dev/null scripts/cso-runtime-promotion.ts check-evaluation lib/cso/runtime-catalog.json)
   (cd "$source_root" && cso_compile_bun lib/cso/cli.ts "$CSO_EVALUATION_UNIT/gstack-cso-core")
   (cd "$source_root" && cso_compile_bun scripts/cso-eval-producer.ts "$CSO_EVALUATION_UNIT/cso-eval-producer")
   cso_compile_watchdog "$CSO_EVALUATION_UNIT/gstack-cso-watchdog"

@@ -20,7 +20,7 @@ if [ "${1:-}" = --diagnostic ]; then
   exec "$here/ubi-runner.sh" run --src "$root" --setup "$here/setup-free-suite.sh" \
     --env GSTACK_EXPECT_BINARIES=1 --env GSTACK_FREE_RETRY_FLAKY=0 \
     --pull "work/$(basename "$root")/.context/ship-measure:$logs" \
-    -- "xvfb-run -a bun run scripts/ship-measure.ts free --backend local $*"
+    -- "xvfb-run -a bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --backend local $*"
 fi
 
 args=(--src "$root" --setup "$here/setup-free-suite.sh"

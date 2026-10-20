@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 // Claude-only outside-review runner. Prompts arrive on stdin, never argv.
 // codex_reviews gates the send (lib/outside-consent.ts); --user-invoked marks
 // a review the user asked for by name (/claude-code) and runs regardless.

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * Gate census arms for evals-periodic.yml (GSTA-49 TM2). Each arm is one host
  * and model running the weekly gate census plan:

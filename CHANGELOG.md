@@ -15,6 +15,120 @@
 - **Review fixes on the Dart port.** A `cd` inside a pipeline, an alternative, a background job, shell control flow, a command substitution or a redirected subshell now leaves a CI lane's test set unknown (it may run any test) instead of resolving later paths against the wrong directory, which could drop a platform obligation. Dart directives are read to their `;` whatever the line indentation, metadata before a directive and semicolons inside a URI are handled, and nested block comments are skipped, so an unindented conditional import or a long `show` list no longer loses its edges.
 - **Gate integrity:** new free regressions in `test/pregate-non-js.test.ts` (Django, assets and licence, init, and the two review fixes, each with a negative control) and `test/pregate-dart.test.ts`. Each new positive case fails on the tree before this change. No existing test, threshold, trial count or case kind changed; `test/helpers/pregate-fixture.ts` only reports more about a failed git spawn. `test/pregate-dart.test.ts` and `test/pregate-non-js.test.ts` join the other pregate fixture files in `scripts/lib/windows-curation.ts`'s known-incompatible list: the Dart stand-ins are bash scripts on a colon-joined PATH, and the bin cases expect the Linux-host lanes verdict.
 
+
+## [1.91.160.0] - 2026-10-19
+
+**Dart and Flutter projects get the right reviewers and the right test command.** A Dart change matched no diff-scope category except its test file, so a Flutter widget PR ran only the testing pass and skipped design, performance and security. Contributed by @arlophoenix (#3284).
+
+### Fixed
+- **`gstack-diff-scope` counts `.dart` as both frontend and backend.** The extension cannot tell a Flutter widget from a repository class or a pure-Dart server, and a skipped reviewer is invisible, so both specialists run. `pubspec.lock` (at the root or in a workspace package) is config. `lib/frontend-scope.ts` mirrors the frontend half, and `gstack-design-detect` still never hands a `.dart` file to the impeccable engine, which reads web sources only.
+- **Test detection knows Dart.** `/ship`'s bootstrap and coverage audit, `/design-review` and `/plan-eng-review` print `RUNTIME:dart` for a `pubspec.yaml` and `FRAMEWORK:flutter` for an indented `sdk: flutter` dependency (a commented-out one or an `environment.sdk` constraint does not count). They treat `dart_test.yaml` and `*_test.dart` files anywhere as existing tests and offer `flutter test` or `dart test`. Review-army reports `STACK: dart` and `TEST_FW: dart-test` or `flutter-test`.
+- **Adversarial `DIFF_SIZE` sums `git diff --numstat`,** the same count review-army's `DIFF_LINES` uses, instead of parsing the `--stat` summary line. Binary files count as zero.
+
+### Changed
+- The test-bootstrap prose is shorter so the generated skills stay inside the parity size cap and `/design-review` stays at its SKILL.md size pin. The rules it states are unchanged. `/design-review`, `/plan-eng-review` and `/review` shrink, so their pins in `test/fixtures/skill-md-size-allowlist.json` go down (31 entries).
+- `test/frontend-scope.test.ts`'s bash parity test gets a 30 s budget. It spawns git six times and the scope script once per sample, and it already ran past Bun's 5 s default on a 4-core machine before this change.
+
+## [1.91.159.0] - 2026-10-19
+
+**Security: the repository gstack runs in can no longer configure gstack's own programs.** Bun loads `.env`, `.env.local` and `.env.<NODE_ENV>` from the directory it starts in. It also runs any `preload` that a `bunfig.toml` there names, before the program's first line. gstack runs inside the repository it audits, so a committed or branch `.env` could set `GSTACK_STATE_ROOT`, `GSTACK_PROJECT_SLUG`, `GSTACK_CLAUDE_BIN` (an attacker-chosen binary then ran as "claude"), `GSTACK_SPEND_CAP_USD` or a provider base URL for every gstack bin, hook and skill step. A `bunfig.toml` preload ran arbitrary code in all of them. Every Bun that gstack starts now passes `--no-env-file` and an empty `--config`. Your shell environment works exactly as before. Found in review by GSTA-54.
+
+### Security
+- **Every bun entry point starts isolated:** all 123 bun shebangs are now `#!/usr/bin/env -S bun --no-env-file --config=/dev/null`. `bun run <file>` ignores the shebang, so the callers carry the flags too: skill templates, generated skill docs, resolvers, hook wrappers, `setup` and the bash bins pass `bun --no-env-file --config=/dev/null` for every `run`, `-e`, `-p` and script path.
+- **TypeScript spawns use `bunIsolationArgs()`** from `lib/bun-isolation.ts`, which follows browse's `emptyBunConfig()`. This covers `scriptInvocation` (how TypeScript launches gstack's own bins), restamp, qa-deadline, the timeline hook's repair child, gbrain sync's ingest child, the agents-digest regen and the Claude Code migration. Native Windows has no `/dev/null`, so there the helper passes a zero-byte bunfig in a fixed directory under the per-user temp root. It is never removed, because the timeline hook's detached repair child reads it after the hook exits. Under Git Bash, MSYS rewrites the shebang's `/dev/null` to `nul`, which Bun 1.4.2 reads as an empty config. A windows-latest run verified both.
+- **Compiled builds:** `build:gates` and `scripts/build-app.sh` now pass `--no-compile-autoload-dotenv --no-compile-autoload-bunfig`, as `scripts/build.sh` already did. Without them, compiled binaries load both files.
+- **A ratchet and regressions:**
+  - `test/bun-entry-isolation.test.ts` fails on any bun shebang, shell or skill caller, TypeScript spawn or `build --compile` that drops the flags.
+  - `test/bun-dotenv-isolation.test.ts` runs the real bins in a fixture repo with a hostile `.env`, `.env.local` and `bunfig.toml`. The state root, slug, claude binary and pregate spend cap still come from the shell.
+  - `test/bun-isolation-launch.test.ts` runs the shebang, bash and TypeScript launch forms on every free lane, Windows included.
+
+### Changed
+- **`gstack-evidence run` no longer scrubs dotenv values from the child environment,** and `GSTACK_EVIDENCE_KEEP_DOTENV` is gone. Bun no longer loads those values into the wrapper, so the child sees your shell's environment, as it would if you ran the command by hand. The old value-equality scrub (#2652, @namtrok) also dropped shell-exported variables whose value matched the file.
+- **Raised SKILL.md size pins:** 80 pins in `test/fixtures/skill-md-size-allowlist.json` grew by 33 to 330 characters each, from the isolation flags alone (8,253 characters in total).
+- **Directly executed `./scripts/*.ts` files no longer read gstack's own `.env`.** `bun run <script>` and the package scripts (`bun run test`, `bun run eval:bg:pr`) still load it.
+
+### If you…
+- **…add a bin or a hook:** start it with the isolated shebang, and pass `bun --no-env-file --config=/dev/null` (or `bunIsolationArgs()` in TypeScript) wherever you start Bun. If you don't, the ratchet names the line.
+- **…relied on a repo `.env` to configure gstack:** export the variable in your shell or set it with `gstack-config`.
+
+## [1.91.158.0] - 2026-10-19
+
+**`gstack-config set plan_mode_preamble off` leaves the plan-mode preamble out of every installed skill, for people who never use plan mode.** The "Plan Mode Safe Operations" and "Skill Invocation During Plan Mode" sections add about 1.6 KB to each of 50 Claude skills. With the key off, the next `./setup` renders every host's skills with `gen-skill-docs --plan-mode=off`, and the default Claude install serves that render instead of the committed files. The default is on, and with it on every render and the committed SKILL.md files are byte-for-byte unchanged.
+
+### Added
+- **`gen-skill-docs --plan-mode=off`** drops the two sections at generation time. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" keep their marker. Hosts whose capabilities declare no plan mode already render the sections empty, so in practice the flag matters for Claude, Copilot and OpenCode. Fixes #3168. From #3213 by @xingzihai, finished with the config wiring.
+- **The `plan_mode_preamble` config key** (`on` | `off`, default `on`). It is a closed domain like `explain_level`: an unknown value warns and stores `on`. Setting it outside `./setup` says it applies on the next setup run and prints the `./setup --refresh-registered` command that applies it now.
+- **Every installed render carries the choice:** all 16 `gen:skill-docs` call sites in `setup`, the Claude render helper, `gstack-config gbrain-refresh`, and the router that `gstack-relink` re-renders in place (as it already does for `disabled_skills`). When setup has to build, `scripts/build.sh` renders Factory, OpenCode, Cursor, Copilot and Antigravity without the flag, so with the key off setup renders those hosts again afterwards.
+- **The default Claude install gets a render when the key is off.** Without a working gbrain (absent, or the detector failed), `gstack_claude_render_action` returns `plain` instead of serving the committed files; with gbrain the brain-aware render already runs and now carries the flag too. The activation record (`~/.gstack/render/claude.overlay`) gains `plan_mode=off`. Turning the key back on removes that render on the next setup when gbrain is absent or its detector fails (a failed detector otherwise keeps a render), and re-renders the brain-aware render with the sections when gbrain is present. A failed render with the key off keeps the previous render. Records written with the key on are unchanged.
+
+### Fixed
+- **`gstack-relink` refreshes the `_gstack-command` router alias after it re-renders the router.** It used to copy the router before the re-render, so the alias kept the previous router (with `disabled_skills`, the full skill list) until the next relink.
+
+### Changed
+- **Gate integrity:** new tests `test/plan-mode-off-build.test.ts` (from #3213, unchanged), `test/plan-mode-off-generation.test.ts`, `test/plan-mode-preamble-config.test.ts`, `test/plan-mode-preamble-render.test.ts` and `test/plan-mode-preamble-setup.test.ts`. No existing test was edited, and no threshold, trial count, case kind or judge changed.
+
+## [1.91.157.0] - 2026-10-19
+
+**Claude SKILL.md files no longer carry a "When to invoke" body section, which saves about 20 KB across 56 skills.** Claude Code reads a skill's body only after the skill is invoked, so routing prose there never routed anything. Routing still comes from the catalog description and the CLAUDE.md routing block, and voice triggers move into the root router's routing block. From #3129 by @thanhnguyentung95.
+
+### Changed
+- **Catalog trim (`scripts/gen-skill-docs.ts`):** the Claude render keeps the one-line catalog description and no longer inserts the routing and voice-trigger prose into the body. `--catalog-mode=full` and the other hosts are unchanged: they keep the full description.
+- **Voice triggers in the root router:** a new `{{VOICE_TRIGGER_ROUTING}}` resolver (`scripts/resolvers/voice-triggers.ts`) adds one `- Voice trigger "…" → invoke /<skill>` line per skill to the root `SKILL.md` routing block, Claude only. That's 21 lines, and the root router's eager ceiling rises from 4289 to 4821 tokens.
+- **Context budget:** 54 per-skill eager ceilings go down (net −5,139 tokens). The `claude/design-review` size pin drops by 437 chars, and the claude ship golden is refreshed.
+- **Gate integrity:** the tests that pinned the removed section now assert its absence, or check the template description instead:
+  - `test/catalog-trim.test.ts` (the three `buildWhenToInvokeSection` tests go with the function);
+  - `test/catalog-mode-full.test.ts` and `test/cso-preserved.test.ts`;
+  - `test/gen-skill-docs.test.ts` (the benchmark routing and CSO voice tests read the template);
+  - `test/skill-validation.test.ts` (trigger and proactive phrases are checked in `SKILL.md.tmpl`);
+  - `test/helpers/parity-harness.ts` (no `## When to invoke` heading required);
+  - `test/helpers/skill-fixture.ts` and `test/skill-e2e-retro.test.ts` (the section is dropped from the review, review-army and retro E2E section lists). `scripts/harness-version.json` records the `skill-fixture.ts` change as non-behavioral: `HARNESS_VERSION` stays 6, and the regenerated SKILL.md bytes already start those cases' new series.
+  - `test/helpers/manual-judge-review-fixture.ts` puts the removed section back when it rebuilds the historical cookie-workflow approval, so the approved prompt hash and line range still match. The approval itself is unchanged.
+
+  One new free test checks that the root router routes every voice trigger, and it skips the `connect-chrome` alias symlink. No threshold, trial count, case kind or judge changed. No context-budget ceiling rose except the root router's.
+
+## [1.91.156.0] - 2026-10-19
+
+**The weekly marathon's office-hours case can run its review formatter again, and its validator now checks cap fixes the way the formatter does.** Both defects came from #3164 and were in the test, not the skill. The marathon fixture copied `bin/gstack-office-hours-review` with a hand-kept list of two library files; #3164 added a third import (`lib/spec-review-cap.ts`), so every formatter command in the fixture failed at module load, the agent correctly declared the review UNREVIEWED, and the case went red in marathon run 39032308051 (#3246). With the module restored, a focused rerun showed the second defect: when the review stops at the round cap and the agent applies the remaining blocking fixes with `--fixes`, the formatter records them as verified, but the test never gave the validator that list, so it expected "fixes unconfirmed" and rejected a correct report.
+
+### Fixed
+- **Office-hours cap fixes:** `observedSpecFixes()` in `test/helpers/office-hours-completion.ts` returns the last valid `--fixes` list the agent saved with Write, and the marathon test passes it to `validateOfficeHoursReviewArtifacts`. A free test in `test/office-hours-completion.test.ts` runs the real `finalize --fixes` at the cap and checks three cases: the observed list validates, no list fails with the marathon rerun's `Spec Review does not match` error, and a list naming a different finding also fails.
+- **Office-hours marathon fixture:** `test/helpers/office-hours-formatter-fixture.ts` copies the formatter together with every local module it imports, so a new import can no longer be left out. A free test in `test/office-hours-review.test.ts` loads the copied formatter and fails on a missing module; the old three-file list reproduces the exact `Cannot find module '../lib/spec-review-cap.ts'` error. The case's touchfiles now include `lib/spec-review-cap.ts` and the new helper.
+- **Gate integrity:** no threshold, trial count, case kind or judge changed. The marathon assertions are unchanged; only the fixture's file copy changed.
+
+## [1.91.155.0] - 2026-10-19
+
+**A busy page no longer locks up the browse daemon.** When one tab kept its main thread busy (a heavy dev bundle, a big grid render, a runaway script), every `browse` command, including `status`, `tabs`, `tab <id>`, `closetab` and `stop`, failed with "Daemon busy" after about 9.6 s, and the only way out was `--force-restart`, which threw away cookies, tabs and logins. Fixes #3247. From #3250 by @AndreIntelas.
+
+### Fixed
+- **`/health` `status` reports daemon liveness (Chromium connected)**, and the active tab's responsiveness is reported separately as `activeTab: {id, responsive}`. The CLI no longer gates every command on a 2 s `page.evaluate` race against the active tab.
+- **`tabs` and `state save` bound their per-tab reads**, so a stuck tab shows as `(not responding)` instead of hanging the command, and one pending probe is shared per stuck tab rather than one per poll. A busy tab keeps its last good storage in saved state.
+- **A command that really needs the stuck tab times out with an error naming that tab** and how to get out (switch tabs or close it). The CLI's timeout branch now matches Bun's `TimeoutError`; the old `AbortError` check never fired.
+
+### Changed
+- **Gate integrity:** `browse/test/terminal-agent.test.ts` adds `activeTab` to the exact `/health` keys and updates its stub for the now-synchronous `isHealthy` and the new `probeActiveTab`; its no-token assertions are unchanged. `browse/test/busy-active-tab.test.ts` and `browse/test/command-timeout-report.test.ts` are new. No threshold, trial count or case kind changed.
+## [1.91.154.0] - 2026-10-19
+
+**/cso can verify Rails repairs in a read-only checkout, its retained Git history no longer brings back credential files the snapshot leaves out, a repair whose external assertions fail is now reported as `ASSERTION_FAILED` instead of a misleading `INCOMPATIBLE_INPUT`, and a security assertion can accept several safe rejection statuses while still requiring the secret to be absent.** The helper keeps `.env`, `master.key`, keys and agent configuration out of the readable tree, but `history.txt` captured `git log -p` in full, so a committed `.env` came back through its diff whenever the value wasn't credential-shaped enough for the redactor. Paid qualification run 39186328569 caught this when the private corpus's planted `.env` value showed up in the judge's helper state.
+
+### Fixed
+- **Rails `verify` on read-only sources:** the helper writes its own test `config/database.yml` (plus an initializer and `storage.yml`) into the execution copy. The copy keeps the source's file modes, so in a read-only checkout (the eval producer seals every source file at 0444, and Nix or Bazel trees are the same) the write failed with `EACCES`. That surfaced as the generic `INVALID_SCHEMA` "unexpected or unsafe input", and no Rails repair could reach `runtime_tested`. Each helper file now replaces the copied file instead of opening it for writing, so it also never writes through a copied symlink.
+- **`history.txt`:** every diff section that touches a path the snapshot excludes (`exclusion()`, the same rule the readable tree uses) is replaced with `diff withheld: <path> (<reason>)`. This covers either side of a rename and any diff header that can't be parsed. Commit preambles and other files' diffs stay.
+- **`verify` with an authenticated witness:** a receipt or observation mismatch is still `INCOMPATIBLE_INPUT`. Receipts that bind correctly but record failed external assertions now raise `ASSERTION_FAILED`, with the phase and the booted, legitimate and security outcome. Nothing new is certified either way. In run 39186328569, three repairs that rejected the attack with a different status than the oracle expected surfaced as `INCOMPATIBLE_INPUT`.
+
+### Changed
+- **A security assertion's `expected.status` may list up to eight safe statuses** (for example `[403, 404]`), so a repair that refuses an attack with a different reasonable rejection still passes. A set is accepted only on a security assertion that also carries a `vulnerable` expectation, and only with `excludes` set, so the response must still withhold the vulnerable marker. The fixed and vulnerable oracles must stay provably mutually exclusive: a set that contains the vulnerable status is accepted only when the vulnerable response's `includes` contains the excluded marker. Legitimate controls and `vulnerable` expectations still take exactly one status, so a patch that answers every route with 403 still fails its controls. A no-op patch, a listed rejection that still leaks the marker, and an unlisted status all stay `inconclusive`.
+
+## [1.91.153.0] - 2026-10-19
+
+**An outside review whose findings are untagged prose no longer reads `clean` because a "no issues" phrase appears somewhere in it, and a clean Codex review that says "no actionable regressions" no longer reads `unverified`.** Reported in #3294 by @SchizasNik, with the false-pass half pointed out by @xg-gh-25. `lib/outside-review-result.ts` matched its no-findings vocabulary anywhere in the reply, so "The parser change has no new issues. However, … drops users_email_idx" passed /ship's structured gate. It also lacked `regressions`, so `codex review --uncommitted`'s "I found no actionable regressions in the staged, unstaged, or untracked changes." was missing coverage.
+
+### Fixed
+- **A no-findings statement counts only as the review's conclusion.** It must open the reply's last sentence or last ", and" clause (or the `because` clause of a review's `Recommendation:` line) and carry no contrast or exception ("but", "however", "except", "other than", "elsewhere"). When other prose comes first, anything after the statement other than a predicate ("were found", "is evident") or a colon explanation must scope it to the change as a whole, so "No issues in the parser." and "No regressions were found by the existing tests." do not conclude the review. Anything else stays `unverified` / `untagged_review`, the same reason code and troubleshooting anchor as before.
+- **`regressions` and `defects` join the vocabulary**, and `NO_FINDINGS` written as inline code still counts.
+
+### Gate integrity
+- The structured and review gates' no-findings check (`classifyOutsideReview`) is stricter about position and wider in vocabulary. New free regressions in `test/outside-review-result.test.ts` cover the reporter's exact reply through their CLI invocation, two clean `codex review --uncommitted` replies captured from codex-cli 0.160.0 with gpt-6-sol (both read `unverified` before), fifteen mixed replies that must stay `unverified` under both gates (the two strings from the issue, the phrase before, after and inside untagged findings, exception conclusions, conclusions scoped to one place or to the tests, a quoted `NO_FINDINGS`, a no-issues line inside a code fence), and Recommendation-clause cases including a wrapped clause with "but". A GPT-6.1 Sol outside review probed the classifier; its false passes are among those controls. A known residual, unchanged from before: untagged findings followed by "No issues found in the changed parser." still read `clean`, because "changed" names the change and the parser cannot tell a finding from a summary without tags. All four new tests fail on the previous classifier. Every existing negative control passes unchanged, including the stored Codex clean review that still reads `unverified` ("no actionable correctness issues"). No threshold, trial count or case kind changed.
+
 ## [1.91.152.0] - 2026-10-19
 
 **`/cso` now starts and finishes on ordinary repositories that hold a nested Git repository, a long patch history, or a Docker socket on macOS 27.** Three user reports (#3255, #3248) each stopped a run on a normal repo.

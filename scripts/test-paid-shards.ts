@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * test-paid-shards — enumerate, shard, plan and run the paid (gate/periodic/marathon) tiers.
  *

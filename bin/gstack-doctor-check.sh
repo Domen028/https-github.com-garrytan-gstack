@@ -213,7 +213,7 @@ _dc_check_browser() {
     out=$(cd "$ROOT" && { command -v timeout >/dev/null 2>&1 && timeout 90 node -e "$script" </dev/null 2>&1 || node -e "$script" </dev/null 2>&1; }); rc=$?
   elif command -v bun >/dev/null 2>&1; then
     engine=bun
-    out=$(cd "$ROOT" && bun -e "$script" </dev/null 2>&1); rc=$?
+    out=$(cd "$ROOT" && bun --no-env-file --config=/dev/null -e "$script" </dev/null 2>&1); rc=$?
   else
     _dc_row FAIL browser "neither node nor bun is on PATH to launch Chromium" "install Node.js (https://nodejs.org) or Bun, then $fix" BROWSER_UNAVAILABLE
     return
@@ -329,7 +329,7 @@ _dc_check_pins() {
     return
   fi
   node=$(node --version </dev/null 2>/dev/null | clamp 'v0-9.' 20); node="${node#v}"
-  out=$(bun "$BIN/gstack-runtime-pins.ts" --project "$project" ${_dc_bun:+--bun "$_dc_bun"} ${node:+--node "$node"} </dev/null 2>&1); rc=$?
+  out=$(bun --no-env-file --config=/dev/null "$BIN/gstack-runtime-pins.ts" --project "$project" ${_dc_bun:+--bun "$_dc_bun"} ${node:+--node "$node"} </dev/null 2>&1); rc=$?
   verdict=$(printf '%s\n' "$out" | sed -n 's/^PINS_VERDICT: //p' | tail -1 | clamp 'a-z' 8)
   summary=$(printf '%s\n' "$out" | sed -n 's/^PIN_SUMMARY: //p' | tr '\n' '|' | sed 's/|$//; s/|/; /g')
   case "$verdict" in
@@ -357,7 +357,7 @@ _dc_check_pins() {
             fi
           fi
           if [ -n "$_dc_ln_dir" ] && [ "$_dc_ln_ver" != "$_dc_bun" ] \
-             && bun "$BIN/gstack-runtime-pins.ts" --project "$project" --bun "$_dc_ln_ver" ${node:+--node "$node"} </dev/null 2>/dev/null | grep -q '^PINS_VERDICT: pass'; then
+             && bun --no-env-file --config=/dev/null "$BIN/gstack-runtime-pins.ts" --project "$project" --bun "$_dc_ln_ver" ${node:+--node "$node"} </dev/null 2>/dev/null | grep -q '^PINS_VERDICT: pass'; then
             note="; bun $_dc_ln_ver found at $_dc_ln_dir (not on PATH) satisfies them" fix="$_dc_ln_fix"
           fi
           _dc_row FAIL pins "$failline$note" "$fix" PROJECT_PIN_MISMATCH ;;
