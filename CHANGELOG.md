@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+**/autoplan no longer stops a healthy run with a false "event order" or "init" denial when Claude Code is slow to write its session journal.** Daily flaky-fix pass, group 5 (other paid cases): the same pass clarifies how the office-hours reviewer recovers from a seal error and fixes two plan-review floor harness gaps in reading cropped permission menus.
+
+### Fixed
+- **/autoplan publication guard (`autoplan/bin/phase-publication-hook.ts`).** If you ran /autoplan on Claude Code 2.1.292, the first Phase 1 step could be blocked with "The native parent event order is unavailable or inconsistent" (code `event_order`) or "needs its own successful init" (code `init_own`), even though the init had already run. Claude Code can run the guard's hook before it writes that turn's earlier steps to the session journal, so the guard judged a journal that did not yet show them. The guard now keeps reading inside its existing 2-second window while the journal shows no step yet, or nothing since your latest message. If Claude Code still has not written it, a journal with no steps lets the call proceed with the existing "unverified" warning (`journal_lag`). A journal that ends at your message gets the normal check, so a run that really skipped init is still denied. Seen on PR gate 39333263804 (`autoplan-guard-pty`, attempt 1).
+- **Office-hours spec reviewer (`lib/office-hours-review.ts`).** The reviewer prompt's "Do not use Edit" sat in the sentence about not changing the design, so a reviewer could patch its own verdict file with Edit after a seal error. The prompt now forbids Edit on every file, the verdict file included, and says to Write the complete corrected JSON to the same path and run the seal command again.
+
+### Tests
+- **Plan-review floor harness (`test/helpers/plan-count-file-permission.ts`).** A cropped owned plan-file Edit menu whose top row is the cwd-relative file row (a bare basename for a file in the working directory) now binds to its pending Edit. Before, only an absolute or `./` row was accepted, so `plan-ceo-finding-floor` sat on the menu until its 600 s timeout (PR gate 39293281037, attempt 1). The row must name the menu's own file and still resolve to the owned path.
+- **Same harness, quote guard.** The guard that keeps a quoted AskUserQuestion from passing as a permission menu matched any row that began with whitespace and `>`, including a soft-wrapped preview row that continued a table cell with `>activation->paid)`. It now matches a quote or fence only within four columns. Wrapped continuations start at five columns or more, and every preview row is still bound to the owned file's bytes. This stalled focused trial t3 on its owned Create menu (`permission_unanswered` at 92 s).
+- `test/autoplan-publication-payload.test.ts` replays the captured journal shape (slash turn and meta skill body, no public event). Flushed inside the window, it gets the normal verdict; never flushed, it is `journal_lag`. Negative controls: a late flush that shows an unpublished phase is still `publication_missing`, an `/autoplan` turn whose init never appears is still `init_own`, and the evaluation denies empty, foreign-session and out-of-order events as `event_order`. Without the fix, four of these fail with `event_order` and `init_own`.
+- `test/plan-edit-cropped-permission.test.ts` adds the captured gate viewport as fixture case `ci-39293281037-a1` (Edit input reconstructed from its diff rows, as for t07 and t08). It is granted once from its own PreToolUse input. Negative controls: a foreign directory, a foreign basename, a numbered diff row, a changed diff row and an unwitnessed Edit are refused.
+- `test/plan-create-prepublication.test.ts` adds trial t3's viewport as `test/fixtures/plan-ceo-floor-create-quote-wrap.json`. It is granted once from its own PreToolUse Write input. Negative controls: a quoted row, a fence and a checkbox above the menu, and a changed continuation row, are refused.
+- `test/office-hours-review.test.ts` pins the reviewer's seal-error recovery. `test/office-hours-completion.test.ts` checks that the validator accepts a seal error recovered by a complete re-Write and rejects the same recovery done with Edit.
+- Gate integrity: no threshold, trial count, case kind, quarantine or budget changed.
+
+### Gate integrity
+
 ## [1.91.165.0] - 2026-10-20
 
 **The Version Gate accepts an unstamped READY head under merge trains.** Under the train policy a lane's head keeps VERSION, package.json and the agents digest at main's version and writes its CHANGELOG entry under `[Unreleased]`. The gate still demanded a bump, so every unstamped PR showed "VERSION not bumped", and `gstack-ship-queue ready` refused it with `QUEUE_NOT_READY` (#3320, #3321). That blocked every train. Plan GSTA-49, S1 for the queue.

@@ -248,8 +248,8 @@ Verdict: ${verdictPath}
 
 Use only Read, Write, and the one Bash seal command for this review. Read the design at ${JSON.stringify(document)} with Read and ${previous
     ? `perform a delta re-review against the preceding verdict and the exact design changes captured below.`
-    : 'review all 5 dimensions independently, including new defects.'} Do not use Edit, and do not change the design.
-Use Write to save your complete verdict as JSON to ${JSON.stringify(verdictPath)}. Then run the \`Seal:\` command from your dispatch message with Bash, exactly as given; it validates the saved file and prints one receipt line. If it reports an error, correct the saved JSON with Write and run the same command again. Use Bash for nothing else.
+    : 'review all 5 dimensions independently, including new defects.'} Never use Edit on any file, your verdict file included, and do not change the design.
+Use Write to save your complete verdict as JSON to ${JSON.stringify(verdictPath)}. Then run the \`Seal:\` command from your dispatch message with Bash, exactly as given; it validates the saved file and prints one receipt line. If it reports an error, Write the complete corrected JSON to the same path (never Edit, even for a one-field fix) and run the same command again. Use Bash for nothing else.
 Return only that printed \`OFFICE_HOURS_VERDICT round=${round} sha256=<hash> path=<verdict path>\` line, unchanged, as your entire response: no JSON, Markdown fences, or prose. The parent verifies the receipt against the saved bytes.
 The saved JSON is your sole findings inventory: include every unresolved problem and necessary remedy, including minor findings that a short conclusion might omit.
 Use one finding per distinct obligation. An exact duplicate shares a finding; a shared component does not combine separate decisions, behavior, or effort.
