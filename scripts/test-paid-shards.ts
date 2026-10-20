@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * test-paid-shards — enumerate, shard, plan and run the paid (gate/periodic/marathon) tiers.
  *
@@ -73,9 +73,11 @@ import { readSessionLedger, type SessionLedgerRow } from '../test/helpers/sessio
 import { preflightAnthropicApi } from '../test/helpers/anthropic-preflight';
 import { e2eReuseLaneProblem, prepareE2EShardReuse, selectPlanReceipts } from './e2e-shard-reuse';
 import { E2E_TOUCHFILES, E2E_TIERS } from '../test/helpers/touchfiles';
+import { resolveEvalHost } from '../test/helpers/e2e-hosts';
 import { scopeCodexAccess, shardFile, shardCaseId, shardTrial, trialShardKey, type CaseTrialPlan, caseTrialPlan, excludedCasesNamePattern, caseTestNamePattern, expandCaseShards, expandTrialShards, fileCaseRegistration, partitionCaseExclusions } from './lib/paid-cases';
 import { retriesForFiles, trialPanelKey, sliceExecutionOrder, buildRunManifest, parseRunManifest, type SliceResult, sliceExitCode, guardTrialRecords, formatSlicePlan, formatCapacityPreflight, sliceDeadlineMs } from './lib/paid-plan';
 import { caseSelection, runCaseDiagnosis, formatPanelLine, runPaidReport } from './lib/paid-report';
+import { planRerun } from './lib/paid-rerun';
 import {
   DEFAULT_JOBS, DEFAULT_MAX_FILES_PER_SHARD, DEFAULT_SHARD_TIMEOUT_MS, DEFAULT_TIER, DEFAULT_WITHIN_SHARD_CONCURRENCY, OVERLAY_MAX_ACTIVE_SHARDS,
   PAID_LANE_POLICY, PAID_TIERS, ROOT, SLICE_JOB_STARTED_AT_ENV, SLICE_UPLOAD_RESERVE_MS, isOverlayTestFile,
@@ -96,6 +98,7 @@ export * from './lib/paid-select';
 export * from './lib/paid-cases';
 export * from './lib/paid-plan';
 export * from './lib/paid-report';
+export * from './lib/paid-rerun';
 
 type TrialEvidence = { records: any[]; contract: string | null; sessions?: SessionLedgerRow[] };
 
@@ -721,6 +724,8 @@ type CliOptions = {
   reportDir: string | null;
   /** Report mode: merge executed shard wall times into the duration seed. */
   writeDurations: boolean;
+  /** With --report: plan this attempt's rule-16 rerun into this directory instead of reporting. */
+  rerunPlanDir: string | null;
   /** Planner: the workflow matrix cap, for the capacity preflight's wave count. */
   maxParallel: number | null;
   /** Local diagnosis: run one case through the panel runner CI uses (never read by CI). */
@@ -763,6 +768,7 @@ CI modes (the eval workflows):
   --emit-plan PATH (--slices K | --slice-budget SECS --jobs N) [--skip-judges] [--max-parallel N]
   --plan PATH --slice I           execute one slice of a manifest
   --report DIR [--write-durations]  reconcile slice results against the manifest
+  --report DIR --rerun-plan OUT   plan this attempt's one rule-16 rerun of its failed cases (scripts/lib/paid-rerun.ts)
 
 Background runs and CI dispatch: bun run eval:bg:<pr|gate|periodic|release> (scripts/eval-bg.ts --help).`;
 
@@ -794,6 +800,7 @@ export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process
     sliceIndex: null,
     reportDir: null,
     writeDurations: false,
+    rerunPlanDir: null,
     maxParallel: null,
     caseId: null,
     trials: null,
@@ -821,6 +828,7 @@ export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process
     '--slice': (next) => { options.sliceIndex = parsePositiveInt(next(), '--slice'); },
     '--report': pathValue('--report needs a directory', (value) => { options.reportDir = value; }),
     '--write-durations': () => { options.writeDurations = true; },
+    '--rerun-plan': pathValue('--rerun-plan needs a directory', (value) => { options.rerunPlanDir = value; }),
     '--max-parallel': (next) => { options.maxParallel = parsePositiveInt(next(), '--max-parallel'); },
     '--case': (next) => {
       const value = next();
@@ -830,6 +838,7 @@ export function parseCliOptions(argv: string[], env: NodeJS.ProcessEnv = process
     '--trials': (next) => { options.trials = parsePositiveInt(next(), '--trials'); },
   }, PAID_USAGE);
   if (options.writeDurations && !options.reportDir) throw new Error('--write-durations requires --report');
+  if (options.rerunPlanDir && (!options.reportDir || options.writeDurations)) throw new Error('--rerun-plan requires --report and writes no durations');
   if (options.trials !== null && options.caseId === null) throw new Error('--trials requires --case');
   if (options.caseId !== null && (options.emitPlanPath || options.planPath || options.reportDir || options.sliceIndex !== null)) {
     throw new Error('--case is local diagnosis; it cannot combine with --emit-plan, --plan/--slice or --report');
@@ -879,6 +888,12 @@ async function main(): Promise<number> {
 
   // ── Report mode: reconcile slice artifacts against the manifest. Fail-closed:
   // a slice whose artifact never landed is a FAILURE, not an absence.
+  if (options.reportDir && options.rerunPlanDir) {
+    const attempt = Number(process.env.GITHUB_RUN_ATTEMPT);
+    const { lines } = planRerun(options.reportDir, Number.isSafeInteger(attempt) && attempt > 0 ? attempt : 1, options.rerunPlanDir);
+    for (const line of lines) console.log(`- ${line}`);
+    return 0;
+  }
   if (options.reportDir) return runPaidReport(options.reportDir, { writeDurations: options.writeDurations });
 
   if (options.caseId && options.listOnly) {
@@ -908,6 +923,9 @@ async function main(): Promise<number> {
     const manifest = parseRunManifest(fs.readFileSync(options.planPath, 'utf-8'));
     if (manifest.tier !== options.tier) {
       throw new Error(`manifest tier ${manifest.tier} != requested tier ${options.tier} — refusing a cross-tier run`);
+    }
+    if ((manifest.host ?? 'claude') !== resolveEvalHost()) {
+      throw new Error(`manifest host ${manifest.host ?? 'claude'} != EVALS_HOST ${resolveEvalHost()} — refusing a cross-host run`);
     }
     const profile = manifest.profile ?? 'full';
     if (options.profileExplicit && options.profile !== profile) throw new Error(`manifest profile ${profile} != requested profile ${options.profile}`);
@@ -956,6 +974,7 @@ async function main(): Promise<number> {
         startedAt,
         finishedAt: Date.now(),
         ...(checkpoint ? { checkpoint: true as const } : {}),
+        ...(manifest.rerun ? { rerun: true as const } : {}),
         outcomes: outcomes.map(({ files, status, exitCode, elapsedMs, executedTests, skippedTests, budget, reused, runnerError, trial, inputKey, sliceDeadline }) =>
           ({ files, status, exitCode, elapsedMs, executedTests, skippedTests, ...(budget ? { budget } : {}), ...(reused ? { reused } : {}),
             ...(runnerError !== undefined ? { runnerError } : {}), ...(trial ? { trial } : {}), ...(inputKey ? { inputKey } : {}),
@@ -985,7 +1004,8 @@ async function main(): Promise<number> {
           expectedCases: Object.fromEntries(mine.map(entry => [entry.file, expectedPrCaseCount(entry.file, manifest.selection!, entry.excludeCases)])),
           casePatterns: Object.fromEntries(mine.map(entry => [entry.file, prProfileTestNamePattern(entry.file, manifest.selection!, entry.excludeCases)])),
           expectedCaseIds: Object.fromEntries(mine.map(entry => [entry.file, prProfileShardIds(entry.file, manifest.selection!, entry.excludeCases)])),
-          reuseFor: e2eReuseLaneProblem(process.env, manifest.prCoverage.mode) !== null ? undefined : (files, env, budget) => {
+          // A rule-16 rerun executes fresh: a receipt would replay the verdict it is rerunning.
+          reuseFor: manifest.rerun || e2eReuseLaneProblem(process.env, manifest.prCoverage.mode) !== null ? undefined : (files, env, budget) => {
             const key = files[0]!;
             const file = shardFile(key);
             if (files.length !== 1 || !/^test\/skill-e2e-/.test(file)) return null;
@@ -1023,7 +1043,7 @@ async function main(): Promise<number> {
       const t = outcome.trial!;
       console.log(`  trial ${t.case} t${t.trial}/${t.panel.n}: ${t.outcome ?? `NO RECORD (${t.harness})`}${t.failure_class ? ` [${t.failure_class}]` : ''}`);
     }
-    return sliceExitCode(guarded);
+    return sliceExitCode(guarded, { caseVerdicts: manifest.tier === 'gate' });
   }
 
   if (options.listOnly && options.sliceBudgetMs !== null) {

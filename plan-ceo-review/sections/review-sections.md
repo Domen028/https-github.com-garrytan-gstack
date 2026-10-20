@@ -358,8 +358,7 @@ review. The user turns this off only by asking explicitly
 
 ```bash
 
-_OUTSIDE_CFG=$("$HOME/.claude/skills/gstack/bin/gstack-config" get codex_reviews 2>/dev/null || echo enabled)
-if [ "$_OUTSIDE_CFG" = disabled ]; then
+if ! _OUTSIDE_CFG=$("$HOME/.claude/skills/gstack/bin/gstack-config" get --stored codex_reviews) || [ "$_OUTSIDE_CFG" = disabled ]; then
   echo 'CODEX_MODE: disabled'
 elif ( # GSTACK_ACTIVE_HOST names the harness, never the model.
 if { [ -n "${CODEX_THREAD_ID:-}" ] || [ -n "${CODEX_SANDBOX:-}" ] || [ "${GSTACK_ACTIVE_HOST:-}" = codex ]; }; then
@@ -378,7 +377,7 @@ else
 fi
 ```
 
-The historical `CODEX_MODE` variable describes **Codex** availability here. The invocation checks auth and the [policy](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md) plan-review model. Missing/broken CLI: install or repair Codex; authentication failure: run `codex login`. Disabled ends this entire extra review step, including the native fallback; record outside_status: disabled and continue after the section. Disabled is not an unavailable provider and never triggers a replacement reviewer. Provider failure is missing outside coverage; follow the caller’s existing fallback only when reviews are enabled. Never substitute another external provider.
+The historical `CODEX_MODE` variable describes **Codex** availability here. The invocation checks auth and the [policy](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md) plan-review model. Missing/broken CLI: install or repair Codex; authentication failure: run `codex login`. Disabled ends this entire extra review step (so does a send's `consent_missing` line), including the native fallback; record outside_status: disabled and continue after the section. Disabled is not an unavailable provider and never triggers a replacement reviewer. Provider failure is missing outside coverage; follow the caller’s existing fallback only when reviews are enabled. Never substitute another external provider.
 
 **Outcome routing:** Follow the row for the current result. After an invocation, route its result
 again. Leave only after recording disabled/unavailable coverage, or after
@@ -483,12 +482,12 @@ _CODEX_SEL=$(echo "$_CODEX_OUT" | sed -n 's/^CODEX_SEL: //p')
 _CODEX_SANDBOX_MODE=$(echo "$_CODEX_OUT" | sed -n 's/^CODEX_SANDBOX: //p')
 "$_CODEX_PROBE" show-first-use-notice
 _OUTSIDE_EXIT=0
-"$_CODEX_PROBE" run-with-timeout 300 codex exec - -C "$_REPO_ROOT" -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'model_reasoning_effort="high"' -c 'web_search="cached"' --json -o "$_OUTSIDE_TMP/text" <"$_OUTSIDE_INPUT" >"$_OUTSIDE_TMP/events" 2>"$_OUTSIDE_TMP/stderr" || _OUTSIDE_EXIT=$?
+"$_CODEX_PROBE" run-with-timeout --effort high 300 codex exec - -C "$_REPO_ROOT" -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'web_search="cached"' --json -o "$_OUTSIDE_TMP/text" <"$_OUTSIDE_INPUT" >"$_OUTSIDE_TMP/events" 2>"$_OUTSIDE_TMP/stderr" || _OUTSIDE_EXIT=$?
 cat "$_OUTSIDE_TMP/text" 2>/dev/null || tail -n 20 "$_OUTSIDE_TMP/events"
 
 cat "$_OUTSIDE_TMP/stderr" >&2 || { [ "$_OUTSIDE_EXIT" -ne 0 ] || _OUTSIDE_EXIT=1; }
 _OUTSIDE_RC=0
-bun "$HOME/.claude/skills/gstack/lib/outside-review-result.ts" --label 'Codex outside review' --exit "$_OUTSIDE_EXIT" --stderr "$_OUTSIDE_TMP/stderr" --events "$_OUTSIDE_TMP/events" review "$_OUTSIDE_TMP/text" || _OUTSIDE_RC=$?
+bun --no-env-file --config=/dev/null "$HOME/.claude/skills/gstack/lib/outside-review-result.ts" --label 'Codex outside review' --exit "$_OUTSIDE_EXIT" --stderr "$_OUTSIDE_TMP/stderr" --events "$_OUTSIDE_TMP/events" review "$_OUTSIDE_TMP/text" || _OUTSIDE_RC=$?
 case "$_OUTSIDE_RC" in
   0|3) ;;
   4) echo 'OUTSIDE_STATUS: unverified provider=codex host=claude'; exit 4 ;;
@@ -521,54 +520,53 @@ Other preflight failures retain their printed diagnosis, including harness misma
 These failures do not block the review; they use the bounded fallback below.
 
 Enter only when **Outcome routing** selects fallback; do not restart the outside
-invocation after its failure. A native result never counts as outside coverage.
+invocation after its failure.
 Immediately before dispatch, recheck whether reviews are enabled. If the mode is
 `CODEX_MODE: disabled`, return to **Record the disabled outcome** without
 dispatching. Otherwise continue with the same prepared prompt.
 
 
-**Bounded outside-voice wait — one five-minute wait plus dispatch/cancellation overhead:**
+**Bounded outside-voice wait — one five-minute host timer:**
 
-Before dispatch, verify TaskOutput and TaskStop in this session's tool definitions,
-and Plan in Agent's declared subagent types. Do not launch a task to test availability.
-If any capability is missing or undeclared, take the unavailable path below.
+Before dispatch, check this session's tools for TaskStop, Bash's `run_in_background`
+and Plan among Agent's subagent types. Do not launch a task to test availability;
+if any is missing, take the unavailable path without launching.
 Use Plan, which denies native Edit, Write and NotebookEdit tools. Do not set a model
 override; keep the inherited model. This is not a filesystem sandbox: the review-only
-prompt also forbids mutations through other tools. The subagent has fresh context
-but is the same harness; model identity stays unknown unless the runtime reports it.
-A native result never supplies outside coverage.
+prompt also forbids mutations through other tools. A native result never supplies
+outside coverage. This is the one exception to foreground dispatch here.
+Execute the four steps once:
 
-This is the single bounded-wait exception to foreground dispatch for this outside
-voice. Execute the four steps once:
-
-1. Dispatch via the Agent tool with `subagent_type: "Plan"` and
-   `run_in_background: true`. Subagent prompt: same plan review prompt as above.
-   Keep the returned `agentId`; do not guess an ID or launch a second task.
-   If dispatch fails without an ID, take the unavailable path without guessing one.
-2. Immediately call TaskOutput with that exact ID as `task_id`, `block: true`,
-   and `timeout: 300000`. Make one wait only; do not poll or renew the budget.
-3. Check TaskOutput's outer fields: `<retrieval_status>` must be `success`,
-   `<task_id>` must match, `<task_type>` must be `local_agent`, `<status>`
-   must be `completed`, `<output>` must be nonempty, and there must be no outer
-   `<error>`. Accept findings only if that output is an identifiable complete
+1. Start the timer: Bash `command: "sleep 300"`, `run_in_background: true`,
+   `timeout: 300000`. Dispatch via the Agent tool with `subagent_type: "Plan"`
+   and `run_in_background: true` where offered, with the same plan review prompt.
+   Keep the returned agent ID; do not guess an ID or launch a second task.
+2. End your turn and wait for task notifications. Make one wait only: do not poll,
+   sleep, Read either output file or renew the timer.
+3. Only the agent's `<task-notification>` arriving before the timer's counts:
+   `<task-id>` must match the agent ID, `<status>` must be `completed`, `<summary>`
+   must say it finished ("is waiting on its own background work": keep waiting; a
+   turn limit: partial) and `<result>` must be nonempty; a "[Subagent hand-back]"
+   header only frames it. Accept findings only if it is an identifiable complete
    final reviewer report. Reject raw or in-progress transcripts; do not extract
    finding fragments from them. Terminal status or warning markers alone do not
-   establish report completeness. If any check fails or the report cannot be identified, follow step 4. Otherwise present it under an `OUTSIDE VOICE (Claude subagent):`
+   establish report completeness. If any check fails or the report cannot be identified, follow step 4. Otherwise call TaskStop with the timer's ID, present it under an `OUTSIDE VOICE (Claude subagent):`
    header, then continue to **Integrate reviewer findings**.
-4. On any noncompletion (timeout, error, missing/mismatched result, failed/killed
-   status, raw transcript or empty report), call TaskStop with the same ID as
-   `task_id`. TaskOutput timeout does not stop the agent. Record the stop result;
-   if cancellation fails, say cancellation is unconfirmed. If TaskStop reports the
-   task already completed after the timeout, still give no late-result credit.
+4. Otherwise (timer first, no ID, failed or stopped status, partial or empty result,
+   or Agent returns a report directly: no enforced deadline, so no credit), call
+   TaskStop with the same ID as the agent, and call TaskStop with the timer's ID if it runs.
+   Record each stop result; if one fails, cancellation is unconfirmed.
+   For a completion after the timer or TaskStop, still give no late-result credit.
 
-**Unavailable path:** "Outside voice unavailable. Continuing to planning decisions and Approval readiness."
+**Unavailable path:** "Outside voice unavailable: <cause>. Fix: <fix>. Continuing to planning decisions and Approval readiness. (OUTSIDE_VOICE_UNAVAILABLE)"
+The cause adds to the provider's diagnosis: Plan agent type not offered, TaskStop not offered,
+background tasks unavailable (fix: Claude Code 2.1.277+, background tasks on), no complete report within five minutes, or a failed status.
 Do not retry with a general-purpose agent. Report missing outside-voice coverage.
 Ignore partial or late results for critique, agreement, clean status or coverage.
 Skip Integrate reviewer findings and Cross-model tension. Persist an unavailable result using the command below
-with STATUS = "unavailable", SOURCE = "none", OUTSIDE_STATUS = "unavailable";
-then continue directly to the remaining planning decisions and Approval readiness. The storage policy still applies.
-Do not record a clean review when no reviewer completed within the accepted wait.
-
+with STATUS = "unavailable", SOURCE = "none", OUTSIDE_STATUS = "unavailable", adding `"unavailable_reason":"<cause>"`;
+then continue directly to the remaining planning decisions and Approval readiness.
+Do not record a clean review when no reviewer completed.
 
 
 **Integrate reviewer findings:**
@@ -1058,9 +1056,8 @@ Historical source "claude" is a native subagent; "claude-code" is the external C
 Do not infer old providers or unknown models from today's harness. A native result
 does not fill missing, disabled or skipped outside coverage.
 
-**Source attribution:** Append a recorded `via` to the suffix, for example
-"CLEAR (PLAN via /autoplan)" or "CLEAR (DIFF via /ship)". Without `via`, keep
-"CLEAR (PLAN)" or "CLEAR (DIFF)". Below the dashboard, group `autoplan-voices`
+**Source attribution:** Append a recorded `via` to the suffix ("CLEAR (PLAN via
+/autoplan)"); without one, keep "CLEAR (PLAN)" or "CLEAR (DIFF)". Below the dashboard, group `autoplan-voices`
 and `design-outside-voices` by workflow run and phase. Show each phase's provider
 and outside_status; retain partial coverage. These details do not clear Eng Review.
 
@@ -1069,8 +1066,7 @@ and outside_status; retain partial coverage. These details do not clear Eng Revi
 - **Content-first rule:** For `review`, `adversarial-review`, `codex-review`,
   ship-stage reviews and `design-review-lite`, use `review_freshness.status`
   and show its `reason`. CURRENT means a completed clean review whose start and
-  end content fingerprints equal the current `---WTREE---` fingerprint. This
-  fingerprint covers working-tree content, not just the commit.
+  end content fingerprints equal the current `---WTREE---` fingerprint.
   STALE or UNVERIFIED cannot clear Eng Review. Missing `review_freshness`,
   including legacy log-only records, means UNVERIFIED. Never fall back to HEAD
   equality or commit distance for diff evidence, even at zero commits.
@@ -1079,12 +1075,11 @@ and outside_status; retain partial coverage. These details do not clear Eng Revi
 - **Plan records** (plan-ceo-review, plan-eng-review, plan-design-review and
   codex-plan-review) use the 7-day window, not the working-tree fingerprint.
   If `plan_sha256` is present, you may compare the plan file and report a mismatch.
-  For plan records only, compare the recorded commit with `---HEAD---`.
-  If different, run `git rev-list --count STORED_COMMIT..HEAD` and report
+  Compare the recorded commit with `---HEAD---`; if different, run
+  `git rev-list --count STORED_COMMIT..HEAD` and report
   "Note: {skill} review from {date} may be stale — {N} commits since review".
-  A failed command means UNKNOWN, treated as stale. Without commit tracking,
-  retain the note to consider re-running. Omit staleness notes when all reviews
-  are current.
+  A failed command means UNKNOWN, treated as stale; without commit tracking,
+  suggest a re-run. Omit notes when all reviews are current.
 
 **3. Choose the historical verdict.** CLEARED requires the selected Eng Review
 to be `clean`, within 7 days and fresh under step 2. Otherwise report NOT CLEARED

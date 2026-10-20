@@ -30,7 +30,8 @@ it, so `headless` keeps its BLOCK semantics.
   sync skipped (unattended session)` on stderr), and `gstack-skill-end` drains
   nothing. Inherited enabled settings and pending queue work are left for the
   next human session. The upgrade offer becomes one line at skill end, read from
-  the local cache: `UPGRADE_AVAILABLE: <version>; run /gstack-upgrade`.
+  the local cache: `UPGRADE_AVAILABLE: <version>; run /gstack-upgrade` (`<version>+<n> (main at <sha>)` when
+  main moved <n> commits past the checkout without a new version).
 - **Questions decide themselves, gates do not.** A question with a
   `(recommended)` option takes it and appends the choice to `decisions.jsonl`
   with `kind: "auto"`. A question with no recommendation, any consent, any
@@ -79,7 +80,7 @@ a `fix:` clause. Grep the code, not the prose.
 | File | Schema | Contents |
 |------|--------|----------|
 | `run.json` | `run` v1 | The manifest: `run` id, `status`, `required_phases`, each phase's `native` and `outside` outcome (`status`, `model`, `provider`), input `snapshot` hashes, `counts`, every artifact's `path` (relative to the run directory) and `sha256`, `session_kind`, `gate_rev`, `deviations`, `consumed_by`. |
-| `decisions.jsonl` | `decisions` v1 | One row per decision: `id` (`<run>-<label>`), `title`, `options`, `recommended`, `kind` (`auto`, `approval`, `user_challenge`), `status` (`pending`, `approved`, `overridden`, `rejected`), `gate_rev`, and once answered `chosen`, `answered_at`, `reply`. |
+| `decisions.jsonl` | `decisions` v1 | One row per decision: `id` (`<run>-<label>` at gate revision 1, `<run>-r<rev>-<label>` after a reopen, since labels restart at each gate), `title`, `options`, `recommended`, `kind` (`auto`, `approval`, `user_challenge`), `status` (`pending`, `approved`, `overridden`, `rejected`), `gate_rev`, and once answered `chosen`, `answered_at`, `reply`. |
 | `findings.jsonl` | `findings` v1 | One row per reviewer finding: `id`, `phase`, `voice` (`native`/`outside`), `model`, `severity`, `title`, `disposition`, `plan_items`, `native_counterpart` (string or null), `source`. Rows share the review-log row shape, so `gstack-review-log --findings` derives review status from this file. |
 | `tasks.jsonl` | `tasks` v2 | Implementation tasks with `id`, `title`, `status`, `depends_on`, `findings` (ids in `findings.jsonl`), `blocked_by`, `acceptance`, optional `pr`/`item`/`tier`. |
 | `timing.json` | `timing` v1 | Per-phase `started_at`, `ended_at`, `wall_s`, `outside_s`, `native_s`; `started_at` and `total_wall_s` for the run; the Phase 0 `estimate`. |
@@ -111,14 +112,14 @@ JSON Schema for any of `findings`, `decisions`, `tasks`, `timing`, `run`,
 3. **List what is pending.**
    ```bash
    jq -c 'select(.status=="pending")' <dir>/decisions.jsonl
-   gstack-gate render <dir>/gate.json          # the numbered list and reply grammar
+   gstack-gate render <dir>/gate.json --all    # the numbered list and reply grammar, every page
    ```
-4. **Answer the gate** by composing the reply grammar (`all`, `<id><option>`
-   tokens such as `d3b uc1a`, or `all except <tokens>`; bare yes/no is
-   rejected) and feeding it back with the gate revision you read:
+4. **Answer the gate** by composing the reply grammar (`rec`, `as-is`,
+   `<id><option>` tokens such as `d3b uc1a`, or `rec except <tokens>`; bare
+   yes/no is rejected) and feeding it back with the gate revision you read:
    ```bash
-   gstack-gate parse <dir>/gate.json --reply "all except d3b" --gate-rev 1 --json
-   gstack-gate decisions <dir>/gate.json --reply "all except d3b" --gate-rev 1 >> <dir>/decisions.jsonl
+   gstack-gate parse <dir>/gate.json --reply "rec except d3b" --gate-rev 1 --json
+   gstack-gate decisions <dir>/gate.json --reply "rec except d3b" --gate-rev 1 >> <dir>/decisions.jsonl
    ```
    A stale revision is `GATE_REV_STALE` and a reply with unparsed tokens is
    `GATE_REPLY_UNPARSED`; both exit `1` and write nothing.
@@ -138,17 +139,28 @@ On a host where the parent dispatches the reviewers itself (Capy, any
 orchestrator without a Claude Code harness), `bin/gstack-autoplan` is the
 explicit, durable state machine for the whole run. The parent never reads the
 review record; it runs a loop over two commands and reads the printed lines.
+A parent on any host reads `autoplan/DRIVER.md` (its path is printed as
+`DRIVER:` by `gstack-autoplan --help` and the first `next`) instead of
+autoplan/SKILL.md: the phase order, the artifact contract and the gate protocol
+in about a hundred lines, generated from the code.
 
 ```bash
 AP=bin/gstack-autoplan
-$AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--light] [--spend-cap <usd>]
+$AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--no-dx] [--light] [--spend-cap <usd>]
 #   PHASE: ceo snapshot=<sha> order=ceo,design,dx,eng
-#   Skipped sections: none (scope: ui=yes,dx=yes,source=detected; checklist=loaded)
-#   ATTEMPT: <run>-a1 phase=ceo voice=native  prompt=<dir>/ceo-native-prompt.md  result=<dir>/ceo-native.md  model_family=...
-#   ATTEMPT: <run>-a2 phase=ceo voice=outside prompt=<dir>/ceo-outside-prompt.md result=<dir>/ceo-outside.md model_family=differs from the native reviewer
+#   SCOPE: ui=yes (...) dx=yes (detected: ...) source=ui:detected,dx:detected
+#   DRIVER: <root>/autoplan/DRIVER.md
+#   Skipped sections: none (scope: ui=yes,dx=yes,source=ui:detected,dx:detected; checklist=loaded)
+#   ATTEMPT: <run>-a1 phase=ceo voice=native  prompt=<dir>/ceo-native-prompt.md  result=<dir>/ceo-native.a1.md  model_family=...
+#   ATTEMPT: <run>-a2 phase=ceo voice=outside prompt=<dir>/ceo-outside-prompt.md result=<dir>/ceo-outside.a2.md model_family=differs from the native reviewer
 #   SPEND: spent=0.00 reserved=0.00 unknown=0(0.00) worst_case=0.00 cap=none
 #   GSTACK_RESULT: skill=autoplan status=awaiting_result run=<dir>
 ```
+
+The first `next` prints `SCOPE: … source=ui:<flag|marker|detected>,dx:<…>`
+and, when CLI flags differ from the plan's marker, `SCOPE_PIN: add <!--
+gstack-autoplan-scope: … --> as the first line of <file>`; gstack never writes
+the plan.
 
 1. **Dispatch each `ATTEMPT:`.** The native voice is a subagent on the parent's
    own model given the prompt file; the outside voice is a subagent on another
@@ -162,41 +174,83 @@ $AP next --out <dir> --plan <plan.md> [--ui|--no-ui] [--developer-tool] [--light
    `release --attempt <id>` returns its reservation).
 2. **Submit each result exactly once.**
    ```bash
-   $AP submit --out <dir> --phase ceo --voice native  --result <dir>/ceo-native.md  --model <id> --attempt <run>-a1
-   $AP submit --out <dir> --phase ceo --voice outside --result <dir>/ceo-outside.md --model <id> --attempt <run>-a2 [--runner host-subagent] [--usage-usd <n>]
+   $AP submit --out <dir> --phase ceo --voice native  --result <dir>/ceo-native.a1.md  --model <id> --attempt <run>-a1
+   $AP submit --out <dir> --phase ceo --voice outside --result <dir>/ceo-outside.a2.md --model <id> --attempt <run>-a2 [--runner host-subagent (default)] [--usage-usd <n>]
    #   BOUND: <run>-a1 phase=ceo voice=native model=<id> findings=7 sha256=<result hash prefix>
    #   PHASE_CLOSED: ceo confirmed=4 disagree=1 new=2 native_only=1 coverage=both
    ```
+   Submit seals the bytes it bound as `<phase>-<voice>.<attempt>.bound.md`
+   (read-only); a later write to the reviewer's file changes nothing bound,
+   and another attempt's result file is refused (`ATTEMPT_MISMATCH`).
    Binding checks the receipt line against the phase snapshot
    (`RESULT_RECEIPT_MISSING`), parses the canonical findings fence
    (`RESULT_FINDINGS_MISSING`), refuses an outside model from the native
    family (`MODEL_FAMILY_CONFLICT`), and refuses a second bind of the same
    attempt or a bind while the phase is not awaiting it (`ATTEMPT_MISMATCH`,
    `PHASE_NOT_AWAITING`, exit 3). Both voices in closes the phase: the
-   reconciliation (`confirmed` / `disagree` / `new` per outside finding, with
+   reconciliation (`confirmed` / `unverified` / `disagree` / `new` per outside finding, with
    disagreement and resolution kept separate) is written to
-   `<phase>-consensus.{json,md}`, and the Eng prompt refuses to open without
-   every closed prior phase's consensus (`CONSENSUS_MISSING`).
+   `<phase>-consensus.{json,md}`, and every later phase's prompts (DX, design
+   and Eng alike) carry each closed predecessor's consensus as data; a phase
+   refuses to open without one (`CONSENSUS_MISSING`).
 3. **Loop `next` until `status=gate_pending`.** Eng always runs last. The gate
    (`gate.json`, `gate_rev`) lists user challenges as approval items,
    disagreements as auto items and `p1` plan approval; nothing is approved.
 4. **Answer the gate** with the reply grammar and the revision you read:
    ```bash
-   $AP answer --out <dir> --gate-rev 1 --reply "all"              # APPROVED: status=complete, no new paid phase
-   $AP answer --out <dir> --gate-rev 1 --reply "all except d1b"   # REOPENED: ceo,eng (Eng last); next continues the loop
+   $AP answer --out <dir> --gate-rev 1 --reply "rec" --by human            # every recommendation, plan changes included (APPLY: ...; amend_pending)
+   $AP answer --out <dir> --gate-rev 1 --reply "as-is" --by human          # APPROVED: keeps every direction, no new paid phase
+   $AP answer --out <dir> --gate-rev 1 --reply "rec except d1b" --by agent:<id> --owner-reply "<owner's words>"
    ```
+   `--by human` means the owner typed the tokens; `--by agent:<thread or id>`
+   means an agent relayed them, and then `--owner-reply` (or `-` for stdin,
+   `--owner-reply-file <path>`) stores the owner's words verbatim
+   (`OWNER_REPLY_REQUIRED`); owner words that parse to different choices are
+   refused (`GATE_OWNER_REPLY_MISMATCH`). An unattended run refuses an answer
+   without `--by` (`ANSWER_BY_REQUIRED`, exit 3) and records the value as
+   `answered_by` on every decision row and in the review record's gate line,
+   so a gate an agent closed is distinguishable from one the owner closed.
+   `gstack-autoplan recommend` changes one recommendation before relay; it
+   bumps the gate's `rec_rev`, and a later `rec` needs the `--rec-hash` from
+   the render the owner saw (`GATE_REC_STALE`).
+   A user challenge both voices raised on a confirmed finding (a title match,
+   not file:line proximity alone, which is `unverified`) with the same
+   `changes` value is recommended as `b` only with one shared proposal: a
+   `--reconcile` record naming it, or the same remedy from both voices.
+   Different or missing remedies keep `a`, and option b shows both verbatim
+   with the basis. `rec` (alias `all`) takes every recommendation, so it
+   accepts the items recommended `b`. Every accepted plan change prints
+   `APPLY: <decision id> <title> -> <chosen text>` and becomes a pending
+   amendment: `next` refuses with `PLAN_AMEND_PENDING` and `export` refuses a
+   `complete` run until `revise --incorporates` names it, or `revise --settle
+   <id>` settles a packaging or ordering change that needs no plan edit.
    A stale revision (`GATE_REV_STALE`, exit 3), bare `yes`/`no`, or a
    conflicting reply (`GATE_REPLY_UNPARSED`) writes nothing. A reply that
    leaves approval items pending records only the answered auto items and
-   keeps the gate. A non-recommended choice on a reviewed item reopens that
-   phase plus Eng, archives their bound files as `*.r<rev>.*`, and the next
-   gate is `gate_rev + 1`; `p1d` reopens every phase; `p1e` ends `incomplete`.
+   keeps the gate; a later reply never overwrites an earlier answer. An
+   accepted change reopens nothing at answer (status `amend_pending`); `revise`
+   reopens each phase whose reviewed plan changed plus Eng, archives their
+   prompts and consensus as `*.r<rev>.*` (sealed `*.bound.md` results stay in
+   place), and the next gate is `gate_rev + 1`; `p1d` reruns every phase on the
+   current plan; `p1e` ends `incomplete`.
 5. **Export and validate.** `$AP export --out <dir>` writes `plan.md` (with
    the `## URGENT, outside this plan` block first), `review-record.md`,
    `tasks.jsonl`, `decisions.jsonl`, `findings.jsonl`, `timing.json` and
    `run.json`; then `gstack-artifact validate <dir>/run.json` and the
    consumption steps above apply unchanged. `$AP status --out <dir>` and
-   `resume` work after the run directory moves (paths are re-rooted).
+   `resume` work after the run directory moves (paths are re-rooted; journal
+   paths are run-relative). With `GSTACK_AUTOPLAN_CHECKPOINT_DIR` set (on Capy,
+   `gstack-config set autoplan_checkpoint drive` defaults it to the private
+   project-user Drive folder; unset, the first `next` prints the export line),
+   a run at rest, after each bound voice and after each phase transition
+   publishes an immutable, hash-listed generation under
+   `<dir>/<run>/generations/` and switches `current.json` to it (the previous
+   generation is kept; a stale copy never replaces a newer one; a directory
+   overlapping the run is refused with `CHECKPOINT_OVERLAP`; a failure is a
+   `CHECKPOINT: failed` warning that leaves the command's exit code alone).
+   `$AP checkpoints --from <dir>` lists generations with their hash status, and
+   `$AP resume --out <new dir> --from <dir>/<run>` restores the newest valid
+   one after validating the staged run (`CHECKPOINT_INVALID`).
 
 Concurrency and recovery: every state write is a locked read-modify-write
 (`run.lock`; a second writer sees `RUN_LOCKED`), attempts are journaled to
@@ -219,7 +273,8 @@ Each prompt file ends with this contract; `submit` enforces it.
    object per line: `{"id":"F1","severity":"High","title":"...","file":"...","line":12,"fix":"..."}`
    inside a ```` ```gstack-findings ```` fence. `severity` is Critical | High |
    Medium | Low | Informational; `"user_challenge": true` marks a recommended
-   change to the plan's stated direction; `"urgent": true` with
+   change to the plan's stated direction and needs `"changes": "scope" |
+   "cost" | "direction"` (what accepting it changes); `"urgent": true` with
    `"suggested_owner"` marks a security or data-loss finding the plan does not
    own. An empty fence means no findings; a missing fence is refused.
 3. The whole result is written to the printed `result=` path.
@@ -240,6 +295,42 @@ by its runner. Result codes: `EXECUTION_UNKNOWN`, `RUN_LOCKED`,
 `RESULT_RECEIPT_MISSING`, `RESULT_FINDINGS_MISSING`, `MODEL_FAMILY_CONFLICT`,
 `SPEND_CAP_EXCEEDED`, `CONSENSUS_MISSING`, `OUTSIDE_RUNNER_UNAVAILABLE`
 (anchors in [troubleshooting.md](troubleshooting.md)).
+
+### Hand-run records, revised plans and admission
+
+- **Hand-run reviews.** `submit --record <file>` binds a review that did not
+  follow the RESULT FORMAT: the `gstack-findings` fence, one findings table
+  (Severity and Title columns), one severity-tagged list (`- [High] title`) or
+  a `No findings.` line. Without its `INPUT:` line it binds only with
+  `--attest "<reason>"` and `--attempt <id>` (receipt `attested`; refused after
+  a later `revise`), and `gstack-artifact validate` prints `attested=<n>`.
+  `--attempt` may be omitted when exactly one attempt is open.
+  `submit --voice outside --unavailable "<reason>"` (or `--failed`) closes the
+  phase `native_only` once native is bound; `next` and `resume` never
+  redispatch it.
+- **Revising the plan in the same run.** Edit the source plan, then
+  `$AP revise --out <dir> --plan <file> [--incorporates <decision id,...>]`.
+  Every phase whose reviewed Implementation-plan hash differs reopens (plus
+  Eng); newly in-scope phases are added; archives keep `.r<rev>` names with
+  `.v<k>` only on collision; a revise at `gate_pending` makes the next gate
+  `gate_rev + 1`. `--incorporates` discharges only the named amendments and
+  refuses an unchanged plan; `revise --out <dir> --withdraw <decision id>`
+  drops one as a journaled owner decision. `next` prints `PLAN_CHANGED` and
+  `answer` prints `PLAN_SOURCE_CHANGED` when the source plan moved since the
+  snapshot. A plan without both `## Implementation plan` and `## Review record`
+  refuses with `PLAN_SECTIONS_INVALID`; `next --scaffold` reviews a copy with
+  the missing heading added. `resume` completes an interrupted revise.
+- **Admission and upgrades.** `next`, `submit`, `answer`, `revise`, `export`
+  and `run` refuse on a Capy host (`GSTACK_CAPY=1`) without an ok install
+  verdict for this checkout, HEAD and workflow at `$GSTACK_INSTALL_VERDICT`
+  (`INSTALL_UNVERIFIED`), and in any unattended session when the running Bun
+  is below gstack's supported minimum (`RUNTIME_BELOW_MINIMUM`); the decision
+  is the same one `gstack-skill-start` makes (see Install admission);
+  `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` overrides and records a run deviation.
+  `status` and `resume` are never gated. A run directory written by an older
+  gstack prints `GSTACK_VERSION_CHANGED` once and moves forward (legacy
+  decision ids are renamed and journaled); one written by a newer gstack is
+  refused.
 
 ## Owner brief
 
@@ -265,6 +356,17 @@ lines whose decision is still pending stay and are reported as
 `DRAFT_DIRECTION_UNRESOLVED` (exit 1). `gstack-autoplan answer` runs the same
 rewrite when a reply completes the gate (journal event `draft_directions_closed`).
 
+## Lane done: pregate, the sealed guard and the handoff lines
+
+A lane under a coordinator runs `gstack-pregate run --allow-repo-commands` on
+its branch before it reports done (the unit tier on the changed files plus
+the repo's guards, [docs/pregate.md#guards](pregate.md#guards)). In a repo
+whose `.gstack/pregate.json` has a `sealed` key it runs `gstack-pregate sealed`
+before any push or PR creation, since a PR tool may not run local hooks. Its
+handoff carries, right after the `GSTACK_RESULT` line, the `gstack: ok|fail
+<rev>` line and then the `PREGATE:` line. The coordinator contract
+(`gstack-autoplan contract`) states the same rule word for word.
+
 ## Timing
 
 `/autoplan` prints `ESTIMATE: ...` at Phase 0 (`gstack-autoplan-timing
@@ -282,3 +384,16 @@ line, on an ephemeral state root.
 `/autoplan` run (the one that produced this wave's plan) and validates clean.
 `test/fixtures/multi-agent-wave/INCIDENTS.md` records what went wrong while it
 was produced by hand and which validator rule now catches each incident.
+
+## Install admission
+
+An unattended run, and a `GSTACK_SESSION_KIND=spawned` run with `GSTACK_CAPY=1`,
+starts only on a supported Bun and, on a Capy machine (`GSTACK_CAPY=1`, set by
+the installer's `GSTACK_LAUNCH` line), with a passing install verdict for this
+checkout, its HEAD and the workflow. Otherwise `gstack-skill-start` prints
+`INSTALL: fail runtime|verdict — <detail>; fix: <command> (<CODE>)` and
+`GSTACK_RESULT: skill=<s> status=refused run=-`, and exits 3; stop and run the
+fix. `GSTACK_ALLOW_UNSUPPORTED_RUNTIME=1` admits anyway (`INSTALL_VERDICT:
+overridden`), recorded as a deviation. TypeScript entrypoints use
+`checkInstallAdmission` from `lib/install-verdict.ts`; the Bash side is
+`bin/gstack-install-verdict.sh`. See [capy-install.md](capy-install.md#the-launch-line).

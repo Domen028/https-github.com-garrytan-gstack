@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { gitArgvIn } from './scratch-repo';
 import { mergeChangelogs } from '../../lib/changelog-check';
+import { runScriptSync } from '../../lib/script-invocation';
 
 export const ROOT = path.resolve(import.meta.dir, '..', '..');
 export const BIN = (name: string) => path.join(ROOT, 'bin', name);
@@ -84,7 +85,7 @@ export function makePr(repo: FixtureRepo, branch: string, opts: { expects?: stri
 }
 
 export function runBin(repo: FixtureRepo, name: string, args: string[], extraEnv: Record<string, string> = {}, cwd = repo.work) {
-  const r = spawnSync(BIN(name), args, { cwd, encoding: 'utf8', timeout: 120_000, env: { ...process.env, ...repo.env, ...extraEnv } });
+  const r = runScriptSync(BIN(name), args, { cwd, encoding: 'utf8', timeout: 120_000, env: { ...process.env, ...repo.env, ...extraEnv } });
   return { status: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 

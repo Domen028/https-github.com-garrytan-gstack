@@ -34,7 +34,7 @@
 #   missing <hook>                      (no shim: setup skips registering it)
 #   fail <hook> <file>:<line>: <message>
 # Exit: 0 when nothing failed, 1 when a hook failed, 2 on usage, 3 when bun
-# (needed for the TypeScript check) is not found. Set GSTACK_HOOK_CHECK_BUN to
+# (needed when a hook runs TypeScript) is not found. Set GSTACK_HOOK_CHECK_BUN to
 # the bun to run (setup passes its own).
 set -u
 
@@ -51,9 +51,22 @@ if [ -z "$ROOT" ] || [ ! -d "$ROOT" ]; then
   echo "usage: gstack-hook-check [--setup <file>] [--list] <gstack root>" >&2
   exit 2
 fi
-# A Windows path (D:\x or D:/x) from a native caller: use Git Bash's spelling.
-case "$ROOT" in [A-Za-z]:[\\/]*) command -v cygpath >/dev/null 2>&1 && ROOT=$(cygpath -u "$ROOT") ;; esac
 case "$ROOT" in /*|[A-Za-z]:[\\/]*) ;; *) ROOT="$PWD/$ROOT" ;; esac
+# Git Bash hands native Bun its drive paths as C:/x, and spells the native temp
+# directory /tmp: one spelling (/c/x) on both sides of every built.tsv lookup
+# (#3088, #3100). The checker is self-contained on purpose (it runs on an
+# extracted archive and must not fail for a missing helper); the same mapping
+# is gstack_path_shell in bin/gstack-path-spelling.sh, and
+# test/path-spelling.test.ts keeps the two equal.
+case "$(uname -s 2>/dev/null)" in
+  MINGW*|MSYS*)
+    _native=$(cygpath -am "$ROOT" 2>/dev/null) || _native=""
+    case "$_native" in
+      [A-Za-z]:/*) ROOT="/$(printf '%s' "${_native%%:*}" | tr '[:upper:]' '[:lower:]')${_native#?:}" ;;
+      *) case "$ROOT" in [A-Za-z]:[\\/]*) command -v cygpath >/dev/null 2>&1 && ROOT=$(cygpath -u "$ROOT") ;; esac ;;
+    esac ;;
+  CYGWIN*) case "$ROOT" in [A-Za-z]:[\\/]*) ROOT=$(cygpath -u "$ROOT") ;; esac ;;
+esac
 [ "$ROOT" = / ] || ROOT=${ROOT%/}
 SETUP_FILE="${SETUP_FILE:-$ROOT/setup}"
 
@@ -75,10 +88,6 @@ if [ "$LIST_ONLY" -eq 1 ]; then
 fi
 
 BUN="${GSTACK_HOOK_CHECK_BUN:-bun}"
-if ! command -v "$BUN" >/dev/null 2>&1; then
-  echo "gstack-hook-check: bun not found, so TypeScript hook entries cannot be checked" >&2
-  exit 3
-fi
 TMP_OUT=$(mktemp -d "${TMPDIR:-/tmp}/gstack-hook-check.XXXXXX") || { echo "gstack-hook-check: cannot create a temp directory" >&2; exit 1; }
 trap 'rm -rf "$TMP_OUT"' EXIT
 
@@ -155,16 +164,27 @@ for hook in $HOOKS; do
 done
 BUILT="$TMP_OUT/built.tsv"
 : > "$BUILT"
+if [ -n "$ENTRIES" ] && ! command -v "$BUN" >/dev/null 2>&1; then
+  echo "gstack-hook-check: bun not found, so TypeScript hook entries cannot be checked" >&2
+  exit 3
+fi
 if [ -n "$ENTRIES" ]; then
+  # Bun reports native spellings; shellPath maps them back to the keys looked
+  # up below (lib/path-spelling.ts shellPath; test/path-spelling.test.ts keeps
+  # the two equal).
   # shellcheck disable=SC2086 # newline-split list (IFS is set to a newline below)
-  (cd "$ROOT" && IFS=$NL && "$BUN" -e '
+  (cd "$ROOT" && IFS=$NL && "$BUN" --no-env-file --config=/dev/null -e '
+    const shellPath = (value) => process.platform === "win32"
+      ? String(value).replace(/\\/g, "/").replace(/^([A-Za-z]):(?=\/|$)/, (_, drive) => `/${drive.toLowerCase()}`)
+      : String(value);
     for (const entry of process.argv.slice(1)) {
+      const key = shellPath(entry);
       const r = await Bun.build({ entrypoints: [entry], target: "bun", packages: "external", metafile: true, throw: false }).catch(e => ({ success: false, logs: [e] }));
-      if (r.success) for (const input of Object.keys(r.metafile?.inputs ?? {})) console.log(`${entry}\tok\t${input}`);
+      if (r.success) for (const input of Object.keys(r.metafile?.inputs ?? {})) console.log(`${key}\tok\t${shellPath(input)}`);
       else {
         const log = (r.logs ?? []).find(l => l?.level === "error") ?? r.logs?.[0] ?? {};
-        const at = log.position ? `${log.position.file}:${log.position.line}` : entry;
-        console.log(`${entry}\tfail\t${at}\t${String(log.message ?? log).split("\n")[0]}`);
+        const at = log.position ? `${shellPath(log.position.file)}:${log.position.line}` : key;
+        console.log(`${key}\tfail\t${at}\t${String(log.message ?? log).split("\n")[0]}`);
       }
     }' $ENTRIES) > "$BUILT" 2>/dev/null || true
 fi

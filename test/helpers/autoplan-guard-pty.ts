@@ -37,6 +37,23 @@ export interface GuardSession {
   cleanup(): void;
 }
 
+/**
+ * The actor ended its turn at the Phase 1 publication instead of going on to
+ * Phase 2: the screen after the last "Phase 1 complete." line shows a finished
+ * turn and no Phase 2 step (PR gate 39099195754, the 489 s "hang" first seen
+ * in 38976253774). Names the failure; it never passes a run.
+ */
+export function stoppedAtPhaseBoundary(screen: string): boolean {
+  const marks = [...screen.matchAll(/Phase\s*1\s*complete\./g)];
+  if (!marks.length) return false;
+  const last = marks[marks.length - 1]!;
+  const after = screen.slice(last.index! + last[0].length);
+  return /✻[^\n]*\bdone\b/.test(after) && !/Step\s*8|design-phase|Design\s*review/i.test(after);
+}
+
+/** The close packet Read (step 6) came after the CEO reviewer's completion notice, so it ran in the notice's new turn. */
+export const closePacketReadAfterNotice = (afterNotice: string[]): boolean => afterNotice.some(c => /^Read .*close-packet\.md$/.test(c));
+
 export function prepareGuardSession(apiKey: string | undefined): GuardSession {
   const base = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'ap-guard-pty-')));
   const home = path.join(base, 'home'), config = path.join(home, '.claude'), project = path.join(base, 'project');
@@ -71,18 +88,23 @@ console.log(close);
   const tool = path.join(ROOT, 'bin', 'gstack-autoplan-snapshot.ts');
   const sections = path.join(config, 'skills', 'gstack', 'autoplan', 'sections');
   const body = [
-    'Run this scripted phase boundary exactly. Each numbered step is its own assistant message; do nothing else.',
+    'Run this scripted phase boundary exactly, from step 1 through step 11 in one continuous run. Each numbered step is its own ' +
+      'assistant message; do nothing else. End your turn before step 11 only where step 5 or step 10 says to wait for a ' +
+      'background agent. **Phase 1 complete.** is a phase boundary, not the end of the task.',
     `1. Run this Bash command alone: bun "${tool}" init "${source}" "${active}" "${restore}"`,
     `2. Read the file ${path.join(sections, 'ceo-phase.md')} with offset 1 and limit 20.`,
     `3. Run this Bash command alone: bun "${review}"`,
     `4. Run this Bash command alone: cat "${path.join(artifacts, 'dispatch-ceo.txt')}"`,
     '5. Call the Agent tool once with these inputs: prompt = the exact, complete output of step 4 (every line, unchanged), ' +
       'description "CEO review", subagent_type "general-purpose", and run_in_background false. Include run_in_background even ' +
-      'if the tool schema lacks it. If the agent runs in the background, end your turn and wait for its completion notification.',
-    '6. Read the file whose path step 3 printed, completely (no offset or limit).',
+      'if the tool schema lacks it. If its result says the agent is running in the background, end your turn at once with no ' +
+      'further tool call; the completion notification starts your next turn.',
+    '6. Only after the CEO review agent has finished (in the turn its completion notification starts, when it ran in the ' +
+      'background), Read the file whose path step 3 printed, completely (no offset or limit).',
     '7. In one message, write exactly this line as your own text: **Phase 1 complete.** and make exactly one tool call in that ' +
-      'same message: the Bash command `true autoplan-published ceo`.',
-    `8. In a later message, Read the file ${path.join(sections, 'design-phase.md')} with offset 1 and limit 20.`,
+      'same message: the Bash command `true autoplan-published ceo`. Do not end your turn after it: when its result arrives, go ' +
+      'straight on to step 8.',
+    `8. As your next assistant message, in the same turn as step 7's result (no user input is coming), Read the file ${path.join(sections, 'design-phase.md')} with offset 1 and limit 20.`,
     `9. Run this Bash command alone: cat "${path.join(artifacts, 'dispatch-design.txt')}"`,
     '10. Call the Agent tool once with these inputs: prompt = the exact, complete output of step 9 (every line, unchanged), ' +
       'description "Design review", subagent_type "general-purpose". If the agent runs in the background, end your turn and wait ' +

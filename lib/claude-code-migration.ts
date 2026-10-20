@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { bunIsolationArgs } from './bun-isolation';
 
 const OLD = 'gstack-claude';
 const NEXT = 'gstack-claude-code';
@@ -10,7 +11,7 @@ const BANNER = '<!-- AUTO-GENERATED from';
 export const CLAUDE_CODE_RUNTIME_FILES = [
   'bin/gstack-claude-code', 'bin/gstack-models', 'bin/gstack-config', 'bin/gstack-state-root.sh',
   'lib/claude-code.ts', 'lib/claude-code-windows-job.ts', 'lib/claude-bin.ts',
-  'lib/outside-review-result.ts', 'lib/gate-outcomes.ts', 'lib/state-root.ts',
+  'lib/outside-review-result.ts', 'lib/gate-outcomes.ts', 'lib/outside-consent.ts', 'lib/state-root.ts',
   'lib/model-catalog.ts', 'lib/model-policy.ts', 'lib/model-policy-cli.ts', 'lib/model-policy-notice.ts',
 ];
 
@@ -152,11 +153,11 @@ export function migrateClaudeCodeSkills(opts: RenameOptions): { migrated: number
   const oldSources = targets.map(t => path.join(root, t.subdir, 'skills', OLD, 'SKILL.md'));
   const result = { migrated: 0, pending: [] as string[] };
   const render = opts.render ?? ((host: string, output: string) => {
-    const args = ['run', 'scripts/gen-skill-docs.ts', '--host', host, '--out-dir', output];
+    const args = [...bunIsolationArgs(), 'run', 'scripts/gen-skill-docs.ts', '--host', host, '--out-dir', output];
     if (host === 'codex') {
       let model = env.GSTACK_CODEX_GENERATION_MODEL;
       if (!model) {
-        const probe = spawnSync(process.execPath, ['run', 'scripts/resolve-codex-generation-model.ts'], { cwd: root, env, encoding: 'utf8', timeout: 30_000 });
+        const probe = spawnSync(process.execPath, [...bunIsolationArgs(), 'run', 'scripts/resolve-codex-generation-model.ts'], { cwd: root, env, encoding: 'utf8', timeout: 30_000 });
         if (probe.status !== 0) throw new Error('could not resolve the Codex model profile');
         model = probe.stdout.trim().split('\t')[0];
       }

@@ -17,7 +17,7 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-sites-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
 
 /** `codex exec|review` at the start of a shell command, optionally behind the probe's run-with-timeout. */
-const COMMAND = /(?:^|[;&|]\s*|\$\(\s*)(?:"\$_CODEX_PROBE"\s+run-with-timeout\s+\d+\s+)?codex\s+(?:exec|review)\b/;
+const COMMAND = /(?:^|[;&|]\s*|\$\(\s*)(?:"\$_CODEX_PROBE"\s+run-with-timeout\s+(?:--user-invoked\s+)?(?:--effort\s+\w+\s+(?:--request-effort\s+'[^']*'\s+)?)?\d+\s+)?codex\s+(?:exec|review)\b/;
 const VALIDATOR = /outside-review-result\.ts\b/;
 
 interface Site { file: string; line: string; fence: string; after: string }

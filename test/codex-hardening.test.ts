@@ -645,7 +645,7 @@ describe('codex timeout wrapper: /review + /ship diff passes', () => {
 
     test(`${relPath}: both diff-review Codex calls run under the wrapper`, () => {
       const wrapped =
-        read().match(/run-with-timeout\s+\d+\s+codex\s+(exec|review)\b/g) ?? [];
+        read().match(/run-with-timeout\s+(?:--user-invoked\s+)?(?:--effort\s+\w+\s+(?:--request-effort\s+'[^']*'\s+)?)?\d+\s+codex\s+(exec|review)\b/g) ?? [];
       // Adversarial pass + structured review pass.
       expect(wrapped.length).toBeGreaterThanOrEqual(2);
     });
@@ -658,7 +658,7 @@ describe('codex timeout wrapper: /review + /ship diff passes', () => {
     });
 
     test(`${relPath}: wrapper budget stays under the outer Bash gate`, () => {
-      const budgets = [...read().matchAll(/run-with-timeout\s+(\d+)\s+codex\b/g)].map(
+      const budgets = [...read().matchAll(/run-with-timeout\s+(?:--user-invoked\s+)?(?:--effort\s+\w+\s+(?:--request-effort\s+'[^']*'\s+)?)?(\d+)\s+codex\b/g)].map(
         (m) => Number(m[1]) * 1000,
       );
       expect(budgets.length).toBeGreaterThan(0);
@@ -710,7 +710,7 @@ describe('codex skeleton+sections union: review sandbox + fail-closed gate + tim
     test(`${relPath}: (a) every scoped codex review invocation pins sandbox_mode from the selected sandbox`, () => {
       const invocations = read()
         .split('\n')
-        .filter((l) => /run-with-timeout\s+\d+\s+codex\s+review\b/.test(l));
+        .filter((l) => /run-with-timeout\s+(?:--user-invoked\s+)?(?:--effort\s+\w+\s+(?:--request-effort\s+'[^']*'\s+)?)?\d+\s+codex\s+review\b/.test(l));
       expect(invocations.length).toBeGreaterThanOrEqual(1);
       for (const line of invocations) {
         // select-model reports read-only (full access only for
@@ -772,7 +772,7 @@ describe('codex skeleton+sections union: review sandbox + fail-closed gate + tim
       const inspected: string[] = [];
       for (const section of sections) {
         const gates = [...section.matchAll(/timeout:\s*(\d{4,})/g)].map((m) => Number(m[1]));
-        const wrappers = [...section.matchAll(/run-with-timeout\s+(\d+)\s+codex\b/g)].map(
+        const wrappers = [...section.matchAll(/run-with-timeout\s+(?:--user-invoked\s+)?(?:--effort\s+\w+\s+(?:--request-effort\s+'[^']*'\s+)?)?(\d+)\s+codex\b/g)].map(
           (m) => Number(m[1]) * 1000,
         );
         if (gates.length === 0 || wrappers.length === 0) continue;

@@ -21,6 +21,7 @@ function repo() {
   fs.mkdirSync(path.join(dir, 'handbook'), { recursive: true });
   git(root, 'init', '-q', '-b', 'main', dir);
   git(dir, 'config', 'user.email', 't@t'); git(dir, 'config', 'user.name', 't'); git(dir, 'config', 'commit.gpgsign', 'false');
+  git(dir, 'config', 'maintenance.auto', 'false'); git(dir, 'config', 'gc.auto', '0');
   fs.writeFileSync(path.join(dir, 'app.ts'), 'export const a = 1;\n');
   fs.writeFileSync(path.join(dir, 'handbook', 'guide.md'), '# Guide\n');
   git(dir, 'add', '.'); git(dir, 'commit', '-qm', 'base');
@@ -38,7 +39,7 @@ describe('gstack-docs-candidate', () => {
   test('snapshot records base, HEAD, index, NUL-safe path lists and content hashes without touching the repository', () => {
     const { dir, record } = repo();
     const gitDir = path.join(dir, '.git');
-    const before = fs.readdirSync(gitDir, { recursive: true }).length;
+    const before = fs.readdirSync(gitDir, { recursive: true }) as string[];
     const indexBefore = fs.readFileSync(path.join(gitDir, 'index'));
     const result = run(dir, 'snapshot', '--out', record, '--audit-id', 'a1', '--mode', 'edit', '--base', 'main', '--docs', 'handbook');
     expect(result.status, result.stderr).toBe(0);
@@ -51,7 +52,9 @@ describe('gstack-docs-candidate', () => {
     expect(saved.hashes['app.ts']).toBe(git(dir, 'hash-object', 'app.ts'));
     expect(saved.index).toHaveLength(2);
     expect(fs.statSync(record).mode & 0o777).toBe(0o600);
-    expect(fs.readdirSync(gitDir, { recursive: true }).length).toBe(before);
+    const after = fs.readdirSync(gitDir, { recursive: true }) as string[];
+    const changed = [...before.filter(entry => !after.includes(entry)).map(entry => `-${entry}`), ...after.filter(entry => !before.includes(entry)).map(entry => `+${entry}`)];
+    expect(after.length, `.git entries changed during snapshot: ${changed.join(', ') || '(same names)'}`).toBe(before.length);
     expect(fs.readFileSync(path.join(gitDir, 'index')).equals(indexBefore)).toBe(true);
   });
 
@@ -96,6 +99,49 @@ describe('gstack-docs-candidate', () => {
     expect(help.stdout).toContain('gstack-docs-candidate snapshot --out <candidate.json>');
     expect(help.stdout).toContain('gstack-docs-candidate compare <candidate.json>');
     expect(run(dir, 'install').stderr).toContain(help.stdout.trim());
+  });
+
+  // PR gate run 38990111230 (ship-docsync-stale-after): an agent needing the post-child snapshot ran
+  // `gstack-docs-candidate snapshot --help`, which exited 1 as an unknown argument.
+  test('snapshot --help and compare --help print the usage and exit 0 before any side effect', () => {
+    const { dir, root } = repo();
+    const before = fs.readdirSync(root, { recursive: true }).sort();
+    const usage = run(dir, '--help').stdout;
+    for (const command of ['snapshot', 'compare']) {
+      const help = run(dir, command, '--help');
+      expect(help.status, help.stderr).toBe(0);
+      expect(help.stdout).toBe(usage);
+    }
+    for (const args of [['snapshot', '--help', '--out', path.join(root, 'x.json')], ['compare', '--help', path.join(root, 'x.json')],
+      ['snapshot', '--out', path.join(root, 'y.json'), '--help'], ['compare', '-h']]) {
+      const result = run(dir, ...args);
+      expect(result.status, args.join(' ')).toBe(1);
+      expect(result.stdout).toBe('');
+    }
+    expect(fs.readdirSync(root, { recursive: true }).sort()).toEqual(before);
+  });
+
+  test('compare names the record path, each missing or wrong field and the snapshot fix, keeping exit 1', () => {
+    const { dir, root } = repo();
+    // A post-audit snapshot over the candidate would replace the before-audit baseline, so the ownership
+    // check would compare current files with themselves; the fix line must never send an agent there.
+    const fix = 'Fix: the candidate must be the record the Prepare snapshot wrote. To rebuild it, rerun the Prepare snapshot (gstack-docs-candidate snapshot --out <path> --audit-id <id> --mode edit --base <rev> ...) only before dispatching the child audit. After the audit, never snapshot over it: the post-child snapshot uses a different --out (<audit-id>-post.json).';
+    const cases: Array<[string, string, string[]]> = [
+      ['legacy.json', JSON.stringify({ audit_id: 'a', base_sha: 'x', content_hashes: {} }),
+        ['missing or wrong schema_version (want 1)', 'missing or wrong base (want the base commit SHA string)', 'missing or wrong hashes (want an object of path -> blob id)']],
+      ['null-hashes.json', JSON.stringify({ schema_version: 1, base: 'x', hashes: null }), ['missing or wrong hashes (want an object of path -> blob id)']],
+      ['version.json', JSON.stringify({ schema_version: 2, base: 'x', hashes: {} }), ['missing or wrong schema_version (want 1)']],
+      ['array.json', '[]', ['not a JSON object']],
+      ['broken.json', '{', ['not valid JSON']],
+    ];
+    for (const [name, body, problems] of cases) {
+      const file = path.join(root, name);
+      fs.writeFileSync(file, body);
+      const result = run(dir, 'compare', file);
+      expect(result.status, name).toBe(1);
+      expect(result.stdout).toBe('');
+      expect(result.stderr.trim()).toBe(`gstack-docs-candidate: ${file} is not a gstack-docs-candidate record: ${problems.join('; ')}. ${fix}`);
+    }
   });
 
   test('/ship records post-child hashes with the helper, so Step 16 compares instead of retyping', () => {

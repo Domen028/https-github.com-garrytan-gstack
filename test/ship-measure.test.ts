@@ -234,7 +234,7 @@ echo "cost_usd: 0.10"
 if [ "$GSTACK_SHIP_MEASURE_TRIAL" = 2 ]; then echo "failure_cause: assertion"; echo "failure_detail: order.js:3 unsorted"; exit 1; fi
 `, { mode: 0o755 });
     const cli = (...args: string[]) => spawnSync(process.execPath, ['run', path.join(ROOT, 'scripts/ship-measure.ts'), ...args], {
-      cwd: project, encoding: 'utf8', timeout: 60_000, env: { ...process.env, GSTACK_HOME: state, GSTACK_STATE_ROOT: state },
+      cwd: project, encoding: 'utf8', timeout: 60_000, env: { ...process.env, HOME: state, USERPROFILE: state, GSTACK_HOME: state, GSTACK_STATE_ROOT: state },
     });
     const out = path.join(project, '.context', 'ship-measure');
     const red = cli('measure', '--case', 'flaky-sort', '--command', './evals.sh case {case}', '--cost-per-trial', '0.1', '--jobs', '3');
@@ -326,7 +326,7 @@ describe('free-suite shard reruns (CEO-1)', () => {
     const args = diagnostic.stdout.split('\n');
     expect(args).toContain('GSTACK_FREE_RETRY_FLAKY=0');
     expect(args).not.toContain('GSTACK_FREE_RETRY_FLAKY=1');
-    expect(args).toContain('xvfb-run -a bun run scripts/ship-measure.ts free --backend local --files test/a.test.ts,test/b.test.ts --reruns 10');
+    expect(args).toContain('xvfb-run -a bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --backend local --files test/a.test.ts,test/b.test.ts --reruns 10');
     expect(args.some(a => a.startsWith('work/') && a.includes('/.context/ship-measure:'))).toBe(true);
     const normal = launch().stdout.split('\n');
     expect(normal).toContain('GSTACK_FREE_RETRY_FLAKY=1');

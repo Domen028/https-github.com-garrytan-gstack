@@ -13,6 +13,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { runScriptSync } from '../../lib/script-invocation';
 import { gitArgvIn } from './scratch-repo';
 
 export const ROOT = path.resolve(import.meta.dir, '..', '..');
@@ -79,7 +80,7 @@ jobs:
         run: node --test \${{ matrix.files }}
 `;
 
-export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | null; pregate?: Record<string, unknown> | null; prefix?: string } = {}): FixtureRepo {
+export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | null; pregate?: Record<string, unknown> | null; prefix?: string; baseFiles?: Record<string, string> } = {}): FixtureRepo {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), opts.prefix ?? 'gstack-pregate-fx-'));
   const origin = path.join(root, 'origin.git');
   const work = path.join(root, 'work');
@@ -90,7 +91,7 @@ export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | nul
   fs.writeFileSync(env.GIT_CONFIG_GLOBAL, '[user]\n\tname = t\n\temail = t@test\n[commit]\n\tgpgsign = false\n[init]\n\tdefaultBranch = main\n');
   const git = (...args: string[]): string => {
     const r = gitArgvIn(work, args, 30_000, { ...process.env, ...env });
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: ${r.stderr?.toString()}`);
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')} failed: status=${r.status} signal=${r.signal} error=${r.error?.message ?? ''} stderr=${r.stderr?.toString() ?? ''}`);
     return r.stdout?.toString().trim() ?? '';
   };
   spawnSync('git', ['init', '-q', '--bare', origin], { timeout: 30_000, env: { ...process.env, ...env } });
@@ -122,6 +123,7 @@ export function makeFixtureRepo(opts: { registry?: Record<string, unknown> | nul
   write(work, '.github/workflows/windows.yml', WORKFLOW_WINDOWS);
   if (opts.registry !== null) write(work, '.gstack/generated.json', JSON.stringify(opts.registry ?? BASE_REGISTRY, null, 2) + '\n');
   if (opts.pregate !== null) write(work, '.gstack/pregate.json', JSON.stringify(opts.pregate ?? BASE_PREGATE, null, 2) + '\n');
+  for (const [rel, text] of Object.entries(opts.baseFiles ?? {})) write(work, rel, text);
   git('add', '-A');
   git('commit', '-q', '-m', 'base');
   git('remote', 'add', 'origin', origin);
@@ -152,7 +154,7 @@ export function commit(repo: FixtureRepo, files: Record<string, string | null>, 
 }
 
 export function runBin(repo: FixtureRepo, name: string, args: string[], extraEnv: Record<string, string> = {}, cwd = repo.work) {
-  const r = spawnSync(BIN(name), args, { cwd, encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...repo.env, ...extraEnv } });
+  const r = runScriptSync(BIN(name), args, { cwd, encoding: 'utf8', timeout: 180_000, maxBuffer: 64 * 1024 * 1024, env: { ...process.env, ...repo.env, ...extraEnv } });
   return { status: r.status, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
@@ -160,11 +162,26 @@ export function cleanup(repo: FixtureRepo): void {
   fs.rmSync(repo.root, { recursive: true, force: true });
 }
 
-/** A `gh` on PATH answering `gh issue view <n> --json ...` from a map and `gh issue list` / `gh run view` from fixed data. */
-export function ghShim(repo: FixtureRepo, data: { issues?: Record<string, unknown>; issueList?: unknown[]; runs?: Record<string, unknown> }): { PATH: string } {
+/**
+ * A `gh` on PATH answering `gh issue view <n> --json ...` from a map, `gh issue list` / `gh run view` from fixed data,
+ * `gh repo view` from `repo` (null fails), the closing-PR `gh api graphql` query from `closing` (issue → pages of
+ * nodes; `after=c<i>` reads page i; a missing issue fails like an API error) and the PR-author query (`head=`)
+ * from `headAuthor` (the HEAD commit's GitHub user, null when GitHub has no such commit) and `ownerType`.
+ */
+export function ghShim(repo: FixtureRepo, data: { issues?: Record<string, unknown>; issueList?: unknown[]; runs?: Record<string, unknown>; repo?: string | null; viewer?: string; closing?: Record<string, unknown[][]>; headAuthor?: string | null; ownerType?: 'User' | 'Organization' }): { PATH: string } {
   const dir = path.join(repo.root, 'gh-shim');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify({ issues: {}, issueList: [], runs: {}, ...data }));
+  fs.writeFileSync(path.join(dir, 'data.json'), JSON.stringify({ issues: {}, issueList: [], runs: {}, repo: 'owner/repo', viewer: 'me', closing: {}, headAuthor: null, ownerType: 'User', ...data }));
+  fs.writeFileSync(path.join(dir, 'api.js'), [
+    'const d = require(process.argv[2]); const a = process.argv.slice(3);',
+    'const arg = k => { const i = a.findIndex(x => x.startsWith(k + "=")); return i < 0 ? undefined : a[i].slice(k.length + 1); };',
+    'if (a[0] === "repo") { if (d.repo === null) { console.error("no git remotes found"); process.exit(1); } console.log(JSON.stringify({ nameWithOwner: d.repo })); process.exit(0); }',
+    'if (arg("head") !== undefined) { console.log(JSON.stringify({ data: { repository: { owner: { __typename: d.ownerType, login: d.repo.split("/")[0] }, object: d.headAuthor === null ? null : { author: { user: { login: d.headAuthor } } } } } })); process.exit(0); }',
+    'const pages = d.closing[arg("number")]; if (!pages) { console.error("HTTP 502: Bad Gateway (https://api.github.com/graphql)"); process.exit(1); }',
+    'const i = Number((arg("after") || "c0").slice(1));',
+    'console.log(JSON.stringify({ data: { viewer: { login: d.viewer }, repository: { issue: { closedByPullRequestsReferences: { nodes: pages[i] || [], pageInfo: { hasNextPage: i + 1 < pages.length, endCursor: "c" + (i + 1) } } } } } }));',
+    '',
+  ].join('\n'));
   const script = [
     '#!/bin/sh',
     `DATA="${path.join(dir, 'data.json')}"`,
@@ -172,8 +189,10 @@ export function ghShim(repo: FixtureRepo, data: { issues?: Record<string, unknow
     '  node -e "const d=require(process.argv[1]);const p=d.issues[process.argv[2]];if(!p){console.error(\'GraphQL: Could not resolve to an Issue\');process.exit(1)}console.log(JSON.stringify(p))" "$DATA" "$3"',
     '  exit $?',
     'fi',
-    '# issue list: entries whose body contains the quoted --search token, numbers only (what gstack-issue-links asks for)',
-    'if [ "$1" = "issue" ] && [ "$2" = "list" ]; then node -e "const a=process.argv.slice(2);const q=(a[a.indexOf(\'--search\')+1]||\'\').replace(/^\\"|\\" in:body$/g,\'\');console.log(JSON.stringify(require(process.argv[1]).issueList.filter(i=>!q||String(i.body||\'\').includes(q)).map(i=>({number:i.number}))))" "$DATA" "$@"; exit $?; fi',
+    '# issue list: entries whose body contains the quoted --search token (number, title, body, author: what gstack-issue-links asks for)',
+    'if [ "$1" = "issue" ] && [ "$2" = "list" ]; then node -e "const a=process.argv.slice(2);const q=(a[a.indexOf(\'--search\')+1]||\'\').replace(/^\\"|\\" in:body$/g,\'\');console.log(JSON.stringify(require(process.argv[1]).issueList.filter(i=>!q||String(i.body||\'\').includes(q))))" "$DATA" "$@"; exit $?; fi',
+    `if [ "$1" = "repo" ] && [ "$2" = "view" ]; then exec node "${path.join(dir, 'api.js')}" "$DATA" repo; fi`,
+    `if [ "$1" = "api" ] && [ "$2" = "graphql" ]; then shift 2; exec node "${path.join(dir, 'api.js')}" "$DATA" "$@"; fi`,
     'if [ "$1" = "run" ] && [ "$2" = "view" ]; then',
     '  node -e "const d=require(process.argv[1]);const p=d.runs[process.argv[2]];if(!p){console.error(\'run not found\');process.exit(1)}console.log(JSON.stringify(p))" "$DATA" "$3"',
     '  exit $?',

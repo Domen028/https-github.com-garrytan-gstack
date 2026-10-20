@@ -122,7 +122,7 @@ test('harmless read wrappers do not fail a docs run', () => {
     'ls 2>&1', 'git status 2>&1']) {
     expect(docsToolFailures(nativeResult(command, 'successful tool acknowledgment', 'docs-dispatch'), fixture, [], true)).toEqual([]);
   }
-  for (const command of ['git status 2>&1 > out.txt', 'ls 2>&1 | head', `bun ${path.join(fixture.home, 'publish.ts')} 2>&1`, 'ls 2>out.txt']) {
+  for (const command of ['git status 2>&1 > out.txt', 'ls 2>&1 | sh', `bun ${path.join(fixture.home, 'publish.ts')} 2>&1`, 'ls 2>out.txt']) {
     expect(docsCommandAllowed(command, fixture, [path.join(fixture.home, 'publish.ts')])).toBe(false);
   }
 });
@@ -232,4 +232,177 @@ test('the installed docs-candidate helper is admitted only with a private .json 
   ]) expect(docsCommandAllowed(command, fixture), command).toBe(false);
   expect(docsNativeInterface(fixture)).toContain(`${fixture.skills.split(path.sep).join('/')}/bin/gstack-docs-candidate snapshot`);
   expect(docsNativeInterface(fixture)).toContain('compare <that .json> and --help commands');
+});
+
+test('the installed lifecycle helpers are admitted for their own --help, which starts nothing', () => {
+  const skills = fixture.skills.split(path.sep).join('/');
+  for (const helper of ['gstack-skill-start', 'gstack-skill-end']) {
+    expect(docsCommandAllowed(`${skills}/bin/${helper} --help`, fixture)).toBe(true);
+    for (const command of [
+      `${skills}/bin/${helper} --help --skill review`,
+      `${skills}/bin/${helper} --skill review`,
+      `${skills}/bin/${helper} -h`,
+      `${skills}/bin/${helper} --help; ${skills}/bin/${helper} --skill document-release`,
+      `~/.claude/skills/gstack/bin/${helper} --help`,
+    ]) expect(docsCommandAllowed(command, fixture), command).toBe(false);
+  }
+  expect(docsNativeInterface(fixture)).toContain('or their own --help');
+});
+
+// PR gate run 38969924945 (ship-docsync-store) went red only on `gstack-skill-start --help`.
+test('every Bash command of the captured ship-docsync-store run is inside the interface', () => {
+  const capture = JSON.parse(fs.readFileSync(path.join(import.meta.dir, 'fixtures/docsync-store-38969924945-bash.json'), 'utf8'));
+  const commands: string[] = capture.commands.map((command: string) => command.replaceAll('<HOME>', fixture.home));
+  for (const file of ['docs-audit-20261016T2140Z-1-documentation.md', 'ship-report.md']) fs.writeFileSync(path.join(fixture.home, file), '');
+  const publish = path.join(fixture.home, 'fixture-publish.ts');
+  expect(commands).toHaveLength(54);
+  expect(commands.filter(command => !docsCommandAllowed(command, fixture, [publish]))).toEqual([]);
+});
+
+// PR gate run 38990111230 (ship-docsync-stale-after, head 6c07d85c82d17bda81860cd0d78616de3dc14cc2) went red only on
+// `gstack-docs-candidate snapshot --help` (bash#8), which the helper rejected as an unknown argument. Every Bash
+// command of the parent, in order; <HOME> is the fixture home and <ACTOR> the fault actor.
+const STALE_AFTER_38990111230 = [
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate compare <HOME>/candidate-ship-docs-a1.json',
+  'bun <ACTOR> inspect <HOME>/actor-state.json',
+  'sha256sum <HOME>/.claude/skills/gstack/document-release/SKILL.md <HOME>/.claude/skills/gstack/document-release/sections/audit-scope.md <HOME>/.claude/skills/gstack/document-release/sections/release-body.md',
+  'bun <ACTOR> prepare <HOME>/actor-state.json audit_id=ship-docs-a2',
+  'bun <ACTOR> dispatch <HOME>/actor-state.json audit_id=ship-docs-a2 candidate=<HOME>/candidate-ship-docs-a2.json prompt=<HOME>/prompt-ship-docs-a2.md run_in_background=false',
+  'bun <ACTOR> inspect <HOME>/actor-state.json',
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate compare <HOME>/candidate-ship-docs-a2.json',
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate snapshot --help',
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate snapshot --out <HOME>/ship-docs-a2-post.json --audit-id ship-docs-a2 --mode edit --base 21cebf26714abdfc6b80267507b88a4df6e933a8 --docs handbook --select AGENTS.md --select CHANGELOG.md --select README.md --select TODOS.md --select VERSION --select app.ts --select handbook/reference/commands/widget.md.tmpl --select package.json',
+  'bun <ACTOR> inspect <HOME>/actor-state.json',
+  'bun <ACTOR> publish <HOME>/actor-state.json audit_id=ship-docs-a2 report=<HOME>/ship-report.md',
+];
+
+test('every Bash command of the captured ship-docsync-stale-after run is inside the fault interface', () => {
+  const actor = path.join(import.meta.dir, 'helpers/docsync-fault-actor.ts');
+  const commands = STALE_AFTER_38990111230.map(command => command.replaceAll('<HOME>', fixture.home).replaceAll('<ACTOR>', actor));
+  expect(commands).toHaveLength(11);
+  expect(commands.filter(command => !docsCommandAllowed(command, fixture, [actor]))).toEqual([]);
+});
+
+test('subcommand --help is admitted alone and runs without effect; with any other argument it stays outside the interface', () => {
+  const helper = path.join(fixture.skills, 'bin/gstack-docs-candidate');
+  const record = path.join(fixture.home, 'help-probe.json');
+  const before = repoSnapshot(fixture.repo);
+  for (const sub of ['snapshot', 'compare']) {
+    expect(docsCommandAllowed(`${helper} ${sub} --help`, fixture)).toBe(true);
+    const run = spawnSync(helper, [sub, '--help'], { cwd: fixture.repo, encoding: 'utf8', timeout: 20_000 });
+    expect(run.status, run.stderr).toBe(0);
+    expect(run.stdout).toContain('usage: gstack-docs-candidate snapshot --out <candidate.json>');
+  }
+  for (const command of [
+    `${helper} snapshot --help --out ${record}`,
+    `${helper} compare --help ${record}`,
+    `${helper} snapshot --out ${record} --help`,
+    `${helper} snapshot -h`,
+    `${helper} compare -h`,
+    `${helper} snapshot --help --out ${path.join(fixture.repo, 'inside.json')}`,
+    `${helper} snapshot --out ${path.join(fixture.repo, 'inside.json')} --audit-id a --mode edit --base main`,
+    `${helper} snapshot --help; ${helper} compare ${record}`,
+  ]) expect(docsCommandAllowed(command, fixture), command).toBe(false);
+  expect(fs.existsSync(record)).toBe(false);
+  expect(repoSnapshot(fixture.repo)).toEqual(before);
+});
+
+// PR gate run 39153452209 (ship-docsync-store, head a844821583d664e3dea279fff12b935865e92f52) went red only on the
+// document-release child's `git describe --tags --always` (bash#24). Every Bash command of the parent and its child,
+// in order; <HOME> is the fixture home.
+const STORE_39153452209 = [
+  'git status',
+  'git rev-parse HEAD',
+  'git ls-files',
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate --help',
+  'git diff --cached',
+  'git diff',
+  'git branch --show-current',
+  'git log --oneline',
+  'git check-ignore -v .qa-state',
+  'ls -la <HOME>',
+  '<HOME>/.claude/skills/gstack/bin/gstack-skill-start --help',
+  'git ls-files -z --cached --others --exclude-standard',
+  'git show HEAD:handbook/reference/commands/widget.md.tmpl',
+  'ls -la <HOME>/state',
+  'git hash-object README.md handbook/reference/commands/widget.md.tmpl options.ts app.ts personal-note.txt',
+  'git log --oneline --decorate --all',
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate snapshot --out <HOME>/ship-docs-20261018-c0048c5-a1.json --audit-id ship-docs-20261018-c0048c5-a1 --mode read-only --base c0048c54c542cf0ba46b7587cf7fea1b519c75e4 --select app.ts --select README.md --select options.ts --docs handbook --docs README.md --docs AGENTS.md --docs CHANGELOG.md --docs TODOS.md',
+  'GSTACK_SESSION_KIND=spawned <HOME>/.claude/skills/gstack/bin/gstack-skill-start --skill document-release --model claude',
+  'git status',
+  'git log --oneline',
+  'git diff c0048c54c542cf0ba46b7587cf7fea1b519c75e4 HEAD --stat',
+  'git diff --cached',
+  'git diff',
+  'git ls-files --cached --others --exclude-standard',
+  'git hash-object README.md options.ts app.ts personal-note.txt',
+  'git describe --tags --always',
+  '<HOME>/.claude/skills/gstack/bin/gstack-skill-end --skill document-release --outcome success --session-id 878-1792348356-d8b277ad --tel-start 1792348356 --used-browse no',
+  '<HOME>/.claude/skills/gstack/bin/gstack-docs-candidate compare <HOME>/ship-docs-20261018-c0048c5-a1.json',
+  'git status',
+  'git rev-parse HEAD',
+  'git hash-object README.md handbook/reference/commands/widget.md.tmpl options.ts app.ts personal-note.txt AGENTS.md CHANGELOG.md TODOS.md VERSION package.json',
+  'ls -la <HOME>',
+  'ls -la <HOME>/repo',
+  'cat <HOME>/ship-docs-20261018-c0048c5-a1-documentation.md >> <HOME>/ship-report.md',
+  'git status',
+  'ls -la <HOME>',
+];
+
+test('every Bash command of the captured run 39153452209 ship-docsync-store is inside the interface', () => {
+  const commands = STORE_39153452209.map(command => command.replaceAll('<HOME>', fixture.home));
+  for (const file of ['ship-docs-20261018-c0048c5-a1-documentation.md', 'ship-report.md']) fs.writeFileSync(path.join(fixture.home, file), '');
+  expect(commands).toHaveLength(36);
+  expect(commands).toContain('git describe --tags --always');
+  expect(commands.filter(command => !docsCommandAllowed(command, fixture))).toEqual([]);
+  expect(docsToolFailures(nativeResult('git describe --tags --always', 'c0048c5', 'docs-dispatch'), fixture, [], true)).toEqual([]);
+});
+
+const DESCRIBE_READS = ['git describe', 'git describe --tags', 'git describe --always', 'git describe --abbrev=7',
+  'git describe --exact-match', 'git describe HEAD', "git describe --tags --always --abbrev=12 'HEAD^{}'",
+  'git describe --exact-match --tags main', 'git describe --always main', 'git describe --tags --always 2>/dev/null'];
+const DESCRIBE_REFUSED = ['git describe --dirty', 'git describe --dirty=-modified', 'git describe --always --dirty',
+  'git describe --broken', 'git describe --broken=-broken', 'git describe --contains HEAD', 'git describe --all',
+  'git describe --abbrev', 'git describe --abbrev=x', 'git describe HEAD main', 'git describe -- HEAD',
+  'git describe --tags > tag.md', 'git describe --tags; git tag v9', 'git describe --tags && git tag v9'];
+
+test('read-only git describe forms are declared and leave the index and repository unchanged', () => {
+  expect(docsNativeInterface(fixture)).toContain('describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision');
+  const own = fixtureDocs('store');
+  try {
+    gitAt(own.repo, 'tag', '-a', 'v0.1.0', '-m', 'fixture release', 'HEAD');
+    const stale = new Date(Date.now() - 3600_000);
+    fs.utimesSync(path.join(own.repo, 'AGENTS.md'), stale, stale);
+    const index = () => fs.readFileSync(path.join(own.repo, '.git/index')).toString('base64');
+    const before = { repo: repoSnapshot(own.repo), index: index() };
+    for (const command of DESCRIBE_READS) {
+      expect(docsCommandAllowed(command, own), command).toBe(true);
+      expect(docsToolFailures(nativeResult(command), own, [], true), command).toEqual([]);
+      const run = spawnSync('bash', ['-c', command], { cwd: own.repo, encoding: 'utf8', timeout: 10000 });
+      expect(run.status, `${command}: ${run.stderr}`).toBe(0);
+      expect({ repo: repoSnapshot(own.repo), index: index() }, command).toEqual(before);
+    }
+  } finally {
+    own.clean();
+  }
+});
+
+test('describe forms that refresh the index or fall outside the declared set, and Git writes, stay outside the interface', () => {
+  for (const command of [...DESCRIBE_REFUSED, 'git tag v9 HEAD', 'git update-index --refresh', 'git notes add -m x HEAD']) {
+    expect(docsCommandAllowed(command, fixture), command).toBe(false);
+    expect(docsToolFailures(nativeResult(command, 'successful tool acknowledgment', 'docs-dispatch'), fixture, [], true), command)
+      .toEqual(['command outside declared docs observation interface']);
+  }
+  const own = fixtureDocs('store');
+  try {
+    const stale = new Date(Date.now() - 3600_000);
+    fs.utimesSync(path.join(own.repo, 'AGENTS.md'), stale, stale);
+    const index = () => fs.readFileSync(path.join(own.repo, '.git/index')).toString('base64');
+    const before = index();
+    const run = spawnSync('git', ['describe', '--always', '--dirty'], { cwd: own.repo, encoding: 'utf8', timeout: 10000 });
+    expect(run.status, run.stderr).toBe(0);
+    expect(index()).not.toBe(before);
+  } finally {
+    own.clean();
+  }
 });

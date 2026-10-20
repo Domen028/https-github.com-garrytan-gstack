@@ -258,15 +258,14 @@ export async function handleMetaCommand(
   tokenInfo?: TokenInfo | null,
   opts?: MetaCommandOpts,
 ): Promise<string> {
-  // Per-tab operations use the active session; global operations use bm directly
-  const session = bm.getActiveSession();
-
+  // Per-tab operations read the active session where they run, so status,
+  // stop and restart still answer when every tab was closed (#3167).
   switch (command) {
     // ─── Tabs ──────────────────────────────────────────
     case 'tabs': {
       const tabs = await bm.getTabListWithTitles();
       return tabs.map(t =>
-        `${t.active ? '→ ' : '  '}[${t.id}] ${t.title || '(untitled)'} — ${t.url}`
+        `${t.active ? '→ ' : '  '}[${t.id}] ${t.busy ? '(not responding)' : t.title || '(untitled)'} — ${t.url}`
       ).join('\n');
     }
 
@@ -403,15 +402,19 @@ export async function handleMetaCommand(
 
     // ─── Server Control ────────────────────────────────
     case 'status': {
-      const page = bm.getPage();
       const tabs = bm.getTabCount();
       const mode = bm.getConnectionMode();
+      const activeTab = await bm.probeActiveTab();
       return [
         `Status: healthy`,
         `Mode: ${mode}`,
-        `URL: ${page.url()}`,
+        `URL: ${bm.getCurrentUrl()}`,
         `Tabs: ${tabs}`,
         `PID: ${process.pid}`,
+        // #3247: name the busy tab and the ways out that keep the session.
+        ...(activeTab && !activeTab.responsive
+          ? [`Active tab ${activeTab.id}: not responding. Switch with: browse tab <id>, or close it: browse closetab ${activeTab.id}`]
+          : []),
       ].join('\n');
     }
 
@@ -720,7 +723,7 @@ export async function handleMetaCommand(
     // ─── Snapshot ─────────────────────────────────────
     case 'snapshot': {
       const isScoped = tokenInfo && tokenInfo.clientId !== 'root';
-      const snapshotResult = await handleSnapshot(args, session, {
+      const snapshotResult = await handleSnapshot(args, bm.getActiveSession(), {
         splitForScoped: !!isScoped,
       });
       // Scoped tokens get split format (refs outside envelope); root gets basic wrapping
@@ -737,6 +740,7 @@ export async function handleMetaCommand(
     }
 
     case 'resume': {
+      const session = bm.getActiveSession();
       bm.resume();
       // Re-snapshot to capture current page state after human interaction
       const isScoped2 = tokenInfo && tokenInfo.clientId !== 'root';

@@ -30,6 +30,7 @@ import {
   getDeviceTunnelIPv6FromDevicectl,
   isAppRunning,
   launchApp,
+  launchEnvArgs,
   copyFileFromAppContainer,
   type DeviceEntry,
   type SpawnImpl,
@@ -177,10 +178,13 @@ function relaunchApp(
   bundleId: string,
   spawn: SpawnImpl = defaultSpawn,
 ): { ok: true } | { ok: false; error: 'device_locked' | 'launch_failed'; detail?: string } {
+  const env = launchEnvArgs();
+  if (!env.ok) return { ok: false, error: 'launch_failed', detail: env.error };
   const r = spawn('xcrun', [
     'devicectl', 'device', 'process', 'launch',
     '--device', udid,
     '--terminate-existing',
+    ...env.args,
     bundleId,
   ]);
   if (r.status === 0) return { ok: true };

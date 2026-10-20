@@ -59,6 +59,17 @@ function dockerTimeout(deadline: number | undefined, maximum: number): number {
   if (remaining <= 0) throw new CsoError('DEADLINE', 'Docker operation reached its aggregate deadline');
   return Math.max(1, Math.min(maximum, remaining));
 }
+// `executable('docker')` is the canonical path, which for OrbStack is the
+// multicall `docker-tools` binary. It dispatches on argv[0] and exits 127 with
+// `unsupported argv0 "docker-tools"` unless it is told it was invoked as docker.
+export const DOCKER_ARGV0 = 'docker';
+export function runDocker(
+  file: string,
+  args: string[],
+  opts: Omit<Parameters<typeof runProcess>[2], 'argv0'>,
+): ReturnType<typeof runProcess> {
+  return runProcess(file, args, { ...opts, argv0: DOCKER_ARGV0 });
+}
 function deadlineExpired(deadline: number | undefined): boolean {
   return deadline !== undefined && Date.now() >= deadline;
 }
@@ -84,7 +95,7 @@ export async function dockerEndpoint(
     };
     let context = env.DOCKER_CONTEXT;
     if (!context) {
-      const shown = await runProcess(docker, ['context', 'show'], {
+      const shown = await runDocker(docker, ['context', 'show'], {
         cwd: home,
         env: inspectEnv,
         raw: true,
@@ -102,7 +113,7 @@ export async function dockerEndpoint(
     }
     if (!/^[A-Za-z0-9_.-]{1,100}$/.test(context))
       throw new CsoError('ISOLATION_FAILED', 'Invalid Docker context name');
-    const result = await runProcess(
+    const result = await runDocker(
       docker,
       ['context', 'inspect', context, '--format', '{{json .Endpoints.docker.Host}}'],
       { cwd: home, env: inspectEnv, raw: true, timeoutMs: dockerTimeout(deadline, 5000), maxBytes: 8192 },
@@ -210,7 +221,7 @@ export async function dockerProbe(
 ): Promise<{ version: string; security: string[] }> {
   assertEndpoint(endpoint);
   const config = secureDirectory(join(home, 'docker-config'));
-  const r = await runProcess(endpoint.executable, ['info', '--format', '{{json .}}'], {
+  const r = await runDocker(endpoint.executable, ['info', '--format', '{{json .}}'], {
     cwd: home,
     env: dockerEnvironment(endpoint, config),
     raw: true,
@@ -260,17 +271,13 @@ export async function dockerExactImagePresent(
   assertExactCatalogImage(image);
   assertEndpoint(endpoint);
   const config = secureDirectory(join(home, 'docker-config'));
-  const result = await runProcess(
-    endpoint.executable,
-    ['image', 'inspect', '--format', '{{json .}}', image],
-    {
-      cwd: home,
-      env: dockerEnvironment(endpoint, config),
-      raw: true,
-      timeoutMs: dockerTimeout(deadline, 5_000),
-      maxBytes: 128 * 1024,
-    },
-  );
+  const result = await runDocker(endpoint.executable, ['image', 'inspect', '--format', '{{json .}}', image], {
+    cwd: home,
+    env: dockerEnvironment(endpoint, config),
+    raw: true,
+    timeoutMs: dockerTimeout(deadline, 5_000),
+    maxBytes: 128 * 1024,
+  });
   assertEndpoint(endpoint);
   if (deadlineExpired(deadline) || result.timedOut)
     throw new CsoError('DEADLINE', 'Exact image inspection reached its bounded image-provisioning deadline');
@@ -304,7 +311,7 @@ export async function dockerPullExactCatalogImage(
   assertExactCatalogImage(image);
   assertEndpoint(endpoint);
   const config = secureDirectory(join(home, 'docker-config'));
-  const result = await runProcess(endpoint.executable, ['pull', '--quiet', '--platform', platform, image], {
+  const result = await runDocker(endpoint.executable, ['pull', '--quiet', '--platform', platform, image], {
     cwd: home,
     env: dockerEnvironment(endpoint, config),
     timeoutMs: dockerTimeout(deadline, 300_000),
@@ -555,7 +562,7 @@ export class DockerGroup {
   private async docker(args: string[], max = 128 * 1024) {
     assertEndpoint(this.endpoint);
     const remaining = Math.max(1, Math.min(300_000, this.deadline - Date.now()));
-    const r = await runProcess(this.endpoint.executable, args, {
+    const r = await runDocker(this.endpoint.executable, args, {
       cwd: this.dir,
       env: dockerEnvironment(this.endpoint, this.config),
       raw: true,
@@ -930,6 +937,7 @@ export class DockerGroup {
       workdir?: string;
       env?: Record<string, string>;
       redaction?: 'withhold' | 'splice';
+      stdoutFormat?: 'json';
       preparationCommand?: true;
     } = {},
   ): Promise<{ code: number; stdout: string; stderr: string }> {
@@ -948,12 +956,13 @@ export class DockerGroup {
       args.push('--env', `${key}=${value}`);
     }
     args.push(id, ...command);
-    const r = await runProcess(this.endpoint.executable, args, {
+    const r = await runDocker(this.endpoint.executable, args, {
       cwd: this.dir,
       env: dockerEnvironment(this.endpoint, this.config),
       timeoutMs: remaining,
       maxBytes: this.remainingOutput,
       redaction: options.redaction,
+      stdoutFormat: options.stdoutFormat,
       preparationCommand: options.preparationCommand,
     });
     this.remainingOutput = Math.max(0, this.remainingOutput - r.capturedBytes);
@@ -975,7 +984,7 @@ export class DockerGroup {
     if (this.remainingOutput <= 0)
       throw new CsoError('REDACTION_FAILED', 'Reproduction-group output budget is exhausted');
     const remaining = Math.max(1, Math.min(300_000, this.deadline - Date.now()));
-    const r = await runProcess(this.endpoint.executable, ['start', '--attach', id], {
+    const r = await runDocker(this.endpoint.executable, ['start', '--attach', id], {
       cwd: this.dir,
       env: dockerEnvironment(this.endpoint, this.config),
       timeoutMs: remaining,

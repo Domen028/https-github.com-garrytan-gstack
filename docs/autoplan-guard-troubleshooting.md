@@ -67,6 +67,11 @@ The journal root has a shape the guard does not know, usually because Claude
 Code changed its journal format. The guard reads the journal twice and allows
 only when both reads agree. `unrecognized_shape:cwd_spelling` means the
 journal's directory is the same folder as the project, spelled differently.
+`unrecognized_shape:compaction_unreachable` means records after a Claude Code
+compaction hang from a compact boundary whose logical parent loops back
+instead of reaching the session root, in a layout gstack does not read yet
+(Claude Code 2.1.300's preserved segment is read). Earlier gstack versions
+dropped those records and denied the next phase with `close_incomplete`.
 Please report the detail and version.
 
 <a id="journal-lag"></a>

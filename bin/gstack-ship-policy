@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-ship-policy — read, validate and explain `.gstack/ship-policy.json` (plan C1).
  *
@@ -18,8 +18,8 @@ import * as path from 'node:path';
 import { EXIT, exitTableHelp } from '../lib/headless-artifacts';
 import { resultLine } from '../lib/result-codes';
 import {
-  SHIP_POLICY_PATH, examplePolicyJson, explainPolicy, isUnavailable, loadPolicyFromBase, loadPolicyFromHead,
-  policyUnavailableLine, renderEffective, resolveBaseBranch, type LoadedPolicy,
+  POLICY_KEYS, POLICY_KEY_INTRODUCED, SHIP_POLICY_PATH, examplePolicyJson, explainPolicy, isUnavailable, loadPolicyFromBase, loadPolicyFromHead,
+  minimumReader, policyUnavailableLine, renderEffective, resolveBaseBranch, type LoadedPolicy,
 } from '../lib/ship-policy';
 
 const HELP = `gstack-ship-policy — the repo ship policy (docs/ship-policy.md)
@@ -86,13 +86,18 @@ function main(argv: string[]): number {
   if (cmd === 'validate' || cmd === 'show-effective') {
     const loaded = load(root, rest, cmd === 'validate' ? 'head' : 'base');
     if (typeof loaded === 'number') return loaded;
+    const set = POLICY_KEYS.filter(k => loaded.values[k] && loaded.values[k] !== 'default');
+    const introduced = Object.fromEntries(set.map(k => [k, POLICY_KEY_INTRODUCED[k]]));
+    const minReader = set.length ? minimumReader(introduced) : null;
     if (json) {
-      process.stdout.write(JSON.stringify({ valid: loaded.errors.length === 0, present: loaded.present, source: loaded.source, policy: loaded.policy, values: loaded.values, errors: loaded.errors }) + '\n');
+      process.stdout.write(JSON.stringify({ valid: loaded.errors.length === 0, present: loaded.present, source: loaded.source, policy: loaded.policy, values: loaded.values, introduced, min_reader: minReader, errors: loaded.errors }) + '\n');
       return loaded.errors.length ? EXIT.fail : EXIT.ok;
     }
     printErrors(loaded);
     if (cmd === 'validate') {
       process.stdout.write(loaded.errors.length ? `POLICY_INVALID: ${loaded.errors.length} error(s) in ${loaded.source.label}\n` : `POLICY_VALID: ${loaded.present ? loaded.source.label : `no ${SHIP_POLICY_PATH} (defaults apply)`}\n`);
+      for (const k of set) process.stdout.write(`KEY: ${k} introduced=${introduced[k]}\n`);
+      if (minReader) process.stdout.write(`MIN_READER: gstack ${minReader} (every lane that reads this policy needs at least this version)\n`);
       return loaded.errors.length ? EXIT.fail : EXIT.ok;
     }
     process.stdout.write(renderEffective(loaded, { base: flag(rest, '--base') ?? resolveBaseBranch(root) }));

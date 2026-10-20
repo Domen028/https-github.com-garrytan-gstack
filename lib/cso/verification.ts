@@ -1035,7 +1035,9 @@ export function preparePatchedSource(snapshot: string, target: string, request: 
       );
     const mode = exists ? fs.statSync(file).mode & 0o777 : 0o600;
     secureDirectory(dirname(file));
+    if (exists) fs.chmodSync(file, mode | 0o200);
     fs.writeFileSync(file, change.after, { mode });
+    fs.chmodSync(file, mode);
   }
 }
 export function certify(params: {
@@ -1217,14 +1219,21 @@ export function certify(params: {
       beforeReceipt.observationHash !== witnessObservationHash(beforeObservation) ||
       afterReceipt.observationHash !== witnessObservationHash(afterObservation) ||
       params.before.existingTests !== beforeReceipt.diagnosticTestsPassed ||
-      params.after.existingTests !== afterReceipt.diagnosticTestsPassed ||
-      !beforeReceipt.externalAssertionsPassed ||
-      !afterReceipt.externalAssertionsPassed
+      params.after.existingTests !== afterReceipt.diagnosticTestsPassed
     )
       throw new CsoError(
         'INCOMPATIBLE_INPUT',
         'Authenticated assertion witness receipts do not match the verifier observations',
       );
+    for (const [phase, receipt] of [
+      ['before', beforeReceipt],
+      ['after', afterReceipt],
+    ] as const)
+      if (!receipt.externalAssertionsPassed)
+        throw new CsoError(
+          'ASSERTION_FAILED',
+          `External assertions failed in the ${phase} phase: booted ${params[phase].booted}, legitimate ${params[phase].legitimate}, security ${params[phase].security}`,
+        );
     const stableExecutions = (receipt: AssertionWitnessReceipt) =>
       receipt.executions.map(({ outputHash: _, ...execution }) => execution);
     if (canonical(stableExecutions(beforeReceipt)) !== canonical(stableExecutions(afterReceipt)))

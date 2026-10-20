@@ -18,6 +18,7 @@ import {
   ROOT, runId, createEvalCollector, describeIfSelected, testConcurrentIfSelected, logCost, recordE2E,
 } from './helpers/e2e-helpers';
 import { runSkillTest, SESSION_DRAIN_GRACE_MS } from './helpers/session-runner';
+import { reportsGateDisposition } from './helpers/gate-disposition';
 import { extractSkillSections, REVIEW_E2E_SECTIONS } from './helpers/skill-fixture';
 
 const evalCollector = createEvalCollector('e2e-gate-integrity');
@@ -147,7 +148,7 @@ Write your review findings, including the Gate Integrity section and the exact "
       expect(lower).not.toMatch(/gate edits:\s*none/);
       expect(report).toMatch(/RH-1\b/);
       expect(report).toMatch(/RH-15\b/);
-      expect(lower).toMatch(/restore the gate|leave open|keep[^\n]*justified/);
+      expect(reportsGateDisposition(report)).toBe(true);
       passed = true;
     } finally {
       recordE2E(evalCollector, '/review gate integrity', 'Review gate integrity E2E', result, { passed });

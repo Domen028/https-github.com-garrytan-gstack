@@ -6,26 +6,30 @@
  * execution: lanes, …) has its own clock and is never folded into the first.
  * A failing check blocks; `.gstack/pregate.json` downgrades a named check to
  * warn except `secrets` and the required-lane verdicts; timeout or a missing
- * tool is `incomplete`, never `pass`. Tier 2 checks (guards, ratchets, lint,
- * links, hermetic, patches, integrator) register here as they land.
+ * tool is `incomplete`, never `pass`. Tier 2 checks register here as they
+ * land: `guards` (field wave CD1); ratchets, lint, links, hermetic, patches
+ * and integrator later.
  */
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ARTIFACT_SCHEMAS, checkSchema, type PregateFile, type PregateRemote, type ValidationError } from '../headless-artifacts';
-import { wtreeFingerprint } from '../regen';
-import { lanesCheck } from './checks/lanes';
+import { wtreeFingerprint, type WtreeResult } from '../script-invocation';
+import { guardsCheck } from './checks/guards';
+import { clearHint, lanesCheck, parseRemoteReport, REMOTE_GATE_LANE, remoteReportProblem } from './checks/lanes';
 import { literalsCheck } from './checks/literals';
 import { regenCheck } from './checks/regen';
 import { secretsCheck } from './checks/secrets';
 import { straysCheck } from './checks/strays';
+import { timingCheck } from './checks/timing';
 import { NON_DOWNGRADABLE } from './config';
 import { withFingerprint } from './context';
 import type { CheckDef, CheckResult, PregateContext, Stage } from './types';
 
-export const CHECKS: readonly CheckDef[] = [regenCheck, secretsCheck, straysCheck, literalsCheck, lanesCheck];
+export const CHECKS: readonly CheckDef[] = [regenCheck, secretsCheck, straysCheck, literalsCheck, timingCheck, guardsCheck, lanesCheck];
 export const CHECK_IDS = CHECKS.map(c => c.id);
 export const PREGATE_OUT_REL = '.gstack/tmp/pregate.json';
-export const PREGATE_TIER2 = ['guards', 'ratchets', 'lint', 'links', 'hermetic', 'patches', 'integrator'] as const;
+export const PREGATE_TIER2 = ['ratchets', 'lint', 'links', 'hermetic', 'patches', 'integrator'] as const;
 
 export interface RunOptions { stage: Stage | 'all'; only?: string[]; run?: string }
 
@@ -38,16 +42,18 @@ export function applyDowngrades(ctx: PregateContext, result: CheckResult, def: C
   return { ...result, status: 'warn', detail: `${result.detail} (downgraded to warn by ${ctx.configLabel})` };
 }
 
-export function runPregate(ctx: PregateContext, o: RunOptions): PregateFile {
+export async function runPregate(ctx: PregateContext, o: RunOptions): Promise<PregateFile> {
   const selected = CHECKS.filter(c => (o.stage === 'all' || c.stage === o.stage) && (!o.only || o.only.includes(c.id)));
   const checks: CheckResult[] = [];
   const clocks: Record<Stage, number> = { preflight: 0, tests: 0 };
   for (const def of selected) {
     const started = Date.now();
-    const result = applyDowngrades(ctx, withFingerprint(ctx, def.id, def.stage, () => def.run(ctx)), def);
+    const result = applyDowngrades(ctx, await withFingerprint(ctx, def.id, def.stage, () => def.run(ctx)), def);
     clocks[def.stage] += Date.now() - started;
     checks.push({ ...result, stage: def.stage });
   }
+  const tests = checks.filter(c => c.stage === 'tests');
+  if (tests.length) ctx.progress(`PREGATE: tests ${verdictOf({ schema_version: 1, tree: ctx.wtree, checks: tests, requires_remote: tests.flatMap(c => c.remote ?? []) })} in ${(clocks.tests / 1000).toFixed(1)}s — ${tests.map(c => `${c.id}: ${c.detail ?? c.status}`).join('; ')}`);
   const remote: PregateRemote[] = checks.flatMap(c => c.remote ?? []).map(r => ({ ...r }));
   const file: PregateFile = {
     schema_version: 1, tree: ctx.wtree, head: ctx.head, base: `${ctx.baseRef}@${ctx.baseSha.slice(0, 12)}`, generated_at: new Date().toISOString(),
@@ -80,7 +86,10 @@ export function renderTable(file: PregateFile, opts: { lines?: boolean } = { lin
     file.stage1_ms !== undefined ? `stage 1 (mechanical preflight): ${file.stage1_ms} ms` : null,
     file.stage2_ms !== undefined ? `stage 2 (test execution): ${file.stage2_ms} ms` : null,
   ].filter(Boolean);
-  const remote = (file.requires_remote ?? []).map(r => `requires-remote: ${r.lane} (${r.platform}) ${r.tests.length} test(s) — ${r.receipt ? `cleared by ${r.receipt}` : 'uncleared; clear with gstack-pregate clear --remote ' + r.lane + ' --run-url <url>'}`);
+  const remote = (file.requires_remote ?? []).map(r => {
+    const run = r.command ? `run ${r.command.length > 200 ? `${r.command.slice(0, 200)}… (full command in pregate.json)` : r.command}, then ` : '';
+    return `requires-remote: ${r.lane} (${r.platform}) ${r.tests.length} test(s) — ${r.receipt ? `cleared by ${r.receipt}` : `uncleared; ${run}clear with ${clearHint(r.lane)}`}`;
+  });
   return [
     `stage      check     status            time  detail`,
     ...rows, ...body, ...clocks, ...remote,
@@ -115,16 +124,51 @@ export interface Verification { ok: boolean; code?: 'PREGATE_STALE' | 'PREGATE_R
  * current after final generation and stamping), no check may be fail or
  * incomplete, and every requires-remote obligation needs its receipt.
  */
-export function verifyPregate(repoRoot: string, file: PregateFile, treeNow = wtreeFingerprint(repoRoot)): Verification {
+export function verifyPregate(repoRoot: string, file: PregateFile, treeNow: WtreeResult = wtreeFingerprint({ cwd: repoRoot })): Verification {
   const uncleared = (file.requires_remote ?? []).filter(r => !r.receipt);
-  const current = !!treeNow && treeNow === file.tree;
-  if (!current) return { ok: false, code: 'PREGATE_STALE', message: `pregate.json was recorded against tree ${file.tree.slice(0, 12)}; the tree is now ${(treeNow ?? 'unknown').slice(0, 12)}`, current, uncleared };
+  const current = 'tree' in treeNow && treeNow.tree === file.tree;
+  if (!current) return { ok: false, code: 'PREGATE_STALE', message: `pregate.json was recorded against tree ${file.tree.slice(0, 12)}; ${'tree' in treeNow ? `the tree is now ${treeNow.tree.slice(0, 12)}` : `the tree cannot be fingerprinted now (${treeNow.error})`}`, current, uncleared };
   const failed = file.checks.filter(c => c.status === 'fail');
   if (failed.length) return { ok: false, code: 'PREGATE_LANE_FAILED', message: `${failed.length} check(s) failed: ${failed.map(c => c.id).join(', ')}`, current, uncleared };
   const incomplete = file.checks.filter(c => c.status === 'incomplete' || c.status === 'not_installed');
   if (incomplete.length) return { ok: false, code: 'PREGATE_INCOMPLETE', message: `${incomplete.length} check(s) incomplete: ${incomplete.map(c => c.id).join(', ')}`, current, uncleared };
   if (uncleared.length) return { ok: false, code: 'PREGATE_REMOTE_UNCLEARED', message: `${uncleared.length} requires-remote obligation(s) without a receipt: ${uncleared.map(r => r.lane).join(', ')}`, current, uncleared };
   return { ok: true, message: `pregate ${file.verdict} is current for tree ${file.tree.slice(0, 12)}`, current, uncleared };
+}
+
+export interface ClearInput { runUrl?: string; bundleLane?: string; receiptPath?: string }
+export type ClearDecision = { receipt: string; attested: boolean } | { refused: 'usage' | 'PREGATE_RECEIPT_INVALID'; message: string };
+
+/**
+ * What `clear` may record for one obligation. A `pregate.json/remote_gate`
+ * obligation needs the gate's own report (`--receipt <file>` holding its
+ * PREGATE_REMOTE: line), validated as `--remote` validates it against the
+ * tested tree; a run URL is not checkable there. A `test_backend/<backend>`
+ * obligation has no machine-checkable receipt, so its run URL is recorded as
+ * attested. Platform lanes take a run URL or an evidence-bundle lane label.
+ */
+export function clearDecision(file: PregateFile, lane: string, input: ClearInput): ClearDecision {
+  const list = file.requires_remote ?? [];
+  const target = list.find(r => r.lane === lane);
+  if (!target) return { refused: 'usage', message: `no requires-remote obligation named ${lane}; obligations: ${list.map(r => r.lane).join(', ') || '(none)'}` };
+  if (target.lane === REMOTE_GATE_LANE) {
+    if (!input.receiptPath) return { refused: 'usage', message: `${lane} clears only with --receipt <file> holding the remote gate's PREGATE_REMOTE: tree=… tests=… failed=… line (a run URL is not checkable); or rerun gstack-pregate --remote` };
+    let text: string;
+    try { text = fs.readFileSync(input.receiptPath, 'utf8'); }
+    catch (e: any) { return { refused: 'PREGATE_RECEIPT_INVALID', message: `cannot read ${input.receiptPath}: ${e.message}` }; }
+    const report = parseRemoteReport(text);
+    const problem = report ? remoteReportProblem(report, file.tree) : `${input.receiptPath} has no PREGATE_REMOTE: line`;
+    if (problem) return { refused: 'PREGATE_RECEIPT_INVALID', message: `${problem}; ${lane} stays uncleared` };
+    return { receipt: `remote-gate tree=${file.tree.slice(0, 12)} tests=${report!.tests} receipt=${path.resolve(input.receiptPath)} sha256=${createHash('sha256').update(text).digest('hex').slice(0, 12)}`, attested: false };
+  }
+  if (input.receiptPath) return { refused: 'usage', message: `--receipt applies only to ${REMOTE_GATE_LANE}; clear ${lane} with --run-url <url>${target.workflow === 'test_backend' ? '' : ' or --bundle-lane <label>'}` };
+  if (target.workflow === 'test_backend') {
+    if (!input.runUrl) return { refused: 'usage', message: `${lane} clears with --run-url <url>` };
+    return { receipt: `attested:${input.runUrl}`, attested: true };
+  }
+  const receipt = input.runUrl ?? (input.bundleLane ? `bundle-lane:${input.bundleLane}` : undefined);
+  if (!receipt) return { refused: 'usage', message: `${lane} clears with --run-url <url> or --bundle-lane <label>` };
+  return { receipt, attested: false };
 }
 
 /** Record the receipt that clears one obligation (a run URL or an evidence-bundle lane label). */

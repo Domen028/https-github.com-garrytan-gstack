@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-greptile-early — /ship's early Greptile review (detect, consent, open, wait).
  *

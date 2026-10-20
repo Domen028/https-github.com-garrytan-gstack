@@ -50,11 +50,12 @@ describe.skipIf(process.platform === 'win32')('upgrade setup recovery (real shel
     try {
       const bin = join(root, 'bin');
       mkdirSync(bin);
-      writeFileSync(join(bin, 'git'), '#!/bin/sh\nif [ "$1 $2" = "rev-parse --show-toplevel" ]; then pwd -P; elif [ "$1" = rev-parse ]; then echo old-commit; fi\nexit 0\n', { mode: 0o755 });
+      writeFileSync(join(bin, 'git'), '#!/bin/sh\nif [ "$1 $2" = "rev-parse --show-prefix" ]; then :; elif [ "$1 $2" = "rev-parse --is-inside-work-tree" ]; then echo true; elif [ "$1" = rev-parse ]; then echo old-commit; fi\nexit 0\n', { mode: 0o755 });
       writeFileSync(join(root, 'setup'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
       // C9: the git fence verifies it is inside gstack's own checkout first.
       writeFileSync(join(root, 'VERSION'), '1.0.0.0\n');
       writeFileSync(join(root, 'bin', 'gstack-config'), '#!/bin/sh\n', { mode: 0o755 });
+      writeFileSync(join(root, 'bin', 'gstack-ff-update'), '#!/bin/sh\necho "ok old-commit new-commit"\n', { mode: 0o755 });
       const result = spawnSync('bash', ['-c', blockAfter('**For git installs**')], {
         cwd: root, encoding: 'utf8', timeout: 10_000,
         env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, INSTALL_DIR: root },
@@ -85,6 +86,7 @@ describe.skipIf(process.platform === 'win32')('upgrade Bun floor (real git)', ()
     spawnSync('git', ['init', '-q', '--bare', '-b', 'main', origin], { timeout: 30_000 });
     const helper = readFileSync(join(import.meta.dir, '../bin/gstack-bun-version.sh'), 'utf8');
     writeFileSync(join(seed, 'bin', 'gstack-bun-version.sh'), helper);
+    writeFileSync(join(seed, 'bin', 'gstack-ff-update'), readFileSync(join(import.meta.dir, '../bin/gstack-ff-update'), 'utf8'), { mode: 0o755 });
     writeFileSync(join(seed, 'bin', 'gstack-config'), '#!/bin/sh\n', { mode: 0o755 });
     writeFileSync(join(seed, 'VERSION'), '1.0.0\n');
     writeFileSync(join(seed, 'setup'), '#!/bin/sh\necho ran >> "$SETUP_LOG"\n', { mode: 0o755 });

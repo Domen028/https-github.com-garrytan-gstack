@@ -27,6 +27,7 @@ const COPIED = [
   'autoplan/SKILL.md', // its frontmatter registers the autoplan hook the hooks-row test breaks
   'bin/gstack-launch-probe.sh',
   'bin/gstack-doctor-check.sh', 'bin/gstack-doctor-components.sh', 'bin/gstack-runtime-pins.ts', 'lib/runtime-pins.ts',
+  'bin/gstack-windows-bash.ts', 'lib/script-invocation.ts', 'lib/bun-isolation.ts', 'lib/result-codes.ts', 'lib/result-codes-release.ts', // the windows bash row
 ];
 const bases: string[] = [];
 afterEach(() => { for (const b of bases.splice(0)) fs.rmSync(b, { recursive: true, force: true }); });
@@ -262,6 +263,20 @@ describe('gstack-doctor', () => {
     expect(doctor(f).row('artifacts sync').state).toBe('ok');
   });
 
+  test('artifacts sync: case-colliding paths warn with the clamped names, held or not', () => {
+    const f = makeFixture();
+    syncOn(f, { status: 'collision', message: 'held projects/myapp/x.md', case_held: 1, case_names: 'MyApp,myapp', drainable: 0, last_drain_at: iso(60), last_push_at: iso(60) });
+    const held = doctor(f);
+    expect(held.row('artifacts sync').state).toBe('warn');
+    expect(held.row('artifacts sync').detail).toBe('status collision; artifact paths differ only by letter case (MyApp,myapp), see docs/troubleshooting.md#artifact-case-collision');
+    expect(held.out).not.toContain('projects/myapp');
+
+    syncOn(f, { status: 'ok', message: 'pushed 1 file(s)', case_held: 0, case_names: 'OLD,old', drainable: 0, last_drain_at: iso(60), last_push_at: iso(60) });
+    expect(doctor(f).row('artifacts sync').state).toBe('warn');
+    syncOn(f, { status: 'ok', message: 'pushed 1 file(s)', case_held: 0, case_names: '', drainable: 0, last_drain_at: iso(60), last_push_at: iso(60) });
+    expect(doctor(f).row('artifacts sync').state).toBe('ok');
+  });
+
   test('artifacts sync: stale push and stale drain warn, a fresh push clears them', () => {
     const f = makeFixture();
     syncOn(f, { status: 'ok', message: 'x', drainable: 4, last_drain_at: iso(60), last_push_at: iso(90_000) });
@@ -473,10 +488,12 @@ describe('gstack-doctor --check', () => {
     installCodex(f);
     const r = row(f, []);
     expect(r.status, r.out).toBe(0);
-    expect(r.required).toEqual(['claude', 'codex', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
-    for (const id of r.required.filter(x => x !== 'pins')) expect(r.rows[id]?.status, `${id}\n${r.out}`).toBe('PASS');
+    expect(r.required).toEqual(['claude', 'codex', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
+    for (const id of r.required.filter(x => x !== 'pins' && x !== 'wrapper')) expect(r.rows[id]?.status, `${id}\n${r.out}`).toBe('PASS');
     // The work dir is not a git repository, so there is no project to read pins from: SKIP with the reason, never silent.
     expect(r.rows.pins).toEqual({ status: 'SKIP', rest: expect.stringContaining('no project') });
+    // No ~/.capy/drive skill copy and no active wrapper: not a Capy machine.
+    expect(r.rows.wrapper).toEqual({ status: 'SKIP', rest: expect.stringContaining('not a Capy machine') });
     expect(r.rows.patch.status).toBe('PASS');
     expect(r.rows['codex-cli'].status).toBe('PASS');
     expect(r.rows.browser).toEqual({ status: 'SKIP', rest: '(lazy; gstack-browser-ensure installs on first use)' });
@@ -495,7 +512,7 @@ describe('gstack-doctor --check', () => {
     fs.rmSync(path.join(f.stub, 'codex'));
     const r = row(f, ['--for', 'autoplan']);
     expect(r.status, r.out).toBe(0);
-    expect(r.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
+    expect(r.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
     expect(r.rows.patch).toEqual({ status: 'PASS', rest: 'gpt-6-astra (gstack-review/SKILL.md)' });
     expect(r.rows['codex-cli'].status).toBe('SKIP');
     expect(r.rows['codex-cli'].rest).toContain('optional');
@@ -606,6 +623,39 @@ describe('gstack-doctor --check', () => {
     expect(missing.rows.pins.status).toBe('SKIP');
   });
 
+  test('project pins on Capy: the PROJECT_PIN_MISMATCH fix is the exact bootstrapper command, which installs a verified pinned Bun', () => {
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, 'package.json'), '{\n  "engines": {\n    "bun": ">=1.4.2"\n  }\n}\n');
+    const wrapper = '/drive/skills/gstack/scripts/install.sh';
+    const capy = row(f, ['--project', project], { STUB_BUN_VERSION: '1.3.14', GSTACK_CAPY_WRAPPER_PATH: wrapper });
+    expect(capy.rows.pins.status).toBe('FAIL');
+    expect(capy.rows.pins.rest).toContain(`fix: bash ${wrapper} (installs the project's pinned Bun when it is a verified version: 1.4.2 1.4.3; otherwise it names the conflict), or change the pin in ${project}`);
+    expect(capy.rows.pins.rest).toContain('(PROJECT_PIN_MISMATCH; ');
+    const forSkill = row(f, ['--project', project, '--for', 'review'], { STUB_BUN_VERSION: '1.3.14', GSTACK_CAPY_WRAPPER_PATH: wrapper });
+    expect(forSkill.rows.pins.rest).toContain(`fix: bash ${wrapper} --for review (installs`);
+    const plain = row(f, ['--project', project], { STUB_BUN_VERSION: '1.3.14' });
+    expect(plain.rows.pins.rest).toContain('fix: install the pinned version for this platform');
+    expect(plain.rows.pins.rest).not.toContain(wrapper);
+  });
+
+  test('project pins: a Node pin mismatch names the node it read and a fix that installs the pinned Node', () => {
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, '.github/workflows/native-locks.yml'), 'jobs:\n  locks:\n    steps:\n      - uses: actions/setup-node@v4\n        with:\n          node-version: 24.18.0\n');
+    script(path.join(f.stub, 'node'), ['echo v24.21.0']);
+    const wrapper = '/drive/skills/gstack/scripts/install.sh';
+    const capy = row(f, ['--project', project, '--for', 'review'], { GSTACK_CAPY_WRAPPER_PATH: wrapper });
+    expect(capy.rows.pins.status).toBe('FAIL');
+    expect(capy.rows.pins.rest).toContain(`node 24.21.0 outside CI 24.18.0 (.github/workflows/native-locks.yml:6); node read from ${bashPath(f.stub)}/node`);
+    expect(capy.rows.pins.rest).toContain(`fix: bash ${wrapper} --for review (installs the project's pinned Node 24.18.0 into gstack's runtime store and launches it through the GSTACK_LAUNCH PATH), or change the pin in ${project}`);
+    expect(capy.rows.pins.rest).toContain('(PROJECT_PIN_MISMATCH; ');
+    const plain = row(f, ['--project', project, '--for', 'review']);
+    expect(plain.rows.pins.rest).toContain(`fix: nvm install 24.18.0 and put its bin directory first on PATH`);
+    script(path.join(f.stub, 'node'), ['echo v24.18.0']);
+    expect(row(f, ['--project', project, '--for', 'review']).rows.pins.status).toBe('PASS');
+  });
+
   test('--revision: a matching VERSION passes, an unmet revision is never ok', () => {
     const f = makeFixture();
     const ok = row(f, ['--revision', VERSION]);
@@ -678,8 +728,8 @@ describe('gstack-doctor --check', () => {
     expect(json.for).toBe('autoplan');
     expect(json.ok).toBe(false);
     expect(json.failed).toEqual(['runtime']);
-    expect(json.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
-    expect(json.rows.map((x: { id: string }) => x.id)).toEqual(['claude', 'codex', 'patch', 'codex-cli', 'browse-bundle', 'browser', 'cso', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision']);
+    expect(json.required).toEqual(['claude', 'codex', 'patch', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
+    expect(json.rows.map((x: { id: string }) => x.id)).toEqual(['claude', 'codex', 'patch', 'codex-cli', 'browse-bundle', 'browser', 'cso', 'helpers', 'runtime', 'pins', 'state-root', 'privacy', 'cores', 'revision', 'wrapper']);
     const runtime = json.rows.find((x: { id: string }) => x.id === 'runtime');
     expect(runtime.status).toBe('FAIL');
     expect(runtime.code).toBe('RUNTIME_BELOW_MINIMUM');
@@ -699,5 +749,325 @@ describe('gstack-doctor --check', () => {
     expect(doctor(f, ['--require', 'claude,bogus']).status).toBe(2);
     expect(doctor(f, ['--check', '--project']).status).toBe(2);
     expect(doctor(f, ['--help']).out).toContain('--check');
+  });
+});
+
+// Field wave lane A: the trailer agrees with the Bun workflows run (A3), a
+// remote minimum fails the revision row (A2), and planning-only workflows do
+// not fail on a repo test-pin mismatch (A3 amendment).
+describe('gstack-doctor --check: launch Bun, supported minimum, planning-only pins', () => {
+  const VERSION = fs.readFileSync(path.join(REPO, 'VERSION'), 'utf8').trim();
+  const check = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = doctor(f, ['--check', ...args], extra);
+    const lines = r.out.split('\n');
+    const rows = Object.fromEntries(lines.filter(l => /^(PASS|FAIL|SKIP) /.test(l)).map(l => {
+      const m = l.match(/^(PASS|FAIL|SKIP) ([a-z-]+)(?:\s(.*))?$/)!;
+      return [m[2], { status: m[1], rest: m[3] ?? '' }];
+    }));
+    return { status: r.status, out: r.out, rows, trailer: lines.filter(l => l.startsWith('gstack: ')).at(-1) ?? '' };
+  };
+  /** A verified Bun in $HOME/.bun/bin (off PATH) that answers --version and runs TypeScript. */
+  const verifiedBun = (f: Fixture, version = '1.4.2') =>
+    script(path.join(f.home, '.bun/bin/bun'), [`[ "$1" = --version ] && { echo "${version}"; exit 0; }`, `exec "${process.execPath}" "$@"`]);
+
+  test('PATH Bun 1.3.14 with a verified 1.4.2 off PATH: runtime FAILs naming where it was found; with the launch PATH it PASSes', () => {
+    const f = makeFixture();
+    verifiedBun(f);
+    const fresh = check(f, [], { STUB_BUN_VERSION: '1.3.14' });
+    expect(fresh.rows.runtime.status).toBe('FAIL');
+    const home = bashPath(f.home);
+    expect(fresh.rows.runtime.rest).toContain(`bun 1.4.2 found at ${home}/.bun/bin (not on PATH)`);
+    expect(fresh.rows.runtime.rest).toContain(`fix: export PATH="${home}/.bun/bin:$PATH" or prefix commands with the GSTACK_LAUNCH line`);
+    expect(fresh.rows.runtime.rest).toContain('(RUNTIME_BELOW_MINIMUM; ');
+    const launched = check(f, [], { STUB_BUN_VERSION: '1.3.14', PATH: `${f.home}/.bun/bin${path.delimiter}${f.env.PATH}` });
+    expect(launched.rows.runtime.status, launched.out).toBe('PASS');
+    expect(launched.rows.runtime.rest).toContain(`at ${home}/.bun/bin/bun`);
+  });
+
+  test('--min-revision: below FAILs with REVISION_BELOW_MINIMUM naming the upgrade command; at or above PASSes; unknown says so and never claims the minimum', () => {
+    const f = makeFixture();
+    const below = check(f, ['--min-revision', '99.0.0.0']);
+    expect(below.status).toBe(1);
+    expect(below.rows.revision.status).toBe('FAIL');
+    expect(below.rows.revision.rest).toContain(`installed ${VERSION}`);
+    expect(below.rows.revision.rest).toContain('below the supported minimum 99.0.0.0');
+    expect(below.rows.revision.rest).toContain(`${bashPath(f.root)}/bin/gstack-upgrade`);
+    expect(below.rows.revision.rest).toContain('(REVISION_BELOW_MINIMUM; ');
+    expect(below.trailer).toBe('gstack: fail revision');
+    const wrapped = check(f, ['--min-revision', '99.0.0.0'], { GSTACK_CAPY_WRAPPER_PATH: '/drive/skills/gstack/scripts/install.sh' });
+    expect(wrapped.rows.revision.rest).toContain('fix: bash /drive/skills/gstack/scripts/install.sh (fast-forwards)');
+    const at = check(f, ['--min-revision', VERSION]);
+    expect(at.rows.revision.status, at.out).toBe('PASS');
+    expect(at.rows.revision.rest).toContain(`>= supported minimum ${VERSION}`);
+    const unknown = check(f, ['--min-revision', 'unknown']);
+    expect(unknown.rows.revision.status).toBe('PASS');
+    expect(unknown.rows.revision.rest).toContain('remote minimum unknown (fetch failed)');
+    expect(unknown.rows.revision.rest).not.toContain('>= supported minimum');
+  });
+
+  test('planning-only workflows SKIP a repo test-pin mismatch; test-running workflows and --require keep pins required', () => {
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, '.bun-version'), '1.4.2\n');
+    const planning = check(f, ['--for', 'autoplan', '--project', project], { STUB_BUN_VERSION: '1.4.3' });
+    expect(planning.rows.pins.status, planning.out).toBe('SKIP');
+    expect(planning.rows.pins.rest).toMatch(/^\(planning-only; repo pins .*1\.4\.2.*, launch bun 1\.4\.3\)$/);
+    for (const args of [['--for', 'review'], ['--for', 'ship'], ['--require', 'claude']]) {
+      const tests = check(f, [...args, '--project', project], { STUB_BUN_VERSION: '1.4.3' });
+      expect(tests.rows.pins.status, args.join(' ')).toBe('FAIL');
+    }
+  });
+});
+
+// Plan A8/A-h: the Capy skill copy. Active-wrapper provenance decides; without
+// it the Drive copies do, failing only when every copy is stale. The printed
+// workaround (the checkout's own wrapper) certifies with the stale Drive copy
+// left unchanged. Plan A5: a drifted resolution is a runtime FAIL.
+describe('gstack-doctor --check: wrapper and runtime drift', () => {
+  const posixPathTest = process.platform === 'win32' ? test.skip : test;
+  const PRE_BOOTSTRAPPER = '#!/usr/bin/env bash\n# gstack Capy skill installer (pre-bootstrapper)\nset -u\nroot="${GSTACK_CAPY_ROOT:-$HOME/.local/share/gstack}"\nexec "$root/bin/gstack-capy-install" "$@"\n';
+  const parse = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = doctor(f, ['--check', ...args], extra);
+    const line = (id: string) => r.out.split('\n').find(l => new RegExp(`^(PASS|FAIL|SKIP|WARN) ${id}\\b`).test(l)) ?? '';
+    return { status: r.status, out: r.out, line, trailer: r.out.split('\n').filter(l => l.startsWith('gstack: ')).at(-1) ?? '' };
+  };
+  const drive = (f: Fixture, scope: string, text: string) => { const file = path.join(f.home, '.capy/drive', scope, 'skills/gstack/scripts/install.sh'); write(file, text); return file; };
+  const withSupport = (f: Fixture, min = 1) => write(path.join(f.root, 'capy/support.env'), `GSTACK_MIN_REVISION=1.0.0.0\nGSTACK_CAPY_MIN_WRAPPER=${min}\n`);
+  const current = fs.readFileSync(path.join(REPO, 'capy/skill/gstack/scripts/install.sh'), 'utf8');
+  const currentRev = current.match(/^GSTACK_CAPY_WRAPPER=(\d+)$/m)![1];
+
+  posixPathTest('direct doctor run: a pre-bootstrapper Drive copy (no revision line) fails wrapper with both fixes; a current copy is not flagged', () => {
+    const f = makeFixture();
+    withSupport(f);
+    const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
+    const r = parse(f, []);
+    expect(r.status).toBe(1);
+    expect(r.trailer).toBe('gstack: fail wrapper');
+    const row = r.line('wrapper');
+    expect(row).toContain(`FAIL wrapper — every Capy skill copy is stale (minimum wrapper 1): ${stale} (wrapper 0); fix: bash ${f.root}/capy/skill/gstack/scripts/install.sh --check (this session); owner: copy ${f.root}/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes`);
+    expect(row).toContain('(CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)');
+    write(stale, current);
+    const fresh = parse(f, []);
+    expect(fresh.line('wrapper')).toBe(`PASS wrapper Drive copy ${stale} (wrapper ${currentRev}) (minimum 1)`);
+    expect(fresh.status, fresh.out).toBe(0);
+  });
+
+  posixPathTest('two Drive copies, one current: PASS naming the stale one; GSTACK_CAPY_WRAPPER_PATH alone decides when set without a revision', () => {
+    const f = makeFixture();
+    withSupport(f);
+    const stale = drive(f, 'org', PRE_BOOTSTRAPPER);
+    const good = drive(f, 'user', current);
+    const r = parse(f, []);
+    expect(r.line('wrapper')).toBe(`PASS wrapper Drive copy ${good} (wrapper ${currentRev}) (minimum 1); stale copies: ${stale} (wrapper 0)`);
+    expect(parse(f, [], { GSTACK_CAPY_WRAPPER_PATH: stale }).trailer).toBe('gstack: fail wrapper');
+  });
+
+  posixPathTest('the printed workaround certifies: a current active wrapper passes with the stale Drive copy unchanged (WARN, owner action); a stale active wrapper is a WARN too', () => {
+    const f = makeFixture();
+    withSupport(f);
+    const stale = drive(f, 'user-garry-tan', PRE_BOOTSTRAPPER);
+    const checkoutCopy = path.join(f.root, 'capy/skill/gstack/scripts/install.sh');
+    const r = parse(f, [], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: checkoutCopy });
+    expect(r.status, r.out).toBe(0);
+    expect(r.trailer).toMatch(/^gstack: ok /);
+    expect(r.line('wrapper')).toBe(`WARN wrapper — active wrapper 1 (${checkoutCopy}) is current; stale Drive copies (minimum 1): ${stale} (wrapper 0); owner action: copy ${f.root}/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes (CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)`);
+    expect(fs.readFileSync(stale, 'utf8')).toBe(PRE_BOOTSTRAPPER);
+    const json = JSON.parse(doctor(f, ['--check', '--json'], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: checkoutCopy }).out);
+    expect(json.ok).toBe(true);
+    expect(json.rows.find((x: { id: string }) => x.id === 'wrapper')).toMatchObject({ status: 'WARN', code: 'CAPY_WRAPPER_STALE' });
+    withSupport(f, 2);
+    const old = parse(f, [], { GSTACK_CAPY_WRAPPER_REV: '1', GSTACK_CAPY_WRAPPER_PATH: stale });
+    // Integration item 2: an active copy below the minimum still works, so it
+    // is an owner-action WARN and the trailer stays ok.
+    expect(old.status, old.out).toBe(0);
+    expect(old.trailer).toMatch(/^gstack: ok /);
+    expect(old.line('wrapper')).toBe(`WARN wrapper — the active Capy skill copy ${stale} is wrapper 1, minimum 2 (it still works); owner action: copy ${f.root}/capy/skill/gstack/ over the Drive skill folder, or have Capy re-sync it; this recurs every session until the Drive copy changes (CAPY_WRAPPER_STALE; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#capy-wrapper-stale)`);
+  });
+
+  test('a drifted Bun resolution is a runtime FAIL carrying the installer\'s detail, fix and BUN_RESOLUTION_DRIFT', () => {
+    const f = makeFixture();
+    const r = parse(f, [], { GSTACK_DOCTOR_RUNTIME_DRIFT: 'recorded bun 1.4.3 at /s/bun (home), now no eligible bun; changed: the recorded binary is gone', GSTACK_DOCTOR_RUNTIME_DRIFT_FIX: 'bash /d/install.sh --for review' });
+    expect(r.trailer).toBe('gstack: fail runtime');
+    expect(r.line('runtime')).toBe('FAIL runtime — bun resolution drifted: recorded bun 1.4.3 at /s/bun (home), now no eligible bun; changed: the recorded binary is gone; fix: bash /d/install.sh --for review (BUN_RESOLUTION_DRIFT; https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#bun-resolution-drift)');
+  });
+
+  posixPathTest('the runtime row shows gstack\'s bun shim and where it resolves from here, or names a foreign ~/.local/bin/bun it left alone', () => {
+    const f = makeFixture();
+    const shim = path.join(f.home, '.local/bin/bun');
+    write(shim, '#!/bin/sh\n# gstack-bun-shim: gstack-owned; delete this file to remove it\n[ "$GSTACK_BUN_SHIM_EXPLAIN" = 1 ] && echo "gstack bun shim: project=none record=none chose=/store/1.4.3/bun rule=default" >&2\necho 1.4.3\n', 0o755);
+    expect(parse(f, []).line('runtime')).toContain(`; shim ${shim} -> /store/1.4.3/bun`);
+    write(shim, '#!/bin/sh\necho mine\n', 0o755);
+    expect(parse(f, []).line('runtime')).toContain(`; ${shim} is not gstack's shim (no marker), left untouched: launch with the GSTACK_LAUNCH line`);
+    expect(parse(f, [], { GSTACK_BUN_INSTALL_VERSION: '1.4.2' }).line('runtime')).toContain('; install version 1.4.2 from GSTACK_BUN_INSTALL_VERSION');
+  });
+
+  test('A-a: the Capy skill\'s dispatch examples (fail revision, fail runtime,pins, fail pins) match the real failure heads, unchanged', () => {
+    const skill = fs.readFileSync(path.join(REPO, 'capy/skill/gstack/SKILL.md'), 'utf8');
+    const step = skill.split('\n').find(l => l.includes('If the trailer names `revision`, `runtime` or `pins`'))!;
+    const examples = [...step.matchAll(/`(gstack: fail [^`]+)`/g)].map(m => m[1]);
+    expect(examples).toEqual(['gstack: fail revision …', 'gstack: fail runtime,pins', 'gstack: fail pins']);
+    const f = makeFixture();
+    const project = path.join(f.base, 'project');
+    write(path.join(project, '.bun-version'), '1.4.2\n');
+    const real: Record<string, string> = {
+      revision: parse(f, ['--require', 'claude', '--min-revision', '99.0.0.0']).trailer,
+      'runtime,pins': parse(f, ['--require', 'claude', '--project', project], { STUB_BUN_VERSION: '1.3.14' }).trailer,
+      pins: parse(f, ['--require', 'claude', '--project', project], { STUB_BUN_VERSION: '1.4.3' }).trailer,
+    };
+    for (const example of examples) {
+      const ids = example.slice('gstack: fail '.length).replace(/ …$/, '');
+      const head = real[ids];
+      expect(head === `gstack: fail ${ids}` || head.startsWith(`gstack: fail ${ids} — `), `${example} vs ${head}`).toBe(true);
+      expect(head.match(/^gstack: fail ([a-z,-]+)/)?.[1].split(',')).toEqual(ids.split(','));
+    }
+  });
+});
+
+// Lane F item D: the plain report lists rescue refs with their commands, warns
+// about a CLAUDE.md gstack section that enumerates skills (#3169), and on
+// Windows names the bash gstack's TypeScript hands its scripts to. GSTACK_DOCTOR_PLATFORM
+// injects the platform and GSTACK_DOCTOR_BASH_PROBE the discovery inputs, so
+// every case runs on every OS.
+describe('gstack-doctor: rescue refs, CLAUDE.md skill lists, Windows bash', () => {
+  const git = (f: Fixture, args: string[], extra: Record<string, string> = {}) => {
+    const r = spawnSync('git', args, {
+      cwd: f.root, encoding: 'utf8', timeout: 20_000,
+      env: { ...process.env, HOME: f.home, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'fixture', GIT_AUTHOR_EMAIL: 'fixture@example.com', GIT_COMMITTER_NAME: 'fixture', GIT_COMMITTER_EMAIL: 'fixture@example.com', ...extra },
+    });
+    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+    return r.stdout.trim();
+  };
+  /** A git install with one rescue commit per entry: a user edit on top of HEAD, committed on the given date. */
+  const withRescues = (f: Fixture, rescues: Array<{ date: string; unmerged?: boolean }>) => {
+    git(f, ['init', '-q']);
+    git(f, ['add', '-A']);
+    git(f, ['commit', '-qm', 'release']);
+    const index = path.join(f.base, 'rescue.idx');
+    return rescues.map(({ date, unmerged }, i) => {
+      const blob = spawnSync('git', ['hash-object', '-w', '--stdin'], { cwd: f.root, input: `edit ${i}\n`, encoding: 'utf8', timeout: 20_000 }).stdout.trim();
+      git(f, ['read-tree', 'HEAD'], { GIT_INDEX_FILE: index });
+      git(f, ['update-index', '--add', '--cacheinfo', `100644,${blob},local-edit-${i}.txt`], { GIT_INDEX_FILE: index });
+      const tree = git(f, ['write-tree'], { GIT_INDEX_FILE: index });
+      const message = `gstack rescue: local edits that conflicted with abc\n${unmerged ? '\nNeeds manual resolution: the install had unmerged files; their captured\ncontent may contain conflict markers.\n' : ''}`;
+      const oid = spawnSync('git', ['commit-tree', tree, '-p', 'HEAD'], {
+        cwd: f.root, input: message, encoding: 'utf8', timeout: 20_000,
+        env: { ...process.env, HOME: f.home, GIT_CONFIG_NOSYSTEM: '1', GIT_AUTHOR_NAME: 'gstack rescue', GIT_AUTHOR_EMAIL: 'gstack@localhost', GIT_COMMITTER_NAME: 'gstack rescue', GIT_COMMITTER_EMAIL: 'gstack@localhost', GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      }).stdout.trim();
+      git(f, ['update-ref', `refs/gstack/rescue/${oid}`, oid]);
+      return `refs/gstack/rescue/${oid}`;
+    });
+  };
+  const rescueRefs = (f: Fixture) => git(f, ['for-each-ref', '--format=%(refname)', 'refs/gstack/rescue/']).split('\n').filter(Boolean);
+  const commandFor = (out: string, label: 'inspect' | 'delete', ref: string) =>
+    out.split('\n').map(l => l.trim()).find(l => l.startsWith(`${label}:`) && l.includes(`'${ref}'`))?.replace(/^[a-z]+:\s+/, '') ?? '';
+
+  test('rescue refs: two refs are listed newest first with their dates; the printed inspect command shows the edit and the printed delete command removes the ref', () => {
+    const f = makeFixture();
+    const [older, newer] = withRescues(f, [{ date: '2026-10-01T12:00:00Z' }, { date: '2026-10-14T08:30:00Z', unmerged: true }]);
+    const r = doctor(f);
+    const row = r.row('rescue refs');
+    expect(row.state, r.out).toBe('warn');
+    expect(row.detail).toContain(`2 in ${bashPath(f.root)}`);
+    expect(row.fix).toContain('#auto-update-rescued-edits');
+    const listing = r.out.split('\n').map(l => l.trim());
+    expect(listing.findIndex(l => l.startsWith(newer))).toBeLessThan(listing.findIndex(l => l.startsWith(older)));
+    expect(listing).toContain(`${older} (2026-10-01)`);
+    expect(listing).toContain(`${newer} (2026-10-14, needs manual resolution)`);
+    const q = `'${bashPath(f.root)}'`;
+    expect(commandFor(r.out, 'inspect', older)).toBe(`git -C ${q} diff '${older}^' '${older}'`);
+    expect(commandFor(r.out, 'delete', older)).toBe(`git -C ${q} update-ref -d '${older}'`);
+    const shown = spawnSync('bash', ['-c', commandFor(r.out, 'inspect', older)], { cwd: f.work, encoding: 'utf8', timeout: 20_000 });
+    expect(shown.status, shown.stderr).toBe(0);
+    expect(shown.stdout).toContain('+edit 0');
+    const deleted = spawnSync('bash', ['-c', commandFor(r.out, 'delete', older)], { cwd: f.work, encoding: 'utf8', timeout: 20_000 });
+    expect(deleted.status, deleted.stderr).toBe(0);
+    expect(rescueRefs(f)).toEqual([newer]);
+    expect(doctor(f).row('rescue refs').detail).toContain(`1 in ${bashPath(f.root)}`);
+    spawnSync('bash', ['-c', commandFor(r.out, 'delete', newer)], { cwd: f.work, encoding: 'utf8', timeout: 20_000 });
+    const none = doctor(f);
+    expect(none.row('rescue refs')).toEqual({ state: 'ok', detail: `none in ${bashPath(f.root)}`, fix: '' });
+    expect(none.status, none.out).toBe(0);
+  });
+
+  const LISTING = '## gstack\nUse /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.\nAvailable skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,\n/design-consultation, /design-shotgun, /design-html, /review, /ship, /qa, /browse, /retro, /investigate.\n';
+  const SHORT = '## gstack\nUse /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.\n';
+  const replacement = (out: string) => out.split('\n').filter(l => l.startsWith(' '.repeat(34))).map(l => l.slice(34));
+
+  test('CLAUDE.md: a gstack section that enumerates skills warns with the short replacement block, for ~/.claude/CLAUDE.md and the project CLAUDE.md', () => {
+    const f = makeFixture();
+    const user = path.join(f.home, '.claude/CLAUDE.md');
+    write(user, `# Me\n\n${LISTING}\n## Other\ntext\n`);
+    const r = doctor(f);
+    const row = r.row('CLAUDE.md');
+    expect(row.state, r.out).toBe('warn');
+    expect(row.detail).toContain(`${bashPath(f.home)}/.claude/CLAUDE.md lists 13 skills`);
+    expect(row.fix).toContain('#claude-md-skill-list');
+    expect(fs.readFileSync(path.join(REPO, 'docs/troubleshooting.md'), 'utf8')).toContain('<a id="claude-md-skill-list"></a>');
+    expect(replacement(r.out)).toEqual(['## gstack', 'Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.']);
+    expect(r.status, r.out).toBe(0);
+    write(user, SHORT);
+    write(path.join(f.work, 'CLAUDE.md'), `# Project\n\n## gstack (recommended)\nskills: /office-hours /plan-ceo-review /plan-eng-review /review /ship /qa /browse /retro /investigate\n`);
+    const project = doctor(f).row('CLAUDE.md');
+    expect(project.state).toBe('warn');
+    expect(project.detail).toContain(`${bashPath(f.work)}/CLAUDE.md lists 9 skills`);
+    expect(project.detail).not.toContain('.claude/CLAUDE.md');
+  });
+
+  test('CLAUDE.md: the short block, team-init\'s block, a separate Skill routing section and paths do not warn; no CLAUDE.md does not warn', () => {
+    const f = makeFixture();
+    const none = doctor(f).row('CLAUDE.md');
+    expect(none.state).toBe('ok');
+    expect(none.fix).toBe('');
+    write(path.join(f.home, '.claude/CLAUDE.md'), SHORT);
+    write(path.join(f.work, 'CLAUDE.md'), [
+      '## gstack (recommended)',
+      'Using gstack skills: After install, skills like /qa, /ship, /review, /investigate,',
+      'and /browse are available. Use the install path ~/.claude/skills/gstack/bin/gstack-config /usr/local/bin/bun /opt/a/b /x/y /z/w.',
+      '',
+      '## Skill routing',
+      '- Product ideas → invoke /office-hours',
+      '- Strategy → invoke /plan-ceo-review',
+      '- Architecture → invoke /plan-eng-review',
+      '- Design → invoke /design-consultation or /plan-design-review',
+      '- Review → invoke /autoplan, /investigate, /qa, /review, /ship',
+      '',
+    ].join('\n'));
+    const r = doctor(f);
+    expect(r.row('CLAUDE.md').state, r.out).toBe('ok');
+    expect(replacement(r.out)).toEqual([]);
+  });
+
+  /** A JSON probe file: the discovery inputs resolveWindowsBash takes, in test/fixtures/windows-bash-resolution.json's shape. */
+  const probe = (f: Fixture, inputs: Record<string, unknown>) => { const file = path.join(f.base, 'bash-probe.json'); write(file, JSON.stringify(inputs)); return file; };
+  const GIT_BASH = 'C:/Program Files/Git/bin/bash.exe';
+
+  test('windows bash: on Windows the row names the resolved bash and what chose it', () => {
+    const f = makeFixture();
+    const found = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: [GIT_BASH], gitExecPath: 'C:/Program Files/Git/mingw64/libexec/git-core' }) });
+    expect(found.row('windows bash'), found.out).toEqual({ state: 'ok', detail: `${GIT_BASH} (chosen by git --exec-path)`, fix: '' });
+    const override = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_GIT_BASH: 'D:\\tools\\bash.exe', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: ['D:/tools/bash.exe', GIT_BASH] }) });
+    expect(override.row('windows bash').detail).toBe('D:/tools/bash.exe (chosen by GSTACK_GIT_BASH)');
+  });
+
+  test('windows bash: GSTACK_GIT_BASH and a different deprecated GSTACK_BASH warn naming both', () => {
+    const f = makeFixture();
+    const differ = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_GIT_BASH: 'D:/a/bash.exe', GSTACK_BASH: 'D:/b/bash.exe', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: ['D:/a/bash.exe', 'D:/b/bash.exe'] }) });
+    expect(differ.row('windows bash').state).toBe('warn');
+    expect(differ.row('windows bash').detail).toContain('D:/a/bash.exe (chosen by GSTACK_GIT_BASH)');
+    expect(differ.row('windows bash').detail).toContain('GSTACK_GIT_BASH (D:/a/bash.exe) and the deprecated GSTACK_BASH (D:/b/bash.exe) differ');
+  });
+
+  test('windows bash: a refusal fails with BASH_UNAVAILABLE naming GSTACK_GIT_BASH; off Windows there is no row', () => {
+    const f = makeFixture();
+    const refused = doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'windows', GSTACK_DOCTOR_BASH_PROBE: probe(f, { exists: [], gitExecPath: null, which: { bash: 'C:/Windows/System32/bash.exe' } }) });
+    const row = refused.row('windows bash');
+    expect(row.state, refused.out).toBe('fail');
+    expect(row.detail).toContain('(BASH_UNAVAILABLE)');
+    expect(row.detail).toContain('PATH C:/Windows/System32/bash.exe: WSL launcher, not Git Bash');
+    expect(row.detail).toContain(`install path ${GIT_BASH}: not found`);
+    expect(row.fix).toContain('GSTACK_GIT_BASH');
+    expect(row.fix).toContain('#bash-unavailable');
+    expect(refused.status).toBe(1);
+    expect(doctor(f, [], { GSTACK_DOCTOR_PLATFORM: 'posix' }).out).not.toContain('windows bash');
   });
 });

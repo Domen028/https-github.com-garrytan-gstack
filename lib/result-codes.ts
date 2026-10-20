@@ -10,6 +10,8 @@
  * agent greps the code, never the prose. test/troubleshooting-anchors.test.ts
  * checks every anchor exists; add a row here before printing a new code.
  */
+import { RELEASE_RESULT_CODES } from './result-codes-release';
+
 export interface ResultCode {
   /** Stable `<a id>` in docs/troubleshooting.md. */
   anchor: string;
@@ -112,7 +114,12 @@ export const RESULT_CODES = {
   GATE_REPLY_UNPARSED: {
     anchor: 'gate-reply-unparsed',
     summary: 'part of the reply matched no gate item or option, so nothing was applied',
-    fix: 'reply with `all`, `<id><option>` tokens (for example `d3b uc1a`), or `all except <tokens>`; bare yes/no is ambiguous',
+    fix: 'reply with `rec`, `as-is`, `<id><option>` tokens (for example `d3b uc1a`), or `rec except <tokens>`; bare yes/no is ambiguous',
+  },
+  ANSWER_BY_REQUIRED: {
+    anchor: 'answer-by-required',
+    summary: 'an unattended gate answer named no valid answerer, so nothing was applied',
+    fix: 'pass `--by human` when the owner typed the tokens, or `--by agent:<thread or id>` when an agent relays or decides; the value lands on every decision row as answered_by',
   },
   // PR A (multi-agent wave): gstack-doctor --check, gstack-capy-install, gstack-browser-ensure.
   COMPONENT_MISSING: {
@@ -128,7 +135,7 @@ export const RESULT_CODES = {
   PROJECT_PIN_MISMATCH: {
     anchor: 'doctor-project-pin-mismatch',
     summary: 'the running Bun or Node is outside a version the target project pins (package.json engines, .tool-versions, .nvmrc, .bun-version or a CI workflow)',
-    fix: 'install the pinned version for this platform, or change the pin in the project',
+    fix: 'install the pinned version for this platform (on Capy: run the gstack skill\'s `scripts/install.sh` without --check), or change the pin in the project',
   },
   REVISION_UNMET: {
     anchor: 'doctor-revision-unmet',
@@ -149,6 +156,11 @@ export const RESULT_CODES = {
     anchor: 'capy-install-preflight-failed',
     summary: 'a tool the installer needs before ./setup (git, curl, node, jq) is missing, or the Bun install recipe failed its checksum',
     fix: 'install the named tool, then re-run bin/gstack-capy-install',
+  },
+  SETUP_PS1_EMPTY_ARGUMENT: {
+    anchor: 'setup-ps1-empty-argument',
+    summary: 'an argument given to .\\setup.ps1 is an empty string, which its Git Bash hand-off cannot carry, so nothing ran',
+    fix: 'drop the empty argument or give it a value, then run .\\setup.ps1 again',
   },
   // C-stamp (plan C1, C2, C3, C5, C7): ship policy, restamp, tree receipt, ship receipt.
   POLICY_SOURCE_UNAVAILABLE: {
@@ -371,8 +383,8 @@ export const RESULT_CODES = {
   },
   PREGATE_NO_LANE: {
     anchor: 'pregate-no-lane',
-    summary: 'a touched file maps to no test lane through imports, repo-path literals, the bin/<name> convention or a declaration',
-    fix: 'add a test that names the file, or declare its lane (or an explicit empty lane) under `dependencies` in .gstack/pregate.json',
+    summary: 'a touched source file maps to no test lane through imports, repo-path literals, the bin/<name> convention or a declaration',
+    fix: 'add a test that names the file, or declare its lane (or an explicit empty lane) under `dependencies` in .gstack/pregate.json. Markdown no test depends on is already a docs/no-tests empty lane; other documentation goes in `empty_lanes`',
   },
   PREGATE_LANE_FAILED: {
     anchor: 'pregate-lane-failed',
@@ -383,6 +395,16 @@ export const RESULT_CODES = {
     anchor: 'pregate-incomplete',
     summary: 'a check timed out, its tool is unavailable, or the tree changed while it ran; the result is incomplete, never pass',
     fix: 'install the named tool or raise --timeout, keep the tree still during the run, then rerun the check',
+  },
+  PREGATE_STALLED: {
+    anchor: 'pregate-stalled',
+    summary: 'a test command printed nothing for the stall timeout, so its process group was killed; the check is incomplete, never pass',
+    fix: 'read the lane log for the last file started, fix the hang, or raise `--stall-timeout` (`stall_timeout_s`; 0 disables) for a test that is quiet for longer, then rerun `gstack-pregate --stage tests`',
+  },
+  PREGATE_RECEIPT_INVALID: {
+    anchor: 'pregate-receipt-invalid',
+    summary: 'the receipt offered to `gstack-pregate clear` for the remote gate obligation does not show the tested tree passing',
+    fix: 'rerun the remote gate on this tree and pass its output with `gstack-pregate clear --remote pregate.json/remote_gate --receipt <file>`, or run `gstack-pregate --stage tests --remote --spend-cap <usd> --allow-repo-commands`',
   },
   PREGATE_STALE: {
     anchor: 'pregate-stale',
@@ -398,6 +420,16 @@ export const RESULT_CODES = {
     anchor: 'issue-unreadable',
     summary: 'an issue a closure trailer or --issue names could not be read through gstack-issue-guard, so its link is Refs, never Fixes',
     fix: 'check `gh auth status` and the issue number; rerun gstack-issue-links once the issue reads',
+  },
+  ISSUE_LOOKUP_FAILED: {
+    anchor: 'issue-lookup-failed',
+    summary: 'gstack-issue-links could not read the repository, this PR\'s author, the open PRs closing a fixed issue, or the flake issues naming a CI run, so Related or Flake lines may be missing or list the owner\'s own PRs',
+    fix: 'check `gh auth status` and the repository (`--repo <owner/repo>`), pass `--author <login>` when gh runs as an app, then rerun gstack-issue-links; report the gap in the handoff if it still fails',
+  },
+  ISSUE_LINKS_MISSING: {
+    anchor: 'issue-links-missing',
+    summary: 'the PR body lacks a line gstack-issue-links wrote to issues.json, so the body and the ship receipt would disagree about what the PR closes or relates to',
+    fix: 'paste every line gstack-issue-links printed under `## Issues` in the body, then rerun gstack-ship-receipt write; nothing was written',
   },
   // PR E (multi-agent wave): gstack-eval-plan, gstack-lane-check, gstack-evidence verify,
   // gstack-owner-brief, gstack-contributor-mode, gstack-banned-terms.
@@ -466,6 +498,276 @@ export const RESULT_CODES = {
     summary: 'a `draft direction stands until the owner decides` line names a decision that is still pending',
     fix: 'answer the gate (`gstack-autoplan answer`) before closing; the close rewrites only decided lines',
   },
+  PREGATE_GUARD_FAILED: {
+    anchor: 'pregate-guard-failed',
+    summary: 'a repo guard from .gstack/pregate.json whose files the branch touched exited non-zero',
+    fix: 'run the guard command printed in the table, apply the guard\'s fix line, commit, then rerun `gstack-pregate run --allow-repo-commands`',
+  },
+  MIGRATION_COLLISION: {
+    anchor: 'migration-collision',
+    summary: 'a migration number this branch adds is already used on the base branch or by another open PR',
+    fix: 'take the next free migration number when this PR is next to merge (rename the file and its id), commit, then rerun `gstack-pregate regate --against <gated-head> --bundle <file>`',
+  },
+  SEALED_OUTPUT_REFUSED: {
+    anchor: 'sealed-output-refused',
+    summary: 'a push or PR would publish sealed or eval output (a sealed path, a transcript, a quoted answer, a seed or a local home path) to a public or unknown destination, or the sealed policy is unreadable',
+    fix: 'remove it from every published commit, or add one reviewed `rule<TAB>path<TAB>sha<TAB>reason` line to the base branch\'s .gstack/sealed-allow.tsv; a private destination sets sealed.visibility "private" in the base branch\'s .gstack/pregate.json',
+  },
+  EVAL_GATE_UNPRICED: {
+    anchor: 'eval-gate-unpriced',
+    summary: 'the paid gate has no call-plan file (no `--plan-file`, no base-policy `price_file`) or the file has no GSTACK_EVAL_CALLS lines, so its cost is unknown',
+    fix: 'have the repo commit a call-plan file (docs/eval-calls.md) and set `price_file` in .gstack/pregate.json, or pass `--allow-unpriced "<reason>"` only on the owner\'s say-so',
+  },
+  EVAL_GATE_OVER_CAP: {
+    anchor: 'eval-gate-over-cap',
+    summary: 'the paid gate\'s priced total, or one call\'s reservation (input plus maximum output), is above the cap',
+    fix: 'cut questions, arms or `max_out_tokens` in the call plan, or raise `--cap-usd` / `--smoke-cap-usd` deliberately with the owner; never split calls to slip under it',
+  },
+  EVAL_PLAN_STALE: {
+    anchor: 'eval-plan-stale',
+    summary: 'the call-plan file\'s binding does not match (a different gate command, a head behind HEAD, an input whose sha256 at HEAD differs) or the declared price_file is not in HEAD',
+    fix: 'regenerate the call-plan file at HEAD for the exact gate command you are approving, commit it, and rerun `gstack-eval-plan price-gate`',
+  },
+  PLAN_SECTIONS_INVALID: {
+    anchor: 'plan-sections-invalid',
+    summary: 'the plan does not have exactly one non-empty `## Implementation plan` section followed by one `## Review record` section',
+    fix: 'add the missing heading, or rerun the first `gstack-autoplan next` with --scaffold to review a scaffolded copy (your plan file is never edited); duplicate, reversed or empty sections are fixed by hand',
+  },
+  PLAN_AMEND_PENDING: {
+    anchor: 'plan-amend-pending',
+    summary: 'the owner accepted plan changes at the gate that the plan has not absorbed yet',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id,...>`; settle a packaging or ordering change with `gstack-autoplan revise --out <dir> --settle <id>`; or drop one with `gstack-autoplan revise --out <dir> --withdraw <decision id>`',
+  },
+  AMENDMENT_UNKNOWN: {
+    anchor: 'amendment-unknown',
+    summary: '`revise --incorporates` or `--withdraw` named a decision that is not a pending amendment (never accepted as a plan change, or already incorporated or withdrawn)',
+    fix: 'name only the ids the refusal lists after `pending:`; with none pending, drop --incorporates and run `gstack-autoplan revise --out <dir> --plan <file>`',
+  },
+  AMENDMENT_NOT_SETTLEABLE: {
+    anchor: 'amendment-not-settleable',
+    summary: '`revise --settle` named an accepted change that needs a plan edit (its item changes scope, cost or direction, or names no packaging/ordering change), or the plan has edits no revise has recorded',
+    fix: 'edit the plan, then `gstack-autoplan revise --out <dir> --plan <file> --incorporates <decision id>` (add `--settle <id>` to settle packaging/ordering changes in the same call); settle alone only on the plan the run already reviews',
+  },
+  GATE_REC_STALE: {
+    anchor: 'gate-rec-stale',
+    summary: 'a `rec` reply was rendered before `gstack-autoplan recommend` changed the recommendations it takes, or the gate predates `rec` (a gate.json without rec_rev, rendered when `all` left changes pending)',
+    fix: 'render the gate again (`gstack-gate render <dir>/gate.json --all`), relay it, and answer with the printed `--rec-hash`',
+  },
+  CHECKPOINT_INVALID: {
+    anchor: 'checkpoint-invalid',
+    summary: 'no autoplan checkpoint generation can be restored: a manifest is unreadable, a listed file is missing, escapes the generation (by path or symlink) or does not match its sha256, or the staged run does not validate',
+    fix: 'run `gstack-autoplan checkpoints --from <dir>` to see each generation\'s hash status and restore an intact one; nothing was written to --out',
+  },
+  CHECKPOINT_OVERLAP: {
+    anchor: 'checkpoint-overlap',
+    summary: 'the checkpoint directory and the run directory (or the restore target) are the same directory or one contains the other, symlinks resolved',
+    fix: 'point GSTACK_AUTOPLAN_CHECKPOINT_DIR (or --from / --out) at a directory outside the run; nothing was moved or deleted',
+  },
+  CHECKPOINT_TARGET_EXISTS: {
+    anchor: 'checkpoint-target-exists',
+    summary: '`gstack-autoplan resume --from` restores only into an empty or missing --out directory',
+    fix: 'pass a new --out directory, or resume the run already there without --from',
+  },
+  OWNER_REPLY_REQUIRED: {
+    anchor: 'owner-reply-required',
+    summary: 'an agent answered the gate (`--by agent:<id>`) without the owner\'s verbatim reply',
+    fix: 'pass the owner\'s words exactly with `--owner-reply "<text>"`, `--owner-reply -` (stdin) or `--owner-reply-file <path>`',
+  },
+  GATE_OWNER_REPLY_MISMATCH: {
+    anchor: 'gate-owner-reply-mismatch',
+    summary: 'the owner\'s verbatim reply parses under the gate grammar but resolves to different choices than the relayed tokens',
+    fix: 'relay exactly what the owner chose (or their reply itself, e.g. `--reply rec`); ask the owner when their words and the tokens disagree',
+  },
+  GSTACK_VERSION_CHANGED: {
+    anchor: 'gstack-version-changed',
+    summary: 'the run directory was written by a different gstack version',
+    fix: 'nothing to do for an older run (journaled forward migrations ran); a run written by a newer gstack needs that gstack: upgrade with bin/gstack-upgrade',
+  },
+  ARTIFACT_GATE_UNSETTLED: {
+    anchor: 'artifact-gate-unsettled',
+    summary: 'the run says complete while an approval item of its last gate revision or an accepted plan amendment is still pending',
+    fix: 'answer the gate until every approval settles and revise (or withdraw) every accepted change with `gstack-autoplan`; never hand-edit status',
+  },
+  // Field wave lane A (items 1-4): gstack-upgrade, the Capy skill bootstrapper, install admission.
+  UPGRADE_REFUSED: {
+    anchor: 'upgrade-refused',
+    summary: 'bin/gstack-upgrade changed nothing: the checkout is dirty, diverged, pinned (detached or off the remote default branch), not a gstack checkout, or the incoming release holds',
+    fix: 'resolve the named cause (commit or move the listed changes, check out the default branch), then re-run bin/gstack-upgrade; it never stashes or resets',
+  },
+  UPGRADE_BUSY: {
+    anchor: 'upgrade-busy',
+    summary: 'bin/gstack-upgrade changed nothing: another live session holds a workflow lease on this installation (bin/gstack-lease live), so moving the checkout would change gstack under it',
+    fix: 'wait for those sessions to finish (bin/gstack-lease list names each pid and age), then re-run bin/gstack-upgrade; GSTACK_UPGRADE_FORCE=1 overrides when you know they are idle',
+  },
+  UPGRADE_FETCH_FAILED: {
+    anchor: 'upgrade-fetch-failed',
+    summary: 'bin/gstack-upgrade could not fetch the remote default branch, so it cannot tell whether the checkout is current',
+    fix: 'check network access to the checkout\'s origin (git -C <checkout> remote -v), then re-run bin/gstack-upgrade',
+  },
+  REVISION_BELOW_MINIMUM: {
+    anchor: 'revision-below-minimum',
+    summary: 'the installed gstack revision is below the supported minimum declared in capy/support.env on the remote default branch',
+    fix: 'run the Capy skill installer without --check (it fast-forwards a clean, unpinned checkout), or bin/gstack-upgrade; a pinned, dirty or diverged checkout is named in the row',
+  },
+  CAPY_WRAPPER_STALE: {
+    anchor: 'capy-wrapper-stale',
+    summary: 'the Capy skill copy that ran (or, without provenance, every Drive copy) is older than the checkout\'s GSTACK_CAPY_MIN_WRAPPER',
+    fix: 'this session: run <checkout>/capy/skill/gstack/scripts/install.sh, which certifies; owner: copy <checkout>/capy/skill/gstack/ over the Drive skill folder (it recurs every session until the copy changes)',
+  },
+  BUN_RESOLUTION_DRIFT: {
+    anchor: 'bun-resolution-drift',
+    summary: 'the Bun the install verdict recorded for this checkout and project is gone, reports another version, or no longer satisfies the pins (or the Bun running is not it)',
+    fix: 'run the fix the row prints: the installer, which records the current resolution or re-downloads a verified Bun into the store',
+  },
+  BUN_INSTALL_VERSION_INVALID: {
+    anchor: 'bun-install-version-invalid',
+    summary: 'GSTACK_BUN_INSTALL_VERSION names a Bun without a verified archive, or one below gstack\'s supported minimum',
+    fix: 'unset GSTACK_BUN_INSTALL_VERSION, or set it to a version listed in GSTACK_BUN_VERIFIED (bin/gstack-bun-version.sh)',
+  },
+  INSTALL_UNVERIFIED: {
+    anchor: 'install-unverified',
+    summary: 'a Capy session (GSTACK_CAPY=1) has no passing install verdict for this checkout, HEAD and workflow, so the workflow refused to start',
+    fix: 'run the Capy skill installer with --for <workflow> on this machine and launch with the GSTACK_LAUNCH line it prints',
+  },
+  // Fix wave 2026-10-15, PR 1a (items 7 and 11).
+  BROWSE_TAB_UNRECOVERABLE: {
+    anchor: 'browse-tab-unrecoverable',
+    summary: 'every tab was closed outside browse and a new one could not be opened, because the browser or its context is gone',
+    fix: 'run `browse restart` (`$B restart` in a gstack skill); `browse status` and `browse stop` keep working',
+  },
+  BUN_VERSION_UNREADABLE: {
+    anchor: 'bun-version-unreadable',
+    summary: 'bun --version did not print a version gstack can compare with the incoming release\'s Bun floor, so the update was held and nothing was changed',
+    fix: 'reinstall Bun from https://bun.sh (bun upgrade may not run on a broken install), check that bun --version prints a version such as 1.4.2, then update again',
+  },
+  // #3197: the one Windows bash resolver (lib/script-invocation.ts) found no usable Git Bash.
+  BASH_UNAVAILABLE: {
+    anchor: 'bash-unavailable',
+    summary: 'no Git Bash found to run gstack\'s bash scripts on Windows',
+    fix: 'install Git for Windows (winget install --id Git.Git -e), or set GSTACK_GIT_BASH to its bash.exe for good: in PowerShell, [Environment]::SetEnvironmentVariable(\'GSTACK_GIT_BASH\', \'C:\\Program Files\\Git\\bin\\bash.exe\', \'User\') and restart Claude Code, or add it to the "env" block of ~/.claude/settings.json',
+  },
+  // Fix wave 2026-10-15, PR 3 (item 23, #1796).
+  IOS_LAUNCH_ENV_INVALID: {
+    anchor: 'ios-launch-env-invalid',
+    summary: 'GSTACK_IOS_LAUNCH_ENV is set but is not a JSON object of string to string, or sets a GSTACK_ variable the debug bridge reserves, so the app was not launched',
+    fix: 'set it to a JSON object such as GSTACK_IOS_LAUNCH_ENV=\'{"DEBUG_BRIDGE":"1"}\' (string values, no GSTACK_ keys), or unset it, then restart gstack-ios-qa-daemon',
+  },
+  // Fix wave 2026-10-15, PR 4 (item 17, #3182).
+  OUTSIDE_VOICE_UNAVAILABLE: {
+    anchor: 'outside-voice-unavailable',
+    summary: 'a plan review ran without its second opinion: the outside provider did not run or failed, and the bounded native Plan reviewer was not offered or did not finish within five minutes',
+    fix: 'repair the provider the line names (install it, or log in with `codex login`); for the native fallback use Claude Code 2.1.277 or later with background tasks enabled (`CLAUDE_CODE_DISABLE_BACKGROUND_TASKS` unset), then re-run the review',
+  },
+  // Field list 2, W6: the public copy of an autoplan run.
+  ARTIFACT_MACHINE_PATH: {
+    anchor: 'artifact-machine-path',
+    summary: 'a public copy of an autoplan run still contains a machine path the run recorded (its run directory, home, plan directory, checkpoint directory or worktree root)',
+    fix: 'export with `gstack-autoplan export --out <run> --public <dir>`, which rewrites recorded roots in prose; a root inside a code span or fence in the plan is never rewritten, so edit the plan, revise, and export again',
+  },
+  ARTIFACT_PUBLIC_TARGET_EXISTS: {
+    anchor: 'artifact-public-target-exists',
+    summary: '`gstack-autoplan export --public <dir>` writes only into an empty directory or over an earlier public copy of the same run',
+    fix: 'pass an empty or new --public directory, or the directory that already holds this run\'s public copy',
+  },
+  // Field list 2 (2026-10-16), W8: preregistered diagnostics run before the freeze commit.
+  PREREG_DIAGNOSTIC_UNTESTED: {
+    anchor: 'prereg-diagnostic-untested',
+    summary: 'the declared summarizer, run on the declared synthetic fixture, did not report every preregistered diagnostic at its expected count',
+    fix: 'fix the summarizer or the declared definition (expected count, fixture) until every PREREG_DIAGNOSTIC line says ok, then commit the freeze; never freeze a diagnostic the summarizer has not counted',
+  },
+  // Field list 2 (2026-10-16), W9: .gstack/eval-models.json.
+  EVAL_MODELS_INVALID: {
+    anchor: 'eval-models-invalid',
+    summary: 'the eval model rules (.gstack/eval-models.json) are unreadable or invalid, so no arm can be checked',
+    fix: 'fix what the line names (docs/eval-models.md: schema_version 1, a non-empty allow, optional deny, scopes and families newest first), or fetch the base branch; no arm passes until the rules parse',
+  },
+  EVAL_MODEL_DENIED: {
+    anchor: 'eval-model-denied',
+    summary: 'an arm names a model the eval model rules deny, or one no allow entry covers for its scope',
+    fix: 'pick a model the rules allow for that scope (the EVAL_MODEL line names the rule), or change .gstack/eval-models.json in a reviewed PR',
+  },
+  EVAL_MODEL_OLD_GENERATION: {
+    anchor: 'eval-model-old-generation',
+    summary: 'an arm names an older generation of a model family the eval model rules order newest first',
+    fix: 'use the newest id of the family the EVAL_MODEL line names, or reorder families in .gstack/eval-models.json in a reviewed PR',
+  },
+  EVAL_MODEL_GENERATION_UNRESOLVED: {
+    anchor: 'eval-model-generation-unresolved',
+    summary: 'the eval model rules declare families (newest generation only) and an arm names a model in none of them, so its generation cannot be checked',
+    fix: 'add the model to its family in .gstack/eval-models.json (newest first) in a reviewed PR, or pick a model a family lists',
+  },
+  // #3226: gstack-error-capture (lib/dx-error-capture.ts) prints these; exit codes and recovery live there.
+  DX_CAPTURE_USAGE: {
+    anchor: 'dx-capture-usage',
+    summary: 'gstack-error-capture arguments are malformed: an unknown flag, a flag missing its value, no `--`, or no command after it',
+    fix: 'gstack-error-capture [--deadline <s>] [--max-bytes <n>] [--pass-env NAME,...] [--copy-config <path>] [--cwd <dir>] [--approved] [--launch-check] -- <cmd> [args]',
+  },
+  DX_CAPTURE_BAD_DEADLINE: {
+    anchor: 'dx-capture-bad-deadline',
+    summary: '--deadline is not a positive number of seconds (at most 3600, up to 3 decimals)',
+    fix: '--deadline 20',
+  },
+  DX_CAPTURE_BAD_MAX_BYTES: {
+    anchor: 'dx-capture-bad-max-bytes',
+    summary: '--max-bytes is not an integer from 1 to 1048576',
+    fix: '--max-bytes 65536',
+  },
+  DX_CAPTURE_BAD_PASS_ENV: {
+    anchor: 'dx-capture-bad-pass-env',
+    summary: '--pass-env names an invalid or unset variable, or one the containment owns (PATH, HOME, XDG_CONFIG_HOME, TERM, USERPROFILE)',
+    fix: '--pass-env NAME with NAME set in the calling environment',
+  },
+  DX_CAPTURE_BAD_CWD: {
+    anchor: 'dx-capture-bad-cwd',
+    summary: '--cwd is not an existing directory',
+    fix: '--cwd <existing directory> --approved',
+  },
+  DX_CAPTURE_APPROVAL_REQUIRED: {
+    anchor: 'dx-capture-approval-required',
+    summary: '--pass-env, --copy-config or --cwd was given without --approved; they hand the target credentials or real files',
+    fix: 'ask the user to approve the named variables, files or directory, then add --approved',
+  },
+  DX_CAPTURE_CONFIG_REFUSED: {
+    anchor: 'dx-capture-config-refused',
+    summary: '--copy-config names a missing file, a symlink, a non-regular file, a path outside HOME, a duplicate, or a file over 1 MiB',
+    fix: '--copy-config <regular file under $HOME, no symlinks>',
+  },
+  DX_CAPTURE_NOT_FOUND: {
+    anchor: 'dx-capture-not-found',
+    summary: 'the command does not resolve to an executable file; the record carries launch "not_found" and nothing ran',
+    fix: 'install the command or pass its absolute path after --',
+  },
+  DX_CAPTURE_TEMP_DIR: {
+    anchor: 'dx-capture-temp-dir',
+    summary: 'the private 0700 containment directory under the gstack state root could not be created',
+    fix: 'make $GSTACK_STATE_ROOT/error-capture a writable directory you own (not a symlink), then rerun',
+  },
+  DX_CAPTURE_CONTAINMENT_UNAVAILABLE: {
+    anchor: 'dx-capture-containment-unavailable',
+    summary: 'process-group or Windows job containment is unavailable on this platform; nothing ran',
+    fix: 'run the capture on Linux, macOS or Windows with job objects available',
+  },
+  DX_CAPTURE_SUPERVISOR_FAILED: {
+    anchor: 'dx-capture-supervisor-failed',
+    summary: 'the deadline supervisor failed before reporting a result',
+    fix: 'rerun the same command once; if it repeats, run bin/gstack-qa-deadline --help to check the supervisor',
+  },
+  DX_CAPTURE_INTERRUPTED: {
+    anchor: 'dx-capture-interrupted',
+    summary: 'the helper received SIGINT, SIGTERM or SIGHUP; the target group was killed and no record was printed',
+    fix: 'rerun the same command without interrupting it',
+  },
+  DX_CAPTURE_REDACTION_FAILED: {
+    anchor: 'dx-capture-redaction-failed',
+    summary: 'the finished record still matched a secret check, so nothing was printed',
+    fix: 'do not rerun with more --pass-env; report the command name to the gstack maintainers',
+  },
+  DX_CAPTURE_INTERNAL: {
+    anchor: 'dx-capture-internal',
+    summary: 'unexpected helper failure; the line names the error class and its first stack frame',
+    fix: 'rerun once; if it repeats, report the printed frame to the gstack maintainers',
+  },
+  ...RELEASE_RESULT_CODES,
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;
@@ -478,6 +780,12 @@ export const TROUBLESHOOTING_DOC = 'https://github.com/garrytan/gstack/blob/main
 /** `(CODE; <doc>#anchor)` — the suffix the doctor and installer rows carry. */
 export function resultCodeSuffix(code: ResultCodeName): string {
   return `(${code}; ${TROUBLESHOOTING_DOC}#${RESULT_CODES[code].anchor})`;
+}
+
+/** The installer form: `<context>: <summary>[ — <detail>]; fix: <fix> (<CODE>; <doc>#anchor)`. */
+export function resultLineWithDocs(context: string, code: ResultCodeName, detail?: string): string {
+  const row: ResultCode = RESULT_CODES[code];
+  return `${context}: ${row.summary}${detail ? ` — ${detail}` : ''}; fix: ${row.fix} ${resultCodeSuffix(code)}`;
 }
 
 /** One error line: `<context>: <summary>[ (<detail>)]; fix: <fix> (<CODE>)`. */

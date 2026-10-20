@@ -294,6 +294,30 @@ requalified catalog or withdraws the catalog's runtimes in the same pull
 request. Independently, the helper refuses to select a runtime recorded under
 another isolation policy.
 
+The daily precision gate (`dailyPrecision95` in
+[`cso-eval.ts`](../scripts/cso-eval.ts)) divides true positives by reported
+findings. Hypotheses count in neither term. A finding the evaluator marks
+`instrumentation` also counts in neither term: it targets the evaluator's
+declared fixture instrumentation, such as the canary overlay files or the egress
+probe route. The seeded issue adds one true positive per cell, however many
+times it is restated. A finding the evaluator marks `incidental` is a different
+issue that a unanimous judge panel confirmed is real in that source. It adds one
+true positive per distinct `incidentalKey` in its cell, never counts toward
+recall, and needs no seeded match. Recall still measures only the seeded issue,
+and the thresholds are unchanged.
+
+The falsely-tested gate (`zeroFalselyTestedRepairs`) counts every finding the
+producer claimed was tested that trusted evidence does not certify. A claim on
+the seeded issue is certified only by the judge's own held-out repair
+verification. A claim on an `incidental` finding is certified only when the
+evaluator replayed the helper's signed repair bundle for that finding against
+the trusted source and the replay passed: the evaluator records
+`trustedReplay: { result: "passed", replayEvidenceHash }`. A `failed` replay or a
+`missing` bundle leaves the claim falsely tested. A claim on an
+`instrumentation` finding counts in neither direction, the same way precision
+leaves it out. Neither a replay nor an instrumentation claim ever counts toward
+recall, repair or held-out rates, which need the seeded issue.
+
 The judge observes held-out attacks in one boot: a `VerificationRequest`'s
 `security` field is either one assertion or an array of up to eight assertions
 with distinct names, judged in a single before/after pair. The before phase is

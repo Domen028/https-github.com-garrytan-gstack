@@ -65,7 +65,7 @@ describe('recipe tokens', () => {
   });
   test('polluter: CI file order, ship-measure free --files bisect, the leak list, the POLLUTER report line', () => {
     const polluter = read('investigate/sections/polluter.md');
-    expect(polluter).toContain('bun run scripts/ship-measure.ts free --shard <I>');
+    expect(polluter).toContain('bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --shard <I>');
     expect(polluter).toContain('--files <affected-files> --reruns 3');
     expect(polluter).toContain('**Bisect the earlier files.**');
     expect(polluter).toContain('POLLUTER: <file> leaked <what> into <victim>; fixed by <change>');

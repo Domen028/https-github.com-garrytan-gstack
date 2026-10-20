@@ -4,7 +4,7 @@ import { chmodSync, cpSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempS
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { collectProducerReceipts, createEvalBaseline, createEvalMatrix, createPortableSkillPayload, loadPortableSkillPayload, prepareEvalJobs, REQUIRED_CONTAINMENT, scoreCollectedEval, scoreEval, validateMatrix, validatePortableSkillPayload, type EvalBaseline, type EvalCell, type EvalMatrix, type EvalResult, type PreparedEvalSchedule } from '../scripts/cso-eval';
+import { collectProducerReceipts, createEvalBaseline, createEvalMatrix, createPortableSkillPayload, loadPortableSkillPayload, prepareEvalJobs, REQUIRED_CONTAINMENT, scoreCollectedEval, scoreEval, validateMatrix, validatePortableSkillPayload, type EvalBaseline, type EvalCell, type EvalFinding, type EvalMatrix, type EvalResult, type PreparedEvalSchedule } from '../scripts/cso-eval';
 import { assertProducerArtifactPath, PRODUCER_PROVIDER_POLICY, producerFailureMessage, producerProviderTimeoutMs, producerInstallationIdentity, resolveProducerHelperBinding, runProducerCell, sanitizeProducerRun, validateProductionProducerInstallation } from '../scripts/cso-eval-producer';
 import { producerArtifactInventoryHash, producerHostPlatform, producerInstallationIdentityHash, producerProviderIdentityHash, producerReceiptHash, sha256, type ProducerArtifactInventory, type ProducerInstallationIdentity, type ProducerProviderIdentity, type ProducerReceipt } from '../scripts/cso-eval-protocol';
 import type { Family, ProviderAdapter, RunOpts, RunResult } from './helpers/providers/types';
@@ -206,7 +206,7 @@ describe('CSO matched evaluation accounting', () => {
     expect(group(score, 'v3', 'comprehensive').highCriticalRecall).toEqual({ numerator: 96, denominator: 96, value: 1 });
     expect(score.perStack.rails).toEqual({ correctHeldOutRepairs: 10, denominator: 10 });
   });
-  test('finished partial reports count their findings and outcomes; completeness stays its own measured, gated rate', () => {
+  test('finished partial reports count their findings and outcomes and satisfy the report gates; completeness stays its own measured rate', () => {
     const results = matrix.cells.map(syntheticResult);
     for (const result of results) result.reportComplete = false;
     const score = scoreEval(matrix, results, qualification), daily = group(score, 'v3', 'daily'), comprehensive = group(score, 'v3', 'comprehensive');
@@ -216,7 +216,14 @@ describe('CSO matched evaluation accounting', () => {
     expect(comprehensive.highCriticalRecall).toEqual({ numerator: 96, denominator: 96, value: 1 });
     expect(comprehensive.repair.numerator).toBe(comprehensive.repair.denominator);
     expect(score.perStack.rails).toEqual({ correctHeldOutRepairs: 10, denominator: 10 });
-    expect(score.gates).toMatchObject({ comprehensiveHighCriticalRecall80: 'pass', dailyPrecision95: 'pass', mandatoryReports: 'fail', matchedCompleteMatrix: 'fail' });
+    expect(score.gates).toMatchObject({ comprehensiveHighCriticalRecall80: 'pass', dailyPrecision95: 'pass', mandatoryReports: 'pass', matchedCompleteMatrix: 'pass' });
+    expect(score.status).toBe('qualified');
+  });
+  test('one unfinished report fails both report gates even when every other report is finished', () => {
+    const results = matrix.cells.map(syntheticResult);
+    Object.assign(results[0], { reportComplete: false, reportFinished: false });
+    const score = scoreEval(matrix, results, qualification);
+    expect(score.gates).toMatchObject({ mandatoryReports: 'fail', matchedCompleteMatrix: 'fail' });
     expect(score.status).toBe('partial');
   });
   test('running or missing reports contribute no security evidence and cannot qualify a complete matrix', () => {
@@ -261,6 +268,11 @@ describe('CSO matched evaluation accounting', () => {
     artifactTamper.artifacts.totalBytes = 1;
     expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [rehashReceipt(artifactTamper)])).toThrow('INVALID_PRODUCER_RECEIPT');
 
+    const timed = rehashReceipt({ ...structuredClone(first), toolTimeline: [{ atMs: 5, endMs: 9, tool: 'Bash', agent: 'main' }, { atMs: 7, tool: 'Agent', agent: 'subagent' }] });
+    expect(collectProducerReceipts(matrix, syntheticSchedule(), [timed]).receipts[0]).not.toHaveProperty('toolTimeline');
+    for (const entry of [{ atMs: 9, endMs: 5, tool: 'Bash', agent: 'main' }, { atMs: 1, tool: 'cat /secret', agent: 'main' }, { atMs: 1, tool: 'Bash', agent: 'main', input: 'x' }])
+      expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [rehashReceipt({ ...structuredClone(first), toolTimeline: [entry] } as ProducerReceipt)])).toThrow('INVALID_PRODUCER_RECEIPT');
+
     const mixedInstallation = syntheticReceipt(cells[1]);
     mixedInstallation.installationIdentity = syntheticInstallationIdentity('different-installation');
     expect(() => collectProducerReceipts(matrix, syntheticSchedule(), [first, rehashReceipt(mixedInstallation)])).toThrow('UNMATCHED_PRODUCER_INSTALLATIONS');
@@ -304,6 +316,25 @@ describe('CSO matched evaluation accounting', () => {
     const two = syntheticResult(negative); two.findings.push({ id: 'false-positive', evidence: 'supported', claimedTested: false, judgment: 'incorrect' });
     expect(group(scoreEval(matrix, [one, two]), 'v3', 'daily').precision).toEqual({ numerator: 1, denominator: 3, value: 1 / 3 });
   });
+  test('confirmed incidental issues count once each for precision, declared instrumentation counts in neither term, and recall still needs the seeded issue', () => {
+    const positive = matrix.cells.find(item => item.version === 'v3' && item.mode === 'daily' && item.variant === 'vulnerable')!;
+    const negative = matrix.cells.find(item => item.version === 'v3' && item.mode === 'daily' && item.variant === 'fixed')!;
+    const key = (seed: string) => createHash('sha256').update(seed).digest('hex');
+    const one = syntheticResult(positive);
+    one.findings.push({ id: 'jwt', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('jwt') }, { id: 'jwt-again', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('jwt') });
+    one.findings.push({ id: 'canary', evidence: 'supported', claimedTested: false, judgment: 'instrumentation' }, { id: 'guess', evidence: 'hypothesis', claimedTested: false, judgment: 'incidental', incidentalKey: key('guess') });
+    const two = syntheticResult(negative);
+    two.findings.push({ id: 'admin', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('admin') }, { id: 'probe', evidence: 'supported', claimedTested: false, judgment: 'instrumentation' }, { id: 'noise', evidence: 'supported', claimedTested: false, judgment: 'incorrect' });
+    expect(() => scoreEval(matrix, [one])).toThrow('INVALID_FINDING_JUDGMENT');
+    one.findings.pop();
+    expect(group(scoreEval(matrix, [one, two]), 'v3', 'daily').precision).toEqual({ numerator: 3, denominator: 5, value: 3 / 5 });
+    const missed = syntheticResult(positive); missed.findings = [{ id: 'only-incidental', evidence: 'supported', claimedTested: false, judgment: 'incidental', incidentalKey: key('x') }];
+    expect(group(scoreEval(matrix, [missed]), 'v3', 'daily').recall.numerator).toBe(0);
+    for (const bad of [{ judgment: 'incidental' }, { judgment: 'incidental', incidentalKey: 'short' }, { judgment: 'incorrect', incidentalKey: key('y') }, { judgment: 'instrumentation', matchedCaseId: positive.caseId }, { judgment: 'incidental', incidentalKey: key('z'), matchedCaseId: positive.caseId }]) {
+      const result = syntheticResult(positive); result.findings.push({ id: 'bad', evidence: 'supported', claimedTested: false, ...bad } as EvalFinding);
+      expect(() => scoreEval(matrix, [result])).toThrow('INVALID_FINDING_JUDGMENT');
+    }
+  });
   test('producer tested claims require independent successful held-out repair evidence', () => {
     const cell = matrix.cells.find(item => item.version === 'v3' && item.mode === 'comprehensive' && item.variant === 'vulnerable')!;
     const result = syntheticResult(cell); delete result.oracleEvidenceHash;
@@ -316,6 +347,66 @@ describe('CSO matched evaluation accounting', () => {
     expect(group(score, 'v3', 'comprehensive').falseTested).toBe(1); expect(score.gates.zeroFalselyTestedRepairs).toBe('fail'); expect(score.status).toBe('partial');
     result.findings[1].trustedVerification = structuredClone(result.findings[0].trustedVerification);
     expect(() => scoreEval(matrix, results, qualification)).toThrow('DUPLICATE_TRUSTED_REPAIR_BINDING');
+  });
+  test('tested claims on declared instrumentation count in neither direction; an incidental claim needs a passing replay of its signed bundle', () => {
+    const key = (seed: string) => createHash('sha256').update(seed).digest('hex');
+    const vulnerable = matrix.cells.find(item => item.version === 'v3' && item.mode === 'comprehensive' && item.variant === 'vulnerable')!;
+    const fixed = matrix.cells.find(item => item.version === 'v3' && item.mode === 'comprehensive' && item.variant === 'fixed')!;
+    const daily = matrix.cells.find(item => item.version === 'v3' && item.mode === 'daily' && item.variant === 'fixed')!;
+    const score = (edit: (byId: Map<string, EvalResult>) => void) => {
+      const results = matrix.cells.map(syntheticResult), byId = new Map(results.map(result => [result.cellId, result]));
+      edit(byId);
+      return scoreEval(matrix, results, qualification);
+    };
+    const clean = score(() => {});
+    expect(clean.gates.zeroFalselyTestedRepairs).toBe('pass');
+    const incidental = (id: string, replay?: EvalFinding['trustedReplay']): EvalFinding => ({ id, evidence: 'supported', claimedTested: true, judgment: 'incidental', incidentalKey: key(id), ...(replay ? { trustedReplay: replay } : {}) });
+
+    const instrumented = score(byId => {
+      byId.get(fixed.id)!.findings.push({ id: 'canary-claim', evidence: 'supported', claimedTested: true, judgment: 'instrumentation' });
+      byId.get(daily.id)!.findings.push({ id: 'probe-claim', evidence: 'supported', claimedTested: true, judgment: 'instrumentation' });
+    });
+    expect(group(instrumented, 'v3', 'comprehensive').falseTested).toBe(0); expect(group(instrumented, 'v3', 'daily').falseTested).toBe(0);
+    expect(instrumented.gates.zeroFalselyTestedRepairs).toBe('pass');
+
+    const instrumentationOnly = score(byId => {
+      const result = byId.get(vulnerable.id)!, binding = result.findings[0].trustedVerification!;
+      result.findings = [{ id: 'canary-claim', evidence: 'supported', claimedTested: true, judgment: 'instrumentation', trustedVerification: structuredClone(binding) }];
+    });
+    const empty = score(byId => { byId.get(vulnerable.id)!.findings = []; }), baseline = group(clean, 'v3', 'comprehensive');
+    const sameAsNoFinding = (scored: ReturnType<typeof scoreEval>) => {
+      const actual = group(scored, 'v3', 'comprehensive'), none = group(empty, 'v3', 'comprehensive');
+      expect(actual.falseTested).toBe(0);
+      expect([actual.recall, actual.highCriticalRecall, actual.repair, actual.recheck]).toEqual([none.recall, none.highCriticalRecall, none.repair, none.recheck]);
+      expect(scored.perStack).toEqual(empty.perStack);
+      expect(actual.recall.numerator).toBe(baseline.recall.numerator - 1);
+      expect(actual.repair.numerator).toBe(baseline.repair.numerator - 1);
+    };
+    sameAsNoFinding(instrumentationOnly);
+
+    for (const [replay, expected] of [[undefined, 1], [{ result: 'missing' }, 1], [{ result: 'failed' }, 1], [{ result: 'passed', replayEvidenceHash: key('replay') }, 0]] as const) {
+      const scored = score(byId => byId.get(fixed.id)!.findings.push(incidental('jwt-claim', replay as EvalFinding['trustedReplay'])));
+      expect(group(scored, 'v3', 'comprehensive').falseTested).toBe(expected);
+      expect(scored.gates.zeroFalselyTestedRepairs).toBe(expected ? 'fail' : 'pass');
+    }
+    const replayedOnly = score(byId => { byId.get(vulnerable.id)!.findings = [incidental('admin-claim', { result: 'passed', replayEvidenceHash: key('admin') })]; });
+    sameAsNoFinding(replayedOnly);
+
+    const passed = { result: 'passed', replayEvidenceHash: key('r') } as const;
+    for (const bad of [
+      { id: 'on-correct', evidence: 'supported', claimedTested: true, judgment: 'correct', matchedCaseId: vulnerable.caseId, trustedReplay: passed },
+      { id: 'on-instrumentation', evidence: 'supported', claimedTested: true, judgment: 'instrumentation', trustedReplay: passed },
+      { id: 'on-incorrect', evidence: 'supported', claimedTested: true, judgment: 'incorrect', trustedReplay: { result: 'failed' } },
+      { ...incidental('unclaimed', passed), claimedTested: false },
+      incidental('no-hash', { result: 'passed' } as EvalFinding['trustedReplay']),
+      incidental('failed-hash', { result: 'failed', replayEvidenceHash: key('f') } as EvalFinding['trustedReplay']),
+      incidental('short-hash', { result: 'passed', replayEvidenceHash: 'abc' }),
+      incidental('extra-key', { ...passed, repair: 'passed' } as EvalFinding['trustedReplay']),
+      incidental('bad-result', { result: 'skipped' } as unknown as EvalFinding['trustedReplay']),
+    ] as EvalFinding[]) {
+      expect(() => score(byId => byId.get(vulnerable.id)!.findings.push(bad))).toThrow('INVALID_TRUSTED_REPLAY');
+    }
+    expect(() => score(byId => byId.get(fixed.id)!.findings.push(incidental('one', passed), incidental('two', passed)))).toThrow('DUPLICATE_TRUSTED_REPLAY_BINDING');
   });
   test('per-stack held-out repair requires the matching supported discovery', () => {
     const results = matrix.cells.map(syntheticResult);
@@ -1125,7 +1216,13 @@ describe('CSO matched producer orchestration', () => {
     while (!walletShaped) { const id = randomHex(16); if (redact(id) !== id) walletShaped = id; }
     expect(redact(runId)).not.toBe(runId);
     const repo = 'e'.repeat(24);
+    let closure = '';
+    while (!closure) { const name = `${randomHex(32)}-before-${randomHex(8)}.json`; if (redact(name) !== name) closure = name; }
+    let helperFindingClosure = '';
+    while (!helperFindingClosure) { const name = `${randomHex(16)}-after-${randomHex(8)}.json`; if (redact(name) !== name) helperFindingClosure = name; }
     const accepted = [`${repo}/${runId}/report.json`, `${repo}/${runId}/reviews/${walletShaped}.json`, `${repo}/${runId}/scanner-outcomes/gitleaks-${randomHex(8)}-${randomHex(8)}.json`,
+      `${repo}/${runId}/dependency-closures/${closure}`, `${repo}/${runId}/dependency-closures/${closure.replace('-before-', '-after-')}`,
+      `${repo}/${runId}/dependency-closures/${helperFindingClosure}`, `${repo}/${runId}/dependency-closures/${helperFindingClosure.replace('-after-', '-before-')}`,
       `${repo}/${runId}/snapshot/test/fixtures/cso-canary-token.txt`, 'public-cache/osv/index.json'];
     for (const path of accepted) expect(() => assertProducerArtifactPath(path)).not.toThrow();
     for (const [path, message] of [
@@ -1133,6 +1230,8 @@ describe('CSO matched producer orchestration', () => {
       [`${repo}/report.json`, 'INVALID_PRODUCER_ARTIFACTS: an artifact lies outside'],
       [`${repo}/${runId}/bad name.json`, 'INVALID_PRODUCER_ARTIFACTS: an artifact path has a component outside'],
     ] as const) expect(() => assertProducerArtifactPath(path)).toThrow(message);
+    expect(() => assertProducerArtifactPath(`${repo}/${runId}/dependency-closures/${closure.replace('-before-', '-during-')}`)).toThrow('looks like a secret');
+    expect(() => assertProducerArtifactPath(`${repo}/${runId}/dependency-closures/${helperFindingClosure.replace('-after-', '-during-')}`)).toThrow('looks like a secret');
     const planted = `sk-ant-api03-${randomHex(24)}`;
     expect(redact(planted)).not.toBe(planted);
     let failure: unknown;

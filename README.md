@@ -52,7 +52,7 @@ When qualified CSO runtime images are published, setup gives each automatic prel
 
 Open Claude Code and paste this. Claude does the rest.
 
-> Install gstack: run **`git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup`** then add a "gstack" section to CLAUDE.md that says to use the /browse skill from gstack for all web browsing, never use mcp\_\_claude-in-chrome\_\_\* tools, and lists the available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review, /design-consultation, /design-shotgun, /design-html, /review, /deslop-shared-libs, /test-audit, /ship, /eval-plan, /land-and-deploy, /canary, /benchmark, /browse, /connect-chrome, /qa, /qa-only, /design-review, /scrape, /setup-browser-cookies, /setup-deploy, /setup-gbrain, /retro, /investigate, /document-release, /document-generate, /codex, /cso, /autoplan, /plan-devex-review, /devex-review, /careful, /freeze, /guard, /unfreeze, /gstack-upgrade, /learn. Then ask the user if they also want to add gstack to the current project so teammates get it.
+> Install gstack: run **`git clone --single-branch --depth 1 https://github.com/garrytan/gstack.git ~/.claude/skills/gstack && cd ~/.claude/skills/gstack && ./setup`** then add a "gstack" section to CLAUDE.md that says to use the /browse skill from gstack for all web browsing and never use mcp\_\_claude-in-chrome\_\_\* tools. Claude Code lists the installed skills itself, so the section needs no skill list. Then ask the user if they also want to add gstack to the current project so teammates get it.
 
 ### Step 2: Team mode — auto-update for shared repos (recommended)
 
@@ -286,14 +286,14 @@ Each skill feeds into the next. `/office-hours` writes a design doc that `/plan-
 | `/plan-ceo-review` | **CEO / Founder** | Rethink the problem. Find the 10-star product hiding inside the request. Four modes: Expansion, Selective Expansion, Hold Scope, Reduction. |
 | `/plan-eng-review` | **Eng Manager** | Lock in architecture, data flow, diagrams, edge cases, and tests. Forces hidden assumptions into the open. |
 | `/plan-design-review` | **Senior Designer** | Rates each design dimension 0-10, explains what a 10 looks like, then edits the plan to get there. AI Slop detection. Interactive — one AskUserQuestion per design choice. |
-| `/plan-devex-review` | **Developer Experience Lead** | Interactive DX review: explores developer personas, benchmarks against competitors' TTHW, designs your magical moment, traces friction points step by step. Three modes: DX EXPANSION, DX POLISH, DX TRIAGE. 20-45 forcing questions. |
+| `/plan-devex-review` | **Developer Experience Lead** | Interactive DX review: explores developer personas, benchmarks against competitors' TTHW, designs your magical moment, traces friction points step by step. Scores error messages for the agents that read them ([agent-ready errors](docs/agent-ready-errors.md)). Three modes: DX EXPANSION, DX POLISH, DX TRIAGE. 20-45 forcing questions. |
 | `/design-consultation` | **Design Partner** | Build a complete design system from scratch. Researches the landscape, proposes creative risks, generates realistic product mockups. Writes `DESIGN.md` in the open DESIGN.md format, so impeccable, Google Stitch, and any tool that reads it share one file. |
 | `/review` | **Staff Engineer** | Find the bugs that pass CI but blow up in production. Auto-fixes the obvious ones. Flags completeness gaps and gate integrity: every weakened test, timeout, snapshot or suppression reaches a human by name. Advisory simplification lens flags over-built code — never blocks, never auto-applies. |
 | `/deslop-shared-libs` | **Shared Code Reviewer** | Find worthwhile shared-code extractions in recent work. Compares up to five opportunities and recommends the best three, with source evidence, reliability gains, and total code savings. Recommendations only. |
 | `/test-audit` | **Test Auditor** | Sweep existing tests for ones that cost more than they protect: source greps, duplicates, assertion-free probes, test-only exports. Every candidate carries an evidence card; report-only unless you approve a batch. |
 | `/investigate` | **Debugger** | Systematic root-cause debugging. Iron Law: no fixes without investigation. Traces data flow, tests hypotheses, stops after 3 failed fixes. |
 | `/design-review` | **Designer Who Codes** | Same audit as /plan-design-review, then fixes what it finds. Atomic commits, before/after screenshots. If you have impeccable installed, its engine runs first and every mechanical finding arrives tagged with its rule id. |
-| `/devex-review` | **DX Tester** | Live developer experience audit. Actually tests your onboarding: navigates docs, tries the getting started flow, times TTHW, screenshots errors. Compares against `/plan-devex-review` scores — the boomerang that shows if your plan matched reality. |
+| `/devex-review` | **DX Tester** | Live developer experience audit. Actually tests your onboarding: navigates docs, tries the getting started flow, times TTHW, triggers CLI errors the way an agent meets them (`gstack-error-capture`: no terminal, contained, redacted). Compares against `/plan-devex-review` scores — the boomerang that shows if your plan matched reality. |
 | `/design-shotgun` | **Design Explorer** | "Show me options." Generates 4-6 AI mockup variants, opens a comparison board in your browser, collects your feedback, and iterates. Taste memory learns what you like. Repeat until you love something, then hand it to `/design-html`. |
 | `/design-html` | **Design Engineer** | Turn a mockup into production HTML that actually works. Pretext computed layout: text reflows, heights adjust, layouts are dynamic. 30KB, zero deps. Detects React/Svelte/Vue. Smart API routing per design type (landing page vs dashboard vs form). One slop-gate pass through the impeccable engine when you have it. The output is shippable, not a demo. |
 | `/qa` | **QA Lead** | Explore browser, API, CLI, job and webhook behavior. Reproduce bugs, write failing regressions, fix the cause and re-verify before committing. |
@@ -656,6 +656,7 @@ Other references: [docs/gbrain-sync.md](docs/gbrain-sync.md) (sync-specific guid
 |-----|---------------|
 | [Skill Deep Dives](docs/skills.md) | Philosophy, examples, and workflow for every skill (includes Greptile integration) |
 | [Diagrams & Document Formats](docs/howto-diagrams-and-formats.md) | Mermaid/excalidraw fences in PDFs, image sizing and safety defaults, `--to html\|docx`, `/diagram` triplets |
+| [First Production Deploy](docs/howto-bring-up-a-first-deploy.md) | What to do when `/setup-deploy` says nothing is deployed yet: hosting, env and secrets, DNS, checking it works, then back to `/setup-deploy` |
 | [Builder Ethos](ETHOS.md) | Builder philosophy: Boil the Ocean, Search Before Building, three layers of knowledge |
 | [Using GBrain with GStack](USING_GBRAIN_WITH_GSTACK.md) | Every path, flag, bin helper, and troubleshooting step for `/setup-gbrain` |
 | [GBrain Sync](docs/gbrain-sync.md) | Cross-machine memory setup, privacy modes, troubleshooting |
@@ -668,19 +669,86 @@ Other references: [docs/gbrain-sync.md](docs/gbrain-sync.md) (sync-specific guid
 
 ## Privacy & Telemetry
 
-gstack includes **opt-in** usage telemetry to help improve the project. Here's exactly what happens:
+gstack sends nothing about how you use it unless you opt in. Three kinds of
+network traffic exist, and each has its own switch.
 
-- **Default is off.** Nothing is sent anywhere unless you explicitly say yes.
-- **On first run,** gstack asks if you want to share anonymous usage data. You can say no.
-- **What's sent (if you opt in):** skill name, duration, success/fail, gstack version, OS. That's it.
-- **What's never sent:** code, file paths, repo names, branch names, prompts, or any user-generated content.
-- **Change anytime:** `gstack-config set telemetry off` disables everything instantly.
-- **Every off-machine send is receipted.** Any gstack-initiated network send — telemetry included — writes a hash-chained, tamper-evident receipt to `~/.gstack/security/egress.jsonl` before the send; sensitive sinks refuse to send at all if the receipt can't be written. Audit with `gstack-egress list`, verify the chain with `gstack-egress verify` (exit 3 on tamper), see the standing consent settings with `gstack-egress grants`. The ledger records attempted sends so accidents are auditable — it's an audit trail, not a network firewall.
-- **Optional third-party bridges are off by default and receipted too.** The one that exists today, the [Memorable recall bridge](docs/memorable-workflow-memory.md), hands your prompt to a locally installed vendor binary only after you run `gstack-memorable enable`; every hand-off writes a receipt first, the consent shows up in `gstack-egress grants`, and what the vendor then sends is documented as the vendor's claim.
+**Telemetry (opt-in, default off).** On first run gstack asks once. You can say
+no, and `gstack-config set telemetry off` turns it off at any time.
 
-Data is stored in [Supabase](https://supabase.com) (open source Firebase alternative). The schema is in [`supabase/migrations/`](supabase/migrations/) — you can verify exactly what's collected. The Supabase publishable key in the repo is a public key (like a Firebase API key) — row-level security policies deny all direct access. Telemetry flows through validated edge functions that enforce schema checks, event type allowlists, and field length limits.
+- **What's sent, per skill run:** skill name, event type, outcome
+  (success/error/abort), duration, gstack version, OS and CPU architecture,
+  whether the browser was used, whether the run was live or a test, a session
+  id, the count of live session markers (below), the error class, the failed step, and an error message passed through gstack's
+  secret redaction (cut to 200 characters). `community` adds a stable device
+  ID; `anonymous` sends no ID. Prompt-injection detections add the attacking
+  page's domain, a payload hash, a confidence score, the detection layer and
+  the verdict.
+- **What's never sent:** code, file paths, repo names, branch names, prompts,
+  or any other content you write.
+- **What stays on your machine:** opted in, each run is also logged to
+  `~/.gstack/analytics/skill-usage.jsonl` (under your state root; see
+  [docs/state-root.md](docs/state-root.md)) with the repo name and branch, so
+  `gstack-analytics` can show your own dashboard. `gstack-telemetry-sync`
+  deletes those two fields (and, for `anonymous`, the device ID) before
+  anything is uploaded. With telemetry off, gstack logs no usage analytics at
+  all; nothing new is written there.
+- **Where it goes:** [Supabase](https://supabase.com) (an open-source Firebase
+  alternative). The schema is in [`supabase/migrations/`](supabase/migrations/),
+  so you can verify what's collected. The publishable key in the repo is a
+  public key; row-level security denies direct access, and edge functions
+  enforce schema checks, event allowlists and field length limits.
 
-**Local analytics are always available.** Run `gstack-analytics` to see your personal usage dashboard from the local JSONL file — no remote data needed.
+**Update check (on by default, regardless of telemetry).** Every interactive
+skill start runs `gstack-update-check`. When its cache is stale (60 minutes after an
+up-to-date result, 12 hours while an upgrade is pending, 10 minutes after a
+failure) it asks GitHub for the latest version: a `git ls-remote` of
+`github.com/garrytan/gstack` and a GET of the `VERSION` file from
+`raw.githubusercontent.com`. GitHub sees your IP address; nothing about you or
+your code is sent. With telemetry on, the same check also posts your gstack
+version and OS to gstack's Supabase. Turn the check off with
+`gstack-config set update_check false`.
+
+**Outside reviews (on by default; the first one prints a notice).** Plan
+reviews, `/autoplan`, `/review` and `/ship` adversarial passes, `/ship`'s design
+check, `/design-review`, `/design-consultation`, `/office-hours`,
+`/document-release` and `/spec` can
+ask a second model for an independent review: Codex under Claude Code, Claude
+Code under Codex. That sends the review prompt and the relevant code, diff or
+plan to that provider, using your own Codex or Claude Code login. The first
+send on a machine says which provider and which account. Turn it off with
+`gstack-config set codex_reviews disabled`; the binaries that send then refuse
+(`not_run`, `consent_missing`) and start nothing, and an unreadable config
+counts as disabled. `/codex` and `/claude-code` still run when you ask for
+them by name.
+
+**Local state that is not telemetry.** gstack keeps a few local files whatever
+your telemetry setting. They are functional state, not usage logs, and the
+files are never sent:
+
+- **Session markers:** `~/.gstack/sessions/<pid>`, one empty file per live agent
+  session, touched at skill start and deleted after 120 minutes. The count lets
+  skills notice several sessions on one machine; with telemetry on, that number
+  is the session count above.
+- **Project timeline:** `~/.gstack/projects/<repo>/timeline.jsonl` records skill
+  starts and finishes with the branch name, for `/context-restore` and `/retro`.
+  It leaves the machine only if you turn on `artifacts_sync_mode full`
+  ([docs/gbrain-sync.md](docs/gbrain-sync.md)).
+
+**Every off-machine send is receipted.** Any gstack-initiated network send,
+telemetry included, writes a hash-chained, tamper-evident receipt to
+`~/.gstack/security/egress.jsonl` before the send; sensitive sinks refuse to
+send at all if the receipt can't be written. Audit with `gstack-egress list`,
+verify the chain with `gstack-egress verify` (exit 3 on tamper), and see the
+standing consent settings with `gstack-egress grants`. The ledger records
+attempted sends so accidents are auditable; it's an audit trail, not a network
+firewall.
+
+**Optional third-party bridges are off by default and receipted too.** The one
+that exists today, the [Memorable recall bridge](docs/memorable-workflow-memory.md),
+hands your prompt to a locally installed vendor binary only after you run
+`gstack-memorable enable`; every hand-off writes a receipt first, the consent
+shows up in `gstack-egress grants`, and what the vendor then sends is
+documented as the vendor's claim.
 
 ## Troubleshooting
 
@@ -729,6 +797,8 @@ types into that element; bare `browse type <text>` types into whatever has focus
 
 **Don't use some skills?** `gstack-config set disabled_skills make-pdf,pair-agent` stops registering them on every host, so their descriptions stop loading into each session. Claude Code updates right away; other hosts on their next `./setup --host <name>` or `/gstack-upgrade`. Their files stay installed, so a skill that calls a disabled one still works (you get a warning). Typos are rejected with the closest skill name, `gstack-upgrade` can't be disabled, and `gstack-config set disabled_skills ""` re-enables everything.
 
+**Never use plan mode?** `gstack-config set plan_mode_preamble off` leaves the "Plan Mode Safe Operations" and "Skill Invocation During Plan Mode" sections (about 1.6 KB per skill) out of every installed skill on the next `./setup` run; the command prints the exact `./setup --refresh-registered` line that applies it. Claude Code then serves a render under `~/.gstack/render/claude` instead of the committed files. Commands marked "PLAN MODE EXCEPTION — ALWAYS RUN" keep their marker. `gstack-config set plan_mode_preamble on` (the default) and another `./setup` bring the sections back. It matters for Claude Code, Copilot and OpenCode: hosts without plan mode (Codex and others) never carry these sections.
+
 **Want namespaced commands?** `cd ~/.claude/skills/gstack && ./setup --prefix` — switches from `/qa` to `/gstack-qa`. Useful if you run other skill packs alongside gstack.
 
 **Codex says "Skipped loading skill(s) due to invalid SKILL.md"?** Your Codex skill descriptions are stale. `${CODEX_HOME:-~/.codex}/skills/gstack` is a runtime directory, not the checkout: `./setup --status` shows the Codex row's source checkout. Fix: `cd <that source> && git pull && ./setup --host codex` — for a repo-local install, run it from inside the project.
@@ -767,18 +837,14 @@ a generated gstack SKILL.md and then edited it, that file is moved to
 `~/.gstack/backups/skills/<timestamp>/<skill>/SKILL.md` before gstack's is
 linked in, never deleted.
 
-**Claude says it can't see the skills?** Make sure your project's `CLAUDE.md` has a gstack section. Add this:
+**Claude says it can't see the skills?** Check that they are installed (`ls ~/.claude/skills`) and restart Claude Code; it lists every installed skill with its description, so CLAUDE.md does not need to enumerate them (a pasted list goes stale with each release). Your project's `CLAUDE.md` only needs the browsing rule:
 
 ```
 ## gstack
 Use /browse from gstack for all web browsing. Never use mcp__claude-in-chrome__* tools.
-Available skills: /office-hours, /plan-ceo-review, /plan-eng-review, /plan-design-review,
-/design-consultation, /design-shotgun, /design-html, /review, /deslop-shared-libs, /test-audit, /ship, /eval-plan, /land-and-deploy,
-/canary, /benchmark, /browse, /open-gstack-browser, /qa, /qa-only, /design-review, /scrape,
-/setup-browser-cookies, /setup-deploy, /setup-gbrain, /sync-gbrain, /retro, /investigate,
-/document-release, /document-generate, /codex, /cso, /autoplan, /pair-agent, /careful, /freeze,
-/guard, /unfreeze, /gstack-upgrade, /learn.
 ```
+
+If an older install prompt left an "Available skills:" line in your CLAUDE.md, delete it.
 
 ## License
 

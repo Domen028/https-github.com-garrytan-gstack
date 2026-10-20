@@ -7,10 +7,11 @@
  * runner-owned selection manifest `.gstack/pregate.json` declares for a
  * planner-computed matrix. Every uncertainty widens the selection.
  */
-import { spawnSync } from 'node:child_process';
 import { GENERATED_PATH } from '../regen';
+import { runBashSync } from '../script-invocation';
 import { matchesAny } from '../ship-policy';
 import { PREGATE_CONFIG_PATH } from './config';
+import { isDocsEmptyLane, isInertNoTests } from './docs-lane';
 import { buildGraph, isTestFile, listRepoFiles, testsFor, type Graph } from './import-graph';
 import type { PregateContext, RemoteObligation } from './types';
 import type { Lane } from './workflows';
@@ -18,6 +19,10 @@ import type { Lane } from './workflows';
 export interface Selection {
   /** Touched files with no lane and no `[]` declaration. */
   noLane: string[];
+  /** Markdown (and `empty_lanes` paths) with no import-graph test: the docs/no-tests empty lane. */
+  emptyLane: string[];
+  /** Assets and dotfile tool config with no import-graph test: files no runner loads, also an empty lane. */
+  inert: string[];
   /** Every test the touched files select, sorted. */
   tests: string[];
   /** Tests that run on this machine. */
@@ -31,15 +36,33 @@ export interface Selection {
   provenance: string[];
 }
 
+/** One path-shaped token: framework route segments (`(group)`, `[id]`, `[...slug]`, `@slot`, `$param`, `+page`) stay whole. */
+const PATH_TOKEN = /[\w.@()[\]$+~-]+(?:\/[\w.@()[\]$+~-]+)*/g;
+
+/** Test files a selection manifest printed, in order: every path-shaped token the import graph calls a test file. */
+export function manifestTestPaths(output: string): string[] {
+  const found = new Set<string>();
+  for (const line of output.split('\n')) {
+    for (const [token] of line.matchAll(PATH_TOKEN)) {
+      const bare = token.replace(/^\.\//, '');
+      const trimmed = bare.replace(/^[([]+/, '').replace(/[)\].,]+$/, '');
+      const hit = [bare, trimmed].find(isTestFile);
+      if (hit) found.add(hit);
+    }
+  }
+  return [...found];
+}
+
 /** Resolve one lane's test-file set: literal paths, then the declared selection manifest, else `?` when its matrix is an expression. */
 export function laneFileSet(ctx: PregateContext, lane: Lane): string[] | '?' | 'all' {
   const files = new Set(lane.testFiles);
   const manifest = ctx.config.selection[lane.id];
   if (manifest) {
     if (!ctx.allowRepoCommands) { ctx.explain.push(`lane ${lane.id}: selection manifest \`${manifest}\` not run (pass --allow-repo-commands); treated as unknown`); return files.size ? [...files] : '?'; }
-    const r = spawnSync('bash', ['-c', `set -o pipefail; ${manifest}`], { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
+    const r = runBashSync(`set -o pipefail; ${manifest}`, { cwd: ctx.repoRoot, encoding: 'utf8', timeout: Math.min(ctx.timeoutMs, 300_000), maxBuffer: 64 * 1024 * 1024, env: ctx.env });
+    if (r.error && r.status === null && r.signal === null) { ctx.explain.push(`lane ${lane.id}: selection manifest could not start (${r.error.message}); treated as unknown`); return '?'; }
     if (r.status !== 0) { ctx.explain.push(`lane ${lane.id}: selection manifest exited ${r.status}; treated as unknown`); return '?'; }
-    for (const line of (r.stdout ?? '').split('\n')) { const m = /((?:[\w.-]+\/)*[\w.-]+\.(?:test|spec)\.[cm]?[jt]sx?|(?:[\w.-]+\/)*test_[\w.-]+\.py)/.exec(line.trim()); if (m) files.add(m[1]!); }
+    for (const f of manifestTestPaths(r.stdout ?? '')) files.add(f);
     ctx.explain.push(`lane ${lane.id}: ${files.size} files from manifest \`${manifest}\``);
     return [...files];
   }
@@ -58,6 +81,8 @@ export function selectLanes(ctx: PregateContext): Selection {
   const provenance: string[] = [];
   const tests = new Set<string>();
   const noLane: string[] = [];
+  const emptyLane: string[] = [];
+  const inert: string[] = [];
   const seeds = new Map<string, string>();
   for (const t of touched) { seeds.set(t.path, t.status === 'D' ? 'deleted' : 'touched'); if (t.renamedFrom) seeds.set(t.renamedFrom, `renamed to ${t.path}`); }
   for (const e of ctx.registry.entries) {
@@ -68,7 +93,12 @@ export function selectLanes(ctx: PregateContext): Selection {
     const m = testsFor(graph, file, ctx.config.dependencies);
     for (const t of m.tests) tests.add(t);
     provenance.push(...m.provenance.map(p => `${p} [${why}]`));
-    if (m.tests.length || m.declaredNone || why.startsWith('generated')) continue;
+    if (m.tests.length || why.startsWith('generated')) continue;
+    // An explicit `[]` already cleared the file. Label it docs/no-tests only when it is that class.
+    if (m.declaredNone) {
+      if (isDocsEmptyLane(file, ctx.config.empty_lanes ?? [])) emptyLane.push(file);
+      continue;
+    }
     // A renamed file keeps the lane its old name had: those tests run (and fail loudly if they still import the old path).
     const renamedFrom = touched.find(t => t.path === file && t.renamedFrom)?.renamedFrom;
     if (renamedFrom && testsFor(graph, renamedFrom, ctx.config.dependencies).tests.length) { provenance.push(`${file}: lane via its old name ${renamedFrom}`); continue; }
@@ -77,6 +107,17 @@ export function selectLanes(ctx: PregateContext): Selection {
     if (generator) { provenance.push(`${file}: covered by regen ${generator.id} (registry input)`); continue; }
     // The pin files are validated by pregate itself (validateConfig / validateRegistry) on every run.
     if (file === PREGATE_CONFIG_PATH || file === GENERATED_PATH) { provenance.push(`${file}: pin file validated by pregate`); continue; }
+    // Reached only when testsFor mapped nothing, so a Markdown file a test reads never lands here.
+    if (isDocsEmptyLane(file, ctx.config.empty_lanes ?? [])) {
+      emptyLane.push(file);
+      provenance.push(`${file}: docs/no-tests (empty lane)`);
+      continue;
+    }
+    if (isInertNoTests(file)) {
+      inert.push(file);
+      provenance.push(`${file}: no-tests (asset or tool config no runner loads)`);
+      continue;
+    }
     noLane.push(file);
   }
   const laneSets: Record<string, string[] | '?'> = {};
@@ -99,7 +140,7 @@ export function selectLanes(ctx: PregateContext): Selection {
   if (anyLocalAll || ctx.lanes.filter(l => l.runsTests && !l.manual && l.tier !== 'platform').length === 0) for (const t of selected) local.add(t);
   for (const t of selected) if (!local.has(t) && !remote.some(r => r.tests.includes(t))) local.add(t);
   if (local.size && tiers.size === 0) tiers.add('unit');
-  return { noLane: noLane.sort(), tests: selected, localTests: [...local].sort(), remote, tiersRan: [...tiers].sort(), laneSets, provenance };
+  return { noLane: noLane.sort(), emptyLane: emptyLane.sort(), inert: inert.sort(), tests: selected, localTests: [...local].sort(), remote, tiersRan: [...tiers].sort(), laneSets, provenance };
 }
 
 export function isTest(file: string): boolean { return isTestFile(file); }

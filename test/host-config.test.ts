@@ -469,7 +469,7 @@ describe('golden-file regression', () => {
 
   test('every Claude outside-voice mode uses the restricted runner and exposes an explicit model override', () => {
     const rendered = fs.readFileSync(path.join(GOLDEN_OUT, '.agents/skills/gstack-claude-code/SKILL.md'), 'utf8');
-    const calls = rendered.split('\n').filter(line => line.includes('"$CLAUDE_RUNNER" --cwd'));
+    const calls = rendered.split('\n').filter(line => line.includes('"$CLAUDE_RUNNER" --user-invoked --cwd'));
     expect(calls).toHaveLength(3);
     expect(rendered.match(/CLAUDE_RUNNER="\$RUNTIME_ROOT\/bin\/gstack-claude-code"/g)).toHaveLength(3);
     for (const call of calls) {

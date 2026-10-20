@@ -10,7 +10,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { AUTOPLAN, ROOT, attemptsOf, env, journal, readRun, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
+import { AUTOPLAN, ROOT, attemptsOf, env, journal, readRun, resultOf, review, runPhase, startSmallRun } from './helpers/autoplan-run-fixture';
 
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'autoplan-concurrency-'));
 afterAll(() => fs.rmSync(TMP, { recursive: true, force: true }));
@@ -24,11 +24,27 @@ async function parallel(argvs: string[][]): Promise<Array<{ status: number; stdo
 }
 
 describe('two writers', () => {
+  test('a lock caught between create and write is held, not stolen: a fresh empty run.lock refuses RUN_LOCKED; an old one is reclaimed', () => {
+    const out = startSmallRun(path.join(TMP, 'half-written'));
+    const lock = path.join(out, 'run.lock');
+    const next = () => Bun.spawnSync(['bun', AUTOPLAN, 'next', '--out', out], { cwd: ROOT, env: env(), timeout: 60_000 });
+    fs.writeFileSync(lock, '');
+    const held = next();
+    expect(held.exitCode).toBe(3);
+    expect(held.stderr.toString()).toMatch(/\(RUN_LOCKED\)$/m);
+    expect(fs.existsSync(lock)).toBe(true);
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(lock, old, old);
+    const reclaimed = next();
+    expect(reclaimed.exitCode, reclaimed.stderr.toString()).toBe(0);
+    expect(fs.existsSync(lock)).toBe(false);
+  });
+
   test('six concurrent submits of the same attempt: exactly one binds, the rest are refused, one journal row, one settlement', async () => {
     const out = startSmallRun(path.join(TMP, 'submit'), ['--estimate-usd', '1']);
     const ids = attemptsOf(out, 'ceo');
     review(path.join(out, 'ceo-native-prompt.md'));
-    const args = ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native];
+    const args = ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native];
     const results = await parallel(Array.from({ length: 6 }, () => args));
     const ok = results.filter(r => r.status === 0);
     expect(ok).toHaveLength(1);
@@ -62,8 +78,8 @@ describe('two writers', () => {
     review(path.join(out, 'ceo-outside-prompt.md'));
     const before = readRun(out).revision;
     const results = await parallel([
-      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', path.join(out, 'ceo-native.md'), '--model', 'claude-opus-4-7', '--attempt', ids.native],
-      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', path.join(out, 'ceo-outside.md'), '--model', 'openai/gpt-6-astra', '--attempt', ids.outside],
+      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'native', '--result', resultOf(out, 'ceo', 'native'), '--model', 'claude-opus-4-7', '--attempt', ids.native],
+      ['submit', '--out', out, '--phase', 'ceo', '--voice', 'outside', '--result', resultOf(out, 'ceo', 'outside'), '--model', 'openai/gpt-6-astra', '--attempt', ids.outside],
       ['status', '--out', out],
     ]);
     const bound = results.slice(0, 2).filter(r => r.status === 0).length;

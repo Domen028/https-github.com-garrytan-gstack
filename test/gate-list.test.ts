@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { applyReply, decisionRows, parseReply, renderGate, resolveAll, validateGateList, type GateList } from '../lib/gate-list';
+import { applyReply, decisionRows, parseReply, recHash, renderGate, validateGateList, type GateList } from '../lib/gate-list';
 import { EXIT, validateFile } from '../lib/headless-artifacts';
 
 const ROOT = path.resolve(import.meta.dir, '..');
@@ -116,7 +116,7 @@ describe('reply grammar', () => {
 });
 
 describe('rendering', () => {
-  test('ids and numbering are stable across pages; each page prints the reply shape and the `all` resolution', () => {
+  test('ids and numbering are stable across pages; each page prints the reply shape and the `rec` resolution with its rec_hash', () => {
     const p1 = renderGate(big, 1);
     const p5 = renderGate(big, 5);
     expect(p1).toContain('page=1/5');
@@ -127,10 +127,10 @@ describe('rendering', () => {
     expect(p5).toContain('29. [d29] decision 29');
     expect(p5).toContain('33. [d33] decision 33');
     for (const page of [p1, p5]) {
-      expect(page).toContain('`all`');
-      expect(page).toContain('`all except <tokens>`');
-      expect(page).toContain(`gate_rev=1`);
-      expect(page).toContain(JSON.stringify({ gate_rev: 1, choices: resolveAll(big) }));
+      expect(page).toContain('`rec`');
+      expect(page).toContain('`rec except <tokens>`');
+      expect(page).toContain(`gate_rev=1 rec_hash=${recHash(big)}`);
+      expect(page).toContain(JSON.stringify({ gate_rev: 1, rec_hash: recHash(big), choices: Object.fromEntries(big.items.map(i => [i.id, i.recommended])) }));
     }
     expect(renderGate(list)).toContain('   d1a) option A (recommended)');
     expect(renderGate(list)).not.toContain('page=1/2');
@@ -142,6 +142,33 @@ describe('rendering', () => {
     expect(validateGateList({ ...list, items: [list.items[0], list.items[0]] })[0]).toContain('duplicated');
     expect(validateGateList({ ...list, items: [{ ...list.items[0], recommended: 'z' }] })[0]).toContain('recommended');
     expect(validateGateList({ ...list, gate_rev: 0 })[0]).toContain('gate_rev');
+  });
+});
+
+describe('next wave B1/B-b: rec, aliases, quotes and the rec_hash', () => {
+  const held: GateList = { ...list, items: [{ ...list.items[0]!, recommended: 'b', options: [{ key: 'a', text: 'keep', changes_plan: false }, { key: 'b', text: 'change', changes_plan: true }, { key: 'c', text: 'other' }] }, ...list.items.slice(1)] };
+  test('every alias resolves like `rec`, plan changes included; `except` and earlier answers combine; quotes, backticks and newlines are separators', () => {
+    const want = { uc1: 'b', d1: 'a', d2: 'a', d3: 'a' };
+    for (const reply of ['rec', 'REC', 'all', 'approve all', 'accept all', 'take all recommendations', '`rec`', '"rec"', '\u201crec\u201d', 'rec\n']) {
+      const p = parseReply(reply, held, 1);
+      expect(p.valid, reply).toBe(true);
+      expect(p.mode).toBe('rec');
+      expect(chosen(p)).toEqual(want);
+    }
+    expect(chosen(parseReply('rec except uc1a d3b', held, 1))).toEqual({ uc1: 'a', d1: 'a', d2: 'a', d3: 'b' });
+    expect(chosen(parseReply('rec', held, 1, { d1: 'c' }))).toEqual({ uc1: 'b', d1: 'c', d2: 'a', d3: 'a' });
+    expect(parseReply('rec', held, 1, { d1: 'c' }).choices.find(c => c.id === 'd1')!.prior).toBe(true);
+    expect(chosen(parseReply('as-is', held, 1))).toEqual({ uc1: 'a', d1: 'a', d2: 'a', d3: 'a' });
+    expect(parseReply('d3b', held, 1).pending).toEqual(['uc1', 'd1']);
+    for (const bad of ['approve', 'accept', 'take all', 'rec rec', 'rec as-is', 'yes']) expect(parseReply(bad, held, 1).valid, bad).toBe(false);
+  });
+  test('rec_hash changes with a recommendation, its basis or rec_rev, and the render shows who set it', () => {
+    const h = recHash(held);
+    expect(recHash({ ...held })).toBe(h);
+    expect(recHash({ ...held, rec_rev: 1 })).not.toBe(h);
+    const moved = { ...held, items: held.items.map(i => (i.id === 'd1' ? { ...i, recommended: 'b', recommended_basis: 'both reviewers name it', recommended_by: 'agent:relay' } : i)) };
+    expect(recHash(moved)).not.toBe(h);
+    expect(renderGate(moved)).toContain('[d1] Delivery shape (approval; recommended: b (both reviewers name it; set by agent:relay))');
   });
 });
 
@@ -162,6 +189,21 @@ describe('decisions.jsonl rows', () => {
     expect(applied.find(r => r.id.endsWith('-uc1'))!.chosen).toBeUndefined();
     const stale = applyReply(rows, parseReply('all', list, 2), '2026-10-10T21:30:00Z');
     expect(stale.every(r => r.status === 'pending')).toBe(true);
+  });
+
+  test('a later gate revision mints its own ids, so rows from every revision stay unique in one file', () => {
+    const rev2: GateList = { ...list, gate_rev: 2 };
+    const answered = applyReply(decisionRows(list), parseReply('all', list, 1), '2026-10-10T21:30:00Z');
+    const later = decisionRows(rev2);
+    expect(later.map(r => r.id)).toEqual(['maw-20261010-r2-uc1', 'maw-20261010-r2-d1', 'maw-20261010-r2-d2', 'maw-20261010-r2-d3']);
+    expect(later[1]).toMatchObject({ label: 'D1', gate_rev: 2 });
+    const all = [...answered, ...applyReply(later, parseReply('d1b', rev2, 2), '2026-10-11T09:00:00Z')];
+    expect(new Set(all.map(r => r.id)).size).toBe(all.length);
+    expect(all.find(r => r.id === 'maw-20261010-r2-d1')).toMatchObject({ status: 'overridden', chosen: 'b' });
+    expect(all.find(r => r.id === 'maw-20261010-d1')).toMatchObject({ status: 'approved', chosen: 'a', reply: 'all' });
+    const f = path.join(tmp, 'decisions-two-revs.jsonl');
+    fs.writeFileSync(f, all.map(r => JSON.stringify(r)).join('\n') + '\n');
+    expect(validateFile(f, 'decisions', 'maw-20261010')).toEqual([]);
   });
 });
 

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * CEO-2 / CEO-6 acceptance for the /autoplan guard's bounded journal read:
  * build a synthetic parent journal around one real /autoplan invocation, keep

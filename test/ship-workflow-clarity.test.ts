@@ -110,7 +110,7 @@ test('Step 11.5 reads review records and blocks on a mismatch', () => {
 
 test('version recovery and digest generation keep their tokens', () => {
   const version = compact(between(entryTemplate, '## Step 12:', '## Step 14:'));
-  expectTokens(version, ['`baseVersion`', '`currentVersion`', 'ALREADY_BUMPED', '`agents-digest/gstack-AGENTS.md`', '`agentsDigest`', '`bun scripts/gen-agents-digest.ts`'], 'ship version step');
+  expectTokens(version, ['`baseVersion`', '`currentVersion`', 'ALREADY_BUMPED', '`agents-digest/gstack-AGENTS.md`', '`agentsDigest`', '`bun --no-env-file --config=/dev/null scripts/gen-agents-digest.ts`'], 'ship version step');
   expectAbsent(version, ['skip if ALREADY_BUMPED'], 'ship version step');
 });
 

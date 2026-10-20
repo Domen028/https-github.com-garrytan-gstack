@@ -437,14 +437,13 @@ describe('gen-skill-docs', () => {
   });
 
   test('benchmark routing is scoped to web page performance', () => {
-    const generated = fs.readFileSync(path.join(ROOT, 'benchmark', 'SKILL.md'), 'utf-8');
+    // The template description is the routing source; the Claude catalog trim
+    // drops its tail from benchmark/SKILL.md.
     const template = fs.readFileSync(path.join(ROOT, 'benchmark', 'SKILL.md.tmpl'), 'utf-8');
-    for (const content of [generated, template]) {
-      const useWhen = content.match(/Use when:[\s\S]*?(?=\n\n|\(gstack\))/)?.[0] ?? '';
-      expect(useWhen).toContain('"web performance benchmark"');
-      expect(useWhen).not.toMatch(/"benchmark"|"performance"/);
-      expect(content).toContain('/benchmark-models');
-    }
+    const useWhen = template.match(/Use when:[\s\S]*?(?=\n\n|\(gstack\))/)?.[0] ?? '';
+    expect(useWhen).toContain('"web performance benchmark"');
+    expect(useWhen).not.toMatch(/"benchmark"|"performance"/);
+    expect(template).toContain('/benchmark-models');
     const router = fs.readFileSync(path.join(ROOT, 'SKILL.md.tmpl'), 'utf-8');
     expect(router).toContain('web performance regression → invoke `/benchmark`');
     expect(router).toContain('model or skill benchmarks → invoke `/benchmark-models`');
@@ -2379,10 +2378,13 @@ describe('DESIGN_OUTSIDE_VOICES resolver', () => {
   test('branches correctly per skillName — different prompts', () => {
     const planContent = readSkillUnion('plan-design-review');
     const consultContent = readSkillUnion('design-consultation');
-    // plan-design-review uses analytical prompt (high reasoning)
-    expect(planContent).toContain('model_reasoning_effort="high"');
+    // plan-design-review uses analytical prompt (high reasoning); run-with-timeout
+    // turns --effort X into -c model_reasoning_effort="X" (test/codex-probe-subcommands.test.ts)
+    expect(planContent).toContain('run-with-timeout --effort high ');
+    expect(planContent).not.toContain('--effort medium');
     // design-consultation uses creative prompt (medium reasoning)
-    expect(consultContent).toContain('model_reasoning_effort="medium"');
+    expect(consultContent).toContain('run-with-timeout --effort medium ');
+    expect(consultContent).not.toContain('--effort high');
   });
 });
 
@@ -2715,7 +2717,7 @@ describe('DESIGN_DETECTOR resolver', () => {
         expect(block).not.toContain('npx impeccable');
         for (const line of block.split('\n')) {
           if (!line.includes('gstack-design-detect.ts')) continue;
-          expect(line).toContain('bun --no-env-file run ');
+          expect(line).toContain('bun --no-env-file --config=/dev/null run ');
           if (/gstack-design-detect\.ts scan /.test(line)) expect(line).toContain('echo "DETECT_EXIT_CODE=$?"');
         }
       }
@@ -2775,7 +2777,7 @@ describe('DESIGN_MD_CHECK resolver and open DESIGN.md adoption', () => {
   test('every rendered gstack-design-md invocation uses bun --no-env-file', () => {
     for (const content of [readSkillUnion('design-consultation'), fs.readFileSync(path.join(ROOT, 'design-review', 'SKILL.md'), 'utf-8'), readSkillUnion('ship')]) {
       for (const line of content.split('\n')) {
-        if (line.includes('gstack-design-md.ts')) expect(line).toContain('bun --no-env-file run ');
+        if (line.includes('gstack-design-md.ts')) expect(line).toContain('bun --no-env-file --config=/dev/null run ');
       }
     }
   });
@@ -4441,10 +4443,27 @@ describe('voice-triggers processing', () => {
     expect(processVoiceTriggers(content)).toBe(content);
   });
 
-  test('generated CSO SKILL.md contains voice triggers in description', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'cso', 'SKILL.md'), 'utf-8');
+  test('CSO voice triggers fold into the full description', () => {
+    // The Claude catalog trim drops this line from cso/SKILL.md; full-mode and
+    // other-host renders still carry it.
+    const content = processVoiceTriggers(fs.readFileSync(path.join(ROOT, 'cso', 'SKILL.md.tmpl'), 'utf-8'));
     expect(content).toContain('"see-so"');
     expect(content).toContain('Voice triggers (speech-to-text aliases):');
+  });
+
+  test('Claude root router routes every skill voice trigger the catalog trim drops', () => {
+    const routing = between(fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8'), '**Routing rules', '**Route only to skills');
+    const skills = fs.readdirSync(ROOT).filter(d => !fs.lstatSync(path.join(ROOT, d)).isSymbolicLink() && fs.existsSync(path.join(ROOT, d, 'SKILL.md.tmpl')));
+    let routed = 0;
+    for (const skill of skills) {
+      const triggers = extractVoiceTriggers(fs.readFileSync(path.join(ROOT, skill, 'SKILL.md.tmpl'), 'utf-8').replace(/\r\n/g, '\n'));
+      if (triggers.length === 0) continue;
+      const line = routing.split('\n').find(l => l.endsWith(`→ invoke \`/${skill}\``) && l.startsWith('- Voice trigger '));
+      expect(line, skill).toBeDefined();
+      for (const t of triggers) expect(line, skill).toContain(`"${t}"`);
+      routed++;
+    }
+    expect(routed).toBeGreaterThan(0);
   });
 
   test('generated CSO SKILL.md does NOT contain raw voice-triggers field', () => {
@@ -4553,8 +4572,8 @@ describe('plan-mode-info resolver (handshake-replacement)', () => {
 
   test('vestigial handshake is absent from non-Claude host outputs', () => {
     // Non-Claude hosts render to hostSubdirs (.agents/, .openclaw/, etc). The
-    // plan-mode-info resolver has no host-scoping — all hosts get the new
-    // section, none get the old handshake. Scan every candidate host tree in
+    // plan-mode-info section renders only on planMode hosts (#3168); no host
+    // gets the old handshake. Scan every candidate host tree in
     // the module-level out-dir render (--host all), which is always present —
     // so the check can no longer silently degrade to a console warning.
     const hostDirs = ['.agents', '.openclaw', '.opencode', '.factory', '.hermes', '.kiro', '.cursor', '.slate'];
@@ -4573,6 +4592,26 @@ describe('plan-mode-info resolver (handshake-replacement)', () => {
       }
     }
     expect(checked).toBeGreaterThan(0);
+  });
+
+  test('plan-mode section renders only for hosts whose capabilities declare planMode (#3168)', () => {
+    for (const host of ALL_HOST_CONFIGS) {
+      const skillsRoot = host.name === 'claude' ? EXTERNAL_OUT : path.join(EXTERNAL_OUT, host.hostSubdir, 'skills');
+      const files = fs.readdirSync(skillsRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map(entry => path.join(skillsRoot, entry.name, 'SKILL.md'))
+        .filter(file => fs.existsSync(file));
+      expect(files.length, `${host.name}: no rendered skills under ${skillsRoot}`).toBeGreaterThan(0);
+      const withSection = files.filter(file => {
+        const content = fs.readFileSync(file, 'utf-8');
+        return content.includes(PLAN_MODE_INFO_MARKER) || content.includes('## Plan Mode Safe Operations');
+      }).map(file => path.relative(EXTERNAL_OUT, file));
+      if (host.capabilities.planMode) {
+        expect(withSection.some(file => file.endsWith(`plan-ceo-review${path.sep}SKILL.md`)), `${host.name} lost the plan-mode section`).toBe(true);
+      } else {
+        expect(withSection, `${host.name} declares planMode:false but renders the plan-mode section`).toEqual([]);
+      }
+    }
   });
 
   test.each(REVIEW_SKILLS)(

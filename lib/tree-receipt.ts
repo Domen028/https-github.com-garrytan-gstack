@@ -4,7 +4,9 @@
  * tree: its fingerprint can name objects unreachable once the gate VM is
  * gone), classifies the diff hunk by hunk with per-file-type rules, decides
  * per gate whether its evidence is reusable, and refuses `eligible` when the
- * recorded predecessor head moved. Tree identity alone is not gate evidence:
+ * recorded predecessor head moved. The repo's stamp rule wins: with
+ * `stamp_files` set, only those files can be stamps, and `stamp_patterns`
+ * (literal `{version}` templates) join the built-in stamp forms. Tree identity alone is not gate evidence:
  * the receipt also compares the execution identity the gate ran under (from
  * a `gstack-evidence bundle`) with the current one.
  */
@@ -18,7 +20,7 @@ import type { ResultCodeName } from './result-codes';
 import { matchesAny, type ShipPolicy } from './ship-policy';
 
 export type HunkClass = 'stamp' | 'changed';
-export interface FileVerdict { path: string; rule: string; verdict: HunkClass; residual?: string }
+export interface FileVerdict { path: string; rule: string; verdict: HunkClass; residual?: string; line?: number }
 export interface GateVerdict { label: string; verdict: 'reusable' | 'rerun' | 'not-reusable'; reason: string; cmd_sha256?: string; command?: string }
 export interface TreeReceipt {
   schema_version: 1;
@@ -48,14 +50,14 @@ function blob(cwd: string, treeish: string, rel: string): string | null {
 }
 
 /** Every removed/added pair differs only by the exact stamp rewrites (old -> new). */
-function stampOnlyHunks(hunks: FileDiff['hunks'], oldV: string, newV: string): string | null {
+function stampOnlyHunks(hunks: FileDiff['hunks'], oldV: string, newV: string, templates: readonly string[]): { why: string; line: number } | null {
   for (const h of hunks) {
-    if (h.removed.length !== h.added.length) return `${h.removed.length} line(s) removed, ${h.added.length} added`;
+    if (h.removed.length !== h.added.length) return { why: `${h.removed.length} line(s) removed, ${h.added.length} added`, line: h.at };
     for (let i = 0; i < h.removed.length; i++) {
       const r = h.removed[i]!;
       const a = h.added[i]!;
-      const rewritten = rewriteStamps(r, oldV, newV);
-      if (rewritten.count === 0 || rewritten.text !== a) return `${JSON.stringify(r.trim().slice(0, 60))} -> ${JSON.stringify(a.trim().slice(0, 60))}`;
+      const rewritten = rewriteStamps(r, oldV, newV, templates);
+      if (rewritten.count === 0 || rewritten.text !== a) return { why: `${JSON.stringify(r.trim().slice(0, 60))} -> ${JSON.stringify(a.trim().slice(0, 60))}`, line: h.at + i };
     }
   }
   return null;
@@ -67,10 +69,12 @@ function jsonEqualModuloVersion(a: string | null, b: string | null, name: string
 }
 
 function classifyFile(repoRoot: string, f: FileDiff, gated: string, current: string, policy: ShipPolicy, versionRel: string, oldV: string | null, newV: string | null): FileVerdict {
-  const changed = (rule: string, residual: string): FileVerdict => ({ path: f.path, rule, verdict: 'changed', residual });
+  const changed = (rule: string, residual: string, line = f.hunks[0]?.at): FileVerdict => ({ path: f.path, rule, verdict: 'changed', residual, line });
   const stamp = (rule: string): FileVerdict => ({ path: f.path, rule, verdict: 'stamp' });
   if (f.binary) return changed('binary', 'binary content differs');
+  if (f.modeChanged) return changed('mode', 'file mode changed');
   if (f.status !== 'M') return changed('path', `${f.status === 'A' ? 'added' : f.status === 'D' ? 'deleted' : 'renamed'}`);
+  if (policy.stamp_files.length && !matchesAny(policy.stamp_files, f.path)) return changed('stamp_files', 'not in the repo\'s stamp_files allowlist');
   const before = blob(repoRoot, gated, f.path);
   const after = blob(repoRoot, current, f.path);
   const base = path.basename(f.path);
@@ -93,10 +97,10 @@ function classifyFile(repoRoot: string, f: FileDiff, gated: string, current: str
   if (policy.changelog && f.path === policy.changelog) {
     return before !== null && after !== null && normalizeChangelog(before) === normalizeChangelog(after) ? stamp('changelog-heading') : changed('changelog', 'entry text changed (only a heading move or re-heading is a stamp)');
   }
-  if (oldV && newV && oldV !== newV && (matchesAny(policy.stamp_paths, f.path) || matchesAny(policy.release_outputs, f.path))) {
-    const rule = matchesAny(policy.stamp_paths, f.path) ? 'stamp_paths' : 'release_outputs';
-    const why = stampOnlyHunks(f.hunks, oldV, newV);
-    return why ? changed(rule, why) : stamp(rule);
+  const rule = matchesAny(policy.stamp_paths, f.path) ? 'stamp_paths' : matchesAny(policy.release_outputs, f.path) ? 'release_outputs' : matchesAny(policy.stamp_files, f.path) ? 'stamp_files' : null;
+  if (oldV && newV && oldV !== newV && rule) {
+    const bad = stampOnlyHunks(f.hunks, oldV, newV, policy.stamp_patterns);
+    return bad ? changed(rule, bad.why, bad.line) : stamp(rule);
   }
   return changed('other', `${f.hunks.length} hunk(s) outside every stamp rule`);
 }

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-autoplan-timing — wall time per autoplan phase and the pre-run estimate (plan B10).
  *

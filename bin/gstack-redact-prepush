@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-redact-prepush — git pre-push hook that scans the diff being pushed for
  * HIGH-severity credentials and blocks the push on a hit.
@@ -29,6 +29,10 @@
  *     line, `#` comments. Only a finding whose matched text equals an entry is
  *     suppressed; every push that carries entries lists what they suppressed.
  *   - GSTACK_REDACT_PREPUSH=skip → log + exit 0 (escape valve).
+ *   - A repo with a `sealed` key in .gstack/pregate.json (base branch ∪ pushed
+ *     commit): lib/sealed-guard.ts checks every commit the push publishes for
+ *     sealed or eval output; a public (or unknown) destination refuses
+ *     (SEALED_OUTPUT_REFUSED), a private one warns.
  *
  * Installed/uninstalled via `gstack-redact install-prepush-hook` (see the
  * gstack-redact CLI), which chains any pre-existing hook.
@@ -39,6 +43,7 @@ import * as path from "path";
 import { normalizeWithMap, scan, type Finding, type ScanOptions } from "../lib/redact-engine";
 import { mkdirpSync } from "../lib/fs-utils";
 import { resolveStateRoot } from "../lib/state-root";
+import { evaluateSealed, publishedCommits, renderSealed, type SealedReport } from "../lib/sealed-guard";
 
 const ZERO = /^0+$/;
 let emptyTree: string | undefined;
@@ -594,6 +599,21 @@ function mediumLine(f: Finding, part: AddedFile): string {
   return `  MEDIUM  ${f.id}  ${where}  fix: ${fix}\n`;
 }
 
+/** The sealed-output guard over every commit this push publishes (lib/sealed-guard.ts); null when nothing is pushed. */
+function sealedForPush(refs: Array<{ localSha: string; remoteSha: string }>): SealedReport | null {
+  if (!refs.length) return null;
+  const target = pushTarget();
+  const remoteName = target.kind === "remote" ? target.name : target.kind === "unknown" && git(["remote"]).split("\n").includes("origin") ? "origin" : null;
+  const remoteUrl = process.argv[3] || (remoteName ? git(["remote", "get-url", remoteName]).trim() : "") || null;
+  const targets: Array<{ commits: string[]; pushedSha: string }> = [];
+  for (const ref of refs) {
+    const published = publishedCommits(".", { localSha: ref.localSha, remoteSha: ref.remoteSha, remoteName });
+    if ("error" in published) return { status: "error", error: published.error, policyLabels: [], commits: 0, findings: [], waived: [], visibility: "unknown", visibilitySource: "", target: remoteUrl ?? "the push target" };
+    targets.push({ commits: published.commits, pushedSha: ref.localSha });
+  }
+  return evaluateSealed({ repoRoot: ".", targets, baseRef: defaultRemoteBranch(), remoteUrl, target: remoteUrl ?? remoteName ?? "the push target" });
+}
+
 function main() {
   if ((process.env.GSTACK_REDACT_PREPUSH || "").toLowerCase() === "skip") {
     logSkip(process.env.GSTACK_REDACT_PREPUSH_REASON || "env-skip");
@@ -612,6 +632,7 @@ function main() {
   const allowEntries = new Set<string>();
   const historyRevs = new Set<string>();
   let trackingRemote: string | null = null;
+  const pushedRefs: Array<{ localSha: string; remoteSha: string }> = [];
 
   for (const fields of refs) {
     // Fail CLOSED on a ref line we cannot parse (#2498): git hands pre-push
@@ -630,6 +651,7 @@ function main() {
       process.exit(1);
     }
     if (ZERO.test(localSha!)) continue; // branch delete → nothing pushed
+    pushedRefs.push({ localSha: localSha!, remoteSha: remoteSha! });
     let added: AddedFile[];
     try {
       added = addedLinesFor(localSha, remoteSha || "0");
@@ -710,6 +732,11 @@ function main() {
     }
   }
 
+  const sealed = sealedForPush(pushedRefs);
+  const sealedText = sealed ? renderSealed(sealed, "gstack sealed-output guard") : "";
+  if (sealedText) process.stderr.write(sealedText);
+  const sealedBlocks = !!sealed && (sealed.status === "refused" || sealed.status === "error");
+
   if (allHigh.length > 0) {
     // A scan that could not RUN is not a scan that FOUND something. Reporting
     // "credential(s) in the pushed diff — rotate the credential" for an
@@ -757,7 +784,7 @@ function main() {
     process.exit(1);
   }
 
-  process.exit(0);
+  process.exit(sealedBlocks ? 1 : 0);
 }
 
 main();

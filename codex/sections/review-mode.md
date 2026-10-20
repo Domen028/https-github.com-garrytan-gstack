@@ -56,7 +56,7 @@ _CODEX_SANDBOX_MODE=$(echo "$_CODEX_OUT" | sed -n 's/^CODEX_SANDBOX: //p')
 # The 330s wrapper sits BELOW the 360s Bash gate so the wrapper fires FIRST
 # and a stall surfaces as a diagnosable exit 124 with an explicit message,
 # never as a silent harness kill that downstream reads as "no findings".
-"$_CODEX_PROBE" run-with-timeout 330 codex review --base <base> -c "sandbox_mode=\"${_CODEX_SANDBOX_MODE:?}\"" -c "review_model=\"${_CODEX_SEL:?}\"" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'model_reasoning_effort="high"' -c 'web_search="cached"' < /dev/null >"$TMPOUT" 2>"$TMPERR"
+"$_CODEX_PROBE" run-with-timeout --user-invoked --effort high --request-effort '<effort-level>' 330 codex review --base <base> -c "sandbox_mode=\"${_CODEX_SANDBOX_MODE:?}\"" -c "review_model=\"${_CODEX_SEL:?}\"" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'web_search="cached"' < /dev/null >"$TMPOUT" 2>"$TMPERR"
 _CODEX_EXIT=$?
 cat "$TMPOUT"
 if [ "$_CODEX_EXIT" = "124" ]; then
@@ -71,10 +71,9 @@ elif [ "$_CODEX_EXIT" != "0" ]; then
   head -20 "$TMPERR" 2>/dev/null | sed 's/^/  /' || true
   "$_CODEX_PROBE" log-event codex_nonzero_exit "review:$_CODEX_EXIT"
 fi
-bun ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" structured "$TMPOUT"
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" structured "$TMPOUT"
 ```
 
-If the user passed `--xhigh`, use `"xhigh"` instead of `"high"`.
 
 **Custom-instructions path (user typed `/codex review <focus>`):** custom instructions
 cannot ride along with `--base` — that is exactly the combination the CLI rejects — and
@@ -124,7 +123,7 @@ _PROMPT_FILE=$(mktemp "$TMP_ROOT/codex-prompt-XXXXXX") || { echo "ERROR: mktemp 
   git diff "<base>...HEAD" 2>/dev/null
   printf '\nDIFF_END\n'
 } > "$_PROMPT_FILE"
-"$_CODEX_PROBE" run-with-timeout 330 codex exec - -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'model_reasoning_effort="high"' -c 'web_search="cached"' --json -o "$TMPOUT" < "$_PROMPT_FILE" >"$TMPOUT.events" 2>"$TMPERR"
+"$_CODEX_PROBE" run-with-timeout --user-invoked --effort high --request-effort '<effort-level>' 330 codex exec - -s "${_CODEX_SANDBOX_MODE:?}" -c "model=\"${_CODEX_SEL:?}\"" -c skills.include_instructions=false -c 'web_search="cached"' --json -o "$TMPOUT" < "$_PROMPT_FILE" >"$TMPOUT.events" 2>"$TMPERR"
 _CODEX_EXIT=$?
 rm -f "$_PROMPT_FILE" "$FOCUS_FILE"
 cat "$TMPOUT"
@@ -133,7 +132,7 @@ if [ "$_CODEX_EXIT" = "124" ]; then
   "$_CODEX_PROBE" log-hang "review" "$(wc -c < "$TMPERR" 2>/dev/null || echo 0)"
   echo "Codex stalled past 5.5 minutes."
 fi
-bun ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" --events "$TMPOUT.events" structured "$TMPOUT"
+bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/lib/outside-review-result.ts --label 'Codex review' --exit "$_CODEX_EXIT" --stderr "$TMPERR" --events "$TMPOUT.events" structured "$TMPOUT"
 ```
 
 When you take this path, say so in the output header — `CODEX SAYS (code review — custom

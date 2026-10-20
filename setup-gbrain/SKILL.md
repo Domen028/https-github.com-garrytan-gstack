@@ -21,13 +21,6 @@ allowed-tools:
 <!-- AUTO-GENERATED from SKILL.md.tmpl — do not edit directly -->
 <!-- Regenerate: bun run gen:skill-docs -->
 
-
-## When to invoke this skill
-
-One command from zero to "gbrain is running, and this agent
-can call it." Use when: "setup gbrain", "connect gbrain", "start
-gbrain", "install gbrain", "configure gbrain for this machine".
-
 ## Preamble (run first)
 
 ```bash
@@ -457,7 +450,7 @@ continue immediately with Step 2:
 
 ```bash
 [ -f ~/.claude/skills/gstack/bin/gstack-code-intelligence ] \
-  && bun ~/.claude/skills/gstack/bin/gstack-code-intelligence select gbrain 2>/dev/null \
+  && bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/bin/gstack-code-intelligence select gbrain 2>/dev/null \
   || true
 ```
 
@@ -827,12 +820,16 @@ Do NOT print the actual token in the curl command — leave the placeholder
 
 ```bash
 SLUG="setup-gbrain-smoke-test-$(date +%s)"
-echo "Set up on $(date). Smoke test for /setup-gbrain." | gbrain put "$SLUG"
-gbrain search "smoke test" | grep -i "$SLUG"
+SMOKE_PAGE=$(mktemp "${TMPDIR:-/tmp}/gstack-gbrain-smoke.XXXXXX")
+echo "Set up on $(date). Smoke test for /setup-gbrain." > "$SMOKE_PAGE"
+gbrain put "$SLUG" < "$SMOKE_PAGE"; PUT_RC=$?
+rm -f "$SMOKE_PAGE"
+[ "$PUT_RC" -eq 0 ] && gbrain search "smoke test" | grep -i "$SLUG"
 ```
 
-Confirms the round trip. On failure, surface `gbrain doctor --json` output
-and STOP with a NEEDS_CONTEXT escalation.
+Confirms the round trip. The page goes in from a temp file, not a pipe: on
+Windows, gbrain failed to read a piped page. On failure, surface
+`gbrain doctor --json` output and STOP with a NEEDS_CONTEXT escalation.
 
 ---
 

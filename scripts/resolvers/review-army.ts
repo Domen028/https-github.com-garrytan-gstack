@@ -24,27 +24,28 @@ function generateSpecialistSelection(ctx: TemplateContext): string {
 ### Detect stack and scope
 
 \`\`\`bash
+_SM=$(${ctx.paths.binDir}/gstack-state-matrix detect --base <base>) || _SM=SCOPE_STATE_MACHINE=unknown; source <(echo "$_SM")
 source <(${ctx.paths.binDir}/gstack-diff-scope <base> 2>/dev/null) || true
-# Detect stack for specialist context
+set | grep '^SCOPE_'
 STACK=""
 [ -f Gemfile ] && STACK="\${STACK}ruby "
 [ -f package.json ] && STACK="\${STACK}node "
 [ -f requirements.txt ] || [ -f pyproject.toml ] && STACK="\${STACK}python "
 [ -f go.mod ] && STACK="\${STACK}go "
 [ -f Cargo.toml ] && STACK="\${STACK}rust "
+[ -f pubspec.yaml ] && STACK="\${STACK}dart "
 echo "STACK: \${STACK:-unknown}"
 DIFF_BASE=$(git merge-base origin/<base> HEAD)
-DIFF_INS=$(git diff "$DIFF_BASE" --stat | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo "0")
-DIFF_DEL=$(git diff "$DIFF_BASE" --stat | tail -1 | grep -oE '[0-9]+ deletion' | grep -oE '[0-9]+' || echo "0")
-DIFF_LINES=$((DIFF_INS + DIFF_DEL))
+DIFF_LINES=$(git diff "$DIFF_BASE" --numstat | awk '{n+=$1+$2} END {print n+0}')
 echo "DIFF_LINES: $DIFF_LINES"
-# Detect test framework for specialist test stub generation
+# Detect test framework
 TEST_FW=""
 { [ -f jest.config.ts ] || [ -f jest.config.js ]; } && TEST_FW="jest"
 [ -f vitest.config.ts ] && TEST_FW="vitest"
 { [ -f spec/spec_helper.rb ] || [ -f .rspec ]; } && TEST_FW="rspec"
 { [ -f pytest.ini ] || [ -f conftest.py ]; } && TEST_FW="pytest"
 [ -f go.mod ] && TEST_FW="go-test"
+[ -f pubspec.yaml ] && TEST_FW="dart-test" && grep -qsE '^ +sdk: *.?flutter' pubspec.yaml && TEST_FW="flutter-test"
 echo "TEST_FW: \${TEST_FW:-unknown}"
 \`\`\`
 
@@ -62,7 +63,7 @@ Based on the scope signals above, select which specialists to dispatch.
 1. **Testing** — read \`${ctx.paths.skillRoot}/review/specialists/testing.md\`
 2. **Maintainability** — read \`${ctx.paths.skillRoot}/review/specialists/maintainability.md\`
 
-**If DIFF_LINES < 50:** Skip all specialists. Print: "Small diff ($DIFF_LINES lines) — specialists skipped." Continue to Step ${stepMerge} with the ${isShip ? 'core/design-lite' : 'core'} findings and an empty specialist list, then the parent's Exploratory QA step and ${nextStep}. Small diffs skip fan-out, never the parent-owned smoke probes. Core shared-code checks also remain required.
+**If DIFF_LINES < 50:** Skip all specialists except State Machines. Print: "Small diff ($DIFF_LINES lines) — specialists skipped." Continue to Step ${stepMerge} with the ${isShip ? 'core/design-lite' : 'core'} findings and an empty specialist list, then the parent's Exploratory QA step and ${nextStep}. Small diffs skip fan-out, never the parent-owned smoke probes. Core shared-code checks also remain required.
 
 **Conditional (dispatch if the matching scope signal is true):**
 3. **Security** — if SCOPE_AUTH=true, OR if SCOPE_BACKEND=true AND DIFF_LINES > 100. Read \`${ctx.paths.skillRoot}/review/specialists/security.md\`
@@ -71,6 +72,7 @@ Based on the scope signals above, select which specialists to dispatch.
 6. **API Contract** — if SCOPE_API=true. Read \`${ctx.paths.skillRoot}/review/specialists/api-contract.md\`
 7. **Design** — if SCOPE_FRONTEND=true. Use the existing design review checklist at \`${ctx.paths.skillRoot}/review/design-checklist.md\` and run the mechanical pass at the top of that checklist (the user-installed design detector, when present) before the LLM items
 8. **Simplification** — if DIFF_LINES > 100. Read \`${ctx.paths.skillRoot}/review/specialists/simplification.md\`. Advisory-only lens: hunts unrequested structure (hand-rolled stdlib, one-implementation abstractions, dependencies duplicating platform features), never coverage.
+9. **State Machines** — if SCOPE_STATE_MACHINE is true or unknown: read \`${ctx.paths.skillRoot}/review/specialists/state-machines.md\`, run \`${ctx.paths.binDir}/gstack-state-matrix outfile\`, Read the file it prints, write the full output there, then run \`${ctx.paths.binDir}/gstack-state-matrix check <file>\` on it.
 
 ### Adaptive gating
 
@@ -78,9 +80,9 @@ After scope-based selection, apply adaptive gating based on specialist hit rates
 
 For each conditional specialist that passed scope gating, check the \`gstack-specialist-stats\` output above:
 - If tagged \`[GATE_CANDIDATE]\` (0 findings in 10+ dispatches): skip it. Print: "[specialist] auto-gated (0 findings in N reviews)."
-- If tagged \`[NEVER_GATE]\`: always dispatch regardless of hit rate. Security and data-migration are insurance policy specialists — they should run even when silent.
+- If tagged \`[NEVER_GATE]\`: always dispatch regardless of hit rate.
 
-**Force flags:** If the user's prompt includes \`--security\`, \`--performance\`, \`--testing\`, \`--maintainability\`, \`--data-migration\`, \`--api-contract\`, \`--design\`, \`--simplification\`, or \`--all-specialists\`, force-include that specialist regardless of gating.
+**Force flags:** \`--<specialist>\` (e.g. \`--simplification\`) or \`--all-specialists\` in the prompt force-includes it.
 
 Note which specialists were selected, gated, and skipped. Print the selection:
 "Dispatching N specialists: [names]. Skipped: [names] (scope not detected). Gated: [names] (0 findings in N+ reviews)."`;
@@ -239,7 +241,7 @@ Do not add core shared-code savings to this specialist footer. Explain any overl
 #### 6. Save specialist activity
 
 Compile a \`specialists\` object for ${persistRef}.
-${isShip ? 'For each specialist' : 'For DIFF_LINES < 50, keep `specialists: {}`; do not manufacture per-specialist scope records. Otherwise record each considered specialist'} (testing, maintainability, security, performance, data-migration, api-contract, design, simplification, red-team):
+${isShip ? 'For each specialist' : 'For DIFF_LINES < 50, keep `specialists: {}`; do not manufacture per-specialist scope records. Otherwise record each considered specialist'} (testing, maintainability, security, performance, data-migration, api-contract, design, simplification, state-machines, red-team):
 - If dispatched: \`{"dispatched": true, "findings": N, "critical": N, "informational": N}\`
 - If skipped by scope: \`{"dispatched": false, "reason": "scope"}\`
 - If skipped by gating: \`{"dispatched": false, "reason": "gated"}\`

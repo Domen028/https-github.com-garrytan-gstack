@@ -35,7 +35,7 @@ import { generateConfidenceCalibration } from './confidence';
 import { generateGateScanBlock } from './gate-scan';
 import { generateInvokeSkill, generateAutoplanReviewFile, generateAutoplanSnapshotTool, generateAutoplanPublicationHook, generateCeoModeHandoffHook } from './composition';
 import { generateReviewArmy } from './review-army';
-import { generateDxFramework } from './dx';
+import { generateDxFramework, generateDxErrorCompact, generateDxErrorItems } from './dx';
 import { generateGBrainContextLoad, generateGBrainSaveResults, generateBrainPreflight, generateBrainCacheRefresh, generateBrainWriteBack } from './gbrain';
 import { generateTasksSectionEmit, generateTasksSectionAggregate } from './tasks-section';
 import { SECTION, SECTION_INDEX } from './sections';
@@ -52,13 +52,16 @@ import { generateImplementerDispatchRules } from './dispatch-rules';
 import { generatePlanRealityRows } from './plan-reality';
 import { generateSidewaysSweep, generateFlakeFixNumber } from './sideways';
 import { generateCoordinatorContract } from './coordinator-contract';
+import { generateAutoplanDriverCodes, generateAutoplanDriverCommands, generateAutoplanDriverFiles, generateAutoplanDriverGate, generateAutoplanDriverPhases, generateAutoplanDriverResultFormat } from './autoplan-driver';
 import { generateQAScope, generateQAExploratory, generateQAFunctional, generateQAResource, generateQAReview, generateQAReviewPreflight, generateQAMethodReads } from './qa';
+import { generateVoiceTriggerRouting } from './voice-triggers';
 
 export const RESOLVERS: Record<string, ResolverFn> = {
   AUTOPLAN_PUBLICATION_HOOK: generateAutoplanPublicationHook,
   CEO_MODE_HANDOFF_HOOK: generateCeoModeHandoffHook,
   OUTSIDE_SELF_GUARD: (ctx, args) => outsideVoiceGuard({ ...ctx, host: args?.[0] === 'claude-code' ? 'codex' : 'claude' }),
   OUTSIDE_VOICE_ROUTING: generateOutsideVoiceRouting,
+  VOICE_TRIGGER_ROUTING: generateVoiceTriggerRouting,
   OUTSIDE_LABEL: (ctx) => outsideVoiceFor(ctx).label,
   NATIVE_LABEL: (ctx) => outsideVoiceFor(ctx).nativeLabel,
   OUTSIDE_PROVIDER: (ctx) => outsideVoiceFor(ctx).id,
@@ -156,6 +159,8 @@ export const RESOLVERS: Record<string, ResolverFn> = {
   REVIEW_ARMY: generateReviewArmy,
   CROSS_REVIEW_DEDUP: generateCrossReviewDedup,
   DX_FRAMEWORK: generateDxFramework,
+  DX_ERROR_ITEMS: generateDxErrorItems,
+  DX_ERROR_COMPACT: generateDxErrorCompact,
   TASTE_PROFILE: generateTasteProfile,
   BIN_DIR: (ctx) => ctx.paths.binDir,
   // Quotable runtime root for paths under gstack's install (freeze/bin, bin, lib):
@@ -176,6 +181,12 @@ export const RESOLVERS: Record<string, ResolverFn> = {
   TASKS_SECTION_EMIT: generateTasksSectionEmit,
   TASKS_SECTION_AGGREGATE: generateTasksSectionAggregate,
   COORDINATOR_CONTRACT: generateCoordinatorContract,
+  AUTOPLAN_DRIVER_PHASES: generateAutoplanDriverPhases,
+  AUTOPLAN_DRIVER_COMMANDS: generateAutoplanDriverCommands,
+  AUTOPLAN_DRIVER_RESULT_FORMAT: generateAutoplanDriverResultFormat,
+  AUTOPLAN_DRIVER_GATE: generateAutoplanDriverGate,
+  AUTOPLAN_DRIVER_FILES: generateAutoplanDriverFiles,
+  AUTOPLAN_DRIVER_CODES: generateAutoplanDriverCodes,
   SECTION,
   SECTION_INDEX,
 };

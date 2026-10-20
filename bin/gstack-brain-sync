@@ -56,6 +56,9 @@
 #   stale-push   trigger: no push for 24 hours while the drain's drainable count is above zero
 #                line:    ARTIFACTS_SYNC: attention: stale-push. Files are ready to sync but nothing has been pushed for over 24 hours. See why: <bin> --status
 #                fix:     the waiting reason <bin> --status names (a coupled group waiting for a consistent generation, a git add failure)
+#   case-collision trigger: case_names is set: artifact paths differ only by letter case, so the drain holds queued files under them
+#                line:    ARTIFACTS_SYNC: attention: case-collision held=<N> names=<names>. Artifact paths differ only by letter case, which a Mac or Windows disk stores as one file; sync holds <N> queued file(s) under them and syncs everything else. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision. See the paths: <bin> --status
+#                fix:     keep one spelling: the manual repair in docs/troubleshooting.md#artifact-case-collision
 #   stale-drain  trigger: last_drain_at older than 24 hours while the queue directory holds records
 #                line:    ARTIFACTS_SYNC: attention: stale-drain. The sync has not run for over 24 hours while files wait in the queue. See why: <bin> --status
 #                fix:     if no gstack process is running, remove ~/.gstack/.brain-sync.lock.d, then run <bin> --once
@@ -115,6 +118,8 @@ REMOVAL_VALVE=20
 ST_HELD='[]'
 ST_DRAINABLE=0
 ST_NOTE=""
+ST_CASE_HELD=0
+ST_CASE_NAMES=""
 
 # origin host for receipt records (github.com etc).
 remote_host() {
@@ -136,8 +141,13 @@ remote_auth_hint() {
 }
 
 # Status file schema (one JSON object; readers: --status, --attention, doctor):
-#   status        ok | idle | held | blocked | push_failed | error
+#   status        ok | idle | held | collision | blocked | push_failed | error
+#                 (collision: files were held only for case-colliding paths)
 #   held_count    files the secret scan held back this drain (hits + dependents)
+#   case_held     queued files held because their path differs only by letter
+#                 case from another path in the repo or the batch
+#   case_names    the colliding path component names, comma-separated and
+#                 clamped to [A-Za-z0-9._?-]; empty when the tree has none
 #   drainable     queued files a drain could publish now: excludes scanner-held
 #                 and privacy-held records
 #   last_drain_at UTC time this drain ran (every write happens inside a drain)
@@ -152,9 +162,9 @@ write_status() {
   local code="$1" msg="$2${ST_NOTE}" ts last_push=""
   ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "")
   [ -f "$LAST_PUSH_FILE" ] && last_push=$(head -1 "$LAST_PUSH_FILE" 2>/dev/null || echo "")
-  python3 - "$STATUS_FILE" "$code" "$msg" "$ts" "$last_push" "$ST_DRAINABLE" "$ST_HELD" <<'PYEOF' 2>/dev/null || true
+  python3 - "$STATUS_FILE" "$code" "$msg" "$ts" "$last_push" "$ST_DRAINABLE" "$ST_HELD" "$ST_CASE_HELD" "$ST_CASE_NAMES" <<'PYEOF' 2>/dev/null || true
 import json, re, sys
-path, code, msg, ts, last_push, drainable, held = sys.argv[1:8]
+path, code, msg, ts, last_push, drainable, held, case_held, case_names = sys.argv[1:10]
 try:
     held = [h for h in json.loads(held) if isinstance(h, dict)]
 except Exception:
@@ -171,6 +181,8 @@ data = {
     "last_drain_at": ts,
     "last_push_at": last_push if re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", last_push) else None,
     "ts": ts,
+    "case_held": int(case_held) if case_held.isdigit() else 0,
+    "case_names": case_names if re.fullmatch(r"[A-Za-z0-9._?,-]{0,300}", case_names) else "",
     "held": held,
     "message": msg,
 }
@@ -564,7 +576,7 @@ PYEOF
 CONSENT_TS="$SCRIPT_DIR/../lib/transcript-consent.ts"
 transcript_policy() {
   command -v bun >/dev/null 2>&1 || return 2
-  GSTACK_STATE_ROOT="$GSTACK_HOME" bun run "$CONSENT_TS" "$@"
+  GSTACK_STATE_ROOT="$GSTACK_HOME" bun --no-env-file --config=/dev/null run "$CONSENT_TS" "$@"
 }
 
 # 0 when staged transcript pages may sync at all.
@@ -767,6 +779,51 @@ stage_paths() {
   rm -f "$paths_file.lf"
 }
 
+# Check outgoing trees too: a retry merge can combine two individually safe
+# spellings, and a retained local commit can be pushed with an empty queue.
+# Also records the tree's case-colliding names for skill start. Without
+# python3 no drain can stage anything, so there is no new tree to check. A
+# passing verdict is cached by HEAD's target and the commit ids of every ref
+# (origin's included, the comparison baseline), so the empty-queue drain at
+# every skill boundary skips the tree walk until one of them moves.
+validate_outgoing_paths() {
+  local out key cached cache="$GSTACK_HOME/.brain-case-check"
+  command -v python3 >/dev/null 2>&1 || return 0
+  key=$({ head -1 "$GSTACK_HOME/.git/HEAD"; git -C "$GSTACK_HOME" show-ref --head; } 2>/dev/null | cksum)
+  cached=$(head -1 "$cache" 2>/dev/null || true)
+  if [ "${cached%%	*}" = "$key" ]; then
+    [ -n "$ST_CASE_NAMES" ] || ST_CASE_NAMES=${cached#*	}
+    return 0
+  fi
+  if ! out=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --outgoing "$GSTACK_HOME"); then
+    ST_CASE_NAMES=${out%$'\r'}
+    write_status "error" "outgoing artifact path validation refused: a local commit adds a path that differs only by letter case from a path on the remote; local commits and queue preserved. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision"
+    return 1
+  fi
+  out=${out%$'\r'}
+  printf '%s\t%s\n' "$key" "$out" > "$cache" 2>/dev/null || true
+  [ -n "$ST_CASE_NAMES" ] || ST_CASE_NAMES=$out
+}
+
+# Hold the queued paths in $1 whose spelling collides by letter case with a
+# path in the index or the batch (see gstack-brain-sync-index.py hold). They
+# leave $1 before staging, so their records stay queued. Sets ST_CASE_HELD.
+hold_case_collisions() {
+  local paths_file="$1" out
+  tr -d '\r' < "$paths_file" > "$paths_file.lf" && mv -f "$paths_file.lf" "$paths_file" || return 1
+  out=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" --hold "$GSTACK_HOME" "$paths_file" "$paths_file.case") || return 1
+  out=${out%$'\r'}
+  tr -d '\r' < "$paths_file.case" > "$paths_file.case.lf" && mv -f "$paths_file.case.lf" "$paths_file.case" || return 1
+  ST_CASE_HELD=$(grep -c . "$paths_file.case" 2>/dev/null || true)
+  ST_CASE_HELD=${ST_CASE_HELD:-0}
+  [ "$ST_CASE_HELD" -gt 0 ] || return 0
+  ST_CASE_NAMES=$out
+  { grep -vxF -f "$paths_file.case" "$paths_file" || true; } > "$paths_file.kept"
+  mv -f "$paths_file.kept" "$paths_file"
+  ST_NOTE="$ST_NOTE; $ST_CASE_HELD file(s) held because their path differs only by letter case from another path ($out), NOT synced and still queued: $(head -3 "$paths_file.case" | tr '\n' ' ')(repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision)"
+  echo "BRAIN_SYNC: holding $ST_CASE_HELD file(s) whose path differs only by letter case ($out); see $SELF_BIN --status" >&2
+}
+
 # Plan the holds for one drain (one Python pass):
 #   $1 scanner hits ("<family>\t<path>"), $2 groups JSON from
 #   compute_paths_to_stage, $3 `git cat-file --batch` output for every group
@@ -891,6 +948,15 @@ hold_flagged_paths() {
   git -C "$GSTACK_HOME" diff --cached --no-renames > "$scan.diff" 2>/dev/null || rc=1
   git -C "$GSTACK_HOME" diff --cached --no-renames -z --name-only > "$scan.names" 2>/dev/null || rc=1
   [ "$rc" -eq 0 ] && { secret_scan attribute "$scan.diff" "$scan.names" "$scan.hits" || rc=1; }
+  # A successful add need not stage the requested spelling or current bytes
+  # (case-insensitive indexes and assume-unchanged can both report success).
+  # Reuse the scanner's name snapshot; refusal preserves the index and queue.
+  local index_error
+  if [ "$rc" -eq 0 ] && ! index_error=$(python3 "$SCRIPT_DIR/gstack-brain-sync-index.py" "$GSTACK_HOME" "$paths_file" "$scan.names" 2>&1); then
+    write_status "error" "staged artifact validation refused; index and queue preserved; inspect before retrying"
+    printf '%s\n' "$index_error" >&2
+    return 1
+  fi
   if [ "$rc" -eq 0 ] && [ -s "$groups_file.batch" ]; then
     tr -d '\r' < "$groups_file.batch" | git -C "$GSTACK_HOME" cat-file --batch > "$scan.blobs" 2>/dev/null || rc=1
   fi
@@ -965,6 +1031,7 @@ publish_removals() {
   git --literal-pathspecs -C "$GSTACK_HOME" -c user.email="gstack@localhost" -c user.name="gstack-brain-sync" \
     commit -q -m "sync: remove $n file(s) | $(date -u +%Y-%m-%dT%H:%M:%SZ)" --pathspec-from-file="$list" >/dev/null 2>&1 || return 1
   guard_unpublished_range || return 2
+  validate_outgoing_paths || return 2
   GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$(remote_host)" curated-memory-git-push "artifacts_sync_mode!=off" \
     bash -c 'GIT_TERMINAL_PROMPT=0 git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME" || return 2
   date -u +%Y-%m-%dT%H:%M:%SZ > "$LAST_PUSH_FILE"
@@ -1035,6 +1102,8 @@ subcmd_once() {
   # network push; the mktemp block below re-traps with tempfile cleanup added.
   gstack_brain_lock_acquire "$GSTACK_HOME" try || exit 0
   trap 'gstack_brain_lock_release' EXIT INT TERM
+
+  validate_outgoing_paths || exit 0
 
   # Convert any legacy single-file queue lines into spool records before the
   # drain reads the spool (transition window for pre-spool writers).
@@ -1174,13 +1243,18 @@ subcmd_once() {
     write_status "error" "classification failed; queue preserved (next run retries)"
     exit 0
   fi
+  if [ -s "$paths_file" ] && ! hold_case_collisions "$paths_file"; then
+    write_status "error" "could not check queued paths for letter-case collisions; queue preserved (next run retries)"
+    exit 0
+  fi
   if [ ! -s "$paths_file" ]; then
     # Nothing stageable. Finalize the snapshot (retained entries survive;
     # classified drops removed; records created after the snapshot untouched).
     finalize_queue "$snapshot_file" "$class_file" "$paths_file"
-    local summary
+    local summary idle_code=idle
     summary=$(queue_summary "$class_file")
-    write_status "idle" "no stageable changes${summary:+ ($summary)}"
+    [ "$ST_CASE_HELD" -gt 0 ] && idle_code=collision
+    write_status "$idle_code" "no stageable changes${summary:+ ($summary)}"
     exit 0
   fi
   local n_stageable
@@ -1224,6 +1298,8 @@ subcmd_once() {
     ok_code="held"
     ST_NOTE="$ST_NOTE; the secret scan held back $held_n flagged file(s) (and any coupled files), NOT synced; see held[] for each file's fixes"
     echo "BRAIN_SYNC: held $held_n flagged file(s); see $SELF_BIN --status" >&2
+  elif [ "$ST_CASE_HELD" -gt 0 ]; then
+    ok_code="collision"
   fi
 
   # A verified empty staged diff is the only "nothing to commit"; anything
@@ -1232,8 +1308,8 @@ subcmd_once() {
   git -C "$GSTACK_HOME" diff --cached --quiet >/dev/null 2>&1 || cached_rc=$?
   if [ "$cached_rc" -eq 0 ]; then
     finalize_queue "$snapshot_file" "$class_file" "$paths_file"
-    if [ "$ok_code" = "held" ]; then
-      write_status "held" "nothing else to sync"
+    if [ "$ok_code" != "ok" ]; then
+      write_status "$ok_code" "nothing else to sync"
     else
       write_status "idle" "queue drained but no new changes to commit"
     fi
@@ -1278,6 +1354,7 @@ subcmd_once() {
 
   # Nothing outside the transcript consent is pushed; a refused rewrite keeps the commit local.
   guard_unpublished_range || { write_status "push_failed" "push blocked: unpushed commits hold transcript pages outside your transcript consent; commit retained locally"; finalize_queue "$snapshot_file" "$class_file" "$paths_file"; exit 0; }
+  validate_outgoing_paths || exit 0
   # Push. On reject, fetch + merge (merge driver handles JSONL) + retry once.
   local push_err
   push_err=$(git -C "$GSTACK_HOME" push origin HEAD 2>&1 >/dev/null) || {
@@ -1302,6 +1379,7 @@ subcmd_once() {
       local branch
       branch=$(git -C "$GSTACK_HOME" rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)
       if git -C "$GSTACK_HOME" merge --no-edit "origin/$branch" >/dev/null 2>&1 && guard_unpublished_range; then
+        validate_outgoing_paths || exit 0
         if GSTACK_HOME="$GSTACK_HOME" _receipted_git closed brain-sync "$push_host" curated-memory-git-push "artifacts_sync_mode!=off" \
             bash -c 'git -C "$1" push origin HEAD 2>/dev/null' _ "$GSTACK_HOME"; then
           finalize_queue "$snapshot_file" "$class_file" "$paths_file"
@@ -1389,11 +1467,12 @@ subcmd_unskip_file() {
 # Skill start's attention lines: one per row of the sync status table in this
 # script's header that applies. Every value read from the status file is
 # clamped (status code to the table's closed set, counts to digits,
-# timestamps to their shape); the message, held paths and scanner output never
-# reach this output, only fixed text and this script's absolute path.
+# timestamps to their shape, case-colliding names to [A-Za-z0-9._?,-]); the
+# message, held paths and scanner output never reach this output, only fixed
+# text, those clamped values and this script's absolute path.
 subcmd_attention() {
   sync_active || exit 0
-  local line="" prefix code="" held="" drainable="" last_drain="" last_push="" bin="$SELF_BIN"
+  local line="" prefix code="" held="" drainable="" last_drain="" last_push="" case_held="" case_names="" bin="$SELF_BIN"
   if [ -f "$STATUS_FILE" ]; then
     line=$(head -c 65536 "$STATUS_FILE" 2>/dev/null | tr -d '\r\n')
     # The counts and timestamps precede every free-text field.
@@ -1403,10 +1482,13 @@ subcmd_attention() {
     drainable=$(printf '%s' "$prefix" | sed -n 's/.*"drainable": *\([0-9][0-9]*\).*/\1/p')
     last_drain=$(printf '%s' "$prefix" | sed -n 's/.*"last_drain_at": *"\([^"]*\)".*/\1/p')
     last_push=$(printf '%s' "$prefix" | sed -n 's/.*"last_push_at": *"\([^"]*\)".*/\1/p')
-    case "$code" in ok|idle|held|blocked|push_failed|error) ;; *) code="unknown" ;; esac
+    case_held=$(printf '%s' "$prefix" | sed -n 's/.*"case_held": *\([0-9][0-9]*\).*/\1/p')
+    case_names=$(printf '%s' "$prefix" | sed -n 's/.*"case_names": *"\([A-Za-z0-9._?,-]*\)".*/\1/p' | head -c 300)
+    case "$code" in ok|idle|held|collision|blocked|push_failed|error) ;; *) code="unknown" ;; esac
   fi
   case "$held" in ''|*[!0-9]*) held=0 ;; esac
   case "$drainable" in ''|*[!0-9]*) drainable=0 ;; esac
+  case "$case_held" in ''|*[!0-9]*) case_held=0 ;; esac
   local iso='[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z'
   case "$last_drain" in $iso) ;; *) last_drain="" ;; esac
   case "$last_push" in $iso) ;; *) last_push="" ;; esac
@@ -1418,6 +1500,9 @@ subcmd_attention() {
     error) echo "ARTIFACTS_SYNC: attention: status=error. The last sync stopped before committing; the queue is kept and retried. See the cause: $bin --status" ;;
     unknown) echo "ARTIFACTS_SYNC: attention: status=unknown. The sync status file is unreadable. See it: $bin --status" ;;
   esac
+  if [ -n "$case_names" ] || [ "$case_held" -gt 0 ]; then
+    echo "ARTIFACTS_SYNC: attention: case-collision held=$case_held names=$case_names. Artifact paths differ only by letter case, which a Mac or Windows disk stores as one file; sync holds $case_held queued file(s) under them and syncs everything else. Repair: https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#artifact-case-collision. See the paths: $bin --status"
+  fi
 
   local now cutoff oldest="" oldest_epoch
   now=$(date +%s 2>/dev/null || echo "")

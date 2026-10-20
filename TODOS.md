@@ -2,6 +2,13 @@
 
 ## NEXT PRIORITY
 
+### P3: `/codex --effort` follow-ups (filed 2026-10-11, from the #3146 autoplan review)
+
+- **Show the effort that ran.** Step 0.5 prints `CODEX_EFFORT: <level> (source: /codex --effort)` once, but the result footers do not repeat the effort, so it scrolls away. Add an `Effort:` line to the review, challenge and consult result footers. Blocked on skeleton bytes in `codex/SKILL.md` (cap 60,200). **Effort:** S. **Priority:** P3.
+- **Timeouts at high effort.** `xhigh`, `max` and `ultra` can exceed the fixed 330 s / 540 s wrappers, and the timeout copy blames prompt size or API speed. Name the effort in the timeout message and suggest a lower `--effort`; consider effort-scaled budgets. **Effort:** S. **Priority:** P3.
+- **Per-run effort for gate voices (#2934).** `/review`, `/ship` and plan-review outside voices take `GSTACK_CODEX_EFFORT` and `codex_effort` but have no per-request flag; the Claude Code runner takes no effort at all. Needs its own precedence and consent review. **Effort:** M. **Priority:** P3.
+- **`minimal` with web search.** Every `/codex` dispatch passes `web_search="cached"`, and Codex reportedly rejects that with `reasoning.effort: minimal` (openai/codex#3559, #5002). Unverified here (no Codex CLI on the release machine); the same path already ships through `codex_effort minimal`. Verify on the pinned CLI and drop web search for `minimal` if it fails. **Effort:** S. **Priority:** P3.
+
 ### P2/P3: open bugs by area after the Wave 9 triage (filed 2026-10-11)
 
 The 158 older open issues were re-checked against main 5cb5e1c (v1.91.83.0). Of the 30 still-valid bugs, Wave 9 lanes take #915, #1080, #1081, #1150, #1315 and #1675 and park #2118 and #2623 (next section). The rest stay open here: issue, root-cause file, size. Bugs already tracked elsewhere in this file point there instead of repeating it.
@@ -34,8 +41,8 @@ The 158 older open issues were re-checked against main 5cb5e1c (v1.91.83.0). Of 
 - **/cso**
   - #2993: tracked under the /cso capacity follow-ups above. **Priority:** P2.
 - **Dependency security ledgers** (not code defects; keep open until the trigger)
-  - #2753: `.osv-scanner.toml` ignores image-size (via html-to-docx) until 2026-11-30. Bump it once a fixed release exists, or re-justify at expiry. **Effort:** S. **Priority:** P3.
-  - #2754: `.osv-scanner.toml` ignores `@anthropic-ai/sdk` 0.81.0 under the pinned claude-agent-sdk until 2026-11-30. Drop it with the next harness bump. **Effort:** S. **Priority:** P3.
+  - `.osv-scanner.toml` ignores katex 0.16.47 in lib/diagram-render (GHSA-238p-pmpm-9mq7, low) until 2027-01-31. The fix (0.18.2) is outside mermaid 11's range; when mermaid-js/mermaid#8388 ships, override katex, rebuild the bundle and drop the ignore. **Effort:** S. **Priority:** P3.
+  - #2753 residual: html-to-docx 1.8.0 bundles its own image-size 1.x, which the package.json override cannot reach. `make-pdf --to docx` never hands it ICNS bytes (make-pdf/src/docx-images.ts), but with `--allow-network` html-to-docx downloads remote images and sizes them itself. Inline remote images before the guard for docx, or replace html-to-docx. Revisit 2026-12-15. **Effort:** M. **Priority:** P2.
 - **Tests and CI**
   - #2756: the periodic lane. Tracked under "Periodic-lane stabilization (#2756)". **Priority:** P2.
   - #2967: `test/redact-prepush-scan-range.test.ts` (and its rebase twin) run fixture pushes with the inherited global config, so a developer's `core.hooksPath` pre-push runs inside the fixture. Set `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1` in the helper. **Effort:** S. **Priority:** P3.
@@ -81,9 +88,6 @@ Left open by the office-hours tier fix (#2801, #879, #1049, #1958, #1723, #1651 
   follows the carried `SESSION_TIER` through Phase 6 (first run gets the
   introduction, second run asks about the earlier assignment). No office-hours
   quality judge exists either. **Effort:** M. **Priority:** P2.
-- **`gstack-timeline-read --since`/`--branch` without a value** — both still
-  read an unbound `$2` under `set -u` and crash with exit 1, the class #1723
-  fixed for `--limit`. **Effort:** S. **Priority:** P3.
 
 ### P3: Oct 8 fix wave, safety hooks follow-ups (filed 2026-10-08)
 
@@ -961,10 +965,9 @@ wave"). Each was explicitly deferred with rationale, not dropped:
 
 - **mermaid 10→11-class major bumps in lib/diagram-render** — the wave's
   dependency pass cleared 102 of 105 OSV advisories via in-range bumps +
-  overrides; the residual ignores (image-size no-fix, @anthropic-ai/sdk under
-  the harness-pinned agent-sdk) carry `ignoreUntil` expiries (~2026-11-30) and
-  re-justify themselves on expiry. When the agent-sdk pin next moves, drop the
-  GHSA-p7fg ignore. Effort S. **Priority:** P3.
+  overrides; the residual ignores carry `ignoreUntil` expiries and
+  re-justify themselves on expiry. Only the katex ignore remains (see the
+  dependency security ledgers above). Effort S. **Priority:** P3.
 - **#2750 split absorption** — the record-scanning Codex JSONL parser (real
   fix; current Codex streams interleave envelopes so sessions vanish from
   /retro global) should be absorbed once the author splits it from the
@@ -1642,18 +1645,24 @@ and `test/dx-selected-navigation-ap.test.ts`. One shared table run once against 
 only after `engFirstReviewAUQ` checks native completion once at entry; today each branch gates it
 separately, so the change alters a paid verdict and needs its own paid run.
 
-### P3: Re-pin the five remaining claude-opus-4-7 paid files
+### P3: Follow-ups from re-baselining the old-model paid pins on the current generation
 
-**What:** The 2026-09 audit moved seven paid evals to the default capture model (`resolveEvalModel('capture')`).
-`skill-e2e-design`, `skill-e2e-office-hours-phase4`, `skill-e2e-plan-prosons` and `skill-e2e-plan` keep
-`claude-opus-4-7` because six cases failed on the default model in one run (plan-design-review-plan-mode timeout,
-office-hours-phase4-fork format, plan-review-prosons-neutral-neg missing output, plan-ceo-review-selective and
-plan-eng-review 600 s timeouts, plan-ceo-review-expansion-energy posture score 3). `skill-e2e-qa-bugs` returned
-to `claude-opus-4-7` after `qa-b6-static` timed out on the default model in two of three runs (census 36597762183
-and a targeted local rerun): each time the stream stopped mid-message, with no pending tool, right after the model
-found the disabled submit button, and emitted nothing until the 300 s case deadline. They measure an old model.
+**What:** GSTA-49 TM3 (2026-10-18) moved every remaining old-model paid pin to the current generation: the
+`claude-opus-4-7` pins in `skill-e2e-{plan,plan-prosons,design,office-hours-phase4,qa-bugs}` follow
+`resolveEvalModel('capture')`, the overlay fixtures pin `claude-opus-5-5` and `claude-sonnet-5-5`, the cookie workflow
+judge pins `claude-sonnet-5-5`, and `codex-sol-scope-termination` runs on `gpt-6.1-sol` (still rendering the
+`gpt-5.6-sol` overlay). Three things remain:
 
-**Re-entry:** fix the prompt, budget or rubric so each case passes on the default model in one run, then drop the pin.
+- The base `claude-dedicated-tools-vs-bash` fixture now duplicates `claude-dedicated-tools-vs-bash-opus-5-5`.
+- The `opus-4-7-*` fixtures measure `model-overlays/opus-4-7.md` on Opus 5.5, which gets the generic `claude`
+  overlay in product.
+- Opus 5.5 refuses (stop category `reasoning_extraction`) capture prompts that ask for the "verbatim text" of a
+  question "you would have made" with "Do NOT paraphrase"; that wording stopped 7 of 16 replays of a prosons
+  request and 0 of 24 without it. `skill-e2e-plan-prosons` dropped it; `skill-e2e-plan-format` and
+  `skill-e2e-office-hours-phase4` still use it.
+
+**Re-entry:** retire one dedicated-tools fixture, decide the opus-4-7 overlay's future, and drop the extraction
+wording from the remaining capture prompts with a paid run each.
 
 ### P3: Retire the unused CEO payment seeder
 
@@ -5387,3 +5396,91 @@ skills were told is fenced.
   Guard both writes. Effort S.
 
 **Priority:** P3. **Depends on:** none.
+
+### P3: fix wave 3 follow-ups (filed 2026-10-17)
+
+- **`qa-quick` has little headroom under its 300 s capture** — paid gate run
+  38980005793 timed out at 300 s (12 turns) while passing runs in the same
+  window took 164–272 s (median about 210 s). Before its first guarded probe the
+  agent loaded qa/SKILL.md (50.4 KB, read with `cat` and paged with `sed`) and
+  read scope, browser-setup, exploratory, qa-patterns and test-bootstrap. One
+  occurrence, kept visible rather than repaired: the cause-level option is to
+  trim what the Quick tier must load (test-bootstrap is not needed for a Quick
+  read-only run), which is a product call. Raising the capture budget is out of
+  scope (EVAL_POLICY). Owner Garry; revisit with the next qa-quick red.
+  **Effort:** S. **Priority:** P3.
+
+### P1–P2: fix wave 2 follow-ups (filed 2026-10-15)
+
+From the free-suite health wave (flaky-pass fixes, #3154 seed refresh). Owner
+Garry for each; revisit 2026-10-29 unless a date says otherwise.
+
+- **`gstack-next-version` fetches claimed slots one PR at a time** —
+  `GH_API_CONCURRENCY = 10` (bin/gstack-next-version:90), but its async workers
+  call `spawnSync`, so the per-PR `gh api` calls run serially: 8 stubbed PRs at
+  0.5 s each took 4160 ms instead of about 500 ms (4108 ms on a rerun), and 27
+  open PRs at about 1.2 s each pass the 30 s that callers allow, which is how the
+  old live smoke test failed. Every `/ship` slot allocation pays this. Fix:
+  async spawn with bounded overlap, verified by a delayed fake `gh`. Changing the
+  CLI selects 108 paid cases and 24 judges, so it ships as its own priced PR on
+  Garry's call. **Effort:** S. **Priority:** P1.
+- **Standing Linux duration-seed recorder** — the seed refresh in this wave
+  keeps CEO-10 green for days, not weeks: main gains about 15 free test files a
+  day against a limit of 5 unseeded, so the weekly health run goes red again
+  until a recorder lands. Design: a scheduled `free-durations-record.yml` that
+  records on the standard runner and updates one seed PR before the Monday
+  health run, or the `free-plan` job consuming the latest recording artifact once
+  #3190 (owner of `free-tests.yml`) lands. Agree the design with the owner of
+  `free-tests.yml` before 2026-10-29. **Effort:** M. **Priority:** P1.
+- **PR full-fallback and recorded spend (audit next step)** — 2026-10-15:
+  full-fallback 45.9% of PR runs, $73.52 recorded PR-lane spend per merged PR,
+  push-to-verdict p50 11.4 min (target 3–5 min). The pre-change spend baseline
+  was never recorded, so the 50% reduction verdict is unavailable
+  (docs/test-audit-2026-10.md, "Post-merge follow-up"). Next step, from the
+  audit's selection replay: touchfile mappings for `bin/`, `lib/`, `hosts/` and
+  `make-pdf/`, so a branch touching them stops selecting every case. Candidate
+  headline for the next wave. **Effort:** M. **Priority:** P1.
+- **Free flaky-pass target follow-ups (2026-10-22 and 2026-10-29)** — read
+  main's `flake-ledger-*` artifacts (`bun run test:health --since-days 7`) and
+  check the free-suite flaky-pass rate is under 5% of main runs; a file still in
+  the ledger gets a named cause or a new entry here. **Effort:** S. **Priority:** P1.
+- ~~**`createQAFunctionalFixture` sets git auto-maintenance off itself**~~ —
+  done in v1.91.107.0 (0bf9d50, #3190): test/helpers/qa-functional-fixture.ts
+  sets `gc.auto 0` and `maintenance.auto false` on its repos, as
+  test/helpers/qa-callers-fixture.ts does; no recurrence of the
+  `.git/objects` watch loss after it (fix wave 3 triage, W3-13). Original
+  note: — its repos inherit the free runner's backstop keys in CI, but a direct
+  `bun test` run still races `.git/objects/maintenance.lock` during observer
+  setup. **Effort:** S. **Priority:** P2.
+- **Nested `bun test` output pollutes free-runner failure attribution** (fix
+  wave 3, D6) — windows-free-tests run 39053431430 (shard 5): a free test that
+  spawns a nested `bun test` echoes the child's `(fail) Review Army: Red Team >
+  (unnamed)` line on failure, and scripts/lib/shard-engine.ts attributed it to
+  the child's temporary file (`redteam.test.ts`), so the shard reported
+  "flaky-retry skipped: failures not fully attributed" instead of retrying the
+  real file. Ignore or prefix nested child result lines when attributing
+  failures, with a free test that feeds the captured shard log through the
+  attribution. **Effort:** S. **Priority:** P2.
+- **`test:ubicloud --diagnostic` cannot give clean counts for two ledger
+  shards** — `ship-measure free` reruns set a private `HOME` under `/tmp` and
+  `GSTACK_STATE_ROOT`, so `browse/test/path-validation.test.ts` (its upload
+  fixture builds an "outside" directory under `os.userInfo().homedir`, which
+  Bun takes from `HOME`) and `browse/test/pair-agent-tunnel-eval.test.ts` (its
+  denial log follows the inherited state root, not its fake `HOME`) fail 30/30
+  in diagnostic mode while passing in the normal suite. Ledger shards that hold
+  them can never report `passed = n`. **Effort:** S. **Priority:** P2.
+- **`test/plan-seed-submission.test.ts` reads its fake CLI's events after a
+  fixed 50 ms sleep** — "actual PTY launcher carries placeholder styling into
+  owned seed submission: xterm-256color" sends `/plan-eng-review\r`, sleeps
+  50 ms and expects the `slash` event already in `events.jsonl`; under the
+  16-worker duration recording on 2026-10-15 the event had not landed
+  (`['paste', 'enter', 'end_turn']`). Wait for the CLI's own write instead of a
+  timer (docs/TESTING_INTERNALS.md#flake-ledger). **Effort:** S. **Priority:** P2.
+- **Split the free files the weekly seed puts over 60 s** —
+  `test/setup-install-registry.test.ts` (84 s), `test/brain-sync.test.ts` (89 s)
+  and `test/setup-codex-scope.test.ts` (64 s) are allowlisted with this todo in
+  `scripts/free-test-seed-allowlist.json` (2026-10-19 recording);
+  `test/host-renders-prune.test.ts` (57 s) and
+  `test/setup-codex-scope-namespaces.test.ts` are next. Split
+  each by describe block, rerun `bun run test:ubicloud --record-durations` and
+  delete the entries. **Effort:** S each. **Priority:** P2.

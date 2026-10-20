@@ -41,6 +41,7 @@ export const IDENTIFIER_PLACEHOLDERS: Record<string, IdentifierGrammar> = {
   '<clean|flagged>': { grammar: oneOf('clean', 'flagged'), what: 'semantic review outcome' },
   '<N|null>': { grammar: /^(?:[0-9]+(?:\.[0-9]+)?|null)$/, what: 'health score or null' },
   '<platform>': { grammar: oneOf('github', 'gitlab', 'unknown'), what: 'detected git platform' },
+  '<effort-level>': { grammar: /^[a-z]*$/, what: "the request's /codex --effort level, or empty for none (the probe validates the level)", quoted: true },
 
   // Ids, keys and numbers.
   '<id>': { grammar: ID, what: 'question or record id (kebab-case)' },
@@ -101,6 +102,7 @@ export const IDENTIFIER_PLACEHOLDERS: Record<string, IdentifierGrammar> = {
   // Paths printed by earlier gstack blocks or chosen by the skill.
   '<body-file-name>': { grammar: ID, what: 'basename of the mktemp body file printed by the previous block' },
   '<title-file-name>': { grammar: ID, what: 'basename of the mktemp title file printed by the previous block' },
+  '<gate-file-name>': { grammar: ID, what: 'basename of the mktemp gate-command file printed by the previous block (/eval-plan price-gate)' },
   '<reply-file-name>': { grammar: ID, what: 'basename of the mktemp reply file printed by the previous block' },
   '<redact-file-name>': { grammar: ID, what: 'basename of the mktemp draft file printed by the free-text block' },
   '<approach-file-name>': { grammar: ID, what: 'basename of the mktemp approach file printed by the free-text block' },

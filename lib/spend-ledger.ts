@@ -159,6 +159,16 @@ export function release(file: string, attempt: string, opts: { now?: Date } = {}
   });
 }
 
+/** Change the cap (an owner's budget raise); every later admission checks the new cap. */
+export function setCap(file: string, cap: number | null): SpendLedger {
+  return withFileLock(file, () => {
+    const ledger = readLedger(file, cap);
+    ledger.cap_usd = cap;
+    writeLedger(file, ledger);
+    return ledger;
+  });
+}
+
 export function renderSpend(summary: SpendSummary): string {
   const cap = summary.cap_usd === null ? 'none' : summary.cap_usd.toFixed(2);
   return `SPEND: spent=${summary.spent_usd.toFixed(2)} reserved=${summary.reserved_usd.toFixed(2)} unknown=${summary.unknown_count}(${summary.unknown_usd.toFixed(2)}) worst_case=${summary.worst_case_usd.toFixed(2)} cap=${cap}`;

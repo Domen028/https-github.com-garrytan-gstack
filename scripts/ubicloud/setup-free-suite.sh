@@ -46,7 +46,7 @@ git config --global --add safe.directory '*'
 bun install --frozen-lockfile
 bunx playwright install --with-deps chromium
 
-chrome=$(bun -e 'import { chromium } from "playwright"; import { realpathSync } from "node:fs"; console.log(realpathSync(chromium.executablePath()))')
+chrome=$(bun --no-env-file --config=/dev/null -e 'import { chromium } from "playwright"; import { realpathSync } from "node:fs"; console.log(realpathSync(chromium.executablePath()))')
 sudo install -T -o root -g root -m 4755 "${chrome%/*}/chrome_sandbox" "${chrome%/*}/chrome-sandbox"
 
 {

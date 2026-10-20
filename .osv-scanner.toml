@@ -17,69 +17,15 @@
 # each reason.
 
 [[IgnoredVulns]]
-id = "GHSA-frvp-7c67-39w9"
-# @hono/node-server 1.19.x. Reachable only through @modelcontextprotocol/sdk,
-# which is an unused transitive dependency (no source file imports it) and never
-# starts a Hono HTTP server, so the advisory's request path is not exercised.
-# The only fix is @hono/node-server 2.0.5, a major bump the MCP SDK pins against
-# (^1.19.9); forcing it via override risks breaking the SDK at runtime for a
-# vulnerability we do not expose. Re-evaluate if the MCP SDK becomes a direct,
-# server-hosting dependency.
-reason = "Unreachable transitive (unused @modelcontextprotocol/sdk); fix requires a risky major override on a pinned peer dep."
-ignoreUntil = 2026-11-30T00:00:00Z
-
-[[IgnoredVulns]]
-id = "GHSA-5p2g-fcmc-qvqq"
-# image-size 1.2.1 via html-to-docx@1.8.0 (pins ^1.0.0). No fixed release
-# exists (FIXED VERSION = --; tracking: #2753). Exposure: image-size only parses images the
-# user themselves embeds into their own generated .docx — no untrusted input
-# path. Upgrade trigger: an image-size release with a fix, or html-to-docx
-# moving off it. Tracking: #2753.
-reason = "No fixed version exists; local-only input path (user's own docx images). Re-evaluate on expiry."
-ignoreUntil = 2026-11-30T00:00:00Z
-
-[[IgnoredVulns]]
-id = "GHSA-w3rx-r6r6-pgpr"
-# Same package/node as GHSA-5p2g-fcmc-qvqq above; same rationale.
-reason = "No fixed version exists; local-only input path (user's own docx images). Re-evaluate on expiry."
-ignoreUntil = 2026-11-30T00:00:00Z
-
-[[IgnoredVulns]]
-id = "GHSA-p7fg-763f-g4gf"
-# @anthropic-ai/sdk 0.81.0 nested under @anthropic-ai/claude-agent-sdk@0.2.117,
-# which is deliberately exact-pinned (eval-harness stability; the v1.77 wave
-# pinned the whole harness after repeated CLI-drift breakage) and declares
-# ^0.81.0 (0.x caret = 0.81.x only), so the 0.91.1 fix cannot be reached
-# without violating the harness pin. 4.8 MEDIUM. Upgrade trigger: the next
-# deliberate claude-agent-sdk bump. Tracking: #2754.
-reason = "Fix requires breaking the deliberate eval-harness agent-sdk pin; MEDIUM severity accepted until the next harness bump."
-ignoreUntil = 2026-11-30T00:00:00Z
-
-[[IgnoredVulns]]
-id = "GHSA-vfj7-8cjw-p6xm"
-# braces 3.0.3 in lib/diagram-render only: @excalidraw/excalidraw -> sass ->
-# chokidar -> braces. chokidar is sass's Node file watcher; the diagram-render
-# bundle is built for the browser and contains no chokidar/braces code
-# (test/osv-config-wiring.test.ts checks the built page for chokidar). No fixed
-# braces release exists. Re-evaluate on expiry or when excalidraw drops sass.
-reason = "Build-time only (excalidraw -> sass -> chokidar); not in the shipped browser bundle; no fixed release."
-ignoreUntil = 2026-11-30T00:00:00Z
-
-[[IgnoredVulns]]
-id = "GHSA-hp3w-g68c-fv3c"
-# sprintf-js 1.1.3 (DoS through an unbounded precision specifier in the FORMAT
-# string). Reachable only as roarr's logger dependency (global-agent -> roarr),
-# which formats its own constant messages; no caller passes user-controlled
-# format strings. No fixed release exists.
-reason = "No fixed release; only roarr's constant-format logging reaches it."
-ignoreUntil = 2026-11-30T00:00:00Z
-
-[[IgnoredVulns]]
 id = "GHSA-238p-pmpm-9mq7"
 # katex 0.16.47 in lib/diagram-render (mermaid's math renderer). The advisory
 # needs prototype pollution to already exist in the page; the render page is
-# offline, loads only gstack's own bundle and the user's diagram source. The
-# only fix is 0.18.x, outside mermaid 11.16's ^0.16 range. Low severity (2.1).
-# Re-evaluate when mermaid accepts katex 0.18.
-reason = "Requires pre-existing prototype pollution in an offline single-bundle page; fix is outside mermaid's katex range; low severity."
-ignoreUntil = 2026-11-30T00:00:00Z
+# offline, loads only gstack's own bundle and the user's diagram source. Low
+# severity (2.1). The fix is katex 0.18.2, outside mermaid 11's ^0.16.47 range.
+# Mermaid 12 accepts ^0.18, but @excalidraw/mermaid-to-excalidraw 2.2.2 (the
+# latest) requires mermaid ^11.12.1, and katex 0.18 renames KaTeX's CSS
+# classes, so forcing it means a bundle requalification, not a lockfile bump.
+# Upgrade trigger: a mermaid 11.x release that allows katex 0.18
+# (https://github.com/mermaid-js/mermaid/issues/8388), then rebuild the bundle.
+reason = "Fix (katex 0.18.2) is outside mermaid 11's ^0.16 range; waiting on mermaid-js/mermaid#8388. Needs pre-existing prototype pollution in an offline single-bundle page; low severity."
+ignoreUntil = 2027-01-31T00:00:00Z

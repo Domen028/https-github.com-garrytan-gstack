@@ -1106,6 +1106,25 @@ export async function superviseRegistrySocket(options: {
  * Requires qualified runtime images to contain the fixed, compiled
  * /opt/cso/preparation@1.0.0 helper contract.
  */
+/**
+ * Write the helper's own files (Rails' test database.yml and friends) into an execution copy. The copy keeps the
+ * source's modes, and a sealed or read-only checkout makes those files 0444, so each copied file is replaced, never
+ * opened for writing (or written through).
+ */
+export function writeOfflineTransformations(
+  source: string,
+  transformations: OfflinePreparationRequest['transformations'],
+): void {
+  for (const transformation of transformations) {
+    if (sha256(transformation.content) !== transformation.sha256)
+      fail('INCOMPATIBLE_INPUT', 'Offline transformation content hash changed');
+    const file = contained(source, transformation.path);
+    secureDirectory(resolve(file, '..'));
+    fs.rmSync(file, { force: true });
+    fs.writeFileSync(file, transformation.content, { mode: 0o600, flag: 'wx' });
+  }
+}
+
 export class DockerPreparationSandboxRunner implements PreparationSandboxRunner {
   readonly qualification;
   private readonly runtime;
@@ -1514,13 +1533,7 @@ export class DockerPreparationSandboxRunner implements PreparationSandboxRunner 
         errorOnExist: false,
         preserveTimestamps: false,
       });
-      for (const transformation of request.transformations) {
-        if (sha256(transformation.content) !== transformation.sha256)
-          fail('INCOMPATIBLE_INPUT', 'Offline transformation content hash changed');
-        const file = contained(source, transformation.path);
-        secureDirectory(resolve(file, '..'));
-        fs.writeFileSync(file, transformation.content, { mode: 0o600 });
-      }
+      writeOfflineTransformations(source, request.transformations);
       for (const item of request.metadata) {
         if (sha256(item.content) !== item.sha256)
           fail('INCOMPATIBLE_INPUT', `Offline metadata hash changed: ${item.path}`);

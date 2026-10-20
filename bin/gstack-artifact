@@ -1,8 +1,10 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-artifact — validate, print and acknowledge the unattended artifact contract.
  *
  *   gstack-artifact validate <run.json> [--json]            completion check for a run directory
+ *   gstack-artifact validate --public <dir> [--private <run.json>] [--json]
+ *                                                           a public run copy: provenance, recorded machine roots
  *   gstack-artifact validate <file> --as <name> [--run <id>] [--json]
  *                                                           one artifact against its schema
  *   gstack-artifact schema <name> | --list                  JSON Schema this version validates
@@ -19,17 +21,21 @@ import {
 } from '../lib/headless-artifacts';
 import { resultLine } from '../lib/result-codes';
 import { resolveStateRoot } from '../lib/state-root';
+import { validatePublic } from '../lib/autoplan-public';
 
 const HELP = `gstack-artifact — the unattended artifact contract (docs/unattended.md)
 
   validate <run.json> [--json]                      run-directory completion check
+  validate --public <dir> [--private <run.json>]   a public run copy (gstack-autoplan export --public): provenance digests;
+                                                    with --private (on the exporting machine) any recorded root fails
+                                                    (ARTIFACT_MACHINE_PATH, file:line); home-path patterns WARN
   validate <file> --as <name> [--run <id>] [--json] one artifact against its schema
   schema <name> | --list                            JSON Schema for ${ARTIFACT_NAMES.join(', ')}
   ack <run.json> --consumer <id> [--json]           set run.json.consumed_by (idempotent) and log the ack
   urgent <findings.jsonl>                           render the URGENT block (\`None.\` when empty)
 
 Without --json: one error line per problem on stderr, each ending in (<CODE>),
-then ARTIFACT_VALID: run=<id> status=<status> or ARTIFACT_INVALID: <n> error(s) on stdout.
+then ARTIFACT_VALID: run=<id> status=<status>[ attested=<n> when voices bound on attestation] or ARTIFACT_INVALID: <n> error(s) on stdout.
 ${exitTableHelp()}`;
 
 function flag(args: string[], name: string): string | undefined {
@@ -57,6 +63,18 @@ function main(argv: string[]): number {
     return EXIT.ok;
   }
 
+  if (cmd === 'validate' && flag(rest, '--public') !== undefined) {
+    const dir = flag(rest, '--public')!;
+    const result = validatePublic(dir, flag(rest, '--private'));
+    if (json) process.stdout.write(JSON.stringify({ valid: result.valid, run: result.run ?? null, public: dir, errors: result.errors, warnings: result.warnings }) + '\n');
+    else {
+      printErrors(result.errors);
+      for (const w of result.warnings) process.stderr.write(w + '\n');
+      process.stdout.write(result.valid ? `ARTIFACT_VALID: public run=${result.run} warnings=${result.warnings.length}${flag(rest, '--private') ? '' : ' (recorded roots unchecked: pass --private <run.json> on the exporting machine)'}\n` : `ARTIFACT_INVALID: ${result.errors.length} error(s)\n`);
+    }
+    return result.valid ? EXIT.ok : EXIT.fail;
+  }
+
   if (cmd === 'validate') {
     const file = rest.find(a => !a.startsWith('--') && a !== flag(rest, '--as') && a !== flag(rest, '--run'));
     if (!file) return usage('validate needs a file');
@@ -70,11 +88,11 @@ function main(argv: string[]): number {
     }
     const result = validateRun(file);
     if (json) {
-      process.stdout.write(JSON.stringify({ valid: result.valid, run: result.manifest?.run ?? null, status: result.manifest?.status ?? null, run_dir: result.runDir, errors: result.errors }) + '\n');
+      process.stdout.write(JSON.stringify({ valid: result.valid, run: result.manifest?.run ?? null, status: result.manifest?.status ?? null, run_dir: result.runDir, attested: result.attested ?? 0, errors: result.errors }) + '\n');
     } else {
       printErrors(result.errors);
       process.stdout.write(result.valid
-        ? `ARTIFACT_VALID: run=${result.manifest!.run} status=${result.manifest!.status}\n`
+        ? `ARTIFACT_VALID: run=${result.manifest!.run} status=${result.manifest!.status}${result.attested ? ` attested=${result.attested}` : ''}\n`
         : `ARTIFACT_INVALID: ${result.errors.length} error(s)\n`);
     }
     return result.valid ? EXIT.ok : EXIT.fail;

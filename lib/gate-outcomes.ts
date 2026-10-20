@@ -58,6 +58,11 @@ export const GATE_OUTCOMES = {
     summary: 'the review completed without severity tags or an explicit no-findings line',
     fix: 'read the output above and decide; it is not a pass',
   },
+  unparsed_severity: {
+    state: 'ran', anchor: 'outside-review-unparsed-severity',
+    summary: 'the review labels a finding with a P0-P3 severity in a form the parser cannot read',
+    fix: 'read the quoted line and the full reply above and decide; it is not a pass. Re-run the review asking for [P0]-[P3] or "P1:" labels, or re-check a corrected reply with bun lib/outside-review-result.ts --verdict <gate> <reply-file> from your gstack checkout (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-unparsed-severity)',
+  },
   model_unusable: {
     state: 'unavailable', anchor: 'codex-model-unusable',
     summary: 'Codex could not use the selected model',
@@ -92,6 +97,11 @@ export const GATE_OUTCOMES = {
     state: 'not_run', anchor: 'outside-review-disabled',
     summary: 'outside reviews are turned off (codex_reviews=disabled)',
     fix: 'gstack-config set codex_reviews enabled',
+  },
+  consent_missing: {
+    state: 'not_run', anchor: 'outside-review-consent-missing',
+    summary: 'outside reviews are turned off (codex_reviews=disabled) or the gstack config could not be read, so no repository content was sent',
+    fix: 'gstack-config set codex_reviews enabled (or make config.yaml readable), then re-run; /codex and /claude-code still run when you ask for them (https://github.com/garrytan/gstack/blob/main/docs/troubleshooting.md#outside-review-consent-missing)',
   },
   no_version_source: {
     state: 'not_run', anchor: 'ship-no-version-source',

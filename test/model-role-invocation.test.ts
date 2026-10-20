@@ -563,6 +563,7 @@ describe('manual /codex entry: explicit role only, paid probe only for the dispa
   const preflight = skill.match(/```bash\n(_CODEX_PROBE=[^\n]*\n_CODEX_ROLE=''[\s\S]*?)\n```/)![1]!
     .replace('{{OUTSIDE_SELF_GUARD:codex}}', RESOLVERS.OUTSIDE_SELF_GUARD(ctxFor('codex', 'claude', HOST_PATHS.claude), ['codex']));
   const withRole = (text: string, role: string) => text.replaceAll("_CODEX_ROLE=''", `_CODEX_ROLE='${role}'`);
+  const withEffort = (text: string, level: string) => text.replaceAll(`'<effort-level>'`, `'${level}'`);
   const shell = (h: { dir: string; state: string }, script: string, sh = 'bash') => {
     fs.mkdirSync(path.join(h.dir, '.claude', 'skills'), { recursive: true });
     if (!fs.existsSync(path.join(h.dir, '.claude', 'skills', 'gstack'))) fs.symlinkSync(ROOT, path.join(h.dir, '.claude', 'skills', 'gstack'));
@@ -574,15 +575,31 @@ describe('manual /codex entry: explicit role only, paid probe only for the dispa
 
   test('Step 0.5 probes the native model without a role and makes no model call with it', () => {
     expect(skill).toContain('[Policy setup](https://github.com/garrytan/gstack/blob/main/docs/model-policy.md)');
-    const plain = shell(home(), preflight);
+    const plain = shell(home(), withEffort(preflight, ''));
     expect(plain.status).toBe(0);
     expect(plain.stdout).toContain('MODEL_OK');
     expect(plain.calls.map(codexModel)).toEqual(['model="gpt-5.6-terra"']);
-    const role = shell(home(), withRole(preflight, 'plan-review'));
+    const role = shell(home(), withEffort(withRole(preflight, 'plan-review'), ''));
     expect(role.status).toBe(0);
     expect(role.stdout).not.toMatch(/MODEL_OK|MODEL_UNUSABLE|AUTH_FAILED/);
     expect(role.calls).toEqual([]);
     expect(role.stderr).not.toContain('NOTICE: gstack plan reviews');
+  });
+
+  test('a valid /codex --effort level passes Step 0.5, shows its source once and probes once', () => {
+    const r = shell(home(), withEffort(preflight, 'medium'));
+    expect(r.status).toBe(0);
+    expect(r.stdout).not.toContain('CODEX_EFFORT');
+    expect(r.stderr).toContain('CODEX_EFFORT: medium (source: /codex --effort)');
+    expect(r.calls.map(codexModel)).toEqual(['model="gpt-5.6-terra"']);
+  });
+
+  test('an invalid /codex --effort level stops Step 0.5 before the paid model probe', () => {
+    const r = shell(home(), withEffort(preflight, 'turbo'));
+    expect(r.status).toBe(1);
+    expect(r.stderr).toContain("'turbo' from /codex --effort");
+    expect(r.stdout).not.toMatch(/MODEL_OK|MODEL_UNUSABLE|AUTH_FAILED/);
+    expect(r.calls).toEqual([]);
   });
 
   test('a missing manual challenge prompt stops before the paid readiness probe or notice', () => {
@@ -607,7 +624,7 @@ describe('manual /codex entry: explicit role only, paid probe only for the dispa
       expect(template.match(/\{\{CODEX_SELECT/g)!.length).toBe(selections.length);
       for (const block of template.split(/\{\{CODEX_SELECT:/).slice(1)) {
         const [kind, budget] = block.split('}}')[0]!.split(':');
-        const wrappers = [...block.split('```')[0]!.matchAll(/run-with-timeout (\d+) codex/g)].map(m => m[1]);
+        const wrappers = [...block.split('```')[0]!.matchAll(/run-with-timeout (?:--user-invoked )?(?:--effort \w+ (?:--request-effort '[^']*' )?)?(\d+) codex/g)].map(m => m[1]);
         expect(wrappers.length).toBeGreaterThan(0);
         expect(new Set(wrappers)).toEqual(new Set([budget]));
         expect(kind).toMatch(/^(exec|review)$/);

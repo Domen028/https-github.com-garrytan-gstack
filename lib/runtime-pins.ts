@@ -11,6 +11,11 @@
  * the platform lane of the job's `runs-on`, so a Windows job's pin never fails
  * a Linux run. A value this module cannot evaluate (`lts/*`, a matrix
  * expression) is reported as skipped, never silently dropped.
+ *
+ * CI exact pins that apply to this platform are alternatives: a repository's
+ * lanes may test several Bun versions (gstack pins its minimum everywhere and
+ * runs one job on its install default), so the running Bun satisfies CI when
+ * it equals any one of them. CI ranges and every non-CI pin stay required.
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -210,18 +215,41 @@ export function evaluatePins(pins: Pin[], running: Running, platform: NodeJS.Pla
     const version = running[tool];
     const applicable = mine.filter(p => p.lane === 'any' || p.lane === here);
     const unmet: Pin[] = [];
+    const ciExact: Pin[] = [];
     for (const pin of applicable) {
       if (pin.kind === 'unevaluable') { skipped.push(`${tool} ${pin.constraint} (${pin.source}) not evaluated`); continue; }
       if (!version) { skipped.push(`${tool} ${pin.constraint} (${pin.source}): ${tool} not found on PATH`); continue; }
       evaluated++;
-      if (satisfies(version, pin.constraint) === false) unmet.push(pin);
+      if (pin.field === 'CI' && pin.kind === 'exact') ciExact.push(pin);
+      else if (satisfies(version, pin.constraint) === false) unmet.push(pin);
     }
+    const ciMet = ciExact.some(pin => satisfies(version!, pin.constraint) !== false);
+    if (!ciMet) unmet.push(...ciExact);
     if (unmet.length === 0) continue;
     const [first, ...rest] = groupPins(unmet);
     const context = rest.map(g => `${describe(g)} pins ${g.pin.constraint}`);
-    failures.push(`${tool} ${version} outside ${first.pin.field} ${first.pin.constraint} (${first.pin.source}${context.length ? '; ' + context.join('; ') : ''})`);
+    const alternatives = ciMet ? [] : [...new Set(ciExact.map(p => p.constraint))];
+    const anyOf = alternatives.length > 1 ? `; CI exact pins are alternatives, any one of ${alternatives.join(', ')} satisfies CI` : '';
+    failures.push(`${tool} ${version} outside ${first.pin.field} ${first.pin.constraint} (${first.pin.source}${context.length ? '; ' + context.join('; ') : ''}${anyOf})`);
   }
   return { pins, summary, failures, skipped, verdict: failures.length ? 'fail' : evaluated ? 'pass' : 'none' };
+}
+
+export interface ExactPlan {
+  /** Distinct non-CI exact pins (engines, packageManager, .tool-versions, .bun-version): all required. */
+  required: Array<{ version: string; source: string }>;
+  /** Distinct CI exact pins for this platform's lanes: any one satisfies CI. */
+  ciAlternatives: string[];
+}
+
+/** The exact pins of one tool that apply on this platform, split into required and CI alternatives. */
+export function exactPlan(pins: Pin[], tool: Tool, platform: NodeJS.Platform = process.platform): ExactPlan {
+  const here = PLATFORM_LANE[platform] ?? 'any';
+  const exact = pins.filter(p => p.tool === tool && p.kind === 'exact' && (p.lane === 'any' || p.lane === here));
+  const strip = (v: string) => v.replace(/^v/, '');
+  const required: ExactPlan['required'] = [];
+  for (const p of exact.filter(p => p.field !== 'CI')) if (!required.some(r => r.version === strip(p.constraint))) required.push({ version: strip(p.constraint), source: p.source });
+  return { required, ciAlternatives: [...new Set(exact.filter(p => p.field === 'CI').map(p => strip(p.constraint)))] };
 }
 
 /** The wire lines bin/gstack-doctor-check.sh reads (PINS_VERDICT last). */
@@ -231,6 +259,11 @@ export function renderPinLines(report: PinReport, platform: NodeJS.Platform = pr
   for (const s of report.summary) lines.push(`PIN_SUMMARY: ${s}`);
   for (const s of report.skipped) lines.push(`PIN_SKIP: ${s}`);
   for (const f of report.failures) lines.push(`PIN_FAIL: ${f}`);
+  for (const tool of ['bun', 'node'] as const) {
+    const plan = exactPlan(report.pins, tool, platform);
+    for (const r of plan.required) lines.push(`PIN_EXACT_REQUIRED: ${tool} ${r.version} ${r.source}`);
+    if (plan.ciAlternatives.length) lines.push(`PIN_CI_ALTERNATIVES: ${tool} ${plan.ciAlternatives.join(' ')}`);
+  }
   lines.push(`PINS_VERDICT: ${report.verdict}`);
   return lines;
 }

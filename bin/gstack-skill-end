@@ -24,6 +24,10 @@ while [ $# -gt 0 ]; do
     --used-browse)   USED_BROWSE="$2"; shift 2 ;;
     --error-message) ERROR_MESSAGE="$2"; shift 2 ;;
     --failed-step)   FAILED_STEP="$2"; shift 2 ;;
+    -h|--help)
+      echo 'Usage: gstack-skill-end --skill NAME --outcome success|error|abort|unknown --session-id ID --tel-start EPOCH [--used-browse yes|no] [--error-message MSG] [--failed-step STEP]'
+      echo 'Records skill completion. --help records nothing.'
+      exit 0 ;;
     *) shift ;;
   esac
 done
@@ -41,9 +45,10 @@ _TEL=$("$_BIN/gstack-config" get telemetry 2>/dev/null || echo off)
 _SESSION_KIND=$("$_BIN/gstack-session-kind" 2>/dev/null || echo "interactive")
 if [ "$_SESSION_KIND" = "unattended" ]; then
   _TEL="off"
-  _CACHED_UPD=$(head -1 "$_GH/last-update-check" 2>/dev/null | tr -cd 'A-Za-z0-9._ ' || true)
+  _CACHED_UPD=$(head -1 "$_GH/last-update-check" 2>/dev/null | tr -cd 'A-Za-z0-9._+ ' || true)
   case "$_CACHED_UPD" in
-    UPGRADE_AVAILABLE*) echo "UPGRADE_AVAILABLE: ${_CACHED_UPD##* }; run /gstack-upgrade" ;;
+    UPGRADE_AVAILABLE*) echo "UPGRADE_AVAILABLE: $(printf '%s\n' "$_CACHED_UPD" | awk '{ print $3 (NF >= 4 ? " (main at " $4 ")" : "") }'); run /gstack-upgrade"
+      echo "UPGRADE_COMMAND: $(cd "$_BIN/.." 2>/dev/null && pwd -P)/bin/gstack-upgrade" ;;
   esac
   echo "ARTIFACTS_SYNC: skipped (unattended session)"
 fi
@@ -53,14 +58,16 @@ case "$TEL_START" in ''|*[!0-9]*) TEL_START="$_TEL_END" ;; esac
 _TEL_DUR=$(( _TEL_END - TEL_START ))
 [ -n "$SESSION_ID" ] && rm -f "$_GH/analytics/.pending-$SESSION_ID" 2>/dev/null || true
 
+# Record completion before the final drain, including its durable enqueue.
+# The normal sync gates still decide publication: full may sync timelines,
+# artifacts-only retains them locally, and unattended never enqueues or drains.
+"$_BIN/gstack-timeline-log" '{"skill":"'"$SKILL_NAME"'","event":"completed","branch":"'"$(_b=$(git branch --show-current 2>/dev/null | tr -cd 'a-zA-Z0-9._/-'); echo "${_b:-unknown}")"'","outcome":"'"$OUTCOME"'","duration_s":"'"$_TEL_DUR"'","session":"'"$SESSION_ID"'"}' 2>/dev/null || true
+
 # Skill-end artifacts sync (drain + push; formerly its own inline fence).
 if [ "$_SESSION_KIND" != "unattended" ]; then
   "$_BIN/gstack-brain-sync" --discover-new 2>/dev/null || true
   "$_BIN/gstack-brain-sync" --once 2>/dev/null || true
 fi
-
-# Session timeline: local-only, never sent anywhere.
-"$_BIN/gstack-timeline-log" '{"skill":"'"$SKILL_NAME"'","event":"completed","branch":"'"$(_b=$(git branch --show-current 2>/dev/null | tr -cd 'a-zA-Z0-9._/-'); echo "${_b:-unknown}")"'","outcome":"'"$OUTCOME"'","duration_s":"'"$_TEL_DUR"'","session":"'"$SESSION_ID"'"}' 2>/dev/null || true
 
 # Local analytics (gated on telemetry setting).
 if [ "$_TEL" != "off" ]; then

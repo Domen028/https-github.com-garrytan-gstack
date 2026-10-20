@@ -20,7 +20,7 @@
 import { expect } from 'bun:test';
 import { describeIfSelected, testIfSelected } from './helpers/e2e-helpers';
 import { launchClaudePty, selectPtyNumberedOption } from './helpers/claude-pty-runner';
-import { prepareGuardSession } from './helpers/autoplan-guard-pty';
+import { closePacketReadAfterNotice, prepareGuardSession, stoppedAtPhaseBoundary } from './helpers/autoplan-guard-pty';
 
 const MODEL = 'claude-haiku-4-5-20251001';
 
@@ -48,6 +48,8 @@ describeIfSelected('autoplan publication guard live PTY', ['autoplan-guard-pty']
           await Bun.sleep(1_500);
         }
         if (log.some(e => e.decision === 'deny') || (log.length >= 4 && s.noticeEvidence().notices >= 2)) break;
+        // The actor ended its turn at the Phase 1 publication; no input is coming, so it cannot reach Phase 2.
+        if (log.length < 4 && stoppedAtPhaseBoundary(screen)) break;
         if (session.exited()) break;
       }
       await Bun.sleep(3_000);
@@ -55,15 +57,16 @@ describeIfSelected('autoplan publication guard live PTY', ['autoplan-guard-pty']
       const summary = { prompts: prompts.length, phase1Ms, totalMs: Math.round(performance.now() - started), evidence,
         decisions: log.map(e => ({ decision: e.decision, code: e.code, path: e.path, version: e.claude_code_version })) };
       console.log(`[autoplan-guard-pty] ${JSON.stringify(summary)}`);
+      if (log.length < 4 && stoppedAtPhaseBoundary(session.visibleText())) console.log('[autoplan-guard-pty] PHASE_BOUNDARY_STOP: the actor ended its turn after "Phase 1 complete." instead of going on to step 8');
       if (log.length !== 4 || log.some(e => e.decision === 'deny') || prompts.length)
-        console.log(`[autoplan-guard-pty] journal:\n${s.journalSummary().join('\n')}\n[autoplan-guard-pty] screen:\n${session.visibleText().slice(-2_000)}`);
+        console.log(`[autoplan-guard-pty] journal:\n${s.journalSummary().join('\n')}\n[autoplan-guard-pty] screen:\n${session.visibleText().slice(-2_000)}\n[autoplan-guard-pty] last non-blank screen:\n${session.lastScreen?.() ?? ''}`);
       for (const prompt of prompts) console.log(`[autoplan-guard-pty] permission card approved:\n${prompt}`);
       expect(log.filter(e => e.decision === 'deny')).toEqual([]);
       // Phase 1 entry, the CEO reviewer dispatch (Cause A: run_in_background sent, stripped from the payload),
       // the Phase 2 transition and the Phase 2 reviewer dispatch: four guarded allows, each verified.
       expect(log.map(e => [e.decision, e.disposition])).toEqual(Array(4).fill(['allow', 'allow']));
       // The CEO reviewer's notice started a new turn before the close packet, the Phase 2 entry and the Phase 2 dispatch.
-      expect(evidence.afterNotice.filter(c => /^Read .*close-packet\.md$/.test(c))).not.toEqual([]);
+      expect(closePacketReadAfterNotice(evidence.afterNotice), evidence.afterNotice.join('\n')).toBe(true);
       expect(evidence.afterNotice.filter(c => /^Read .*autoplan\/sections\/design-phase\.md$/.test(c))).not.toEqual([]);
       expect(evidence.afterNotice).toContain('Agent Design review');
       expect(evidence.reviewerReads.filter(f => /\.gstack\/tmp\/autoplan\/autoplan-design-[^/]+\/native-prompt\.md$/.test(f))).not.toEqual([]);

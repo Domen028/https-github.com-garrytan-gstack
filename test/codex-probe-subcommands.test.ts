@@ -17,7 +17,7 @@ const PROBE = path.join(ROOT, 'bin', 'gstack-codex-probe');
 const HAS_ZSH = Boolean(Bun.which('zsh'));
 const ZSH_REQUIRED = Boolean(process.env.CI) && process.platform !== 'win32';
 const SHELLS = ['bash', 'zsh'] as const;
-const SUBCOMMANDS = ['select-model', 'check-auth', 'show-sandbox', 'check-sandbox', 'probe-model', 'check-version',
+const SUBCOMMANDS = ['select-model', 'check-effort', 'check-auth', 'show-sandbox', 'check-sandbox', 'probe-model', 'check-version',
   'show-first-use-notice', 'run-with-timeout', 'log-event', 'log-hang', 'help'];
 
 const STUB = `#!/usr/bin/env bash
@@ -96,6 +96,7 @@ describe('gstack-codex-probe subcommands', () => {
       try {
         const results: Record<string, ReturnType<typeof probe>> = {
           'select-model': probe(f, 'select-model exec', {}, shell),
+          'check-effort': probe(f, 'check-effort high', {}, shell),
           'check-auth': probe(f, 'check-auth', {}, shell),
           'show-sandbox': probe(f, 'show-sandbox', {}, shell),
           'check-sandbox': probe(f, 'check-sandbox', {}, shell),
@@ -113,6 +114,8 @@ describe('gstack-codex-probe subcommands', () => {
         }
         expect(results['select-model']!.stdout).toBe('CODEX_SEL: gpt-test-model\nCODEX_SEL_KIND: exec\nCODEX_SANDBOX: read-only\n');
         expect(results['select-model']!.stderr).toContain('CODEX_MODEL: gpt-test-model (exec; source: ');
+        expect(results['check-effort']!.stdout).toBe('CODEX_EFFORT: high\n');
+        expect(results['check-effort']!.stderr).toBe('');
         expect(results['check-auth']!.stdout).toBe('AUTH_OK\n');
         expect(results['show-sandbox']!.stdout).toBe('CODEX_SANDBOX: read-only\n');
         expect(results['check-sandbox']!.stdout).toBe('');
@@ -150,6 +153,61 @@ describe('gstack-codex-probe subcommands', () => {
       expect([invalid.code, invalid.stdout]).toEqual([1, '']);
       expect(invalid.stderr).toContain('CODEX_MODEL: invalid');
       expect(calls(f)).toEqual([]);
+    } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+  });
+
+  test('check-effort uses GSTACK_CODEX_EFFORT, then codex_effort, then the gate default, and rejects a bad level before any Codex call', () => {
+    const f = fixture();
+    try {
+      const unset = probe(f, 'check-effort high');
+      expect([unset.code, unset.stdout]).toEqual([0, 'CODEX_EFFORT: high\n']);
+      expect(probe(f, 'check-effort medium').stdout).toBe('CODEX_EFFORT: medium\n');
+      const max = probe(f, 'check-effort high', { GSTACK_CODEX_EFFORT: 'max' });
+      expect([max.code, max.stdout]).toEqual([0, 'CODEX_EFFORT: max\n']);
+      expect(max.stderr).toBe('CODEX_EFFORT: max (source: env GSTACK_CODEX_EFFORT)\n');
+      fs.writeFileSync(path.join(f.state, 'config.yaml'), 'codex_effort: low\n');
+      const config = probe(f, 'check-effort high');
+      expect([config.code, config.stdout, config.stderr]).toEqual([0, 'CODEX_EFFORT: low\n', 'CODEX_EFFORT: low (source: config codex_effort)\n']);
+      expect(probe(f, 'check-effort high', { GSTACK_CODEX_EFFORT: 'xhigh' }).stdout).toBe('CODEX_EFFORT: xhigh\n');
+      fs.writeFileSync(path.join(f.state, 'config.yaml'), 'codex_effort: bogus\n');
+      const badConfig = probe(f, 'check-effort high');
+      expect([badConfig.code, badConfig.stdout]).toEqual([1, '']);
+      expect(badConfig.stderr).toContain("'bogus' from config codex_effort");
+      fs.rmSync(path.join(f.state, 'config.yaml'));
+      const empty = probe(f, 'check-effort high', { GSTACK_CODEX_EFFORT: '' });
+      expect([empty.code, empty.stdout]).toEqual([0, 'CODEX_EFFORT: high\n']);
+      const invalid = probe(f, 'check-effort high', { GSTACK_CODEX_EFFORT: 'banana' });
+      expect([invalid.code, invalid.stdout]).toEqual([1, '']);
+      expect(invalid.stderr).toContain('HINT:');
+      expect(invalid.stderr).toContain('banana');
+      const badDefault = probe(f, 'check-effort banana');
+      expect([badDefault.code, badDefault.stdout, badDefault.stderr.startsWith('Usage: gstack-codex-probe')])
+        .toEqual([64, '', true]);
+      const badDefaultWithEnv = probe(f, 'check-effort banana', { GSTACK_CODEX_EFFORT: 'max' });
+      expect([badDefaultWithEnv.code, badDefaultWithEnv.stdout, badDefaultWithEnv.stderr.startsWith('Usage: gstack-codex-probe')])
+        .toEqual([64, '', true]);
+      expect(calls(f)).toEqual([]);
+    } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
+  });
+
+  test('run-with-timeout --effort appends the resolved effort to the codex command; a bad level or non-codex command never runs', () => {
+    const f = fixture();
+    try {
+      expect(probe(f, 'run-with-timeout --effort high 20 codex exec - --json').code).toBe(0);
+      fs.writeFileSync(path.join(f.state, 'config.yaml'), 'codex_effort: low\n');
+      expect(probe(f, 'run-with-timeout --user-invoked --effort high 20 codex review --base main').code).toBe(0);
+      expect(probe(f, 'run-with-timeout --effort medium 20 codex exec -', { GSTACK_CODEX_EFFORT: 'xhigh' }).code).toBe(0);
+      expect(calls(f)).toEqual([
+        'exec - --json -c model_reasoning_effort="high"',
+        'review --base main -c model_reasoning_effort="low"',
+        'exec - -c model_reasoning_effort="xhigh"',
+      ]);
+      const bad = probe(f, 'run-with-timeout --effort high 20 codex exec -', { GSTACK_CODEX_EFFORT: 'banana' });
+      expect([bad.code, bad.stdout]).toEqual([1, '']);
+      expect(bad.stderr).toContain('No Codex call was made');
+      expect(probe(f, 'run-with-timeout --effort high 20 echo hi').code).toBe(64);
+      expect(probe(f, 'run-with-timeout --effort 20 codex exec -').code).toBe(64);
+      expect(calls(f)).toHaveLength(3);
     } finally { fs.rmSync(f.home, { recursive: true, force: true }); }
   });
 

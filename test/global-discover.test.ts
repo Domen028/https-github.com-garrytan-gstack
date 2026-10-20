@@ -439,13 +439,13 @@ describe("gstack-global-discover", () => {
     });
   });
 
-  describe("extractCwdFromJsonl 64KB cap (PR #1169 bug #8)", () => {
+  describe("extractCwdFromJsonl reads whole lines up to 1 MiB (PR #1169 bug #8, #1315)", () => {
     // Regression: the old 8KB cap landed mid-line on Claude Code sessions with
     // long headers, JSON.parse threw on the truncated tail, the catch
     // `continue`d silently, and the project disappeared from discovery.
     // The fix raised the cap to 64KB AND drops the trailing partial segment
     // before parsing.
-    let extractCwdFromJsonl: (filePath: string) => string | null;
+    let extractCwdFromJsonl: (filePath: string, stats?: { oversizedLines: number }) => string | null;
     let tmpDir: string;
 
     beforeEach(async () => {
@@ -483,19 +483,31 @@ describe("gstack-global-discover", () => {
       expect(extractCwdFromJsonl(filePath)).toBe("/tmp/repo-12k");
     });
 
-    test("80KB single line (overflows 64KB cap): returns null without crashing", () => {
-      // One line >64KB with no newline inside the read window. The 64KB read
-      // captures a truncated prefix, parts.length === 1, no trailing drop
-      // applies, JSON.parse throws, catch returns null. The fix's
-      // trailing-partial-drop must not crash on this shape.
-      const padding = "y".repeat(80 * 1024);
-      const line = JSON.stringify({ cwd: "/tmp/repo-80k", type: "header", notes: padding });
-      expect(line.length).toBeGreaterThan(64 * 1024);
+    test("86KB queue-operation first line, cwd on the third record: returns cwd (#1315)", () => {
+      // Recent Claude Code sessions open with one queue-operation record larger
+      // than the old 64KB prefix; cwd first appears on a later record.
+      const filePath = join(tmpDir, "queue-op-86k.jsonl");
+      const first = JSON.stringify({ type: "queue-operation", operation: "enqueue", content: "q".repeat(86 * 1024) });
+      const second = JSON.stringify({ type: "summary" });
+      const third = JSON.stringify({ type: "attachment", cwd: "/tmp/repo-86k" });
+      expect(first.length).toBeGreaterThan(64 * 1024);
+      writeFileSync(filePath, [first, second, third].join("\n") + "\n");
+      expect(extractCwdFromJsonl(filePath)).toBe("/tmp/repo-86k");
+    });
 
-      const filePath = join(tmpDir, "header-80k.jsonl");
-      writeFileSync(filePath, line + "\n");
-      // Don't throw, just return null.
-      expect(extractCwdFromJsonl(filePath)).toBeNull();
+    test("a line over 1 MiB is skipped and counted; the next line's cwd is returned", () => {
+      const filePath = join(tmpDir, "oversized.jsonl");
+      const huge = JSON.stringify({ cwd: "/tmp/repo-huge", notes: "y".repeat(1024 * 1024 + 10) });
+      writeFileSync(filePath, huge + "\n" + JSON.stringify({ cwd: "/tmp/repo-after-huge" }) + "\n");
+      const stats = { oversizedLines: 0 };
+      expect(extractCwdFromJsonl(filePath, stats)).toBe("/tmp/repo-after-huge");
+      expect(stats.oversizedLines).toBe(1);
+    });
+
+    test("a file with no trailing newline still yields its cwd", () => {
+      const filePath = join(tmpDir, "no-newline.jsonl");
+      writeFileSync(filePath, JSON.stringify({ cwd: "/tmp/repo-no-newline" }));
+      expect(extractCwdFromJsonl(filePath)).toBe("/tmp/repo-no-newline");
     });
 
     test("complete line followed by partial second line: returns first line's cwd", () => {
@@ -524,6 +536,113 @@ describe("gstack-global-discover", () => {
       const good = JSON.stringify({ cwd: "/tmp/repo-skip-bad" });
       writeFileSync(filePath, "{ not valid json\n" + good + "\n");
       expect(extractCwdFromJsonl(filePath)).toBe("/tmp/repo-skip-bad");
+    });
+  });
+
+  describe("Claude Code project resolution from the recorded cwd (#1315)", () => {
+    let home: string;
+    beforeEach(() => {
+      home = mkdtempSync(join(tmpdir(), "gstack-cc-projects-"));
+    });
+    afterEach(() => rmSync(home, { recursive: true, force: true }));
+
+    const git = (cwd: string, ...args: string[]) => {
+      const r = spawnSync("git", ["-C", cwd, ...args], {
+        encoding: "utf-8",
+        timeout: 30_000,
+        env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, ".gitconfig"), GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.com", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.com" },
+      });
+      expect(r.status).toBe(0);
+      return r.stdout;
+    };
+    function repo(rel: string, remote?: string): string {
+      const dir = join(home, rel);
+      mkdirSync(dir, { recursive: true });
+      git(dir, "init", "-q");
+      git(dir, "commit", "-q", "--allow-empty", "-m", "init");
+      if (remote) git(dir, "remote", "add", "origin", remote);
+      return dir;
+    }
+    /** One Claude Code session whose cwd appears on its third record, in a project dir named like Claude Code names it. */
+    function session(cwd: string, id: string): void {
+      const dir = join(home, ".claude", "projects", cwd.replace(/[\\/.:]/g, "-"));
+      mkdirSync(dir, { recursive: true });
+      const lines = [
+        { type: "queue-operation", operation: "enqueue", content: "q".repeat(70 * 1024) },
+        { type: "summary" },
+        { type: "user", cwd, message: { role: "user", content: "hi" } },
+      ];
+      writeFileSync(join(dir, `${id}.jsonl`), lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
+    }
+    function discover(): { repos: Array<{ name: string; remote: string; paths: string[]; sessions: { claude_code: number } }>; tools: { claude_code: { total_sessions: number } } } {
+      const r = spawnSync("bun", ["run", scriptPath, "--since", "1h", "--format", "json"], {
+        encoding: "utf-8",
+        timeout: 60_000,
+        env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_SESSIONS_DIR: join(home, "no-codex"), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: join(home, ".gitconfig") },
+      });
+      expect(r.status).toBe(0);
+      return JSON.parse(r.stdout);
+    }
+
+    test("root and subdirectory sessions of a hyphenated repository count the same", () => {
+      const root = repo("work/ai-blogger-lab", "https://github.com/acme/ai-blogger-lab.git");
+      mkdirSync(join(root, "packages", "web-app"), { recursive: true });
+      session(root, "root-1");
+      session(root, "root-2");
+      session(join(root, "packages", "web-app"), "sub-1");
+      session(join(root, "packages", "web-app"), "sub-2");
+      const json = discover();
+      const r = json.repos.find((x) => x.remote === "https://github.com/acme/ai-blogger-lab")!;
+      expect(r.sessions.claude_code).toBe(4);
+      expect(r.paths).toEqual([root]);
+      expect(r.name).toBe("ai-blogger-lab");
+    });
+
+    test("a linked worktree counts with its repository, under its own path", () => {
+      const main = repo("work/app", "git@github.com:acme/app.git");
+      const wt = join(home, "work", "app-feature-x");
+      git(main, "worktree", "add", "-q", wt);
+      session(main, "main-1");
+      session(join(wt), "wt-1");
+      const r = discover().repos.find((x) => x.remote === "https://github.com/acme/app")!;
+      expect(r.sessions.claude_code).toBe(2);
+      expect(r.paths.sort()).toEqual([main, wt].sort());
+    });
+
+    test("a linked worktree of a repository with no remote still counts with its repository", () => {
+      const main = repo("work/local-only");
+      const wt = join(home, "work", "local-only-wt");
+      git(main, "worktree", "add", "-q", wt);
+      session(main, "l-1");
+      session(wt, "l-2");
+      const local = discover().repos.filter((x) => x.remote.startsWith("local:"));
+      expect(local).toHaveLength(1);
+      expect(local[0].sessions.claude_code).toBe(2);
+      expect(local[0].name).toBe("local-only");
+    });
+
+    test("a nested repository counts as its own repository, not its parent's", () => {
+      const outer = repo("work/outer", "https://github.com/acme/outer.git");
+      const inner = repo("work/outer/vendor/inner", "https://github.com/acme/inner.git");
+      session(outer, "o-1");
+      session(inner, "i-1");
+      session(join(inner), "i-2");
+      const json = discover();
+      expect(json.repos.find((x) => x.remote === "https://github.com/acme/outer")!.sessions.claude_code).toBe(1);
+      expect(json.repos.find((x) => x.remote === "https://github.com/acme/inner")!.sessions.claude_code).toBe(2);
+    });
+
+    test("sessions outside any repository, or inside .git, are not counted as a repository", () => {
+      const plain = join(home, "notes", "my-notes");
+      mkdirSync(plain, { recursive: true });
+      const r = repo("work/real", "https://github.com/acme/real.git");
+      session(plain, "p-1");
+      session(join(r, ".git"), "g-1");
+      session(r, "r-1");
+      const json = discover();
+      expect(json.tools.claude_code.total_sessions).toBe(3);
+      expect(json.repos).toHaveLength(1);
+      expect(json.repos[0].sessions.claude_code).toBe(1);
     });
   });
 });

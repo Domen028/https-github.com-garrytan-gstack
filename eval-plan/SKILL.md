@@ -399,6 +399,15 @@ Write (or open) the preregistration file. Each section is required and must be f
 (`PREREG_INCOMPLETE`, exit 1); fill them and rerun. Do not continue on an incomplete
 preregistration.
 
+When the summarizer counts diagnostics, declare them before the freeze commit in a
+`## Diagnostics` section: `summarizer: <command naming {fixture}>`, `fixture: <synthetic
+records file>`, and one `| diagnostic | expected |` row per diagnostic, with the count the
+fixture is built to produce. The summarizer's last stdout line is one JSON object of counts.
+Then run `prereg --check <path> --allow-repo-commands`. Without the flag, the summarizer is
+listed and the check exits 3. Every `PREREG_DIAGNOSTIC:` line must say `ok`.
+`PREREG_DIAGNOSTIC_UNTESTED` (exit 1) means a count, a missing diagnostic or an
+undeclared one does not match its definition. Fix that before you freeze.
+
 ### Step 1b: Arms and their price
 
 ```bash
@@ -411,6 +420,12 @@ falling back to the repo's own policy document (`--policy-doc <path>`), or from
 and the per-item cost at the stated token estimate; `price=MISSING` (`EVAL_PRICE_MISSING`)
 means the model has no row in `lib/pricing.ts`: add the row from the provider's pricing
 page or drop the arm. Copy the priced arms into the Arms section.
+
+When the repo commits `.gstack/eval-models.json` (allow, deny, per-scope lists, families
+newest first; `docs/eval-models.md` in gstack), `arms`, `dry-run`, `pilot start` and
+`price-gate` print one `EVAL_MODEL:` line per arm. Pass `--scope smoke` for a smoke run;
+the default is `full`. A refused arm (`EVAL_MODEL_DENIED`, `EVAL_MODEL_OLD_GENERATION`,
+`EVAL_MODEL_GENERATION_UNRESOLVED`) is replaced, never argued past.
 
 ## Step 2: zero-cost stub-model dry run
 
@@ -428,6 +443,8 @@ the budget the run will use. The checklist printed must be all `ok`:
   spends output tokens thinking, and a smaller budget truncates the answer the scorer reads.
 - `CHECK: retry-prompt` — the exact text the run sends on a retry, printed verbatim; a retry
   with no text is a repeat of the same failure at the same price.
+- `CHECK: reservation-fits-cap` (with `--cap <cap-usd>`) — one call, the largest row plus the
+  output budget, priced, fits under the cap; a provider refuses a reservation the cap cannot hold.
 - `DRY_RUN_ROW:` lines name rows missing a field; fix the rows, not the prompt.
 
 `DRY_RUN_RESULT: pass` writes `dry-run.json` to `--out`; the pilot refuses to start on
@@ -459,8 +476,32 @@ the preregistration, when `status=budget_exhausted`, or when `verdict=exceeds`.
 
 ## Step 4: The approval ask
 
+Price every paid gate the plan names (a benchmark or eval command that spends) from the
+repo's call-plan file; nothing is executed (`docs/eval-calls.md` in gstack). The gate
+command is free text, so it reaches the pricer only as a file:
+
+```bash
+_GT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.gstack/tmp"
+mkdir -p "$_GT" && chmod 700 "$_GT" || { echo "Not sent: cannot create $_GT for the text file." >&2; exit 1; }
+_EX=$(git rev-parse --git-path info/exclude 2>/dev/null) && mkdir -p "$(dirname "$_EX")" && { grep -qxF '/.gstack/tmp/' "$_EX" 2>/dev/null || echo '/.gstack/tmp/' >> "$_EX"; }
+GATE_FILE=$(mktemp "${_GT:?}/gate-command.XXXXXX") || { echo "Not sent: mktemp failed in $_GT." >&2; exit 1; }; echo "GATE_FILE: $GATE_FILE (name: ${GATE_FILE##*/})"
+```
+
+Write the text into each printed file with your file-write tool (Claude Code's Write tool needs a Read of the empty file first), exactly as it should appear. The text never goes into a shell command, heredoc or quoted argument. If a write fails or is refused, do not send: print the cause, the file path and the command below for sending by hand.
+
+Write the exact gate command, one line, into the printed file, then price it:
+
+```bash
+GATE_FILE="$(git rev-parse --show-toplevel 2>/dev/null || pwd)/.gstack/tmp/<gate-file-name>"
+~/.claude/skills/gstack/bin/gstack-eval-plan price-gate --gate-file "$GATE_FILE" --cap-usd <cap-usd>
+```
+
+Each `GATE_PRICE:` line goes into the ask. `EVAL_GATE_UNPRICED`, `EVAL_PLAN_STALE`,
+`EVAL_PRICE_MISSING` or `EVAL_GATE_OVER_CAP` means that gate is not approvable as priced;
+`--allow-unpriced "<reason>"` only on the owner's word.
+
 Present, in this order and nothing before it: the `PILOT_PROJECTION:` line, the spend
-table, the pilot's per-bar results, and the preregistration's stop rules. Then ask one
+table, each gate's `GATE_PRICE:` line, the pilot's per-bar results, and the preregistration's stop rules. Then ask one
 question with the projection as the recommended option only when `verdict=within`:
 
 - A) Run `<total-items>` items at the projected cost (recommended when within the cap)
