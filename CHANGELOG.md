@@ -8,6 +8,23 @@
 - **`test/setup-ps1.test.ts` PowerShell 5.1 cases (windows-setup, 2026-10-17 and 2026-10-20).** The workflow runs the file with plain `bun test`, so each case has Bun's 5 s default. The first `powershell.exe` launch on a runner pays a cold start that later launches do not. Over 94 windows-setup jobs, the first legacy launch (the space-in-TMPDIR case) took p50 1.46 s, p95 3.42 s and max 5.04 s, while the second launch (the empty-argument case) had p95 1.41 s. Both reds were that first launch killed at 5 s with exit null. A `beforeAll` now launches the legacy interpreter once on the stub checkout, with a 60 s hook budget matching the spawns' own bound. No per-test timeout changed. On Linux, a pwsh wrapper that adds 6 s to the first launch reproduces the CI symptom on main and passes with the warm-up. One that adds 6 s to every launch still fails three cases (negative control).
 - **`browse/test/xvfb.test.ts` spawn → cleanup round trip (Ubicloud full run, 2026-10-18).** It picked a display from `:99-:110` and then spawned on it, inside the default range that headed daemons in parallel shards allocate from. Six default-range allocators reproduced "X display :N was reserved by another X server during startup" in 9 of 20 and 5 of 20 runs. The case now uses `:25000-:25100`, a range no other allocator uses, like the file's other private-range cases. It now fails instead of silently returning when no display is free. 30 of 30 runs pass under the same load.
 
+## [1.91.165.0] - 2026-10-20
+
+**The Version Gate accepts an unstamped READY head under merge trains.** Under the train policy a lane's head keeps VERSION, package.json and the agents digest at main's version and writes its CHANGELOG entry under `[Unreleased]`. The gate still demanded a bump, so every unstamped PR showed "VERSION not bumped", and `gstack-ship-queue ready` refused it with `QUEUE_NOT_READY` (#3320, #3321). That blocked every train. Plan GSTA-49, S1 for the queue.
+
+### Fixed
+- **`scripts/compare-pr-version.ts`** passes an unstamped head when the base's `.gstack/ship-policy.json` declares `train`. A head counts as unstamped (`lib/version-gate-train.ts`) when, against its merge base with main, it changes neither `VERSION`, the `package.json` version nor any release output, and its CHANGELOG change is confined to one `[Unreleased]` section at the top. An older merge base is fine, because the train merges the head onto current main and rule 14 forbids lane main merges.
+- **A stamped head under a train policy must carry exactly base + bump**, the version `gstack-restamp --next` allocates when the slot is called. Without a train block the gate is unchanged.
+- **`.github/workflows/version-gate.yml`** runs the gate's code from the PR's merge commit (`github.sha`) rather than its head. A PR that edits the gate runs its own edit, and an open PR picks up a gate fix from main at its next `pull_request` event. It also fetches the base with full history so the merge base resolves.
+
+### Gate integrity
+- The unstamped pass is new and applies only under a train policy. Negative controls in `test/compare-pr-version.test.ts` cover:
+  - a stamped head at any version other than base + bump;
+  - a changed `package.json` version or release output, which is treated as a stamp;
+  - a CHANGELOG edit to a released section;
+  - a second `[Unreleased]` section, or one that isn't at the top;
+  - an unstamped head without a train block, which still fails hard rule 1.
+
 ## [1.91.164.0] - 2026-10-19
 
 **Merge trains are on for gstack: `.gstack/ship-policy.json` now carries the `train` block.** READY PRs merge in trains of up to 5 (or once the oldest READY is 3 hours old) behind one full gate on the train head, instead of one full gate per PR. Plan GSTA-49, go-live after lanes T1 and T1b. Garry approved going live once one dry-run train passed.
