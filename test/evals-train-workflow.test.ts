@@ -296,6 +296,27 @@ describe('rule-16 rerun wiring (F1)', () => {
     expect(trainRun.jobs).toEqual(expect.arrayContaining(['rerun-plan', 'eval-rerun', 'slices-report', 'train-check']));
   });
 
+  test('a real red (reconcile exit 1, e.g. a case red twice) fails slices-report and so the run, after every rerun path', () => {
+    // slices-report runs whether the slices and the rerun passed, failed or were skipped, and no job may swallow its failure.
+    for (const results of [{}, { 'eval-slices': 'failure' }, { 'eval-rerun': 'failure' }, { 'eval-rerun': 'skipped' }] as Array<Record<string, string>>) {
+      const sim = simulate(evals, { github: pr(), inputs: {}, outputs: { route: { ...ROUTE, mode: 'pr' }, 'rerun-plan': planned }, results });
+      expect(sim.jobs, JSON.stringify(results)).toContain('slices-report');
+    }
+    for (const [id, job] of Object.entries(evals.jobs)) expect((job as Record<string, unknown>)['continue-on-error'], id).toBeUndefined();
+    const report = evals.jobs['slices-report']!;
+    const reconcile = report.steps.find(st => st.id === 'reconcile')!;
+    expect(reconcile.run).toContain('echo "exit=${PIPESTATUS[0]}"');
+    const fail = report.steps.at(-1)!;
+    expect(fail.name).toBe('Fail the workflow when reconciliation failed');
+    expect(fail.run).toBe('exit 1');
+    const fires = (exit: string | null, reused: string | null = null) => truthy(evaluate(String(fail.if), { steps: { reconcile: { outputs: { exit } }, reused: { outputs: { exit: reused } } } }, { success: true, failure: false }));
+    expect(fires('1')).toBe(true);
+    expect(fires('0')).toBe(false);
+    // A red report also withholds the train check (the train verdict reads the run's failure too).
+    const trainRun = simulate(evals, { github: dispatch('train/t1'), inputs: { ...INPUTS, nonce: 'gate.train-x', expected_sha: SHA.head }, outputs: { route: { ...ROUTE, ...train, mode: 'train' }, 'rerun-plan': planned }, results: { 'slices-report': 'failure' } });
+    expect(trainRun.jobs).not.toContain('train-check');
+  });
+
   test('a confirmed verdict reuse plans and runs no rerun', () => {
     const sim = simulate(evals, { github: pr(), inputs: {}, outputs: { route: { ...ROUTE, mode: 'pr' }, 'plan-slices': { gate_reuse: 'true' }, 'rerun-plan': planned } });
     expect(sim.jobs).not.toContain('rerun-plan');

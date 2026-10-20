@@ -14,6 +14,10 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { type CaseObservation, FLAKE_RECORDS_FILE, RERUN_PLAN_ARTIFACT, resolveCases, rerunCandidates, rerunSpend } from '../scripts/lib/paid-rerun';
 import { sliceExitCode } from '../scripts/lib/paid-plan';
+import { BINDING_FILE, buildBinding, findReusableGate } from '../scripts/gate-reuse';
+import type { GhRunner } from '../scripts/recover-receipts';
+import { buildTrainRecord } from '../scripts/train-gate';
+import { classifyGate } from '../lib/ship-queue-train-verdict';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const CASE = 'plan-ceo-finding-floor';
@@ -156,6 +160,47 @@ describe('negative controls: rule 16 never turns a real red green', () => {
     const again = planRerun(dir, 2);
     expect(again.manifest).toBeNull();
     expect(again.out).toContain(`not rerun: ${CASE} (failed twice`);
+  });
+
+  test('red twice is a real red everywhere it is read: the report, the reuse binding and lookup, and the train verdict', () => {
+    const dir = withRerun(FAIL);
+    const r = report(dir);
+    expect(r.status, r.out).toBe(1);
+    expect(r.out).toContain('VERDICT RED');
+    expect(r.collector.verdict.verdict).toBe('RED');
+    // gate-reuse: slices-report binds what the report proved, and find refuses it (evals.yml also fails the run on reconcile exit 1).
+    const head = 'a'.repeat(40);
+    const { binding } = buildBinding({ repository: 'garrytan/gstack', pr: 42, runId: 300, runAttempt: 1, headSha: head, baseSha: 'b'.repeat(40), profile: 'pr', reconcileExit: r.status!, reportDir: dir });
+    expect(binding).toMatchObject({ verdict: 'RED', reconcile_exit: 1 });
+    expect(binding!.flaky_cases).toBeUndefined();
+    const gh: GhRunner = (args) => {
+      const ok = (body: unknown) => ({ status: 0, stdout: JSON.stringify(body), stderr: '' });
+      if (args.some(a => a.endsWith('/workflows/evals.yml/runs'))) {
+        return ok({ workflow_runs: [{ id: 300, status: 'completed', conclusion: 'failure', event: 'pull_request', head_sha: head, run_attempt: 1,
+          head_repository: { full_name: 'garrytan/gstack' }, pull_requests: [{ number: 42 }] }] });
+      }
+      if (args.some(a => /\/runs\/300\/artifacts$/.test(a))) return ok({ artifacts: [{ name: 'gate-binding-a1', expired: false }, { name: 'paid-slice-1-a1', expired: false }] });
+      if (args[0] === 'run' && args[1] === 'download') {
+        const out = args[args.indexOf('-D') + 1]!;
+        fs.mkdirSync(out, { recursive: true });
+        fs.writeFileSync(path.join(out, BINDING_FILE), JSON.stringify(binding));
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return { status: 1, stdout: '', stderr: `unexpected gh ${args.join(' ')}` };
+    };
+    const found = findReusableGate({ repo: 'garrytan/gstack', pr: 42, headRepo: 'garrytan/gstack', branch: 'feature', selfRunId: 500, headSha: 'c'.repeat(40),
+      testedSha: 'd'.repeat(40), repoRoot: dir, out: path.join(dir, 'reuse-out'), gh });
+    expect(found.candidate).toBeNull();
+    expect(found.lines.join('\n')).toContain('is RED, reconcile exit 1, conclusion failure');
+    // The train verdict: its record is RED with the case a VERDICT red, and T1 classifies it RED whatever the run concluded.
+    const record = buildTrainRecord({ reportDir: dir, nonce: 'gate.train-x', head, tree: 'e'.repeat(40), reconcileExit: r.status!,
+      prefixes: [], run: { id: 300, attempt: 1, url: 'https://example.invalid/runs/300' } });
+    expect(record.verdict).toBe('RED');
+    expect(record.panels.find(p => p.case === CASE)).toMatchObject({ status: 'FAIL', red_class: 'VERDICT' });
+    expect(record.panels.find(p => p.case === CASE)!.flaky).toBeUndefined();
+    for (const conclusion of ['failure', 'success']) {
+      expect(classifyGate(record, { nonce: 'gate.train-x', head, tree: 'e'.repeat(40) }, { status: 'completed', conclusion }, { status: 'completed', conclusion: 'success' } as never).outcome).toBe('RED');
+    }
   });
 
   test('a manual attempt after a failed rerun never makes it flaky: two failures stay RED', () => {
