@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.166.0] - 2026-10-20
 
 **Two load-sensitive free tests from the flaky ledger now measure what they test.** Daily flaky-fix pass, 2026-10-20, free and load-sensitive group.
 
