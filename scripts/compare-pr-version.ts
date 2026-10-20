@@ -16,6 +16,7 @@
 // only blocks actual collisions.
 
 import { readFileSync } from "node:fs";
+import { classifyTrainHead } from "../lib/version-gate-train";
 
 const [, , jsonPath, prNumber] = process.argv;
 if (!jsonPath) {
@@ -29,6 +30,28 @@ try {
 } catch (e) {
   console.log("::warning::could not parse util output; failing open");
   process.exit(0);
+}
+
+const tag = prNumber ? `PR #${prNumber}` : "this PR";
+const prVersionEnv = (process.env.PR_VERSION ?? "").trim();
+
+// Merge trains: when the base's ship policy declares a `train` block, a READY
+// head is unstamped and the lane stamps at its slot (docs/ship-policy.md#run-a-merge-train).
+// The workflow passes BASE_REF and HEAD_SHA with the PR head checked out as cwd.
+if (process.env.BASE_REF && process.env.HEAD_SHA) {
+  const train = classifyTrainHead({ repoRoot: process.cwd(), baseRef: process.env.BASE_REF, head: process.env.HEAD_SHA });
+  if (train.kind === "unstamped") {
+    console.log(`✓ ${tag} is unstamped under the base's train policy: VERSION, package.json and the release outputs match its merge base, and the CHANGELOG change is confined to [Unreleased]. The lane stamps at its slot.`);
+    process.exit(0);
+  }
+  if (train.kind === "invalid") {
+    console.log(`::error::${tag}: ${train.reason}.`);
+    process.exit(1);
+  }
+  if (train.kind === "stamped" && prVersionEnv !== train.expected) {
+    console.log(`::error::${tag} claims v${prVersionEnv}, but under the base's train policy a stamped head must carry v${train.expected} (base + bump, what gstack-restamp --next allocates at its slot). Leave VERSION, package.json and the release outputs at the base's values until the slot is called.`);
+    process.exit(1);
+  }
 }
 
 if (parsed.offline === true) {
@@ -62,7 +85,6 @@ if (!pPR || !pNext) {
   process.exit(0);
 }
 
-const tag = prNumber ? `PR #${prNumber}` : "this PR";
 const claimed = (parsed.claimed ?? []) as Array<{ pr: number; branch: string; version: string; url?: string }>;
 
 // Emit a GitHub step summary (always helpful, even on pass).
