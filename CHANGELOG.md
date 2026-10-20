@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.163.0] - 2026-10-19
 
 **A gate red on one test now reruns that test once instead of the whole gate, and a pass is green with a flaky note.** Garry, 2026-10-19 (CREW rule 16): "you can just run the failed test again and note that it is flaky... You don't have to do the whole test pass again for one failed test." Plan GSTA-49, lane F1; the #3308 reuse miss is GSTA-53.
 
