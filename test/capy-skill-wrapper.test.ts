@@ -24,6 +24,7 @@ import { capyHost, type CapyHost } from './helpers/capy-host';
 const REPO = path.resolve(import.meta.dir, '..');
 const SKILL = path.join(REPO, 'capy/skill/gstack');
 const BOOT = path.join(SKILL, 'scripts/install.sh');
+const WRAPPER_REV = fs.readFileSync(BOOT, 'utf8').match(/^GSTACK_CAPY_WRAPPER=(\d+)$/m)![1];
 const hosts: CapyHost[] = [];
 afterEach(() => { for (const h of hosts.splice(0)) h.cleanup(); });
 
@@ -139,13 +140,13 @@ describe('capy skill bootstrapper (capy/skill/gstack/scripts/install.sh)', () =>
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(f.git(['rev-parse', '--is-shallow-repository'])).toBe('true');
     expect(install.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=1.0.0`]);
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=${WRAPPER_REV} min=1.0.1 from=1.0.0`]);
 
     const next = f.run(['--check', '--for', 'autoplan']);
     expect(next.status, next.stdout + next.stderr).toBe(0);
     expect(next.stdout).not.toContain('upgraded');
     expect(next.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls().at(-1)).toBe(`installer --check --root ${f.root} --for autoplan lock= rev=2 min=1.0.1 from=`);
+    expect(f.calls().at(-1)).toBe(`installer --check --root ${f.root} --for autoplan lock= rev=${WRAPPER_REV} min=1.0.1 from=`);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
   });
 
@@ -243,7 +244,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(r.stdout).toMatch(/^SELF_UPGRADE: done 1\.0\.1 -> 1\.0\.2$/m);
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.c);
     expect(r.last).toBe('gstack: ok 1.0.2 for=autoplan');
-    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=1.0.1`]);
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=${WRAPPER_REV} min=1.0.1 from=1.0.1`]);
     expect(fs.existsSync(path.join(f.root, '.git/gstack-upgrade.pending'))).toBe(false);
 
     const next = f.run(['--for', 'autoplan']);
@@ -251,7 +252,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(next.stdout).toMatch(/^SELF_UPGRADE: none \(current\)$/m);
     expect(next.stdout).not.toContain('SELF_UPGRADE: done');
     expect(next.last).toBe('gstack: ok 1.0.2 for=autoplan');
-    expect(f.calls().at(-1)).toBe(`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=`);
+    expect(f.calls().at(-1)).toBe(`installer --root ${f.root} --for autoplan lock=1 rev=${WRAPPER_REV} min=1.0.1 from=`);
   });
 
   test('--check mode never moves a behind checkout: it names the gap and the fast-forwarding command, then certifies the installed revision', () => {
@@ -262,7 +263,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(r.stdout).not.toContain('SELF_UPGRADE');
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(r.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls()).toEqual([`installer --check --root ${f.root} --for autoplan lock= rev=2 min=1.0.1 from=`]);
+    expect(f.calls()).toEqual([`installer --check --root ${f.root} --for autoplan lock= rev=${WRAPPER_REV} min=1.0.1 from=`]);
   });
 
   test('a dirty behind checkout is skipped with gstack-upgrade\'s reason and still ends ok: above the floor, the trailer is the doctor\'s', () => {
@@ -275,7 +276,7 @@ describe('capy skill: always current when online (the minimum is the floor, not 
     expect(f.git(['rev-parse', 'HEAD'])).toBe(f.b);
     expect(fs.readFileSync(path.join(f.root, 'README.md'), 'utf8')).toBe('local edit\n');
     expect(r.last).toBe('gstack: ok 1.0.1 for=autoplan');
-    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=2 min=1.0.1 from=`]);
+    expect(f.calls()).toEqual([`installer --root ${f.root} --for autoplan lock=1 rev=${WRAPPER_REV} min=1.0.1 from=`]);
   });
 
   test('GSTACK_CAPY_SELF_UPGRADE=off and GSTACK_CAPY_AUTO_UPGRADE=0 each disable the fast-forward by name and leave HEAD where it is', () => {

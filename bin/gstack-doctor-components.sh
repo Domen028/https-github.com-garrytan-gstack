@@ -286,6 +286,17 @@ gstack_result_anchor() {
     STATE_MATRIX_INCOMPLETE) printf '%s' 'state-matrix-incomplete' ;;
     WTREE_UNAVAILABLE) printf '%s' 'wtree-unavailable' ;;
     REGEN_DEPS_MISSING) printf '%s' 'regen-deps-missing' ;;
+    APPROVAL_RECORD_INVALID) printf '%s' 'approval-record-invalid' ;;
+    APPROVAL_RECORD_SECRET) printf '%s' 'approval-record-secret' ;;
+    APPROVAL_RECORD_NO_BRANCH) printf '%s' 'approval-record-no-branch' ;;
+    APPROVAL_RECORD_UNAVAILABLE) printf '%s' 'approval-record-unavailable' ;;
+    APPROVAL_RECORD_WRITE_FAILED) printf '%s' 'approval-record-write-failed' ;;
+    APPROVAL_IMPORT_UNANSWERED) printf '%s' 'approval-import-unanswered' ;;
+    CAPTAIN_BRIEF_INCOMPLETE) printf '%s' 'captain-brief-incomplete' ;;
+    PR_SHOTS_INPUT_NOT_FOUND) printf '%s' 'pr-shots-input-not-found' ;;
+    PR_SHOTS_INPUT_REFUSED) printf '%s' 'pr-shots-input-refused' ;;
+    PR_SHOTS_IDENTICAL) printf '%s' 'pr-shots-identical' ;;
+    PR_SHOTS_RENDER_FAILED) printf '%s' 'pr-shots-render-failed' ;;
     *) return 1 ;;
   esac
 }

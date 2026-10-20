@@ -11,6 +11,7 @@
  * checks every anchor exists; add a row here before printing a new code.
  */
 import { RELEASE_RESULT_CODES } from './result-codes-release';
+import { CAPY_RESULT_CODES } from './result-codes-capy';
 
 export interface ResultCode {
   /** Stable `<a id>` in docs/troubleshooting.md. */
@@ -768,6 +769,7 @@ export const RESULT_CODES = {
     fix: 'rerun once; if it repeats, report the printed frame to the gstack maintainers',
   },
   ...RELEASE_RESULT_CODES,
+  ...CAPY_RESULT_CODES,
 } as const satisfies Record<string, ResultCode>;
 
 export type ResultCodeName = keyof typeof RESULT_CODES;

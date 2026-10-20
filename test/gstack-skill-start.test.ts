@@ -80,6 +80,7 @@ const PROSE_REFERENCED_KEYS = [
   'SKILL_PREFIX',
   'REPO_MODE',
   'SESSION_KIND',
+  'CAPY',
   'ACTIVATED',
   'FIRST_LOOP_SHOWN',
   'FIRST_TASK',
@@ -163,6 +164,22 @@ describe('gstack-skill-start behavior', () => {
       } finally { fs.rmSync(state, { recursive: true, force: true }); }
     });
   }
+
+  test('Capy: CAPY on prints the capy-asks block once; off and GSTACK_CAPY_ASKS=0 print none', () => {
+    const blocks = (out: string) => (out.match(/^GSTACK_INSTRUCTION_BEGIN: (\S+)/gm) ?? []).map((h) => h.replace(/^GSTACK_INSTRUCTION_BEGIN: /, ''));
+    const on = runStart([], { GSTACK_CAPY: '1' });
+    expect(on).toMatch(/^CAPY: on$/m);
+    expect(blocks(on).filter((b) => b === 'capy-asks')).toHaveLength(1);
+    expect(on).toContain('needs-you report to your Captain');
+    expect(on).toContain('gstack-owner-brief render --captain --out <run dir>');
+    expect(on).toContain('gstack-approvals add');
+    const off = runStart();
+    expect(off).toMatch(/^CAPY: off$/m);
+    expect(blocks(off)).not.toContain('capy-asks');
+    const quiet = runStart([], { GSTACK_CAPY: '1', GSTACK_CAPY_ASKS: '0' });
+    expect(quiet).toMatch(/^CAPY: on \(asks block off: GSTACK_CAPY_ASKS=0\)$/m);
+    expect(blocks(quiet)).not.toContain('capy-asks');
+  });
 
   test('sanitizes GSTACK_INSTRUCTION markers out of passthrough output (OV4)', () => {
     // Poison the learnings passthrough: >5 entries triggers learnings-search

@@ -24,6 +24,7 @@ import { consensusRecord, reconcile, remedyKey, renderConsensus, SETTLEABLE_CHAN
 import type { Phase } from './autoplan-prompts';
 import { FILES, RunError, journal as journalRow, now, readDecisions, voiceRows, voiceTerminal, writeDecisions, type Amendment, type RunState, type VoiceState } from './autoplan-state';
 import { applyCapChoices, pendingDeltas, releaseUndispatched, roundCap, roundOf } from './autoplan-budget';
+import { capyRelayLine } from './captain-brief';
 import { previousReview, reviewRows, settledIds } from './autoplan-confirm';
 import { phaseClose } from './autoplan-timing';
 import { ANSWERED_BY_RE, applyReply, decisionId, decisionRows, keepDirection, parseReply, pendingHint, recHash, validateGateList, type GateChoice, type GateItem, type GateList, type GateOption, type ParsedReply } from './gate-list';
@@ -280,7 +281,8 @@ export function recommendGate(state: RunState, gateRev: number, itemId: string, 
   journalRow(state.out, { event: 'recommended', gate_rev: gateRev, item: itemId, option, basis, by, rec_rev: list.rec_rev, rec_hash: hash });
   exportRun(state);
   return [`RECOMMENDED: ${itemId}${option} by=${by} basis=${JSON.stringify(basis)} p1=${p1.recommended} rec_hash=${hash}`,
-    `RELAY: gstack-gate render ${gateFile} --all (a rec rendered before this is refused; answer with --rec-hash ${hash})`];
+    `RELAY: gstack-gate render ${gateFile} --all (a rec rendered before this is refused; answer with --rec-hash ${hash})`,
+    ...[capyRelayLine(state.out)].filter((l): l is string => !!l)];
 }
 
 /** Every phase closed: write the gate list, decisions, tasks and the exported files; the run ends gate_pending. Unchanged answered proposals carry forward. */

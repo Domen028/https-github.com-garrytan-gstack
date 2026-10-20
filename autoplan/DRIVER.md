@@ -50,6 +50,9 @@ line yourself; gstack never writes the plan.
   with `gstack-config set autoplan_checkpoint drive`) so a run survives machine replacement: a
   generation is published at rest, after each bound voice and after each phase transition; restore
   with `resume --out <new dir> --from <dir>/<run>`, which never redispatches a bound voice.
+- Plans carry `## Before → after`, `## Why it matters`, `## What caused this work`, `## Big decisions`;
+  relay the printed `RELAY: gstack-owner-brief render --captain` output to your Captain (or the person),
+  then `gstack-approvals import --autoplan <dir>` after `answer` (`capy/skill/gstack/captain.md`).
 
 ### Commands
 

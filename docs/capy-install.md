@@ -381,6 +381,17 @@ the baked `~/.bun/bin` reaches workflows through the `GSTACK_LAUNCH` line. The
 project Setup is shared by every thread in the project, so changing it is the
 project's decision.
 
+## Working under a Captain
+
+In a Capy session (`GSTACK_CAPY=1`, set by the launch line) every workflow
+prints `CAPY: on` and a `capy-asks` block: decisions go through Capy (a crew
+thread asks its Captain, otherwise the person), plan approvals are rendered
+with `gstack-owner-brief render --captain`, answers are recorded with
+`gstack-approvals`, and /ship's PR body opens with before/after images
+(`gstack-pr-shots`), Why and Approvals. The guide is
+[`capy/skill/gstack/captain.md`](../capy/skill/gstack/captain.md);
+`GSTACK_CAPY_ASKS=0` drops the block for one session.
+
 ## Raising the supported minimum
 
 `capy/support.env` holds `GSTACK_MIN_REVISION` and `GSTACK_CAPY_MIN_WRAPPER`.
@@ -397,7 +408,14 @@ working and print an owner action
 doctor's `wrapper` row warns (an active copy below the minimum is a WARN,
 never a FAIL; `bin/gstack-upgrade` never leaves a pending reinstall for it).
 Wrapper 2 only adds optional exports (the trailer's `latest:` note and the
-`cloned` line), so the minimum stays 1.
+`cloned` line). Wrapper 3 raises the minimum to 3 because the skill folder
+gained guidance owners need in their copy (the "Working under a Captain"
+section and `captain.md`); the bootstrapper's behaviour is unchanged, and the
+notice stops once the owner copies the folder:
+
+```bash
+cp -R ~/.local/share/gstack/capy/skill/gstack/. ~/.capy/drive/<your user scope>/skills/gstack/
+```
 
 ## Exit codes
 

@@ -1618,6 +1618,116 @@ and launch with the `GSTACK_LAUNCH` line it prints.
 
 ---
 
+## Capy: approvals, Captain briefs and PR screenshots
+
+These come from the commands gstack's Capy adaptations add: `gstack-approvals` (the
+per-thread approval record), `gstack-owner-brief render --captain` (the plan ask in
+the before/after shape) and `gstack-pr-shots` (before/after images for a PR body).
+The guide is `capy/skill/gstack/captain.md`.
+
+<a id="approval-record-invalid"></a>
+### `gstack-approvals: ... (APPROVAL_RECORD_INVALID)`
+
+**Meaning.** A row is missing a required field (`--ask`, `--words`, `--scope`,
+`--by`), holds a value outside its enum (`--outcome approved|rejected|pending|standing`,
+a `--date` that is not a real `YYYY-MM-DD` day) or exceeds a length cap (ask, scope and
+pending 300 characters, words 2,000). Exit 2. Nothing was written.
+
+**Fix.** Rerun with every required flag inside the caps the line names.
+
+<a id="approval-record-secret"></a>
+### `gstack-approvals: ... (APPROVAL_RECORD_SECRET)`
+
+**Meaning.** A field matched gstack's secret scanner (the same one the push guard
+uses). The line names the field and the detector rule, never the matched text. Exit 3.
+Nothing was written, locally or to the Drive mirror.
+
+**Fix.** Record the words with the secret replaced by `[redacted]`, or ask the person to
+restate them. Rotate the secret if it was real.
+
+<a id="approval-record-no-branch"></a>
+### `gstack-approvals: ... (APPROVAL_RECORD_NO_BRANCH)`
+
+**Meaning.** The record is kept per branch (one Capy thread ships one branch), and
+HEAD is detached or the working directory is not a git repository. Exit 3.
+
+**Fix.** Check out the branch the work ships from, or pass `--branch <name>`.
+
+<a id="approval-record-unavailable"></a>
+### `gstack-approvals: ... (APPROVAL_RECORD_UNAVAILABLE)`
+
+**Meaning.** There is no record on this machine, the state root is ephemeral (a Capy
+machine), and no Drive mirror could be resolved, so "no approvals" cannot be told apart
+from "the record was lost with the old machine". `render` still prints the section, with
+"Record unavailable on this machine" instead of "No approvals recorded". Exit 1.
+
+**Fix.** Run where the record lives, copy the rows back from the thread's report, or make
+the private Drive mirror resolvable (one `~/.capy/drive/project-user-*` folder, or
+`GSTACK_APPROVALS_DIR`).
+
+<a id="approval-record-write-failed"></a>
+### `gstack-approvals: ... (APPROVAL_RECORD_WRITE_FAILED)`
+
+**Meaning.** The local record or its Drive mirror could not be written; the line names
+the path and the error. A failed local append wrote nothing. A failed mirror write
+leaves the local row in place. Exit 1.
+
+**Fix.** Make the named directory writable, then rerun `gstack-approvals sync` to mirror again.
+
+<a id="approval-import-unanswered"></a>
+### `gstack-approvals import: ... (APPROVAL_IMPORT_UNANSWERED)`
+
+**Meaning.** The autoplan run has no answered gate (every decision is still pending),
+so there is nothing to import. Exit 3.
+
+**Fix.** Answer the gate (`gstack-autoplan answer ... --by human|agent:<id>`), then
+import again. Imports are idempotent, so a retry never records an answer twice.
+
+<a id="captain-brief-incomplete"></a>
+### `gstack-owner-brief render --captain: ... (CAPTAIN_BRIEF_INCOMPLETE)`
+
+**Meaning.** The plan is missing at least one section the brief needs: `## Before → after`,
+`## Why it matters`, `## What caused this work`, `## Big decisions`. The brief still prints,
+but it opens with "Not ready for approval" and has no reply invitation. Exit 1.
+
+**Fix.** Add the named sections to the plan (`gstack-autoplan revise --plan <file>` if
+the run is reviewing it) and render again. `--allow-incomplete` exits 0 for a preview,
+but the text still says it is not ready.
+
+<a id="pr-shots-input-not-found"></a>
+### `gstack-pr-shots: ... (PR_SHOTS_INPUT_NOT_FOUND)`
+
+**Meaning.** An input is missing: a `--before/--after` file, the `--base` ref, the
+`--path` at both the base and the working tree, or the `--heading` on both sides. Exit 3.
+
+**Fix.** Check the ref, path or heading named on the line.
+
+<a id="pr-shots-input-refused"></a>
+### `gstack-pr-shots: ... (PR_SHOTS_INPUT_REFUSED)`
+
+**Meaning.** An input was refused before anything was rendered, because PR images
+are public. It matched the secret scanner (the line names the side, line and rule),
+is binary, exceeds 512 KiB, lies outside the repository and the state root, or names a
+ref starting with `-`. Exit 3.
+
+**Fix.** Take the secret out of the capture, or picture a tracked text file.
+
+<a id="pr-shots-identical"></a>
+### `gstack-pr-shots: ... (PR_SHOTS_IDENTICAL)`
+
+**Meaning.** Before and after are the same text, so there is no change to picture. Exit 1.
+
+**Fix.** Picture a file or section this branch changed (`git diff --stat origin/<base>...HEAD`).
+
+<a id="pr-shots-render-failed"></a>
+### `gstack-pr-shots: ... (PR_SHOTS_RENDER_FAILED)`
+
+**Meaning.** A browser was available but rendering `shot.html` failed; the line names the
+renderer's error. `shot.html` and `text.md` are still written. Exit 1. With no browser at
+all the command prints `SHOT_PNG: unavailable (...)` and exits 0 instead.
+
+**Fix.** Screenshot `shot.html` with your own browser at 880 px wide, or use `text.md`.
+
 ## Browser
 
 <a id="browse-runtime-version-skew"></a>
