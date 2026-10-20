@@ -7,6 +7,7 @@ import { assertQaBrowserDeadline, assertQaBrowserPreparation, assertQaBrowserChe
 import capturedPreparation from './fixtures/qa-only-charter-public.json';
 import capturedObservation from './fixtures/qa-only-observation-public.json';
 import capturedStop from './fixtures/qa-only-stop-cleanup-public.json';
+import capturedBookkeeping from './fixtures/qa-only-bookkeeping-joins-public.json';
 
 const ROOT = path.resolve(import.meta.dir, '..');
 const guard = path.join(ROOT, 'bin/gstack-qa-deadline');
@@ -223,7 +224,7 @@ test.each(['extra-option', 'suffix-option', 'operator', 'newline', 'foreign-cwd'
     const commands = {
       'extra-option': `git -C ${quote(f.directory)} -c color.ui=false rev-parse HEAD`,
       'suffix-option': metadata + ' --git-dir',
-      operator: metadata + '; ' + metadata,
+      operator: metadata + '; ' + quote(browse) + ' --version',
       newline: metadata + '\n' + metadata,
       'foreign-cwd': `git -C ${quote(path.dirname(f.directory))} rev-parse HEAD`,
       'missing-cwd': 'git rev-parse HEAD',
@@ -231,6 +232,76 @@ test.each(['extra-option', 'suffix-option', 'operator', 'newline', 'foreign-cwd'
     f.calls.push({ tool: 'Bash', input: { command: commands[scenario as keyof typeof commands] }, output: 'metadata' });
     expect(() => f.check()).toThrow('QA deadline:');
   });
+
+// Opus gates 39313931713, 39332134395 and 39336730429 (slice 8, attempt 1) failed qa-only-no-fix with
+// "unsupported outer shell composition" after joining reads with an exact bookkeeping call, as in
+// `ls -la; git -C <fixture> branch --show-current`. Every non-guard Bash command from those three
+// attempts and from the eight passing attempts beside them replays inside a real guarded attempt.
+const bookkeepingReplay = (f: ReturnType<typeof fixture>, command: string) => command
+  .replaceAll('__QA_FIXTURE__', f.directory).replaceAll('__QA_GUARD__', guard).replaceAll('__QA_BROWSE__', browse);
+test.each(capturedBookkeeping.attempts.map(attempt => [attempt.source, attempt.passed, attempt.commands] as const))
+  ('captured non-guard Bash commands replay as bookkeeping: %s (passed %p)', (_, __, commands) => {
+    const f = fixture();
+    const start = f.calls.shift()!;
+    for (const command of commands) f.calls.push({ tool: 'Bash', input: { command: bookkeepingReplay(f, command) }, output: 'bookkeeping' });
+    f.calls.push(start);
+    f.run();
+    expect(f.check()).toEqual({ launchedRuns: 1, completedRuns: 1, refusedRuns: 0, timedOutRuns: 0 });
+  });
+
+test('the captured joins are the three failing attempts\' only unaccepted commands', () => {
+  const failing = capturedBookkeeping.attempts.filter(attempt => !attempt.passed);
+  expect(failing.map(attempt => attempt.source.split(' ')[1])).toEqual(['39313931713', '39332134395', '39336730429']);
+  expect(failing.flatMap(attempt => attempt.commands.filter(command => /^ls -la; /.test(command)))).toEqual([
+    "ls -la; cat TODOS.md 2>/dev/null; git -C '__QA_FIXTURE__' rev-parse --short HEAD",
+    "ls -la; git -C '__QA_FIXTURE__' branch --show-current",
+    "ls -la; git -C '__QA_FIXTURE__' branch --show-current",
+  ]);
+});
+
+test.each(['captured', 'two-bookkeeping', 'and-or', 'readiness-check-joined', 'trailing-semicolon',
+  'browser-after', 'browser-before', 'guard-joined', 'guard-tail', 'git-option', 'git-other-subcommand', 'pipe-to-shell', 'background',
+  'substitution', 'newline', 'cd-then-read', 'read-outside-root', 'dangling-and', 'escaped-semicolon', 'quoted-operator', 'receipt-in-output', 'readiness-block-joined'])
+  ('bookkeeping joins accept exact calls and grammar reads only: %s', scenario => {
+    const f = fixture();
+    f.run();
+    const status = `git -C ${quote(f.directory)} status --short`;
+    const branch = `git -C ${quote(f.directory)} branch --show-current`;
+    const guarded = ['bun', guard, 'run', f.policy.file, '--', browse, '--version'].map(quote).join(' ');
+    const commands: Record<string, string> = {
+      captured: `ls -la; ${branch}`,
+      'two-bookkeeping': `${status}; ${branch}`,
+      'and-or': `ls -la qa-reports && ${status} || echo none`,
+      'readiness-check-joined': `${f.policy.allowed[3]}; ${branch}`,
+      'trailing-semicolon': `ls -la; ${branch};`,
+      'browser-after': `ls -la; ${branch}; ${quote(browse)} goto http://127.0.0.1:1/`,
+      'browser-before': `${quote(browse)} --version && ${status}`,
+      'guard-joined': `${status} && ${guarded}`,
+      'guard-tail': `${guarded}; ${status}`,
+      'git-option': `ls -la; git -C ${quote(f.directory)} -c core.pager=cat log -1`,
+      'git-other-subcommand': `ls -la; git -C ${quote(f.directory)} config --list`,
+      'pipe-to-shell': `${status} | sh`,
+      background: `${status} & ${quote(browse)} --version`,
+      substitution: `ls -la "$(${quote(browse)} --version)"; ${status}`,
+      newline: `ls -la\n${status}`,
+      'cd-then-read': `cd qa-reports; cat deadline.json; ${status}`,
+      'read-outside-root': `cat /etc/hostname; ${status}`,
+      'dangling-and': `ls -la; ${status} &&`,
+      'escaped-semicolon': `ls -la \\; ${quote(browse)} --version; ${status}`,
+      'quoted-operator': `echo 'a; b'; ${status}`,
+      'receipt-in-output': `ls -la; ${status}`,
+      'readiness-block-joined': `${f.policy.allowed[0]}; ${status}`,
+    };
+    f.calls.push({ tool: 'Bash', input: { command: commands[scenario] }, output: scenario === 'receipt-in-output' ? 'QA_DEADLINE {"guard":"qa-deadline"}' : 'bookkeeping' });
+    if (['captured', 'two-bookkeeping', 'and-or', 'readiness-check-joined', 'trailing-semicolon', 'quoted-operator'].includes(scenario)) expect(f.check()).toEqual({ launchedRuns: 1, completedRuns: 1, refusedRuns: 0, timedOutRuns: 0 });
+    else expect(() => f.check()).toThrow(scenario === 'receipt-in-output' ? 'receipt outside trusted guard invocation' : 'QA deadline:');
+  });
+
+test('the deadline prompt declares the bookkeeping join it accepts', () => {
+  const { policy } = fixture();
+  expect(policy.prompt).toContain('join several of them and the shared-grammar reads below with ;, && or || (no cd in such a join)');
+  expect(policy.prompt).toContain('as its own Bash call (no appended commands)');
+});
 
 test('quoted question marks stay literal but bare glob expansion is rejected', () => {
   const f = fixture();

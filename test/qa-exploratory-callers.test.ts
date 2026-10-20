@@ -16,6 +16,7 @@ import { readQACheckpointFiles } from './helpers/qa-checkpoint-evidence';
 import { generateQAExploratory, generateQAResource, generateQAReview, generateQAReviewPreflight } from '../scripts/resolvers/qa';
 import { HOST_PATHS } from '../scripts/resolvers/types';
 import { qaProbeNames } from './helpers/qa-probe-names';
+import capturedHandoffOrder from './fixtures/qa-caller-handoff-order-public.json';
 
 function nativeCall(id: string, name: string, input: object, output: string, parent: string | null = null, failed = false) {
   return [
@@ -245,6 +246,22 @@ describe('caller native-event observer controls', () => {
     }
     expect(validateCallerEvidence(observed)).toContain('review completion preceded handoff freshness decision');
   });
+
+  // Opus gates 39320737890 attempt 1 and 39332134395 attempt 2 (slice 8, review-exploratory-small-cli) wrote the
+  // completed:true adversarial-review record in the same response as the first HANDOFF.md Read, or before any Read.
+  // The same public events pass once the record follows every handoff result in its own response.
+  test.each(capturedHandoffOrder.attempts.map(attempt => [attempt.source, attempt] as const))
+    ('captured adversarial-review completion before its handoff result is flagged; reordered it passes: %s', (_, attempt) => {
+      const observed = evidence();
+      const base = observed.result.transcript;
+      observed.result.transcript = [...base, ...structuredClone(attempt.events)];
+      expect(validateCallerEvidence(observed)).toEqual(['review completion preceded handoff freshness decision']);
+      const ordered = structuredClone(attempt.events) as any[];
+      const [use, result] = ordered.splice(ordered.findIndex(event => event.message.content[0].name === 'Bash'), 2);
+      use.message.id = 'record-after-handoff-results';
+      observed.result.transcript = [...base, ...ordered, use, result];
+      expect(validateCallerEvidence(observed)).toEqual([]);
+    });
 
   test('captured gate-census-5 review record: bun-wrapped helper and receipt status are outside the interface', () => {
     // ci-36629958451-1-gate-census-5 review-exploratory-small-cli, native events 68 and 70 (fixture paths shortened).
@@ -892,6 +909,62 @@ describe('real caller-specific native fixture and capture boundary', () => {
   const probe = (fixture: QaCallerFixture, value: string) => spawnSync(process.execPath, ['scripts/probe.ts', value], { cwd: fixture.cwd, encoding: 'utf8', timeout: 5000 });
   const dispose = async (fixture: QaCallerFixture) => { await fixture.close(); fs.rmSync(fixture.root, { recursive: true, force: true }); };
 
+  // Opus gate 39320737890 attempt 2 slice 8 (ship-exploratory-plan-checks, head f278f5b): capture 001 was the
+  // guarded smoke probe of 9, 002 probed 10, and 003 ran PLAN.md's required release check of 9 with
+  // --timeout-ms 10000, the form the prompt reserves for an explicit plan check outside the smoke budget.
+  // The validator read 003 as a wasted rerun. One explicit plan check beside the smoke probe is verification;
+  // a second smoke or plan-check run of the same unchanged input is still a duplicate.
+  test.each([
+    ['captured', ['deadline 9', 'deadline 10', 'timeout 9'], undefined],
+    ['plan check guarded like a smoke probe', ['deadline 9', 'deadline 10', 'deadline 9'], 2],
+    ['plan check repeated', ['deadline 9', 'deadline 10', 'timeout 9', 'timeout 9'], 3],
+    ['ordinary input under the plan-check form', ['deadline 3', 'deadline 10', 'timeout 3'], 2],
+  ] as const)('an explicit plan check is not a duplicate of the smoke probe: %s', async (_, steps, duplicate) => {
+    const fixture = await fixtureFor('ship-exploratory-plan-checks', true);
+    try {
+      const reportRoot = path.join(fixture.cwd, 'reports');
+      const state = path.join(reportRoot, 'deadline.json');
+      const evidenceTool = path.join(fixture.runtime, 'bin/gstack-qa-evidence');
+      const result = await runQaCaller(fixture, 'free-plan-check-replay', async options => {
+        const transcript: unknown[] = [
+          ...nativeCall('parent', 'Read', { file_path: `${fixture.cwd}/caller-ship.md` }, 'parent workflow'),
+          ...nativeCall('shared', 'Read', { file_path: `${fixture.runtime}/qa/sections/exploratory.md` }, 'shared method'),
+          ...nativeCall('functional', 'Read', { file_path: `${fixture.runtime}/qa/sections/system-functional.md` }, 'functional method'),
+          ...nativeCall('ship-army', 'Read', { file_path: `${fixture.runtime}/ship/sections/review-army.md` }, 'ship Step 9'),
+        ];
+        const execute = (id: string, cmd: string) => {
+          expect(qaCallerCommandAllowed(cmd, fixture.workflowCommands, { runtime: fixture.runtime, fixtureRoot: fixture.cwd }), cmd).toBe(true);
+          const actual = spawnSync('bash', ['-c', cmd], { cwd: options.workingDirectory, env: { ...process.env, ...options.env }, encoding: 'utf8', timeout: 10_000 });
+          expect(actual.error).toBeUndefined();
+          transcript.push(...nativeCall(id, 'Bash', { command: cmd }, (actual.status ? `Exit code ${actual.status}\n` : '') + actual.stdout + actual.stderr, null, actual.status !== 0));
+        };
+        execute('start', `bun ${path.join(fixture.runtime, 'bin/gstack-qa-deadline')} start ${state} 300`);
+        for (const [index, step] of steps.entries()) {
+          const [lane, value] = step.split(' ');
+          const id = String(index + 1).padStart(3, '0');
+          const bound = lane === 'deadline' ? `--deadline ${state}` : '--timeout-ms 10000';
+          const after = index ? ` --after ${String(index).padStart(3, '0')} --hypothesis 'Input ${value} checks the next documented contract.'` : '';
+          execute(`capture-${id}`, `bun ${evidenceTool} capture ${reportRoot} ${id} --public ${bound}${after} -- bun scripts/probe.ts ${value}`);
+        }
+        return { exitReason: 'success', transcript } as SkillTestResult;
+      });
+      await fixture.close();
+      const probes = fixture.probes();
+      expect(probes).toHaveLength(steps.length);
+      const checkpointFiles = readQACheckpointFiles(reportRoot);
+      const errors = validateCallerEvidence({
+        caller: fixture.caller, result, probes,
+        receipt: { status: 'pass', probes: probes.map(probe => probe.id), remaining: [] },
+        currentSnapshot: fixture.snapshot(), requiredCharters: ['happy', 'adverse', 'plan:nine'], mutations: fixture.mutationEvents,
+        observerComplete: fixture.observation?.complete === true && !fixture.observerErrors.length,
+        fixtureRoot: fixture.cwd, runtime: fixture.runtime, reportRoot, requireGuardedSmoke: true, requireCapturedEvidence: true,
+        checkpointFiles, reportMarkdown: Object.keys(checkpointFiles).map(name => `[checkpoint](${name})`).join('\n'),
+      });
+      if (duplicate === undefined) expect(errors).toEqual([]);
+      else expect(errors).toContain(`duplicate unchanged passing probe: ${probes[duplicate].id}`);
+    } finally { await dispose(fixture); }
+  });
+
   test('deadline authority is closed over the installed helper, owned state and literal probe child', async () => {
     const fixture = await fixtureFor('ship-exploratory-small-cli', true);
     try {
@@ -1503,7 +1576,8 @@ describe('real caller-specific native fixture and capture boundary', () => {
         expect(options.appendSystemPrompt).not.toMatch(/bun scripts\/probe\.ts \d|invalid input|highest.risk/i);
         expect(options.prompt).toMatch(/keep normal parent decision gates/i);
         expect(options.prompt).toMatch(/Hard deadline UTC, never its Runner entry UTC/i);
-        expect(options.prompt).toMatch(/completed:true review record, read HANDOFF\.md/i);
+        expect(options.prompt).toMatch(/Handoff freshness check: Read HANDOFF\.md and reports\/HANDOFF\.md/);
+        expect(options.prompt).toMatch(/only in a later message than the check's Read results: the evidence helper's materialize, which runs once per report root and freezes the verdict; every gstack-review-log completed:true record, adversarial-review included/);
         expect(options.prompt).toMatch(/do not publish a checkpoint for it/i);
         expect(options.prompt).toMatch(/authenticated expired-capture result/i);
         expect(options.prompt).toContain('reports/review.md');

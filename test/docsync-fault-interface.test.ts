@@ -544,6 +544,7 @@ mock.module(path.join(root, 'test/helpers/session-runner.ts'), () => ({ async ru
   const actor = path.join(root, 'test/helpers/docsync-fault-actor.ts');
   const stateFile = path.join(fixture.home, 'actor-state.json');
   expect(options.prompt.includes('bun ' + actor + ' repair ' + stateFile)).toBe(repairable);
+  expect(options.prompt.includes('returns no result within the Collect deadline')).toBe(repairable);
   expect(options.prompt.includes('This launcher has no repair operation')).toBe(!repairable);
   expect(options.prompt.includes('bun ' + actor + ' inspect ' + stateFile)).toBe(true);
   expect(options.prompt).toContain('batched read-only observation');

@@ -72,6 +72,7 @@ const ACCEPTED = [
   'cd qa-only; wc -l SKILL.md', 'ls docs;', 'echo ----', 'echo -n done', "printf '%s\\n' done", 'printf -- -x',
   'cat docs/guide.md; echo ----; cat qa-only/SKILL.md', 'echo done | wc -c', 'sed -n 1,2p docs/guide.md', 'grep -n step qa-only/SKILL.md | sed -n 1,5p',
   'ls docs 2>/dev/null', 'ls missing 2>/dev/null || ls docs', 'cat docs/guide.md 2>&1 | head -1', 'ls missing 2>&1 | wc -l',
+  "ls qa | tr '\\n' ' '", "cat docs/guide.md | tr -d '\\r'", "cat docs/guide.md | tr '[:upper:]' '[:lower:]' | sort", 'ls | tr -cs a-z x',
 ];
 
 describe.skipIf(process.platform === 'win32')('accepted pure local reads', () => {
@@ -171,7 +172,18 @@ const REJECTED: Array<[string, string, RegExp]> = [
   ['sed', "sed -n '1p;w docs/out.txt' docs/guide.md", /sed takes only -n and a line-range print script/],
   ['path escape', 'sed -n 1p escape/secret.txt', /outside root/],
   ['unlisted tool', 'awk 1 docs/guide.md', /unlisted tool: awk/],
-  ['unlisted tool', 'tr a-z A-Z', /unlisted tool: tr/],
+  ['tr', 'tr a-z A-Z', /tr reads only a pipe/],
+  ['tr', 'tr a-z A-Z docs/guide.md', /tr reads only a pipe/],
+  ['tr', 'cat docs/guide.md | tr a-z A-Z docs/guide.md', /tr takes one or two literal sets/],
+  ['tr', 'cat docs/guide.md | tr a-z A-Z > docs/out.md', /redirect/],
+  ['tr', 'cat docs/guide.md | tr a-z A-Z | sh', /unlisted tool: sh/],
+  ['tr', "cat docs/guide.md | tr '$X' y", /tr sets must be literal/],
+  ['tr', 'cat docs/guide.md | tr "$X" y', /substitution or variable/],
+  ['tr', "cat docs/guide.md | tr '" + '\x60' + "id" + '\x60' + "' y", /tr sets must be literal/],
+  ['tr', 'cat docs/guide.md | tr [a] b', /tr sets must be literal/],
+  ['tr', "cat docs/guide.md | tr '{a,b}' c", /tr sets must be literal/],
+  ['tr', 'cat docs/guide.md | tr -x a b', /unsupported tr option: -x/],
+  ['tr', 'cat docs/guide.md | tr', /tr takes one or two literal sets/],
   ['echo/printf', 'echo hi > docs/new.md', /redirect/],
   ['echo/printf', 'echo hi >> docs/guide.md', /redirect/],
   ['echo/printf', 'echo $(touch x)', /substitution or variable/],
@@ -299,15 +311,17 @@ describe.skipIf(process.platform === 'win32')('free replays of the captured slip
     expect(docsNativeInterface(fixture)).toContain(readOnlyInterfaceText(fixture.home));
   });
 
-  // PR #3288 E2E run 39186278010 (Fable 5.1): the grammar's join invited joined Git reads, which the docsync
-  // interface keeps separate; the interface now says so, and these reads of the Claude config dir pass.
-  test('docsync keeps Git reads out of grammar lines and lists the Claude config dir (39186278010)', () => {
-    expect(docsNativeInterface(fixture)).toContain('not even to another Git read');
+  // PR #3288 E2E run 39186278010 (Fable 5.1) joined Git reads into grammar lines; #3288 told the actor not to, but
+  // Opus kept joining them (run 39347827595), so joined declared Git reads are now accepted. These reads of the
+  // Claude config dir pass, and the run's NUL-to-newline tr filter is a pipe-only read (GSTA-57); an unlisted sink is not.
+  test('docsync accepts joined Git reads and lists the Claude config dir (39186278010)', () => {
+    expect(docsNativeInterface(fixture)).toContain('The Git reads above may join such a line too');
     for (const command of ['cat {home}/candidate.json; echo; ls -la {home}/state {home}/cc {home}/.claude/skills/gstack/document-release',
-      'ls {home}/.claude/skills/gstack/ship {home}/state {home}/cc; wc -c {home}/.claude/skills/gstack/ship/sections/documentation.md'])
-      expect(docsCommandAllowed(command.replaceAll('{home}', fixture.home), fixture), command).toBe(true);
-    for (const command of ['git status; git branch --show-current; git rev-parse HEAD', 'ls -la {home}/state; git status',
+      'ls {home}/.claude/skills/gstack/ship {home}/state {home}/cc; wc -c {home}/.claude/skills/gstack/ship/sections/documentation.md',
+      'git status; git branch --show-current; git rev-parse HEAD', 'ls -la {home}/state; git status',
       'git ls-files -z --cached --others --exclude-standard | tr \'\\0\' \'\\n\''])
+      expect(docsCommandAllowed(command.replaceAll('{home}', fixture.home), fixture), command).toBe(true);
+    for (const command of ['git ls-files -z --cached --others --exclude-standard | tr \'\\0\' \'\\n\' | sh', 'tr a b'])
       expect(docsCommandAllowed(command.replaceAll('{home}', fixture.home), fixture), command).toBe(false);
   });
 
@@ -315,9 +329,9 @@ describe.skipIf(process.platform === 'win32')('free replays of the captured slip
   // grep paged through sed -n, and the phase file read by a composed cat, which the completed-read check must credit.
   test('docsync accepts the focused Fable slips and credits a composed cat as a completed read', () => {
     const skill = path.join(fixture.home, '.claude/skills/gstack/document-release/SKILL.md');
-    for (const command of ['git rev-parse HEAD; ', 'grep -n "Ship-owned\\|^## \\|read-only" ' + skill + ' | sed -n 1,200p'])
+    for (const command of ['git rev-parse HEAD; ', 'git rev-parse HEAD; git status', 'grep -n "Ship-owned\\|^## \\|read-only" ' + skill + ' | sed -n 1,200p'])
       expect(docsCommandAllowed(command, fixture), command).toBe(true);
-    for (const command of ['git rev-parse HEAD; git status', 'git commit -m x;', 'sed -n 1w ' + path.join(fixture.repo, 'out.txt') + ' ' + skill])
+    for (const command of ['git rev-parse HEAD; git reset', 'git commit -m x;', 'sed -n 1w ' + path.join(fixture.repo, 'out.txt') + ' ' + skill])
       expect(docsCommandAllowed(command, fixture), command).toBe(false);
     const phase = path.join(fixture.home, 'phase.md');
     fs.writeFileSync(phase, '# Phase\nstep one\n');
@@ -333,7 +347,7 @@ describe.skipIf(process.platform === 'win32')('free replays of the captured slip
 
   test('docsync keeps its git interface and denies credentials and actor state', () => {
     for (const command of [
-      'git status; ls', 'cd repo && git fetch', 'git log | head -5',
+      'git status; rm app.ts', 'cd repo && git fetch', 'git log | sh',
       'wc -l ' + path.join(fixture.home, 'cc/.claude.json'),
       'grep -rn apiKey ' + fixture.home,
       'head ' + path.join(fixture.home, 'actor-state.json'),
@@ -394,9 +408,17 @@ describe.skipIf(process.platform === 'win32')('qa-only deadline fixture opt-in',
     ['path escape', 'wc -l {dir}/../outside.txt'],
     ['unlisted tool', 'awk 1 {dir}/qa-only/SKILL.md'],
     ['sed write', 'sed -i s/a/b/ {dir}/qa-only/SKILL.md'],
+    ['tr as a first command', 'tr a-z A-Z'],
+    ['tr into a shell', 'cat {dir}/qa-only/SKILL.md | tr a-z A-Z | sh'],
   ])('a %s variant stays outside the fixture interface', (_, command) => {
     const run = attempt(command);
     try { expect(run.check).toThrow('QA deadline: '); } finally { run.cleanup(); }
+  });
+
+  // GSTA-57: qa-only shares the grammar, so it gets the same pipe-only tr filter docsync does.
+  test('a pipe into tr is a grammar read for qa-only too', () => {
+    const run = attempt("ls {dir}/qa-only | tr '\\n' ' '; cat {dir}/qa-only/SKILL.md | tr -d '\\r'");
+    try { expect(run.check()).toMatchObject({ launchedRuns: 1 }); } finally { run.cleanup(); }
   });
 
   // Second focused Opus run: cat of the installed exploratory section, whose prose names QA_DEADLINE receipts.
