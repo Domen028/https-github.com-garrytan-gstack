@@ -279,7 +279,9 @@ Complete start-to-finish flows belong to the `marathon` tier
 (`describeE2ETier('marathon')`), which runs only in the non-blocking
 `evals-marathon.yml` lane (weekly and on dispatch) and never gates a merge.
 
-Verdicts: paid evals never retry. Each case's kind in `E2E_KINDS`
+Verdicts: paid evals never retry, except the gate's one flaky rerun of a red
+case verdict at the same head ([flaky reruns](docs/TESTING_INTERNALS.md#flaky-reruns)).
+Each case's kind in `E2E_KINDS`
 (`test/helpers/touchfiles-data.ts`) fixes its trials before the run, from the
 constants in `EVAL_POLICY` (`test/helpers/periodic-exclude-data.ts`):
 

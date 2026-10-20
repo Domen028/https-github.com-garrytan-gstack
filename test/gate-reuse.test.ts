@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
-  BINDING_FILE, CANDIDATE_FILE, REUSE_FILE, buildBinding, confirmReuse, findReusableGate, parseReuse, reuseReport, selectionFingerprint,
+  BINDING_FILE, CANDIDATE_FILE, REUSE_FILE, buildBinding, confirmReuse, findReusableGate, parseBinding, parseReuse, reuseReport, selectionFingerprint,
   type GateBinding, type GateReuse,
 } from '../scripts/gate-reuse';
 import type { GhRunner, WorkflowRun } from '../scripts/recover-receipts';
@@ -558,3 +558,74 @@ describe('dispatched screens (GSTA-49 T1b): authenticated by PR, head, repositor
     expect(screen('narrow', [trainRun, screenRun(300)], { 300: screenBinding(sha.gated!), 310: screenBinding(sha.gated!) }).candidate?.reused_run_id).toBe(300);
   });
 });
+
+describe('rule-16 flaky GREENs are reusable (GSTA-53, F1)', () => {
+  const flaky = (over: Partial<GateBinding> = {}) => binding({ flaky_cases: ['tpa-absent-darwin'], ...over });
+  /** A run that bound once per attempt: gate-binding-a<n> each, download by name (a `gh run rerun --failed` attempt binds again). */
+  function attemptsGh(runs: WorkflowRun[], perAttempt: Record<number, GateBinding>): GhRunner {
+    const inner = fakeGh(runs, { 300: perAttempt[1]! });
+    return (args, timeoutMs) => {
+      if (args.some(a => /\/runs\/300\/artifacts$/.test(a))) {
+        return { status: 0, stdout: JSON.stringify({ artifacts: [...Object.keys(perAttempt).map(n => ({ name: `gate-binding-a${n}`, expired: false })), { name: 'paid-slice-1-a1', expired: false }] }), stderr: '' };
+      }
+      if (args[0] === 'run' && args[1] === 'download' && args[2] === '300') {
+        const dir = args[args.indexOf('-D') + 1]!;
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, BINDING_FILE), JSON.stringify(perAttempt[Number(args[args.indexOf('-n') + 1]!.slice('gate-binding-a'.length))]));
+        return { status: 0, stdout: '', stderr: '' };
+      }
+      return inner(args, timeoutMs);
+    };
+  }
+  const findWith = (head: string, gh: GhRunner, baseSha = sha.base!) => {
+    const out = path.join(scratch, 'out-' + ++outCount);
+    const result = findReusableGate({ repo: REPO, pr: 42, headRepo: REPO, branch: 'feature', selfRunId: 500, headSha: head, testedSha: tested(baseSha, head), repoRoot: receipt, out, gh });
+    return { ...result, out, text: result.lines.join('\n') };
+  };
+
+  test('R2a: a restamp of a flaky-annotated GREEN reuses it and carries the flaky case names', () => {
+    const { candidate } = find(sha.restamp!, [run(300, sha.gated!)], { 300: flaky() });
+    expect(candidate).toMatchObject({ kind: 'restamp-only', reused_run_id: 300, reused_flaky: ['tpa-absent-darwin'] });
+    expect(parseReuse(candidate)).toEqual(candidate);
+    expect(reuseReport(candidate!, REPO)).toContain('flaky (rule 16): tpa-absent-darwin failed once and passed on their one rerun in the reused gate');
+  });
+
+  test('R2: main moved with an identical own diff reuses a flaky-annotated GREEN', () => {
+    const { candidate } = find(sha.rebased!, [run(300, sha.gated!)], { 300: flaky() }, { baseSha: sha.moved });
+    expect(candidate).toMatchObject({ kind: 'main-moved', reused_run_id: 300, reused_flaky: ['tpa-absent-darwin'] });
+  });
+
+  test('a manual --failed attempt that went green: its newest binding is reused (R2a and R2), never the red first attempt', () => {
+    const attempts = { 1: binding({ verdict: 'RED', reconcile_exit: 1 }), 2: flaky({ run_attempt: 2 }) };
+    const restamp = findWith(sha.restamp!, attemptsGh([run(300, sha.gated!)], attempts));
+    expect(restamp.candidate, restamp.text).toMatchObject({ kind: 'restamp-only', reused_run_attempt: 2, reused_flaky: ['tpa-absent-darwin'] });
+    const moved = findWith(sha.rebased!, attemptsGh([run(300, sha.gated!)], attempts), sha.moved!);
+    expect(moved.candidate, moved.text).toMatchObject({ kind: 'main-moved', reused_run_attempt: 2 });
+  });
+
+  test('negative control: a run still red after its rerun is never reused, whatever it calls flaky', () => {
+    const stillRed = find(sha.restamp!, [run(300, sha.gated!, 'failure')], { 300: flaky({ verdict: 'RED', reconcile_exit: 1 }) });
+    expect(stillRed.candidate).toBeNull();
+    expect(stillRed.text).toContain('is RED, reconcile exit 1');
+    const moved = find(sha.rebased!, [run(300, sha.gated!, 'failure')], { 300: flaky({ verdict: 'RED', reconcile_exit: 1 }) }, { baseSha: sha.moved });
+    expect(moved.candidate).toBeNull();
+    const newestRed = findWith(sha.restamp!, attemptsGh([run(300, sha.gated!, 'failure')], { 1: flaky(), 2: binding({ run_attempt: 2, verdict: 'RED', reconcile_exit: 1 }) }));
+    expect(newestRed.candidate).toBeNull();
+    expect(newestRed.text).toContain('is RED');
+  });
+
+  test('bind records the report\'s flaky cases; a malformed flaky list is no binding', () => {
+    const dir = path.join(scratch, 'bind-flaky');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest()));
+    fs.writeFileSync(path.join(dir, 'collector-outcomes.json'), JSON.stringify({ verdict: { verdict: 'GREEN' }, totals: { manual_accepted: 0 },
+      flaky: [{ case: 'tpa-absent-darwin' }, { case: 'plan-design-with-ui-scope' }] }));
+    const { binding: bound, reason } = buildBinding({ repository: REPO, pr: 42, runId: 300, runAttempt: 2, headSha: 'a'.repeat(40), baseSha: 'b'.repeat(40), profile: 'pr', reconcileExit: 0, reportDir: dir });
+    expect(bound).toMatchObject({ verdict: 'GREEN', run_attempt: 2, flaky_cases: ['tpa-absent-darwin', 'plan-design-with-ui-scope'] });
+    expect(reason).toContain('bound GREEN (flaky: tpa-absent-darwin, plan-design-with-ui-scope)');
+    expect(parseBinding({ ...binding(), flaky_cases: 'x' })).toBeNull();
+    expect(parseBinding({ ...binding(), flaky_cases: [''] })).toBeNull();
+    expect(parseBinding(binding())?.flaky_cases).toBeUndefined();
+  });
+});
+

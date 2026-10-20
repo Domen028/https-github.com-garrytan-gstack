@@ -739,7 +739,8 @@ jobs:
         run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --plan /tmp/paid-plan/manifest.json --slice ${{ matrix.slice }}
 
       # Attempt-scoped: a re-run attempt's trials are reported under that
-      # attempt and never replace (or collide with) the first attempt's.
+      # attempt and never collide with the first attempt's; the report reads
+      # them through the rule-16 case history (scripts/lib/paid-rerun.ts).
       - name: Upload slice results
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -775,6 +776,201 @@ jobs:
           # The Fix-bun-temp step points TMPDIR at /home/runner/.cache, so the
           # runner's spool lands THERE, not /tmp — the original /tmp glob
           # uploaded nothing and a red slice's diagnostics were unreachable.
+          path: |
+            /home/runner/.cache/gstack-paid-shard-*.log
+            /tmp/gstack-paid-shard-*.log
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # ── Rule-16 rerun (CREW rule 16, Garry 2026-10-19; a gate edit) ────────
+  # "You can just run the failed test again and note that it is flaky... You
+  # don't have to do the whole test pass again for one failed test." After the
+  # slices, the planner reruns ONCE, at the same head and in this run attempt,
+  # only the cases whose verdict failed once with no rerun yet: a red rule or
+  # judge case on its own shard (narrowed to it in PR mode; other cases a whole
+  # file reruns never count), a behavior FAIL as its whole planned panel.
+  # Harness, INFRA, INCOMPLETE and unattributed reds, a case already red twice,
+  # or any other problem plan nothing (scripts/lib/paid-rerun.ts planRerun).
+  # The rerun runs fresh (no receipts, no reuse) and never changes a trial
+  # count, kind or threshold; slices-report decides FLAKY (green, annotated,
+  # flake record) or red. Train runs use the same path; bisects rerun inside
+  # scripts/train-gate.ts.
+  rerun-plan:
+    runs-on: ubuntu-24.04
+    needs: [plan-slices, eval-slices]
+    if: ${{ !cancelled() && needs.plan-slices.result == 'success' && needs.plan-slices.outputs.gate_reuse != 'true' }}
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      planned: ${{ steps.plan.outputs.planned }}
+      slices: ${{ steps.plan.outputs.slices }}
+      slice_timeouts: ${{ steps.plan.outputs.slice_timeouts }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.screen_merge_sha }}
+          persist-credentials: false
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.4.2
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: paid-plan
+          path: /tmp/paid-report
+
+      # Every attempt's slices and earlier attempts' reruns: one history per case.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: paid-slice-*
+          path: /tmp/paid-report
+
+      # A missing rerun artifact leaves its case red (fail-closed), never green.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          pattern: paid-rerun-*
+          path: /tmp/paid-report
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          pattern: rerun-plan-a*
+          path: /tmp/paid-report
+
+      - name: Plan the rule-16 rerun of this attempt's failed cases
+        id: plan
+        run: |
+          EVALS_TIER=gate bun --no-env-file --config=/dev/null --no-install run scripts/test-paid-shards.ts --tier gate --report /tmp/paid-report \
+            --rerun-plan /tmp/paid-rerun >> "$GITHUB_STEP_SUMMARY"
+          if [ -f /tmp/paid-rerun/manifest.json ]; then
+            { echo "planned=true"
+              echo "slices=$(jq -c '[range(1; .sliceCount + 1)]' /tmp/paid-rerun/manifest.json)"
+              echo "slice_timeouts=$(jq -ec '[0] + .plan.sliceCiTimeoutMinutes' /tmp/paid-rerun/manifest.json)"; } >> "$GITHUB_OUTPUT"
+          else
+            echo "planned=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Hand the rerun manifest to its executors and the report
+        if: steps.plan.outputs.planned == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: rerun-plan-a${{ github.run_attempt }}
+          path: /tmp/paid-rerun/manifest.json
+          retention-days: 90
+
+  eval-rerun:
+    runs-on: ubicloud-standard-8
+    needs: [build-image, rerun-plan]
+    if: ${{ !cancelled() && needs.build-image.result == 'success' && needs.rerun-plan.outputs.planned == 'true' }}
+    env:
+      EVALS_RUN_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}-eval-rerun-${{ matrix.slice }}
+    timeout-minutes: ${{ fromJSON(needs.rerun-plan.outputs.slice_timeouts)[matrix.slice] }}
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.build-image.outputs.image-tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --user runner
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        slice: ${{ fromJSON(needs.rerun-plan.outputs.slices) }}
+    steps:
+      - name: Record the job start for the slice deadline
+        run: echo "GSTACK_SLICE_JOB_STARTED_AT=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ inputs.screen_merge_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fix bun temp
+        uses: ./.github/actions/fix-bun-temp
+
+      - name: Restore deps
+        uses: ./.github/actions/restore-deps
+
+      - run: bun run build
+
+      - name: Seed claude interactive config
+        uses: ./.github/actions/seed-claude-config
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Register gstack skills for PTY smokes
+        uses: ./.github/actions/register-gstack-skills
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: rerun-plan-a${{ github.run_attempt }}
+          path: /tmp/paid-plan
+
+      - name: Authenticate the Codex CLI
+        shell: bash
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          codex="${GSTACK_CI_CODEX_BIN_DIR:?}/codex"
+          export CODEX_HOME="$HOME/.gstack-ci-codex"
+          mkdir -p "$CODEX_HOME"
+          echo "GSTACK_CI_CODEX_HOME=$CODEX_HOME" >> "$GITHUB_ENV"
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "::warning::OPENAI_API_KEY is unavailable; Codex eval cases cannot authenticate and will fail."
+            exit 0
+          fi
+          printenv OPENAI_API_KEY | "$codex" login --with-api-key
+          "$codex" login status >/dev/null 2>&1
+
+      # No EVALS_CACHE_*: a rerun never reuses a receipt and publishes none.
+      - name: Rerun slice ${{ matrix.slice }} (rule 16, once)
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PLAYWRIGHT_BROWSERS_PATH: /opt/playwright-browsers
+          EVALS_JOBS: "2"
+          EVALS_CONCURRENCY: "2"
+          GSTACK_EVAL_DIR: /tmp/paid-rerun-results
+        run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --plan /tmp/paid-plan/manifest.json --slice ${{ matrix.slice }}
+
+      - name: Upload rerun results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: paid-rerun-${{ matrix.slice }}-a${{ github.run_attempt }}
+          path: /tmp/paid-rerun-results
+          retention-days: 90
+
+      - name: Upload native capture evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: native-captures-${{ env.EVALS_RUN_ID }}
+          include-hidden-files: true
+          path: |
+            ~/.gstack/projects/*/e2e-runs
+            ~/.gstack/projects/*/evals/qa-callers
+            ~/.gstack-dev/e2e-runs
+            ~/.gstack-dev/evals/qa-callers
+          if-no-files-found: ignore
+          retention-days: 90
+
+      - name: Upload shard logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: paid-rerun-logs-${{ matrix.slice }}-a${{ github.run_attempt }}
+          include-hidden-files: true
           path: |
             /home/runner/.cache/gstack-paid-shard-*.log
             /tmp/gstack-paid-shard-*.log
@@ -932,7 +1128,7 @@ jobs:
     # sees, so a store saved on Ubicloud was never restored (GSTA-48: every
     # restore missed, e.g. #3253's restamp gate 3 minutes after a saved store).
     runs-on: ubuntu-24.04
-    needs: [plan-slices, eval-slices]
+    needs: [plan-slices, eval-slices, rerun-plan, eval-rerun]
     # !cancelled(): the report must run (and FAIL) when an executor died — a
     # missing slice artifact reading as green is the class this lane kills —
     # but a run superseded by a newer push stops here.
@@ -969,16 +1165,34 @@ jobs:
           path: /tmp/paid-report
 
       # One directory per attempt-scoped slice artifact (no merge): shard
-      # records can never overwrite each other, and the report keeps the
-      # first attempt's verdict.
+      # records can never overwrite each other. Attempt 1 decides the lane;
+      # a later attempt or a rule-16 rerun resolves a red only by the flaky
+      # rule (scripts/lib/paid-rerun.ts) and never hides a new red.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: paid-slice-*
           path: /tmp/paid-report
 
+      # Rule-16 reruns and their manifests. A missing one leaves its case red.
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          pattern: paid-rerun-*
+          path: /tmp/paid-report
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          pattern: rerun-plan-a*
+          path: /tmp/paid-report
+
       - name: Reconcile slices against the manifest (fail-closed)
         id: reconcile
         if: needs.plan-slices.outputs.gate_reuse != 'true'
+        env:
+          # Flake records name the PR and its head (scripts/lib/paid-rerun.ts flakeRecords).
+          GSTACK_GATE_PR: ${{ github.event.pull_request.number || inputs.screen_pr }}
+          GSTACK_GATE_HEAD_SHA: ${{ github.event.pull_request.head.sha || needs.plan-slices.outputs.screen_head || inputs.expected_sha }}
         run: |
           set +e
           EVALS_TIER=gate bun --no-install run scripts/test-paid-shards.ts --tier gate --report /tmp/paid-report | tee /tmp/report.txt
@@ -1042,6 +1256,18 @@ jobs:
             /tmp/paid-report/report-receipts
           if-no-files-found: ignore
           retention-days: 30
+
+      # Rule 16: one JSONL record per case that failed once and passed on its
+      # one rerun (case, PR, head, run, both attempts, symptom, rerun cost),
+      # read by the daily flaky-fix pass (docs/TESTING_INTERNALS.md#flaky-reruns).
+      - name: Upload flake records for the daily flaky-fix pass
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: flake-records-a${{ github.run_attempt }}
+          path: /tmp/paid-report/flake-records.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
 
       # R2a/R2: what this executed run proved, read by a later push. The base
       # is the tested merge commit's first parent. Reused runs bind nothing,
@@ -1193,7 +1419,7 @@ jobs:
           REUSE=/tmp/paid-report/gate-reuse.json
           if [ "${RECONCILE_EXIT:-1}" = "0" ] && [ -f "$REUSE" ] \
             && jq -e '.schema == 1 and (.kind == "restamp-only" or .kind == "main-moved")' "$REUSE" >/dev/null 2>&1; then
-            BODY=$(jq -r --arg repo "$GITHUB_REPOSITORY" '"## E2E Evals: ✅ PASS (reused: \(if .kind == "restamp-only" then "restamp-only, R2a" else "main moved, R2" end))\n\nNo paid case ran on `\(.current_head)`. It carries the GREEN verdict of [run \(.reused_run_id)](https://github.com/\($repo)/actions/runs/\(.reused_run_id)) at `\(.gated_head)`, because \(.why).\n\n```\n\(if .kind == "restamp-only" then "TREE: same-modulo-stamps receipt=\(.receipt_sha256)" else "OWN DIFF: identical sha256=\(.own_diff_sha256) (merge-base \(.gated_merge_base) -> \(.merge_base))" end)\nbase: \(.gated_base) -> \(.base_sha)\nselection: \(.selection_sha256) (identical to the reused gate)\n```\n\n---\n*Verdict reuse (R2a restamp-only, R2 main moved): a changed own diff, a non-stamp byte, a changed selection, a newer red or unbound gate, or a missing binding or receipt runs the full gate; the evals-fresh label opts out. Free Tests and every other check still ran on this head.*"' "$REUSE")
+            BODY=$(jq -r --arg repo "$GITHUB_REPOSITORY" '"## E2E Evals: ✅ PASS (reused: \(if .kind == "restamp-only" then "restamp-only, R2a" else "main moved, R2" end))\n\nNo paid case ran on `\(.current_head)`. It carries the GREEN verdict of [run \(.reused_run_id)](https://github.com/\($repo)/actions/runs/\(.reused_run_id)) at `\(.gated_head)`, because \(.why).\(if ((.reused_flaky // []) | length) > 0 then " That gate was green with flaky case(s) that failed once and passed on their one rule-16 rerun: \(.reused_flaky | join(", "))." else "" end)\n\n```\n\(if .kind == "restamp-only" then "TREE: same-modulo-stamps receipt=\(.receipt_sha256)" else "OWN DIFF: identical sha256=\(.own_diff_sha256) (merge-base \(.gated_merge_base) -> \(.merge_base))" end)\nbase: \(.gated_base) -> \(.base_sha)\nselection: \(.selection_sha256) (identical to the reused gate)\n```\n\n---\n*Verdict reuse (R2a restamp-only, R2 main moved): a changed own diff, a non-stamp byte, a changed selection, a newer red or unbound gate, or a missing binding or receipt runs the full gate; the evals-fresh label opts out. Free Tests and every other check still ran on this head.*"' "$REUSE")
           else
           TOTAL=0; PASSED=0; FAILED=0; MANUAL=0; EXECUTED=0; REUSED=0; COST="0"
           SUITE_LINES=""
@@ -1203,6 +1429,8 @@ jobs:
             .version == 2 and (.files | type == "array") and (.totals | type == "object") and
             (.headline | type == "array") and (.failures | type == "array") and (.panels | type == "array") and
             (.verdict.verdict == "GREEN" or .verdict.verdict == "RED") and
+            ((.flakyCollectorFailures // 0) | type == "number" and . >= 0 and floor == .) and
+            ((.flakyCollectorFailures // 0) <= .totals.failed) and
             ([.files[] | .total == (.passed + .failed + .manual_accepted) and
               (.total == (.executed + .reused)) and
               ([.total,.passed,.failed,.manual_accepted,.executed,.reused,.attempts,.flaky] | all(. >= 0 and (floor == .))) ] | all) and
@@ -1215,6 +1443,8 @@ jobs:
           fi
           HEADLINE='(no verified report headline)'
           FAILURES=""
+          FLAKY=""
+          FLAKY_FAILED=0
           if [ -n "$VERIFIED" ]; then
             while IFS=$'\t' read -r _FILE T P F M _FLAKY EX RE _ATTEMPTS C TIER SHARD; do
               [ "$T" -eq 0 ] && continue
@@ -1230,6 +1460,10 @@ jobs:
             # Report-sanitized lines (no @-mentions, one capped line each), fenced here.
             HEADLINE=$(jq -r '.headline[]' "$VERIFIED")
             FAILURES=$(jq -r '.failures[]' "$VERIFIED")
+            # Rule 16: report-sanitized lines of cases that failed once and passed on their one rerun.
+            FLAKY=$(jq -r '(.flakyLines // [])[]' "$VERIFIED")
+            # Their first-attempt collector failures, the only failed records a green report may carry.
+            FLAKY_FAILED=$(jq -r '.flakyCollectorFailures // 0' "$VERIFIED")
           fi
 
           COVERAGE=$(jq -r '"Profile: \(.profile // "full") / mode `\(.prCoverage.mode // "broad")`; selected behaviors: \(.selection.e2e | if . == null then "all" else length end), judges: \(.selection.judges | if . == null then "all" else length end). Deferred to scheduled/release coverage: \(.prCoverage.deferred // [] | length) behaviors and \(.prCoverage.deferredPromptFiles // [] | length) changed prompt files. Deferred checks did not run and receive no PR-pass credit."' /tmp/paid-report/manifest.json) || COVERAGE='Coverage manifest unavailable; no coverage claim.'
@@ -1249,9 +1483,10 @@ jobs:
           ${DERIVED}"; fi
 
           STATUS="✅ PASS"
-          if [ "${RECONCILE_EXIT:-1}" != "0" ] || [ "$FAILED" -gt 0 ] \
+          if [ "${RECONCILE_EXIT:-1}" != "0" ] || [ "$FAILED" -gt "$FLAKY_FAILED" ] \
             || { [ -n "$VERIFIED" ] && [ "$(jq -r '.verdict.verdict' "$VERIFIED")" != "GREEN" ]; }; then STATUS="❌ FAIL"; fi
           if [ "$STATUS" = '✅ PASS' ] && [ "$MANUAL" -gt 0 ]; then STATUS='⚠ MANUAL ACCEPTED (unscored)'; fi
+          if [ "$STATUS" = '✅ PASS' ] && [ -n "$FLAKY" ]; then STATUS="✅ PASS (flaky: $(grep -c . <<<"$FLAKY") case(s) passed on their one rerun)"; fi
           if [ -z "$VERIFIED" ]; then STATUS='❌ FAIL (verified report unavailable)'; fi
 
           BODY="## E2E Evals: ${STATUS}
@@ -1288,6 +1523,16 @@ jobs:
           \`\`\`
           ${FAILURES}
           \`\`\`"
+          fi
+
+          if [ -n "$FLAKY" ]; then
+            BODY="${BODY}
+
+          ### Flaky: failed once, passed on its one rerun (rule 16)
+          \`\`\`
+          ${FLAKY}
+          \`\`\`
+          Each failed and passed on its rerun in [run ${GITHUB_RUN_ID}](https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) at the attempts named above. Logged for the daily flaky-fix pass in this run's \`flake-records-a${GITHUB_RUN_ATTEMPT}\` artifact (docs/TESTING_INTERNALS.md#flaky-reruns)."
           fi
 
           fi

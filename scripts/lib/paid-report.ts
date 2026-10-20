@@ -19,13 +19,14 @@ import { writeNegativeReceipt, writePanelReceipt } from '../e2e-shard-reuse';
 import { E2E_TOUCHFILES, E2E_TIERS, LLM_JUDGE_TOUCHFILES } from '../../test/helpers/touchfiles';
 import { type EvalHost, hostSkipReason } from '../../test/helpers/e2e-hosts';
 import { CASE_TEST_NAMES, type CaseTrialPlan, caseTestNamePattern, caseTrialPlan, fileCaseRegistration, shardCaseId, shardFile, trialShardKey } from './paid-cases';
-import { type ManifestEntry, PAID_TEST_DURATIONS_FILE, type PaidRunManifest, type SliceResult, collectorOutcomeCounts, formatProfileCoverage, loadPaidTestDurations, mergePaidTestDurations, parseRunManifest, trialPanelKey, verifySliceResults, writePaidTestDurations } from './paid-plan';
+import { type ManifestEntry, PAID_TEST_DURATIONS_FILE, type PaidRunManifest, type SliceResult, collectorOutcomeCounts, formatProfileCoverage, loadPaidTestDurations, mergePaidTestDurations, parseRunManifest, trialPanelKey, writePaidTestDurations } from './paid-plan';
 import { DEFAULT_JOBS, type PaidCaseSelection, type PaidTier, ROOT, type ShardTrialRecord } from './paid-types';
 import { collectPaidTestFiles, isAllSkippedPass, shardSlug, paidSelectionEnv } from './paid-select';
 import type { RunShardsOptions } from '../test-paid-shards';
 import { attributeCommands, formatMapGap, mapGaps, readShardCommands } from '../exercised-map';
 import { checkoutExercisedConsumers } from '../pr-dependencies';
 import { PR_FULL_GATE_FILES, PR_PROFILE_MAPS } from '../test-pr-profile';
+import { FLAKE_RECORDS_FILE, flakeRecords, flakyShards, formatFlakyLine, gateProblems, rerunSpend, rerunState } from './paid-rerun';
 
 // ─── Local diagnosis: one case through the CI panel runner (A9) ────────────
 
@@ -215,7 +216,7 @@ export function attributeJUnitCase(tc: JUnitCase, ctx: JUnitShardContext,
   return { kind: 'case', id };
 }
 
-interface RuleCase { id: string; kind: EvalCaseKind; outcome: TrialOutcome; line?: string }
+export interface RuleCase { id: string; kind: EvalCaseKind; outcome: TrialOutcome; key: string; slice: number; failureClass?: TrialFailureClass; error?: string; costUsd: number; costKnown: boolean; line?: string }
 
 /** JUnit evidence of the non-trial shards of one attempt. */
 export interface JUnitCensus {
@@ -246,7 +247,7 @@ export const CENSUS_RED_GUIDE = 'docs/evals/census-red.md';
 
 export function sliceArtifactName(root: string, slice: number, attempt: number): string {
   const name = path.basename(root);
-  return /^(?:paid-slice|gate-census)-\d+-a\d+(?:-[a-z0-9-]+)?$/.test(name) ? name : `slice ${slice} attempt ${attempt}`;
+  return /^(?:paid-slice|paid-rerun|gate-census)-\d+-a\d+(?:-[a-z0-9-]+)?$/.test(name) ? name : `slice ${slice} attempt ${attempt}`;
 }
 
 export function junitCensus(manifest: PaidRunManifest, artifacts: ReportArtifact[], recordsByShard: Map<string, any[]>,
@@ -288,7 +289,8 @@ export function junitCensus(manifest: PaidRunManifest, artifacts: ReportArtifact
           bump(reasons, RUNTIME_SKIP_REASON);
           census.skipped.push(`◌ ${id}  ${key} (${cases.map(tc => tc.name).join('; ')}): ${RUNTIME_SKIP_REASON}`);
         }
-        census.ruleCases.push({ id, kind, outcome: caseOutcome,
+        census.ruleCases.push({ id, kind, outcome: caseOutcome, key, slice: result.sliceIndex, ...(failureClass ? { failureClass } : {}), ...(error && failed ? { error } : {}),
+          costUsd: Math.round(mine.reduce((sum: number, r: any) => sum + (Number(r.cost_usd) || 0), 0) * 100) / 100, costKnown: trialCostKnown(mine, sessions).cost_known !== false,
           ...(failed ? { line: `✗ ${id}  ${kind}  FAIL  ${failureClass}${failedRecord?.exit_reason === 'timeout' && failedRecord?.timeout_at_turn !== undefined ? ` at turn ${failedRecord.timeout_at_turn}` : ''}${error ? ` — ${error}` : ''}`
             + `${diagnosisText(diagnosis, error)}  [slice ${result.sliceIndex}, attempt ${result.attempt ?? 1}]`
             + `${evidencePointer(sliceArtifactName(root, result.sliceIndex, result.attempt ?? 1), key, typeof base.run_id === 'string' ? base.run_id : undefined, id)}`
@@ -318,15 +320,20 @@ export function formatJUnitCensus(census: JUnitCensus): string[] {
   ];
 }
 
-interface ReportArtifact { root: string; result: SliceResult }
+export interface ReportArtifact { root: string; result: SliceResult }
 
-/** Every slice result under the report dir: flat (merged) or one directory per attempt-scoped artifact. */
-export function loadSliceArtifacts(reportDir: string): ReportArtifact[] {
+/**
+ * Every slice result under the report dir: flat (merged) or one directory per
+ * attempt-scoped artifact. Rule-16 rerun results (scripts/lib/paid-rerun.ts)
+ * are returned only with `{ reruns: true }`, and then only they are.
+ */
+export function loadSliceArtifacts(reportDir: string, options: { reruns?: boolean } = {}): ReportArtifact[] {
   const found: ReportArtifact[] = [];
   for (const name of fs.readdirSync(reportDir, { recursive: true }) as string[]) {
     const rel = normalizeRelativePath(name);
     if (!/^slice-\d+\.json$/.test(path.basename(rel)) || rel.split('/').includes('shards') || rel.split('/').includes('receipts')) continue;
-    found.push({ root: path.join(reportDir, path.dirname(rel)), result: JSON.parse(fs.readFileSync(path.join(reportDir, rel), 'utf8')) as SliceResult });
+    const result = JSON.parse(fs.readFileSync(path.join(reportDir, rel), 'utf8')) as SliceResult;
+    if ((result.rerun === true) === (options.reruns === true)) found.push({ root: path.join(reportDir, path.dirname(rel)), result });
   }
   return found.sort((a, b) => (a.result.attempt ?? 1) - (b.result.attempt ?? 1) || a.result.sliceIndex - b.result.sliceIndex);
 }
@@ -452,7 +459,11 @@ export interface ReportHeadline {
     infra: number;
     incomplete: number;
     unattributed: number;
+    /** Cases that failed once and passed on their one rule-16 rerun (scripts/lib/paid-rerun.ts). */
+    flaky?: number;
   };
+  /** Re-executions of once-red cases (rule-16 reruns and later attempts) and their cost, when any ran. */
+  reruns?: { executions: number; usd: number; unknown: number };
   actionRequired: number;
   wallMs: number | null;
   costUsd: number;
@@ -474,6 +485,8 @@ export function formatHeadline(h: ReportHeadline, cost: { unknownTrials: number;
       + ` · judge ${c.judge.passed}/${c.judge.total} · quarantined ${c.quarantined.total} (${c.quarantined.failingLane} failing the lane)`,
     `  SKIPPED ${c.skipped} · INFRA ${c.infra} · INCOMPLETE ${c.incomplete} · unattributed ${c.unattributed} · ACTION REQUIRED ${h.actionRequired}`,
     `  wall ${minutes} · ${formatCost(h.costUsd, cost.unknownTrials, cost.trials)}${h.redispatchEligible ? ' · every red is machine-classified INFRA/INCOMPLETE: eligible for ONE re-dispatch as a new run (EVAL_POLICY.infraRedispatch); report both runs' : ''}`,
+    ...(c.flaky || h.reruns ? [`  FLAKY ${c.flaky ?? 0} (failed once, passed on its one rule-16 rerun) · ${h.reruns?.executions ?? 0} rerun execution(s), `
+      + `${formatCost(h.reruns?.usd ?? 0, h.reruns?.unknown ?? 0, h.reruns?.executions ?? 0)}`] : []),
   ];
 }
 
@@ -527,16 +540,20 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
   const summaryPath = path.join(reportDir, 'collector-outcomes.json');
   const summaryMdPath = path.join(reportDir, 'report-summary.md');
   const trialOutcomesPath = path.join(reportDir, TRIAL_OUTCOMES_FILE);
-  for (const file of [summaryPath, summaryMdPath, trialOutcomesPath]) fs.rmSync(file, { force: true });
+  for (const file of [summaryPath, summaryMdPath, trialOutcomesPath, path.join(reportDir, FLAKE_RECORDS_FILE)]) fs.rmSync(file, { force: true });
   const manifest = parseRunManifest(fs.readFileSync(path.join(reportDir, 'manifest.json'), 'utf-8'));
   const artifacts = loadSliceArtifacts(reportDir);
   const attempts = [...new Set(artifacts.map(a => a.result.attempt ?? 1))].sort((a, b) => a - b);
   const primary = attempts[0] ?? 1;
   const results = artifacts.filter(a => (a.result.attempt ?? 1) === primary).map(a => a.result);
-  const verdict = verifySliceResults(manifest, results);
+  // Rule 16 (scripts/lib/paid-rerun.ts): every attempt and each attempt's one rerun form one history per case; a flaky case's own red is no problem.
+  const rerun = rerunState(reportDir, manifest, artifacts);
+  const flakyFirst = flakyShards(rerun.observations.filter(o => o.attempt === primary && o.phase === 'first'), rerun.flaky);
+  const verdict = { problems: gateProblems(rerun.sets, rerun.observations, rerun.flaky) };
   const planned = manifest.entries.filter((e) => e.status === 'planned').length;
   const lane = `${manifest.tier}/${manifest.profile ?? 'full'}${manifest.evalsAll ? ' census' : ''}${manifest.host ? ` on ${manifest.host}` : ''}`;
-  console.log(`[test:paid] report: ${results.length}/${manifest.sliceCount} slices, ${planned} planned shards, tier=${manifest.tier}, attempt ${primary}${attempts.length > 1 ? ` (later attempts ${attempts.slice(1).join(', ')} reported, never replacing it)` : ''}`);
+  console.log(`[test:paid] report: ${results.length}/${manifest.sliceCount} slices, ${planned} planned shards, tier=${manifest.tier}, attempt ${primary}${attempts.length > 1 ? ` (later attempts ${attempts.slice(1).join(', ')} reported, never replacing it); a later attempt resolves a red only by the rule-16 flaky rule and never hides a new red` : ''}`);
+  for (const line of rerun.ignored) console.log(`[test:paid] rule-16 rerun ignored: ${line}`);
   for (const line of formatProfileCoverage(manifest)) console.log(line);
   for (const result of [...results].sort((a, b) => a.sliceIndex - b.sliceIndex)) {
     for (const outcome of result.outcomes) {
@@ -555,6 +572,8 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
   const roots = artifacts.map(a => ({ root: path.resolve(a.root), attempt: a.result.attempt ?? 1 }))
     .sort((a, b) => b.root.length - a.root.length);
   const attemptOf = (abs: string) => roots.find(r => abs === r.root || abs.startsWith(r.root + path.sep))?.attempt ?? primary;
+  const rerunRoots = loadSliceArtifacts(reportDir, { reruns: true }).map(a => path.resolve(a.root));
+  const inRerun = (abs: string) => rerunRoots.some(root => abs === root || abs.startsWith(root + path.sep));
   const entryBySlug = new Map(manifest.entries.map(entry => [shardSlug([entry.file]), entry]));
   const shardOf = (rel: string) => {
     const parts = normalizeRelativePath(rel).split('/');
@@ -571,10 +590,11 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
   const manualClaims = new Map<string, string>();
   const recordsByShard = new Map<string, any[]>();
   let costUsd = 0;
+  let flakyCollectorFailures = 0;
   for (const name of fs.readdirSync(reportDir, { recursive: true }) as string[]) {
     const rel = normalizeRelativePath(name);
     if (!isFinalizedEvalResultFile(rel) || rel.split('/').includes('receipts') || rel === 'collector-outcomes.json') continue;
-    if (attemptOf(path.resolve(reportDir, rel)) !== primary) continue;
+    if (inRerun(path.resolve(reportDir, rel)) || attemptOf(path.resolve(reportDir, rel)) !== primary) continue;
     const shard = shardOf(rel);
     try {
       const parsed = JSON.parse(fs.readFileSync(path.join(reportDir, rel), 'utf-8'));
@@ -611,6 +631,7 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
       }
       collectors.push(parsed);
       const counts = collectorOutcomeCounts([parsed]);
+      if (shard && flakyFirst.has(normalizeRelativePath(shard.file))) flakyCollectorFailures += counts.failed;
       files.push({ file: rel, tier: parsed.tier ?? 'unknown', shard: parsed.shard ?? '-',
         cost: parsed.total_cost_usd ?? 0, flaky: parsed.flaky_retries?.length ?? 0,
         total: counts.passed + counts.failed + counts.manual_accepted, ...counts });
@@ -626,7 +647,7 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
     for (const f of flaky) console.log(`  ⚠ ${f.name} (x${f.attempts}) — ${f.file}`);
   }
   if (manualProblems.length) verdict.problems.push(...manualProblems);
-  if (evidence.failed > 0) verdict.problems.push(`${evidence.failed} unapproved final collector failure(s)`);
+  if (evidence.failed > flakyCollectorFailures) verdict.problems.push(`${evidence.failed - flakyCollectorFailures} unapproved final collector failure(s)`);
   if (files.reduce((sum, file) => sum + file.total, 0) !== evidence.passed + evidence.failed + evidence.manual_accepted
     || files.reduce((sum, file) => sum + file.executed + file.reused, 0) !== evidence.executed + evidence.reused) {
     verdict.problems.push('Collector summary totals are inconsistent');
@@ -634,9 +655,6 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
 
   // Panel verdicts: one function, computed here only.
   const panels = panelReports(manifest, results, primary);
-  for (const panel of panels.filter(p => p.failsLane)) {
-    verdict.problems.push(`PANEL ${panel.case} ${panel.status}${panel.redClass === 'INFRA' ? ' (INFRA)' : ''} ${panel.passed}/${panel.panel.n} (${panel.marks}): ${panel.reason}`);
-  }
   const laterPanels = attempts.slice(1).flatMap(attempt => panelReports(manifest, artifacts.map(a => a.result), attempt)
     .filter(panel => panel.trials.length > 0));
 
@@ -719,17 +737,22 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
   const behaviorPanels = panels.filter(p => !p.quarantined && p.kind === 'behavior');
   const lanePanels = panels.filter(p => !p.quarantined);
   const count = (kind: EvalCaseKind) => ({
-    passed: ruleCases.filter(c => c.kind === kind && c.outcome === 'passed').length
-      + lanePanels.filter(p => p.kind === kind && p.status === 'PASS').length,
+    passed: ruleCases.filter(c => c.kind === kind && (c.outcome === 'passed' || (c.outcome === 'failed' && rerun.flaky.has(c.id)))).length
+      + lanePanels.filter(p => p.kind === kind && (p.status === 'PASS' || rerun.flaky.has(p.case))).length,
     total: ruleCases.filter(c => c.kind === kind).length + lanePanels.filter(p => p.kind === kind).length,
   });
   const primaryTrials = results.flatMap(r => r.outcomes.map(o => o.trial)).filter((t): t is ShardTrialRecord => !!t);
   const wall = results.filter(r => Number.isSafeInteger(r.startedAt) && Number.isSafeInteger(r.finishedAt));
   const failureLines = [
     ...ruleShardFailures,
-    ...ruleCases.filter(c => c.line).map(c => c.line!),
-    ...panels.filter(p => p.status !== 'PASS' || p.split).map(p => formatPanelLine(p, manifest.tier, { artifacts: sliceArtifacts, runId })),
+    ...ruleCases.filter(c => c.line && !rerun.flaky.has(c.id)).map(c => c.line!),
+    ...panels.filter(p => (p.status !== 'PASS' || p.split) && !rerun.flaky.has(p.case)).map(p => formatPanelLine(p, manifest.tier, { artifacts: sliceArtifacts, runId })),
+    ...[...rerun.resolutions.values()].filter(r => r.status === 'red' && r.next)
+      .map(r => `✗ ${r.case}  ${r.kind}  FAILED TWICE (rule 16: a real red): ${r.first.where}; again in ${r.next!.where}${r.next!.symptom ? ` — ${r.next!.symptom}` : ''}`),
   ];
+  const flakes = flakeRecords(rerun.resolutions.values(), { lane, env });
+  const flakyLines = flakes.map(formatFlakyLine);
+  const spend = rerunSpend(rerun.observations);
   const red = verdict.problems.length > 0;
   const headline: ReportHeadline = {
     lane, verdict: red ? 'RED' : 'GREEN', attempt: primary,
@@ -743,7 +766,9 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
         + results.flatMap(r => r.outcomes).filter(o => !o.trial && o.runnerError !== undefined).length,
       incomplete: panels.filter(p => p.status === 'INCOMPLETE').length,
       unattributed: census.unattributed.length,
+      ...(flakes.length ? { flaky: flakes.length } : {}),
     },
+    ...(spend.executions ? { reruns: spend } : {}),
     actionRequired: verdict.problems.length,
     wallMs: wall.length ? Math.max(...wall.map(r => r.finishedAt!)) - Math.min(...wall.map(r => r.startedAt!)) : null,
     costUsd: Math.round(costUsd * 100) / 100,
@@ -756,11 +781,17 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
     console.log('[test:paid] failures and split verdicts:');
     for (const line of failureLines) console.log(`  ${line}`);
   }
-  for (const panel of laterPanels) console.log(`  attempt ${panel.attempt} (re-run; reported, never replacing attempt ${primary}): ${formatPanelLine(panel, manifest.tier)}`);
+  if (flakyLines.length) {
+    console.log('[test:paid] flaky (rule 16: failed once, passed on its one rerun; green with this annotation):');
+    for (const line of flakyLines) console.log(`  ${line}`);
+  }
+  for (const panel of laterPanels) console.log(`  attempt ${panel.attempt} (re-run; resolves a red only by the rule-16 flaky rule): ${formatPanelLine(panel, manifest.tier)}`);
+  if (flakes.length) fs.writeFileSync(path.join(reportDir, FLAKE_RECORDS_FILE), flakes.map(record => JSON.stringify(record)).join('\n') + '\n');
   const fence = (lines: string[]) => publishedFence(lines);
   fs.writeFileSync(summaryMdPath, [
     ...fence(headlineLines),
     ...(failureLines.length ? ['', '**Failures and split verdicts**', '', ...fence(failureLines)] : []),
+    ...(flakyLines.length ? ['', '**Flaky: failed once, passed on its one rule-16 rerun**', '', ...fence(flakyLines)] : []),
     ...(censusLines.length ? ['', '**Skipped, deselected and unattributed testcases**', '', ...fence(censusLines)] : []),
     ...(verdict.problems.length ? ['', `**ACTION REQUIRED (${verdict.problems.length})**`, '', ...fence(verdict.problems.map(p => sanitizeTrialError(p) ?? p)), '', `Guide: ${CENSUS_RED_GUIDE}`] : []),
   ].join('\n') + '\n');
@@ -774,7 +805,8 @@ export function runPaidReport(reportDir: string, options: { writeDurations?: boo
     trials: p.trials.map(t => ({ trial: t.trial, outcome: t.outcome, ...(t.failure_class ? { failure_class: t.failure_class } : {}),
       ...(t.exit_reason ? { exit_reason: t.exit_reason } : {}), ...(t.error ? { error: t.error } : {}) })) })),
   // evals.yml wraps these in a fixed fence for the PR comment.
-  failures: failureLines.map(line => sanitizeFixedFenceLine(line)) }, null, 2) + '\n');
+  failures: failureLines.map(line => sanitizeFixedFenceLine(line)),
+  flaky: flakes, flakyLines: flakyLines.map(line => sanitizeFixedFenceLine(line)), flakyCollectorFailures }, null, 2) + '\n');
   reportMapGaps(reportDir, new Set(executed.map(record => record.case)), rootDir);
   if (verdict.problems.length) {
     console.error(`[test:paid] report: ${verdict.problems.length} problem(s):`);

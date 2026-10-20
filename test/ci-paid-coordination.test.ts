@@ -145,8 +145,8 @@ describe('paid CI coordination stays off the eval image', () => {
       const captures = hiddenUploads.filter(step => step.with?.name === 'native-captures-${{ env.EVALS_RUN_ID }}');
       // evals-periodic's host-run Codex job mounts $RUNNER_TEMP/eval-home as the container's HOME.
       const hostHome = (pattern: string) => pattern.replace('${{ runner.temp }}/eval-home/', '~/');
-      // evals.yml: eval-slices and train-bisect (GSTA-49 T1b), each under its own EVALS_RUN_ID.
-      expect(captures).toHaveLength(name === 'evals.yml' ? 2 : name === 'evals-periodic.yml' ? 3 : 2);
+      // evals.yml: eval-slices, the rule-16 eval-rerun and train-bisect (GSTA-49 T1b), each under its own EVALS_RUN_ID.
+      expect(captures).toHaveLength(name === 'evals.yml' ? 3 : name === 'evals-periodic.yml' ? 3 : 2);
       for (const capture of captures) {
         expect(capture.if).toBe('always()');
         expect(String(capture.with?.path).trim().split('\n').map(hostHome)).toEqual([
@@ -165,7 +165,11 @@ describe('paid CI coordination stays off the eval image', () => {
       const bisectLogs = name === 'evals.yml'
         ? jobs['train-bisect'].steps.find(step => step.with?.name === 'train-bisect-logs-${{ matrix.slice }}-a${{ github.run_attempt }}') : undefined;
       if (name === 'evals.yml') expect(String(bisectLogs?.with?.path)).toBe(String(logs?.with?.path));
-      expect(hiddenUploads.filter(step => !captures.includes(step))).toEqual([logs!, ...(codexLogs ? [codexLogs] : []), ...(bisectLogs ? [bisectLogs] : [])]);
+      // F1: the rule-16 eval-rerun keeps the same shard-log upload under its own name.
+      const rerunLogs = name === 'evals.yml'
+        ? jobs['eval-rerun'].steps.find(step => step.with?.name === 'paid-rerun-logs-${{ matrix.slice }}-a${{ github.run_attempt }}') : undefined;
+      if (name === 'evals.yml') expect(String(rerunLogs?.with?.path)).toBe(String(logs?.with?.path));
+      expect(hiddenUploads.filter(step => !captures.includes(step))).toEqual([logs!, ...(codexLogs ? [codexLogs] : []), ...(rerunLogs ? [rerunLogs] : []), ...(bisectLogs ? [bisectLogs] : [])]);
     });
   }
 

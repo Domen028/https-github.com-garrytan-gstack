@@ -146,8 +146,9 @@ const pr = (labels: string[] = []) => ({ event_name: 'pull_request', actor: 'gar
 const dispatch = (ref = 'main') => ({ event_name: 'workflow_dispatch', actor: 'garrytan', repository: 'garrytan/gstack', repository_id: 1, sha: SHA.main, run_id: 7, run_attempt: 1, ref_name: ref,
   event: { repository: { default_branch: 'main' } } });
 const INPUTS = { evals_all: true, base_ref: '', base_sha: '', expected_sha: '', nonce: '', pr_receipts: '', cases: '', prefix_shas: '', screen_pr: '', screen_merge_sha: '', screen_policy: '' };
-const TODAY_PR_JOBS = ['build-image', 'eval-slices', 'plan-slices', 'readiness', 'recover-receipts', 'slices-comment', 'slices-report'];
-const TODAY_DISPATCH_JOBS = ['build-image', 'eval-slices', 'plan-slices', 'slices-report'];
+// rerun-plan is the free rule-16 planner (F1); its paid eval-rerun runs only when it plans a rerun.
+const TODAY_PR_JOBS = ['build-image', 'eval-slices', 'plan-slices', 'readiness', 'recover-receipts', 'rerun-plan', 'slices-comment', 'slices-report'];
+const TODAY_DISPATCH_JOBS = ['build-image', 'eval-slices', 'plan-slices', 'rerun-plan', 'slices-report'];
 const TRAIN_STEPS = ['Write the train record', 'Upload the train record', "Check the screen's PR head (Free Tests)", 'Plan the bisect (one executor per prefix)', 'Hand the bisect plan to its executors'];
 const train = { record_artifact: 'gstack-train-record', full_gate_check: 'gstack/full-gate' };
 
@@ -206,7 +207,7 @@ describe('under a train block (the gate edits, each only on its mode)', () => {
     const inputs = { ...INPUTS, evals_all: false, nonce: 'pr.screen.narrow-x', expected_sha: SHA.merge, base_ref: 'main', base_sha: SHA.base, screen_pr: '42', screen_merge_sha: SHA.merge, screen_policy: 'narrow' };
     const route = { ...ROUTE, ...train, mode: 'screen', screen_head: SHA.screenHead, screen_base: SHA.screenBase, screen_branch: 'feature' };
     const sim = simulate(evals, { github: dispatch(), inputs, outputs: { route } });
-    expect(sim.jobs).toEqual(['build-image', 'eval-slices', 'plan-slices', 'recover-receipts', 'route', 'slices-comment', 'slices-report']);
+    expect(sim.jobs).toEqual(['build-image', 'eval-slices', 'plan-slices', 'recover-receipts', 'rerun-plan', 'route', 'slices-comment', 'slices-report']);
     expect(sim.group).toBe('evals-screen-42');
     expect(sim.runName).toBe('E2E Evals [eval-bg pr.screen.narrow-x] screen #42');
     expect(sim.steps('recover-receipts')).not.toContain('Recover receipts of cancelled runs (base-ref code)');
@@ -228,7 +229,7 @@ describe('under a train block (the gate edits, each only on its mode)', () => {
   test('a train gate runs the full gate, writes its record from the report and publishes the check; it never reuses or binds', () => {
     const inputs = { ...INPUTS, nonce: 'gate.train-x', expected_sha: SHA.head };
     const sim = simulate(evals, { github: dispatch('train/t1'), inputs, outputs: { route: { ...ROUTE, ...train, mode: 'train' } } });
-    expect(sim.jobs).toEqual(['build-image', 'eval-slices', 'plan-slices', 'route', 'slices-report', 'train-check']);
+    expect(sim.jobs).toEqual(['build-image', 'eval-slices', 'plan-slices', 'rerun-plan', 'route', 'slices-report', 'train-check']);
     expect(sim.steps('plan-slices')).not.toContain('Confirm gate verdict reuse (R2a/R2)');
     expect(sim.steps('slices-report')).not.toContain("Bind this run's verdict for reuse (R2a/R2)");
     expect(sim.steps('slices-report')).toEqual(expect.arrayContaining(['Write the train record', 'Upload the train record']));
@@ -276,6 +277,56 @@ describe('GSTA-48 open items', () => {
     expect(comment.steps[0]!.run).toContain('## E2E Evals: ⛔ NOT RUN on');
     expect(comment.steps[0]!.run).not.toContain('PASS');
     expect(simulate(evals, { github: pr(), inputs: {}, outputs: { route: { ...ROUTE, mode: 'pr' } } }).jobs).not.toContain('readiness-comment');
+  });
+});
+
+describe('rule-16 rerun wiring (F1)', () => {
+  const planned = { planned: 'true', slices: '[1]', slice_timeouts: '[0,40]' };
+  test('the paid rerun runs only when rerun-plan planned one, on the same checkout as the slices, and the report waits for it', () => {
+    const quiet = simulate(evals, { github: pr(), inputs: {}, outputs: { route: { ...ROUTE, mode: 'pr' }, 'rerun-plan': { planned: 'false', slices: '', slice_timeouts: '' } } });
+    expect(quiet.jobs).not.toContain('eval-rerun');
+    const sim = simulate(evals, { github: pr(), inputs: {}, outputs: { route: { ...ROUTE, mode: 'pr' }, 'rerun-plan': planned } });
+    expect(sim.jobs).toEqual([...TODAY_PR_JOBS, 'eval-rerun', 'route'].sort());
+    for (const job of ['rerun-plan', 'eval-rerun']) expect(sim.checkout(job)?.ref ?? '', job).toBe(sim.checkout('eval-slices')?.ref ?? '');
+    expect([evals.jobs['slices-report']!.needs].flat()).toEqual(expect.arrayContaining(['rerun-plan', 'eval-rerun']));
+    const screen = simulate(evals, { github: dispatch(), inputs: { ...INPUTS, evals_all: false, nonce: 'pr.screen.narrow-x', expected_sha: SHA.merge, base_ref: 'main', base_sha: SHA.base, screen_pr: '42', screen_merge_sha: SHA.merge, screen_policy: 'narrow' },
+      outputs: { route: { ...ROUTE, ...train, mode: 'screen', screen_head: SHA.screenHead, screen_base: SHA.screenBase, screen_branch: 'feature' }, 'rerun-plan': planned } });
+    for (const job of ['rerun-plan', 'eval-rerun']) expect(screen.checkout(job)?.ref, job).toBe(SHA.merge);
+    const trainRun = simulate(evals, { github: dispatch('train/t1'), inputs: { ...INPUTS, nonce: 'gate.train-x', expected_sha: SHA.head }, outputs: { route: { ...ROUTE, ...train, mode: 'train' }, 'rerun-plan': planned } });
+    expect(trainRun.jobs).toEqual(expect.arrayContaining(['rerun-plan', 'eval-rerun', 'slices-report', 'train-check']));
+  });
+
+  test('a confirmed verdict reuse plans and runs no rerun', () => {
+    const sim = simulate(evals, { github: pr(), inputs: {}, outputs: { route: { ...ROUTE, mode: 'pr' }, 'plan-slices': { gate_reuse: 'true' }, 'rerun-plan': planned } });
+    expect(sim.jobs).not.toContain('rerun-plan');
+    expect(sim.jobs).not.toContain('eval-rerun');
+    expect(sim.jobs).not.toContain('eval-slices');
+  });
+
+  test('the rerun runs its own attempt-scoped manifest fresh: no receipts in, none out, results under paid-rerun-*', () => {
+    const job = evals.jobs['eval-rerun']!;
+    expect(job.strategy!.matrix.slice).toBe('${{ fromJSON(needs.rerun-plan.outputs.slices) }}');
+    expect(job.steps.find(st => st.uses?.startsWith('actions/download-artifact@'))!.with).toEqual({ name: 'rerun-plan-a${{ github.run_attempt }}', path: '/tmp/paid-plan' });
+    const run = job.steps.find(st => st.name === 'Rerun slice ${{ matrix.slice }} (rule 16, once)')!;
+    expect(run.run).toContain('--plan /tmp/paid-plan/manifest.json --slice ${{ matrix.slice }}');
+    expect(Object.keys(run.env!).filter(key => key.startsWith('EVALS_CACHE'))).toEqual([]);
+    expect(JSON.stringify(job)).not.toContain('receipts');
+    expect(job.steps.find(st => st.name === 'Upload rerun results')!.with).toMatchObject({ name: 'paid-rerun-${{ matrix.slice }}-a${{ github.run_attempt }}', path: '/tmp/paid-rerun-results' });
+    const plan = evals.jobs['rerun-plan']!;
+    expect(plan.permissions).toEqual({ contents: 'read' });
+    expect(JSON.stringify(plan)).not.toMatch(/secrets\.|restore-deps|bun install/);
+    expect(plan.steps.find(st => st.name === "Plan the rule-16 rerun of this attempt's failed cases")!.run!.replace(/\s*\\\n\s*/g, ' ')).toContain('--report /tmp/paid-report --rerun-plan /tmp/paid-rerun');
+  });
+
+  test('the report reads every attempt and rerun, publishes flake records, and the comment never hides a non-flaky failed record', () => {
+    const report = evals.jobs['slices-report']!;
+    const patterns = report.steps.filter(st => st.uses?.startsWith('actions/download-artifact@')).map(st => st.with?.pattern ?? st.with?.name);
+    expect(patterns).toEqual(expect.arrayContaining(['paid-slice-*', 'paid-rerun-*', 'rerun-plan-a*']));
+    expect(report.steps.find(st => st.name === 'Upload flake records for the daily flaky-fix pass')!.with).toMatchObject({ name: 'flake-records-a${{ github.run_attempt }}', path: '/tmp/paid-report/flake-records.jsonl' });
+    const comment = evals.jobs['slices-comment']!.steps.find(st => st.name === 'Post PR comment')!.run!;
+    expect(comment).toContain('[ "$FAILED" -gt "$FLAKY_FAILED" ]');
+    expect(comment).toContain("FLAKY_FAILED=$(jq -r '.flakyCollectorFailures // 0' \"$VERIFIED\")");
+    expect(comment).toContain('((.flakyCollectorFailures // 0) <= .totals.failed)');
   });
 });
 

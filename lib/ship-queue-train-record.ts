@@ -37,7 +37,11 @@ export interface TrainRecord {
 }
 export type AttemptPurpose = 'gate' | 'rebuild' | 'infra-redispatch' | 'bisect';
 export type GateOutcome = 'PENDING' | 'GREEN' | 'RED' | 'INCOMPLETE';
-export interface CasePanel { case: string; kind: string; status: string; red_class: string | null; cost_usd: number | null }
+export interface CasePanel {
+  case: string; kind: string; status: string; red_class: string | null; cost_usd: number | null;
+  /** Rule 16: a PASS that failed once and passed on its one rerun, with where each ran. */
+  flaky?: { first: string; rerun: string };
+}
 export interface AttemptRecord {
   schema: 1; kind: 'train-attempt'; train: string; id: string; purpose: AttemptPurpose; nonce: string; workflow: string; ref: string;
   inputs: Record<string, string>; state: 'dispatching' | 'unknown' | 'absent' | 'dispatched' | 'completed'; run: { id: number; url: string } | null;

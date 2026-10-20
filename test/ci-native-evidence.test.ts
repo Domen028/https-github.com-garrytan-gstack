@@ -44,7 +44,7 @@ function render(template: string, fields: Record<string, string>): string {
 
 test('every direct CI paid executor binds a safe unique run/attempt/job/slice identity', () => {
   expect(executors.map(({ name, jobName }) => `${name}:${jobName}`)).toEqual([
-    'evals.yml:eval-slices', 'evals-periodic.yml:eval-slices', 'evals-periodic.yml:eval-codex-slices', 'evals-periodic.yml:gate-census', 'evals-marathon.yml:eval-slices',
+    'evals.yml:eval-slices', 'evals.yml:eval-rerun', 'evals-periodic.yml:eval-slices', 'evals-periodic.yml:eval-codex-slices', 'evals-periodic.yml:gate-census', 'evals-marathon.yml:eval-slices',
   ]);
   const ids = new Set<string>();
   for (const [workflowIndex, { job, step }] of executors.entries()) {
@@ -59,7 +59,7 @@ test('every direct CI paid executor binds a safe unique run/attempt/job/slice id
       for (const attempt of ['1', '2']) {
         // The planner sizes the matrix; cover more slices than any live plan.
         expect(armed ? job.strategy.matrix.include : job.strategy.matrix.slice)
-          .toMatch(armed ? /^\$\{\{ fromJSON\(needs\.plan-slices\.outputs\.gate_matrix\) \}\}$/ : /^\$\{\{ fromJSON\(needs\.plan-slices\.outputs\.(?:[a-z]+_)*slices\) \}\}$/);
+          .toMatch(armed ? /^\$\{\{ fromJSON\(needs\.plan-slices\.outputs\.gate_matrix\) \}\}$/ : /^\$\{\{ fromJSON\(needs\.(?:plan-slices|rerun-plan)\.outputs\.(?:[a-z]+_)*slices\) \}\}$/);
         for (const arm of armed ? Object.keys(CENSUS_ARMS) : ['']) {
           for (let slice = 1; slice <= 64; slice++) {
             const id = render(env.EVALS_RUN_ID, {

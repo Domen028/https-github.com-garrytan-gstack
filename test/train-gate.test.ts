@@ -158,6 +158,19 @@ describe('train record: the census comes from the run\'s own manifest, first att
     expect(record.panels.find(p => p.case === j1)).toMatchObject({ status: 'FAIL', red_class: 'VERDICT' });
     expect(classify(record)).toBe('RED');
   });
+
+  test('rule 16: a case the report resolved FLAKY is a PASS naming both runs, and the train is GREEN; without the record it stays red', () => {
+    const outcomes = [{ case: j1, kind: 'judge', attempt: 1, outcome: 'failed', failure_class: 'assertion' },
+      { case: j2, kind: 'judge', attempt: 1, outcome: 'passed' }, ...[1, 2, 3].map(trial => ({ case: behavior, kind: 'behavior', trial, attempt: 1, outcome: 'passed' }))];
+    const flake = { schema: 1, kind: 'gate-flake', case: j1, case_kind: 'judge', first: { attempt: 1, phase: 'first', where: 'attempt 1 (paid-slice-1-a1)' },
+      rerun: { attempt: 1, phase: 'rerun', where: 'attempt 1 rerun (paid-rerun-1-a1)' } };
+    const record = build(report({ outcomes, collector: { verdict: { verdict: 'GREEN' }, census: { unattributed: [] }, panels: [], flaky: [flake] } }));
+    expect(record.panels.find(p => p.case === j1)).toEqual({ case: j1, kind: 'judge', status: 'PASS', red_class: null, cost_usd: null,
+      flaky: { first: 'attempt 1 (paid-slice-1-a1)', rerun: 'attempt 1 rerun (paid-rerun-1-a1)' } });
+    expect(record.verdict).toBe('GREEN');
+    expect(classify(record)).toBe('GREEN');
+    expect(build(report({ outcomes, collector: { verdict: { verdict: 'RED' }, census: { unattributed: [] }, panels: [] } })).verdict).toBe('RED');
+  });
 });
 
 describe('prefix trees modulo stamps', () => {
@@ -236,6 +249,24 @@ describe('bisect: one executor per prefix, one trial per case', () => {
       { case: 'case-b', kind: 'judge', status: 'INCOMPLETE', red_class: 'INCOMPLETE', cost_usd: null }] });
     await expect(runBisectPrefix(plan, 1, { rootDir: scratch, evalDir: scratch, checkedOut: B, runCase: async () => ({ status: 'PASS', redClass: null }) })).rejects.toThrow('not its prefix');
     await expect(runBisectPrefix(plan, 3, { rootDir: scratch, evalDir: scratch, checkedOut: B })).rejects.toThrow('names no prefix');
+  });
+
+  test('rule 16 in a bisect: a case verdict FAIL reruns once on the prefix; a pass is a flaky PASS, a second FAIL stays red, INFRA and INCOMPLETE never rerun', async () => {
+    const script = (verdicts: Record<string, Array<{ status: string; redClass: string | null }>>) => {
+      const calls: string[] = [];
+      return { calls, runCase: async (id: string, _kind: string, evalDir: string) => { calls.push(`${id} ${path.basename(evalDir)}`); return verdicts[id]!.shift()!; } };
+    };
+    const fail = { status: 'FAIL', redClass: 'VERDICT' }, pass = { status: 'PASS', redClass: null };
+    const flaky = script({ 'case-a': [fail, pass], 'case-b': [fail, fail] });
+    const record = await runBisectPrefix(plan, 1, { rootDir: scratch, evalDir: path.join(scratch, 'bisect-flaky'), checkedOut: A, runCase: flaky.runCase });
+    expect(record.panels).toEqual([
+      { case: 'case-a', kind: 'rule', status: 'PASS', red_class: null, cost_usd: null, flaky: { first: `prefix ${A.slice(0, 12)} slice 1`, rerun: `prefix ${A.slice(0, 12)} slice 1 rerun` } },
+      { case: 'case-b', kind: 'judge', status: 'FAIL', red_class: 'VERDICT', cost_usd: null }]);
+    expect(flaky.calls).toEqual(['case-a case-a', 'case-a case-a.rerun', 'case-b case-b', 'case-b case-b.rerun']);
+    const never = script({ 'case-a': [{ status: 'FAIL', redClass: 'INFRA' }], 'case-b': [{ status: 'INCOMPLETE', redClass: 'INCOMPLETE' }] });
+    const kept = await runBisectPrefix(plan, 1, { rootDir: scratch, evalDir: path.join(scratch, 'bisect-never'), checkedOut: A, runCase: never.runCase });
+    expect(kept.panels.map(p => [p.case, p.status, p.red_class])).toEqual([['case-a', 'FAIL', 'INFRA'], ['case-b', 'INCOMPLETE', 'INCOMPLETE']]);
+    expect(never.calls).toHaveLength(2);
   });
 });
 

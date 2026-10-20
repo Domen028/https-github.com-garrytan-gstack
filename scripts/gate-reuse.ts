@@ -9,9 +9,13 @@
  *            report verdict and its plan's selection fingerprint. Reused runs
  *            bind nothing, so reuse never chains off a reuse.
  *   find     (recover-receipts, BASE-REF code, actions: read) takes the newest
- *            earlier completed run of this PR that bound a verdict. It must be
- *            GREEN with reconcile exit 0 and a successful conclusion, ran the
- *            PR profile, and gated a different head. Then one of:
+ *            earlier completed run of this PR that bound a verdict (its
+ *            newest attempt's binding). It must be GREEN with reconcile exit 0
+ *            and a successful conclusion, ran the PR profile, and gated a
+ *            different head. A flaky-annotated GREEN (rule 16: a red that
+ *            passed its one in-run rerun, or a `gh run rerun --failed`
+ *            attempt that passed every earlier red) is such a GREEN; a run
+ *            still red after its rerun binds RED and is never reused. Then one of:
  *              restamp-only (R2a): same base; the tree receipt
  *                (lib/tree-receipt.ts, the base's ship policy) says
  *                `TREE: same-modulo-stamps` and every differing file is a stamp
@@ -78,6 +82,8 @@ export interface GateBinding {
   /** Cases accepted manually (unscored); a gate with any is never reused as a clean pass. */
   manual_accepted: number;
   selection_sha256: string;
+  /** Rule 16: cases that failed once and passed on their one rerun; the GREEN is reusable and carries their names. */
+  flaky_cases?: string[];
   /** Dispatched screens only: the purpose, the refs/pull/<n>/merge commit it tested, and the screen policy. */
   purpose?: 'screen';
   tested_sha?: string;
@@ -112,6 +118,8 @@ export interface GateReuse {
   own_diff_sha256?: string;
   /** The reused run was a dispatched screen with this policy. */
   reused_screen_policy?: ScreenPolicy;
+  /** The reused GREEN was flaky-annotated (rule 16): these cases failed once and passed on their one rerun. */
+  reused_flaky?: string[];
 }
 
 /** The cases, trial plans and verdict-relevant plan fields a run executes; slice packing and receipts are excluded. */
@@ -133,6 +141,7 @@ export function parseBinding(value: unknown): GateBinding | null {
   if (!b || b.schema !== 1 || typeof b.repository !== 'string' || !Number.isSafeInteger(b.pr) || !Number.isSafeInteger(b.run_id)
     || !Number.isSafeInteger(b.run_attempt) || !SHA.test(b.head_sha ?? '') || !SHA.test(b.base_sha ?? '') || typeof b.profile !== 'string'
     || !Number.isSafeInteger(b.reconcile_exit) || typeof b.verdict !== 'string' || !Number.isSafeInteger(b.manual_accepted) || b.manual_accepted < 0 || !SHA256.test(b.selection_sha256 ?? '')) return null;
+  if (b.flaky_cases !== undefined && (!Array.isArray(b.flaky_cases) || b.flaky_cases.some(id => typeof id !== 'string' || !id))) return null;
   if (b.purpose !== undefined && (b.purpose !== 'screen' || !SHA.test(b.tested_sha ?? '') || (b.screen_policy !== 'narrow' && b.screen_policy !== 'broad'))) return null;
   return b;
 }
@@ -278,13 +287,15 @@ export function buildBinding(o: { repository: string; pr: number; runId: number;
   if (!o.baseSha) return { binding: null, reason: 'the tested base is unknown' };
   const manifest = readJson<PaidRunManifest>(path.join(o.reportDir, 'manifest.json'));
   if (!manifest?.entries) return { binding: null, reason: 'no readable manifest' };
-  const outcomes = readJson<{ verdict?: { verdict?: string }; totals?: { manual_accepted?: number } }>(path.join(o.reportDir, 'collector-outcomes.json'));
+  const outcomes = readJson<{ verdict?: { verdict?: string }; totals?: { manual_accepted?: number }; flaky?: Array<{ case?: string }> }>(path.join(o.reportDir, 'collector-outcomes.json'));
+  const flaky = (outcomes?.flaky ?? []).map(record => record.case ?? '');
   const binding: GateBinding = { schema: 1, repository: o.repository, pr: o.pr, run_id: o.runId, run_attempt: o.runAttempt,
     head_sha: o.headSha, base_sha: o.baseSha, profile: o.profile, reconcile_exit: o.reconcileExit,
     verdict: outcomes?.verdict?.verdict ?? 'MISSING', manual_accepted: outcomes?.totals?.manual_accepted ?? -1, selection_sha256: selectionFingerprint(manifest),
+    ...(flaky.length ? { flaky_cases: flaky } : {}),
     ...(o.purpose === 'screen' ? { purpose: 'screen' as const, tested_sha: o.testedSha ?? '', screen_policy: o.screenPolicy as ScreenPolicy } : {}) };
   return parseBinding(binding)
-    ? { binding, reason: `bound ${binding.verdict} at ${binding.head_sha.slice(0, 12)} on base ${binding.base_sha.slice(0, 12)} (reconcile exit ${binding.reconcile_exit})` }
+    ? { binding, reason: `bound ${binding.verdict}${binding.flaky_cases ? ` (flaky: ${binding.flaky_cases.join(', ')})` : ''} at ${binding.head_sha.slice(0, 12)} on base ${binding.base_sha.slice(0, 12)} (reconcile exit ${binding.reconcile_exit})` }
     : { binding: null, reason: 'binding fields are incomplete' };
 }
 
@@ -419,7 +430,8 @@ export function findReusableGate(o: FindOptions): { candidate: GateReuse | null;
     if (policy.errors.length) return refuse(`the base's ship policy is invalid (${policy.errors[0]!.message})`);
     const common = { schema: 1 as const, pr: o.pr, reused_run_id: run.id, reused_run_attempt: binding.run_attempt, gated_head: binding.head_sha,
       current_head: o.headSha, gated_base: binding.base_sha, base_sha: baseSha, selection_sha256: binding.selection_sha256,
-      ...(binding.screen_policy ? { reused_screen_policy: binding.screen_policy } : {}) };
+      ...(binding.screen_policy ? { reused_screen_policy: binding.screen_policy } : {}),
+      ...(binding.flaky_cases?.length ? { reused_flaky: binding.flaky_cases } : {}) };
 
     let candidate: GateReuse;
     if (binding.base_sha === baseSha) {
@@ -484,6 +496,7 @@ export function reuseReport(reuse: GateReuse, repo: string): string {
     `GATE REUSED (${reuse.kind === 'restamp-only' ? 'R2a, restamp-only' : 'R2, main moved'}): no paid case ran on ${reuse.current_head}`,
     `reused verdict: GREEN from run ${reuse.reused_run_id} attempt ${reuse.reused_run_attempt}${reuse.reused_screen_policy ? ` (a ${reuse.reused_screen_policy} screen)` : ''} at ${reuse.gated_head} (https://github.com/${repo}/actions/runs/${reuse.reused_run_id})`,
     `why: ${reuse.why}`,
+    ...(reuse.reused_flaky?.length ? [`flaky (rule 16): ${reuse.reused_flaky.join(', ')} failed once and passed on their one rerun in the reused gate`] : []),
     `base: ${reuse.gated_base} -> ${reuse.base_sha}`,
     ...evidence,
     `selection: ${reuse.selection_sha256} (identical to the reused gate)`,

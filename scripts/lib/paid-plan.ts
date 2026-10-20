@@ -66,14 +66,17 @@ export interface PaidRunManifest {
   selection?: PaidCaseSelection;
   prCoverage?: PrProfileSelection;
   plan?: PaidSlicePlan;
+  /** A rule-16 rerun manifest (scripts/lib/paid-rerun.ts): the run attempt whose reds it reruns once, and those cases. */
+  rerun?: { attempt: number; cases: string[] };
   entries: ManifestEntry[];
 }
 
 /**
- * Paid evals never retry (approved 2026-09-29): a failed verdict is final for
- * its run, and trials are fixed by kind before the run (EVAL_POLICY). The
- * function stays the single statement of that policy for the Bun arguments
- * and the reuse identity.
+ * Bun never retries a paid case inside a shard (approved 2026-09-29): trials
+ * are fixed by kind before the run (EVAL_POLICY). The one rule-16 rerun of a
+ * red case (CREW rule 16, scripts/lib/paid-rerun.ts) is a separate,
+ * reported execution, never a Bun retry. The function stays the single
+ * statement of that policy for the Bun arguments and the reuse identity.
  */
 export function retriesForFiles(_files: string[]): number {
   return 0;
@@ -514,6 +517,10 @@ export function parseRunManifest(raw: string): PaidRunManifest {
       throw new Error('manifest deferred case is outside the broad census');
     }
   }
+  if (parsed.rerun !== undefined && (!Number.isSafeInteger(parsed.rerun?.attempt) || parsed.rerun.attempt < 1 || !Array.isArray(parsed.rerun.cases)
+    || parsed.rerun.cases.length === 0 || parsed.rerun.cases.some(id => typeof id !== 'string') || new Set(parsed.rerun.cases).size !== parsed.rerun.cases.length)) {
+    throw new Error('manifest rerun block invalid');
+  }
   if (!Number.isInteger(parsed.sliceCount) || parsed.sliceCount <= 0) throw new Error('manifest sliceCount invalid');
   if (!Array.isArray(parsed.entries)) throw new Error('manifest entries missing');
   for (const entry of parsed.entries) {
@@ -665,6 +672,8 @@ export interface SliceResult {
   finishedAt?: number;
   /** A progress checkpoint the executor never replaced: the job ended (ceiling or cancellation) before its final result. */
   checkpoint?: true;
+  /** Produced from a rule-16 rerun manifest (`manifest.rerun`), never a first-attempt slice. */
+  rerun?: true;
   outcomes: Array<Pick<ShardOutcome, 'files' | 'status' | 'exitCode' | 'elapsedMs' | 'executedTests' | 'skippedTests' | 'budget' | 'reused' | 'runnerError' | 'trial' | 'inputKey' | 'sliceDeadline'>>;
 }
 
@@ -674,11 +683,18 @@ export interface SliceResult {
  * isolated trial shard fails it only when the harness produced no trial
  * record. Failed, timed-out or crashed trials are verdict input for the
  * report's panelVerdict(), so a 2/3 PASS panel never reds its runner.
+ * `caseVerdicts` (the gate lane's CI slices, rule 16): a rule shard that ran
+ * to completion and reported executed cases is verdict input too, so its red
+ * cases stay in the report (which still fails closed on them) and the run's
+ * conclusion follows the report, where a flaky case can resolve green.
  */
-export function sliceExitCode(outcomes: ReadonlyArray<Pick<ShardOutcome, 'status' | 'trial'>>): number {
+export function sliceExitCode(outcomes: ReadonlyArray<Pick<ShardOutcome, 'status' | 'trial'> & Partial<Pick<ShardOutcome, 'exitCode' | 'executedTests' | 'skippedTests' | 'runnerError' | 'sliceDeadline'>>>,
+  options: { caseVerdicts?: boolean } = {}): number {
+  const completedRed = (o: (typeof outcomes)[number]) => !!options.caseVerdicts && o.status === 'failed' && o.exitCode !== null && o.exitCode !== undefined
+    && typeof o.executedTests === 'number' && o.executedTests - (o.skippedTests ?? 0) > 0 && o.runnerError === undefined && !o.sliceDeadline;
   return outcomes.every(outcome => outcome.trial !== undefined
     ? outcome.trial.outcome !== null
-    : outcome.status === 'passed' || outcome.status === 'skipped-by-diff') ? 0 : 1;
+    : outcome.status === 'passed' || outcome.status === 'skipped-by-diff' || completedRed(outcome)) ? 0 : 1;
 }
 
 /** A hollow-guarded trial shard has no trial record: the guard's verdict is a harness problem. */
@@ -697,8 +713,16 @@ export function guardTrialRecords<T extends Pick<ShardOutcome, 'status' | 'trial
 export function verifySliceResults(
   manifest: PaidRunManifest,
   results: SliceResult[],
+  /**
+   * `flaky`: non-trial shards whose every failed case passed its one rule-16
+   * rerun (scripts/lib/paid-rerun.ts); their non-zero exit and failed status
+   * are not problems. `partial`: a later run attempt that re-ran only some
+   * slices, so a slice it did not re-run is no problem.
+   */
+  options: { flaky?: ReadonlySet<string>; partial?: boolean } = {},
 ): { ok: boolean; problems: string[] } {
   const problems: string[] = [];
+  const exitOk = (file: string, exitCode: number | null) => exitCode === 0 || !!options.flaky?.has(file);
   try { parseRunManifest(JSON.stringify(manifest)); }
   catch (error) { problems.push(`Invalid run manifest: ${error instanceof Error ? error.message : String(error)}`); }
   const byIndex = new Map<number, SliceResult>();
@@ -713,7 +737,7 @@ export function verifySliceResults(
     byIndex.set(result.sliceIndex, result);
   }
   for (let index = 1; index <= manifest.sliceCount; index += 1) {
-    if (!byIndex.has(index)) problems.push(`slice ${index}/${manifest.sliceCount} reported NO result — cancelled/crashed executor, not a pass`);
+    if (!byIndex.has(index) && !options.partial) problems.push(`slice ${index}/${manifest.sliceCount} reported NO result — cancelled/crashed executor, not a pass`);
   }
 
   const reported = new Map<string, { slice: number; status: ShardStatus; trial?: ShardTrialRecord; sliceDeadline?: ShardOutcome['sliceDeadline'] }>();
@@ -731,7 +755,7 @@ export function verifySliceResults(
           ? -1 : outcome.executedTests - outcome.skippedTests;
         // A trial's exit status is its verdict (panelVerdict decides); its
         // completeness is the trial record checked below.
-        if ((!trialPlan && outcome.exitCode !== 0) || expected < 1 || (!trialPlan && executed !== expected)) {
+        if ((!trialPlan && !exitOk(file, outcome.exitCode)) || expected < 1 || (!trialPlan && executed !== expected)) {
           problems.push(`PR profile expected ${expected} executed cases in ${file}, received ${executed}`);
         }
       }
@@ -767,7 +791,7 @@ export function verifySliceResults(
       if (finding) {
         // Full-census runs must account for every registered case. A manifest
         // explicitly marked selective may report its executed subset.
-        if (outcome.exitCode !== 0 || !Number.isInteger(outcome.executedTests) ||
+        if (!exitOk(file, outcome.exitCode) || !Number.isInteger(outcome.executedTests) ||
             outcome.executedTests! < 1 || outcome.executedTests! > finding.cases ||
             (manifest.evalsAll !== false && outcome.executedTests !== finding.cases) || outcome.skippedTests !== 0) {
           problems.push(`Finding workflow must execute real unskipped cases with exit zero: ${file}`);
@@ -794,7 +818,7 @@ export function verifySliceResults(
     // Isolated trial shards: harness health only; the panel verdict gates.
     if (entry.trial) {
       if (got.trial?.outcome === null) problems.push(`${entry.file}: no trial record (${got.trial.harness ?? 'unknown'})`);
-    } else if (got.status !== 'passed') {
+    } else if (got.status !== 'passed' && !(got.status === 'failed' && options.flaky?.has(normalizeRelativePath(entry.file)))) {
       // The slice deadline distinguishes work that never started (INFRA) from work killed in flight (TIMEOUT).
       const why = got.sliceDeadline === 'not_run' ? ' (not_run: the slice deadline passed before it started)'
         : got.sliceDeadline === 'hung' ? ' (hung: killed at the slice deadline)' : '';

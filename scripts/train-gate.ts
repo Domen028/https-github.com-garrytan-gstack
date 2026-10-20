@@ -36,6 +36,7 @@ import { UNRECORDED_SHARD_MS, nonceScope, plannedSerialMs } from './eval-bg';
 import { caseTrialPlan, fileCaseRegistration, shardCaseId, shardFile } from './lib/paid-cases';
 import { buildRunManifest, loadPaidTestDurations, parseRunManifest, recordedShardMs, type PaidRunManifest } from './lib/paid-plan';
 import { loadSliceArtifacts } from './lib/paid-report';
+import type { FlakeRecord } from './lib/paid-rerun';
 import { paidSelectionEnv } from './lib/paid-select';
 import { ROOT } from './lib/paid-types';
 
@@ -195,11 +196,14 @@ function readJson<T>(file: string): T | null {
 }
 
 /** One panel per planned case from the run's trial outcomes (trial panels from the collector's panelVerdict). */
-function casePanels(planned: Map<string, string>, outcomes: OutcomeLine[], collector: CollectorPanel[]): CasePanel[] {
+function casePanels(planned: Map<string, string>, outcomes: OutcomeLine[], collector: CollectorPanel[], flaky: FlakeRecord[] = []): CasePanel[] {
   return [...planned].sort(([a], [b]) => (a < b ? -1 : 1)).map(([id, kind]) => {
     const mine = outcomes.filter(o => o.case === id && o.execution !== 'reused');
     const cost = mine.length && mine.every(o => o.cost_known !== false && typeof o.cost_usd === 'number')
       ? Math.round(mine.reduce((sum, o) => sum + o.cost_usd!, 0) * 10_000) / 10_000 : null;
+    // Rule 16: the report resolved this case FLAKY (failed once, passed its one rerun): a PASS that names both runs.
+    const flake = flaky.find(f => f.case === id);
+    if (flake) return { case: id, kind, status: 'PASS', red_class: null, cost_usd: cost, flaky: { first: flake.first.where, rerun: flake.rerun.where } };
     const panel = collector.find(p => p.case === id);
     if (panel) return { case: id, kind, status: panel.status, red_class: panel.redClass, cost_usd: cost };
     const failed = mine.filter(o => o.outcome === 'failed');
@@ -219,8 +223,8 @@ export function buildTrainRecord(o: { reportDir: string; nonce: string; head: st
   let lines: OutcomeLine[] = [];
   try { lines = fs.readFileSync(path.join(o.reportDir, 'trial-outcomes.jsonl'), 'utf8').split('\n').filter(Boolean).map(line => JSON.parse(line) as OutcomeLine); } catch { lines = []; }
   const primary = Math.min(...lines.map(l => l.attempt ?? 1), Infinity);
-  const collector = readJson<{ verdict?: { verdict?: string }; census?: { unattributed?: unknown[] }; panels?: CollectorPanel[] }>(path.join(o.reportDir, 'collector-outcomes.json'));
-  const panels = casePanels(planned, lines.filter(l => (l.attempt ?? 1) === primary), collector?.panels ?? []);
+  const collector = readJson<{ verdict?: { verdict?: string }; census?: { unattributed?: unknown[] }; panels?: CollectorPanel[]; flaky?: FlakeRecord[] }>(path.join(o.reportDir, 'collector-outcomes.json'));
+  const panels = casePanels(planned, lines.filter(l => (l.attempt ?? 1) === primary), collector?.panels ?? [], collector?.flaky ?? []);
   const artifacts = loadSliceArtifacts(o.reportDir);
   const first = Math.min(...artifacts.map(a => a.result.attempt ?? 1), Infinity);
   const results = artifacts.filter(a => (a.result.attempt ?? 1) === first).map(a => a.result);
@@ -246,7 +250,7 @@ export function buildTrainRecord(o: { reportDir: string; nonce: string; head: st
 
 export interface BisectPlan { schema: 1; nonce: string; cases: Array<{ id: string; kind: string }>; prefixes: string[] }
 
-/** One executor per prefix; each case runs one trial, so a slice's ceiling grows with the case count. */
+/** One executor per prefix; each case runs one trial (and at most one rule-16 rerun inside its 30 minutes), so a slice's ceiling grows with the case count. */
 export function bisectMatrix(plan: BisectPlan): { slices: number[]; timeouts: number[]; refs: string[] } {
   const minutes = Math.min(350, 20 + 30 * plan.cases.length);
   return { slices: plan.prefixes.map((_, i) => i + 1), timeouts: [0, ...plan.prefixes.map(() => minutes)], refs: ['', ...plan.prefixes] };
@@ -254,7 +258,13 @@ export function bisectMatrix(plan: BisectPlan): { slices: number[]; timeouts: nu
 
 export type CaseRunner = (id: string, kind: string, evalDir: string) => Promise<{ status: string; redClass: string | null }>;
 
-/** Run every red case once on the checked-out prefix; a case that leaves no verdict is INCOMPLETE (T1 relaunches it). */
+/**
+ * Run every red case once on the checked-out prefix; a case that leaves no
+ * verdict is INCOMPLETE (T1 relaunches it). Rule 16 holds here as in the
+ * gate: a case verdict that fails (red class VERDICT) reruns once on the same
+ * prefix; passing makes it a flaky PASS naming both runs, failing again keeps
+ * it red. INFRA and INCOMPLETE are never rerun.
+ */
 export async function runBisectPrefix(plan: BisectPlan, index: number, o: { rootDir: string; evalDir: string; checkedOut: string; runCase?: CaseRunner }): Promise<BisectPrefixRecord> {
   const sha = plan.prefixes[index - 1];
   if (!sha) throw new Error(`bisect slice ${index} names no prefix (${plan.prefixes.length} planned)`);
@@ -262,11 +272,19 @@ export async function runBisectPrefix(plan: BisectPlan, index: number, o: { root
   const runCase = o.runCase ?? ((id, kind, evalDir) => runOneTrial(id, kind, evalDir, o.rootDir));
   const panels: CasePanel[] = [];
   for (const c of plan.cases) {
-    let verdict: { status: string; redClass: string | null };
-    try { verdict = await runCase(c.id, c.kind, path.join(o.evalDir, c.id.replace(/[^A-Za-z0-9._-]/g, '_'))); }
-    catch (error) { console.error(`[train-gate] ${c.id}: ${error instanceof Error ? error.message : String(error)}`); verdict = { status: 'INCOMPLETE', redClass: 'INCOMPLETE' }; }
-    panels.push({ case: c.id, kind: c.kind, status: verdict.status, red_class: verdict.redClass, cost_usd: null });
-    console.log(`[train-gate] prefix ${sha.slice(0, 12)} (slice ${index}): ${c.id} ${verdict.status}${verdict.redClass ? ` (${verdict.redClass})` : ''}`);
+    const dir = path.join(o.evalDir, c.id.replace(/[^A-Za-z0-9._-]/g, '_'));
+    const run = async (evalDir: string): Promise<{ status: string; redClass: string | null }> => {
+      try { return await runCase(c.id, c.kind, evalDir); }
+      catch (error) { console.error(`[train-gate] ${c.id}: ${error instanceof Error ? error.message : String(error)}`); return { status: 'INCOMPLETE', redClass: 'INCOMPLETE' }; }
+    };
+    const verdict = await run(dir);
+    const rerun = verdict.status === 'FAIL' && verdict.redClass === 'VERDICT' ? await run(`${dir}.rerun`) : null;
+    const flaky = rerun?.status === 'PASS';
+    const final = flaky ? rerun! : verdict;
+    panels.push({ case: c.id, kind: c.kind, status: final.status, red_class: final.redClass, cost_usd: null,
+      ...(flaky ? { flaky: { first: `prefix ${sha.slice(0, 12)} slice ${index}`, rerun: `prefix ${sha.slice(0, 12)} slice ${index} rerun` } } : {}) });
+    console.log(`[train-gate] prefix ${sha.slice(0, 12)} (slice ${index}): ${c.id} ${verdict.status}${verdict.redClass ? ` (${verdict.redClass})` : ''}`
+      + `${rerun ? `; rule-16 rerun ${rerun.status}${rerun.redClass ? ` (${rerun.redClass})` : ''}${flaky ? ': FLAKY, counted as PASS' : ': failed twice, red'}` : ''}`);
   }
   return { schema: 1, kind: 'train-bisect-prefix', nonce: plan.nonce, prefix_sha: sha, checked_out_sha: o.checkedOut, panels };
 }
