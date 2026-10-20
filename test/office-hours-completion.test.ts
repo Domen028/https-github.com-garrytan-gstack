@@ -1040,6 +1040,20 @@ Next: /plan-eng-review after observing the workflow. The user declined launching
     expect(() => checkArtifacts(evidence, artifacts)).toThrow('observed JSON Write');
   });
 
+  test('a seal error recovered by a complete re-Write passes; the same recovery by Edit is not the observed Write', () => {
+    const recovered = structured();
+    const final = recovered.evidence.toolCalls.findLastIndex(call => call.input?.file_path === recovered.artifacts[1].path);
+    recovered.evidence.toolCalls.splice(final, 0,
+      { tool: 'Write', input: { file_path: recovered.artifacts[1].path, content: recovered.artifacts[1].content.replace('"round":2', '"round":3') } },
+      { tool: 'Bash', input: { command: 'gstack-office-hours-review seal --design design.md --verdict round-2.json round-1.json' }, output: 'Error: verdict round does not match' });
+    expect(() => checkArtifacts(recovered.evidence, recovered.artifacts)).not.toThrow();
+    const patched = structured();
+    const write = patched.evidence.toolCalls.findLast(call => call.input?.file_path === patched.artifacts[1].path)!;
+    write.input!.content = patched.artifacts[1].content.replace('"round":2', '"round":3');
+    patched.evidence.toolCalls.push({ tool: 'Edit', input: { file_path: patched.artifacts[1].path, old_string: '"round":3', new_string: '"round":2' } });
+    expect(() => checkArtifacts(patched.evidence, patched.artifacts)).toThrow('artifact differs from its observed Write');
+  });
+
   test('accepts relative and dot-segment Writes to the assigned artifact', () => {
     const { evidence, artifacts } = structured();
     evidence.toolCalls.find(call => call.input?.file_path === artifacts[0].path)!.input!.file_path = './review/round-1.json';

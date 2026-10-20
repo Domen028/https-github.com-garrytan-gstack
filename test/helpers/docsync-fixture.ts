@@ -11,6 +11,11 @@ export const DOCSYNC_ROOT = path.resolve(import.meta.dir, '../..');
 export const DOC_PATH = 'handbook/reference/commands/widget.md.tmpl';
 export type DocsScenario = 'updated' | 'current' | 'risky' | 'store' | 'legacy';
 
+/** The fixture's CLAUDE_CONFIG_DIR: credentials and session transcripts, unreadable to the actor except settings.json. */
+export function docsConfigDir(home: string): string {
+  return path.join(home, 'cc');
+}
+
 export function gitAt(repo: string, ...args: string[]): string {
   const result = spawnSync('git', args, { cwd: repo, encoding: 'utf8', timeout: 15000,
     env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } });
@@ -126,7 +131,7 @@ export function fixtureDocs(scenario: DocsScenario, generatedRoot = process.env.
   const state = path.join(home, 'state');
   fs.mkdirSync(state);
   fs.writeFileSync(path.join(state, 'config.yaml'), 'update_check: false\n');
-  const config = path.join(home, 'cc');
+  const config = docsConfigDir(home);
   fs.mkdirSync(config);
   fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify(buildSeedConfig({
     apiKey: process.env.ANTHROPIC_API_KEY, trustedDirs: [repo],

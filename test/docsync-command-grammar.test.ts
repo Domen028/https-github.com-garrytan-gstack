@@ -2,8 +2,8 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fixtureDocs, gitAt, repoSnapshot } from './helpers/docsync-fixture';
-import { docsCommandAllowed, docsNativeInterface, docsSessionOptions, docsToolFailures } from './helpers/docsync-observer';
+import { DOC_PATH, fixtureDocs, gitAt, repoSnapshot } from './helpers/docsync-fixture';
+import { docsCommandAllowed, docsCompletedRead, docsNativeInterface, docsSessionOptions, docsToolFailures } from './helpers/docsync-observer';
 import { parseNDJSON, type SkillTestResult } from './helpers/session-runner';
 
 let fixture: ReturnType<typeof fixtureDocs>;
@@ -57,7 +57,7 @@ test('captured check-ignore read is declared, executes without changing the repo
   expect(result.stdout).toContain('.qa-state');
   expect(docsToolFailures(nativeResult(command, result.stdout), fixture, [], true)).toEqual([]);
   expect(repoSnapshot(fixture.repo)).toEqual(before);
-  for (const denied of ['git check-ignore -v .qa-state; ls', 'git check-ignore -v .qa-state > out.txt']) {
+  for (const denied of ['git check-ignore -v .qa-state; git add .qa-state', 'git check-ignore -v .qa-state > out.txt']) {
     expect(docsCommandAllowed(denied, fixture)).toBe(false);
   }
 });
@@ -72,7 +72,7 @@ test('captured tracked-file listing is a declared read and leaves the repository
   expect(result.status).toBe(0);
   expect(docsToolFailures(nativeResult(command, result.stdout), fixture, [], true)).toEqual([]);
   expect(repoSnapshot(fixture.repo)).toEqual(before);
-  for (const rejected of ['git ls-tree -r HEAD > tree.txt', 'git ls-tree -r HEAD | head', 'git -c core.pager=less ls-tree HEAD']) {
+  for (const rejected of ['git ls-tree -r HEAD > tree.txt', 'git ls-tree -r HEAD | tee tree.txt', 'git -c core.pager=less ls-tree HEAD']) {
     expect(docsCommandAllowed(rejected, fixture)).toBe(false);
   }
 });
@@ -96,8 +96,8 @@ test.each([
   '{ git rev-parse HEAD; }', 'git rev-parse HEAD^{tree,commit}', 'git rev-parse HEAD@{0..2}',
   'git rev-parse HEAD^{tree}{,x}', 'git rev-parse HEAD^{tree', 'git rev-parse HEAD^{tree}}',
   'git rev-parse {HEAD}', 'git rev-parse HEAD$(pwd)', 'git rev-parse "HEAD$(pwd)"',
-  'git rev-parse `pwd`', 'git rev-parse ${HEAD}', 'git rev-parse HEAD; git status',
-  'git rev-parse HEAD && git status', 'git rev-parse HEAD | cat',
+  'git rev-parse `pwd`', 'git rev-parse ${HEAD}', 'git rev-parse HEAD; git add app.ts',
+  'git rev-parse HEAD && git commit -m changed', 'git rev-parse HEAD | sh',
   'git rev-parse HEAD > out.md', 'git rev-parse HEAD 2>/tmp/leak', 'git rev-parse HEAD < in.md',
   'git rev-parse HEAD\ngit status', 'git rev-parse HEAD &', 'git rev-parse HEAD\\^{tree}',
   'git rev-parse "HEAD^{tree}', "git rev-parse 'HEAD^{tree}", 'git rev-parse HEAD*',
@@ -405,4 +405,87 @@ test('describe forms that refresh the index or fall outside the declared set, an
   } finally {
     own.clean();
   }
+});
+
+
+// ship-docsync-current on Opus 5.5: run 39347827595 (PR #3300 @ ca215b0) went red only on the parent's joined Git read,
+// and run 39344306426 (PR #3312 @ c895ab9) only on the child's loop that printed each selected file under a header.
+// Both are pure reads; each still runs as declared and leaves the repository unchanged.
+const CURRENT_COMPOSED_READS = [
+  'cat personal-note.txt; echo ---; git diff main HEAD',
+  'for f in AGENTS.md README.md CHANGELOG.md TODOS.md VERSION app.ts package.json handbook/reference/commands/widget.md.tmpl personal-note.txt; do echo "=== $f"; cat $f; done',
+  'git status --porcelain && git diff --cached | head -5',
+  'for doc in README.md AGENTS.md; do git log --oneline -- $doc; done',
+  'for f in app.ts; do echo "== ${f}"; cat "$f" 2>/dev/null; done',
+  // Focused Opus trial after the first repair (2026-10-20): a loop joined to a find.
+  'for f in AGENTS.md README.md CHANGELOG.md TODOS.md VERSION app.ts package.json handbook/reference/commands/widget.md.tmpl; do echo "== $f"; cat $f; done; find <HOME>/repo -name .gstack -not -path "*/.git/*"',
+  'git status; for f in README.md AGENTS.md; do cat $f; done && git rev-parse HEAD',
+  // Round-1 focused trial and the round-2 ship-docsync-completion trial: NUL-separated paths shown one per line.
+  "git ls-files -z --cached --others --exclude-standard | tr '\\0' '\\n'",
+  "git status --porcelain=v1 --ignored; git rev-parse HEAD; git merge-base main HEAD; git branch --show-current; git ls-files -z --cached --others --exclude-standard | tr '\\0' '\\n'",
+];
+
+test('captured composed reads of ship-docsync-current are declared and leave the repository unchanged (39347827595, 39344306426)', () => {
+  const own = fixtureDocs('current');
+  try {
+    expect(docsNativeInterface(own)).toContain('The Git reads above may join such a line too');
+    expect(docsNativeInterface(own)).toContain('A for loop over literal words');
+    const before = repoSnapshot(own.repo);
+    for (const command of CURRENT_COMPOSED_READS.map(line => line.replaceAll('<HOME>', own.home))) {
+      expect(docsCommandAllowed(command, own), command).toBe(true);
+      expect(docsToolFailures(nativeResult(command, 'output', 'docs-dispatch'), own, [], true), command).toEqual([]);
+      const run = spawnSync('bash', ['-c', command], { cwd: own.repo, encoding: 'utf8', timeout: 10000 });
+      expect(run.status, `${command}: ${run.stderr}`).toBe(0);
+    }
+    expect(repoSnapshot(own.repo)).toEqual(before);
+    const doc = path.join(own.repo, DOC_PATH);
+    const source = fs.readFileSync(doc, 'utf8');
+    const credited = (command: string) => docsCompletedRead(nativeResult(command, source), doc, own);
+    expect(credited(`cat ${DOC_PATH}; git status`)).toBe(true);
+    expect(credited(`git status; cat ${DOC_PATH} | head`)).toBe(false);
+    // The focused trial's child read the document only inside its loop.
+    const loop = `for f in personal-note.txt README.md ${DOC_PATH} app.ts; do echo "=== $f"; cat $f; done`;
+    const looped = spawnSync('bash', ['-c', loop], { cwd: own.repo, encoding: 'utf8', timeout: 10000 }).stdout;
+    expect(docsCompletedRead(nativeResult(loop, looped), doc, own)).toBe(true);
+    expect(docsCompletedRead(nativeResult(`for f in ${DOC_PATH}; do cat $f | head -1; done`, source), doc, own)).toBe(false);
+    expect(docsCompletedRead(nativeResult(`for f in ${DOC_PATH}; do cat $f; cat $HOME; done`, source), doc, own)).toBe(false);
+  } finally {
+    own.clean();
+  }
+});
+
+// Run 39338691964 (PR #3308 @ 8da34e2) keeps failing on purpose: the child's stray assignment, and the parent's reads
+// of agents' session transcripts in the Claude config dir (now named off-limits in the interface). Joined Git reads
+// and loops grant no write, bypass option, pipe sink, cd, glob, variable or denied path.
+test.each([
+  'for_none=1; cat AGENTS.md README.md',
+  'find <HOME>/cc/projects -type f',
+  'grep -o SESSION_KIND <HOME>/cc/projects/session/subagents/agent-a.jsonl',
+  'cat README.md; git add app.ts', 'git diff; git commit -m changed', 'ls && git -c core.pager=less show HEAD',
+  'ls; git -C /tmp status', 'cat app.ts | git hash-object -w --stdin', 'cat app.ts | git hash-object --stdin',
+  'cd .. && git status; ls', 'cd handbook; git status', 'git diff > out.md; ls', 'ls; git diff --output=out.md',
+  'git status & ls', 'git status; rm app.ts', 'git log | sh', 'git log | tee log.md', 'git status; cat <HOME>/cc/.claude.json',
+  'git status; git remote get-url origin', "ls; git show 'HEAD", 'git status; ls $HOME',
+  'for f in README.md; do cat $f > out.md; done', 'for f in app.ts; do rm $f; done', 'for f in $(ls); do cat $f; done',
+  'for f in *; do cat $f; done', 'for f in c*/.claude.json; do cat "$f"; done', 'for PATH in /tmp; do cat README.md; done',
+  'for f in README.md; do cat $f; cat $HOME; done', 'for f in README.md; do cat $f; done; rm app.ts',
+  'for f in README.md; do cat $f; done > out.md', 'for f in "README.md"; do cat $f; done', 'for f in ../../outside; do cat $f; done',
+  'for f in ../cc/.claude.json; do cat $f; done', 'for f in app.ts; do git add $f; done', 'for f in a b; do for g in c; do cat $g; done; done',
+  'for f in README.md; do cat $f; done &', 'for f in {README,AGENTS}.md; do cat $f; done', 'for f in ~/x; do cat $f; done',
+  'ls; for f in README.md; do cat $f; done > out.md', 'for f in README.md; do cat $f; done; for g in app.ts; do rm $g; done',
+  'ls; for f in README.md; do cat $f; done | sh', 'cd ..; for f in README.md; do git status; done', 'for f in README.md; do cat $f && done',
+  "git ls-files -z | tr '\\0' '\\n' | sh", "git ls-files -z | tr '\\0' '\\n' > files.md", 'tr a b', "git ls-files | tr '$x' y",
+])('composed reads stay closed to writes and bypasses: %s', command => {
+  const line = command.replaceAll('<HOME>', fixture.home);
+  expect(docsCommandAllowed(line, fixture), line).toBe(false);
+  expect(docsToolFailures(nativeResult(line, 'successful tool acknowledgment', 'docs-dispatch'), fixture, [], true))
+    .toEqual(['command outside declared docs observation interface']);
+});
+
+test('the docs interface names the Claude config dir and private actor state as unreadable', () => {
+  const guidance = docsNativeInterface(fixture);
+  expect(guidance).toContain(`off ${fixture.env.CLAUDE_CONFIG_DIR} except its settings.json`);
+  expect(guidance).toContain("every agent's session transcript");
+  expect(guidance).toContain('judge a child only by the output it returns');
+  expect(guidance).toContain('Every read stays off actor-state.json');
 });

@@ -8,8 +8,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { guardFixture, section, denial, codeOf, type GuardFixture } from './helpers/autoplan-guard-fixture';
-import { AGENT_KEYS, CHECKED_CLAUDE_CODE, nativeToolInput, newerThanChecked } from '../autoplan/bin/phase-publication-hook.ts';
+import * as crypto from 'node:crypto';
+import { guardFixture, section, denial, codeOf, ROOT, type GuardFixture } from './helpers/autoplan-guard-fixture';
+import { AGENT_KEYS, CHECKED_CLAUDE_CODE, evaluatePayloadPublication, nativeToolInput, newerThanChecked } from '../autoplan/bin/phase-publication-hook.ts';
+import { readOwnedClaudePublicTranscript } from '../lib/claude-owned-journal';
 import { nativePathSpelling } from '../lib/claude-public-transcript';
 import captured from './fixtures/claude-agent-payload-2.1.292.json';
 import { OWNED_READ_APPROVAL } from '../autoplan/bin/owned-read';
@@ -233,6 +235,65 @@ describe('ENG-1: a background reviewer keeps the invocation armed', () => {
     f.add({ kind: 'typed', text: 'Thanks, something else now.' });
     f.journal();
     expect(await f.hook(f.input('next', 'Read', { file_path: section('design-phase.md') }))).toEqual(OWNED_READ_APPROVAL);
+  });
+});
+
+describe('Cause C: the hook runs before Claude Code flushes the turn it acts in (PR gate 39333263804)', () => {
+  // The PTY eval's slash turn (no /autoplan user_turn), its meta skill body, and nothing else: what the
+  // failing attempt's first guarded Read saw at 22:25:20, after the model's init Bash had already returned.
+  const SLASH = '<command-message>autoplan-guard-transition</command-message>\n<command-name>/autoplan-guard-transition</command-name>';
+  /** Writes the slash turn, its meta skill body and the first `kept` later records; flush() appends the rest, as Claude Code does. */
+  function cut(f: GuardFixture, upto: number, kept: number, opening: 'eval' | 'autoplan' = 'eval') {
+    f.journal(upto);
+    let rows = fs.readFileSync(f.transcript, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+    const meta = { ...rows[0], uuid: crypto.randomUUID(), parentUuid: rows[0].uuid, isMeta: true, origin: undefined, promptId: undefined,
+      message: { role: 'user', content: [{ type: 'text', text: 'Base directory for this skill: /project/.claude/skills/autoplan' }] } };
+    if (rows[1]) rows[1] = { ...rows[1], parentUuid: meta.uuid };
+    rows = [opening === 'eval' ? { ...rows[0], message: { role: 'user', content: SLASH } } : rows[0], meta, ...rows.slice(1)];
+    const text = (part: object[]) => part.map(r => JSON.stringify(r) + '\n').join('');
+    fs.writeFileSync(f.transcript, text(rows.slice(0, 2 + kept)));
+    return { flush: () => fs.appendFileSync(f.transcript, text(rows.slice(2 + kept))) };
+  }
+  const entry = (f: GuardFixture) => f.input('entry-now', 'Read', { file_path: section('ceo-phase.md'), offset: 1, limit: 20 });
+
+  test('a ready journal with no public event, flushed inside the window, gets the normal payload verdict', async () => {
+    const f = make(); const { flush } = cut(f, 2, 0);
+    expect(readOwnedClaudePublicTranscript(f.transcript, f.cwd, f.sessionId)).toMatchObject({ transcript: { status: 'ready' }, events: [] });
+    const timer = setTimeout(flush, 300);
+    const output = await f.hook(entry(f)); clearTimeout(timer);
+    expect(denial(output)).toBeUndefined();
+    expect(f.log()).toEqual([expect.objectContaining({ decision: 'allow', disposition: 'allow', path: 'payload' })]);
+  });
+
+  test('a ready journal that stays without a public event is journal lag at expiry, never event_order', async () => {
+    const f = make(); cut(f, 2, 0);
+    const output = await f.hook(entry(f));
+    expect(output.hookSpecificOutput.permissionDecision).toBeUndefined();
+    expect(codeOf(output)).toBe('journal_lag');
+    expect(f.log()).toEqual([expect.objectContaining({ decision: 'allow', disposition: 'unverified', code: 'journal_lag' })]);
+  });
+
+  test('control: a late flush that shows an unpublished phase is still denied', async () => {
+    const f = make(); const { flush } = cut(f, f.steps.length, 0);
+    const timer = setTimeout(flush, 300);
+    const output = await f.hook(f.input('next', 'Read', { file_path: section('design-phase.md') })); clearTimeout(timer);
+    expect(codeOf(output)).toBe('publication_missing');
+  });
+
+  test('an /autoplan turn whose init is flushed late is allowed; control: an init that never appears is init_own', async () => {
+    const late = make(); const { flush } = cut(late, 2, 0, 'autoplan');
+    const timer = setTimeout(flush, 300);
+    expect(denial(await late.hook(entry(late)))).toBeUndefined(); clearTimeout(timer);
+    const missing = make(); cut(missing, 2, 0, 'autoplan');
+    expect(codeOf(await missing.hook(entry(missing)))).toBe('init_own');
+  });
+
+  test('the evaluation itself still denies empty, foreign-session and out-of-order events as event_order', () => {
+    const f = make(); f.journal(2);
+    const events = readOwnedClaudePublicTranscript(f.transcript, f.cwd, f.sessionId).events, input = entry(f);
+    expect(evaluatePayloadPublication(input, ROOT, events)).toEqual({ allow: true });
+    for (const bad of [[], events.map(e => ({ ...e, sessionId: 'foreign-session' })), [...events].reverse()])
+      expect(evaluatePayloadPublication(input, ROOT, bad)).toMatchObject({ allow: false, reason: expect.stringContaining('(code event_order,') });
   });
 });
 

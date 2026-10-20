@@ -9,6 +9,7 @@ import {createPlanCountPermissionGuard,countingCapture,type CountingRun} from '.
 import {createPlanCountSnapshotWriter} from './helpers/plan-count-artifacts';
 import captured from './fixtures/plan-create-prepublication-491.json';
 import toolOnlyCreate from './fixtures/plan-ceo-floor-toolonly-create.json';
+import quoteWrapCreate from './fixtures/plan-ceo-floor-create-quote-wrap.json';
 
 function fixture(){
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'gstack-prewrite-'));const cwd=path.join(root,'owned'),config=path.join(root,'config');fs.mkdirSync(cwd);
@@ -217,5 +218,40 @@ test('a tool-only session gets no credit for a changed preview or a foreign crea
  const f=toolOnlyFixture();try{
   expect(f.read(toolOnlyCreate.screen.replace('Validate first (recommended)','Validate later (recommended)'))).toBeNull();
   expect(f.read(toolOnlyCreate.screen.replaceAll(toolOnlyCreate.basename,'foreign-plan.md'))).toBeUndefined();
+ }finally{f.close();}
+});
+
+// Focused trial t3 (2026-10-20): a soft-wrapped table row continued with '>activation->paid)' and the
+// blockquote guard refused the owned Create menu until permission_unanswered.
+function quoteWrap(){
+ const root=fs.mkdtempSync(path.join(os.tmpdir(),'gstack-quote-wrap-')),cwd=path.join(root,'owned'),config=path.join(root,'config');fs.mkdirSync(cwd);
+ const expected=path.join(cwd,quoteWrapCreate.basename),sid=quoteWrapCreate.sessionId,id=quoteWrapCreate.toolUseId;
+ const journal=path.join(config,'projects','owned',sid+'.jsonl');fs.mkdirSync(path.dirname(journal),{recursive:true});
+ const startedAt=Date.now()-1000,recorder=createFilePermissionRecorder(cwd,config,expected)!,input={file_path:expected,content:quoteWrapCreate.writeContent};
+ fs.writeFileSync(journal,JSON.stringify({cwd,sessionId:sid,isSidechain:false,timestamp:new Date().toISOString(),message:{role:'assistant',content:[{type:'text',text:'Writing the working plan.'}]}})+'\n');
+ recordFilePermission(JSON.stringify({hook_event_name:'PreToolUse',tool_name:'Write',session_id:sid,tool_use_id:id,cwd,transcript_path:journal,tool_input:input}),recorder.file,cwd,config,expected);
+ const read=(screen=quoteWrapCreate.screen)=>currentFilePermissionEpoch(recorder.file,expected,cwd,config,startedAt,readPlanCountTranscript(config,cwd),screen);
+ return {sid,id,read,close(){recorder.dispose();fs.rmSync(root,{recursive:true,force:true});}};
+}
+
+test('t3: a wrapped preview row that continues with ">" still binds the owned Create once',()=>{
+ const f=quoteWrap();try{
+  expect(createHash('sha256').update(quoteWrapCreate.screen).digest('hex')).toBe(quoteWrapCreate.screenSha256);
+  expect(quoteWrapCreate.screen).toContain('\n     >activation->paid) | yes\n');
+  expect(f.read()?.pendingId).toBe(`${f.sid}:${f.id}`);
+  const guard=createPlanCountPermissionGuard();expect(guard(quoteWrapCreate.screen,'',f.read())).toBe('grant');expect(guard(quoteWrapCreate.screen,'',f.read())).toBe('handled');
+ }finally{f.close();}
+});
+
+test.each(['quoted-row','fenced-row','checkbox','changed-continuation'])('t3 negative control: %s above the Create menu is refused',mode=>{
+ const f=quoteWrap();try{
+  const row='  54 Success metric',screen=quoteWrapCreate.screen;
+  const changed=mode==='quoted-row'?screen.replace(row,'  > Question: D1 approve the tier?\n'+row)
+   :mode==='fenced-row'?screen.replace(row,'    ```\n'+row)
+   :mode==='checkbox'?screen.replace(row,'  ☐ Premise\n'+row)
+   :screen.replace('     >activation->paid) | yes','     >activation->retained) | yes');
+  expect(changed).not.toBe(screen);
+  expect(f.read(changed)).toBeNull();
+  expect(createPlanCountPermissionGuard()(changed,'',f.read(changed))).not.toBe('grant');
  }finally{f.close();}
 });
