@@ -54,12 +54,14 @@ import { generateSidewaysSweep, generateFlakeFixNumber } from './sideways';
 import { generateCoordinatorContract } from './coordinator-contract';
 import { generateAutoplanDriverCodes, generateAutoplanDriverCommands, generateAutoplanDriverFiles, generateAutoplanDriverGate, generateAutoplanDriverPhases, generateAutoplanDriverResultFormat } from './autoplan-driver';
 import { generateQAScope, generateQAExploratory, generateQAFunctional, generateQAResource, generateQAReview, generateQAReviewPreflight, generateQAMethodReads } from './qa';
+import { generateVoiceTriggerRouting } from './voice-triggers';
 
 export const RESOLVERS: Record<string, ResolverFn> = {
   AUTOPLAN_PUBLICATION_HOOK: generateAutoplanPublicationHook,
   CEO_MODE_HANDOFF_HOOK: generateCeoModeHandoffHook,
   OUTSIDE_SELF_GUARD: (ctx, args) => outsideVoiceGuard({ ...ctx, host: args?.[0] === 'claude-code' ? 'codex' : 'claude' }),
   OUTSIDE_VOICE_ROUTING: generateOutsideVoiceRouting,
+  VOICE_TRIGGER_ROUTING: generateVoiceTriggerRouting,
   OUTSIDE_LABEL: (ctx) => outsideVoiceFor(ctx).label,
   NATIVE_LABEL: (ctx) => outsideVoiceFor(ctx).nativeLabel,
   OUTSIDE_PROVIDER: (ctx) => outsideVoiceFor(ctx).id,

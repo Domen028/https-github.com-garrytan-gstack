@@ -240,3 +240,31 @@ describe('outside reviewer runtime discovery in fresh shells', () => {
     expect(fs.existsSync(path.join(f.repo, 'NEVER'))).toBe(false);
   });
 });
+
+// Value: protects=the adversarial DIFF_SIZE sums insertions+deletions across files and ignores binary rows;
+//   fails_when=the numstat/awk sum reads the wrong field or a binary "-" row breaks it; why_new=no test ran the
+//   size block; seam=none; no_claim=the size thresholds that consume DIFF_SIZE
+test('adversarial DIFF_SIZE counts changed lines from numstat', () => {
+  const ctx: TemplateContext = { host: 'claude', skillName: 'ship', tmplPath: 'ship/SKILL.md.tmpl', paths: HOST_PATHS.claude };
+  const fence = generateAdversarialStep(ctx).match(/```bash\n(DIFF_BASE=[\s\S]*?)\n```/);
+  expect(fence).not.toBeNull();
+  const repo = fs.mkdtempSync(path.join(TEMP, 'diff-size-'));
+  const git = (...args: string[]) => {
+    const r = spawnSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo, encoding: 'utf8', timeout: 30_000 });
+    expect(r.status).toBe(0);
+  };
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'one\ntwo\n');
+  git('add', '-A');
+  git('commit', '-qm', 'base');
+  git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+  git('checkout', '-q', '-b', 'feature');
+  fs.writeFileSync(path.join(repo, 'a.txt'), 'one\nTWO\n');            // 1 insertion + 1 deletion
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'x\ny\nz\n');              // 3 insertions
+  fs.writeFileSync(path.join(repo, 'c.bin'), Buffer.from([0, 1, 2, 0])); // binary: "-\t-" in numstat
+  git('add', '-A');
+  git('commit', '-qm', 'change');
+  const r = spawnSync('bash', ['-c', fence![1].replaceAll('<base>', 'main')], { cwd: repo, encoding: 'utf8', timeout: 30_000 });
+  expect(r.stderr).toBe('');
+  expect(r.stdout.trim()).toBe('DIFF_SIZE: 5');
+});

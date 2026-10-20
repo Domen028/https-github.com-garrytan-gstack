@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * eval-bg — the one entry point for background paid evals (`bun run eval:bg:<lane>`).
  *

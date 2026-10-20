@@ -326,7 +326,7 @@ describe('free-suite shard reruns (CEO-1)', () => {
     const args = diagnostic.stdout.split('\n');
     expect(args).toContain('GSTACK_FREE_RETRY_FLAKY=0');
     expect(args).not.toContain('GSTACK_FREE_RETRY_FLAKY=1');
-    expect(args).toContain('xvfb-run -a bun run scripts/ship-measure.ts free --backend local --files test/a.test.ts,test/b.test.ts --reruns 10');
+    expect(args).toContain('xvfb-run -a bun --no-env-file --config=/dev/null run scripts/ship-measure.ts free --backend local --files test/a.test.ts,test/b.test.ts --reruns 10');
     expect(args.some(a => a.startsWith('work/') && a.includes('/.context/ship-measure:'))).toBe(true);
     const normal = launch().stdout.split('\n');
     expect(normal).toContain('GSTACK_FREE_RETRY_FLAKY=1');

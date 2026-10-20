@@ -6,6 +6,9 @@
  * names GSTACK_GIT_BASH, a gstack-wtree exit keeps the repair it printed.
  * Under --json every context refusal is one envelope on stdout with exit 3,
  * sharing `ok` and `status` with the run object; GSTACK_RESULT is on stderr.
+ * A `--base` that names a commit here but no origin branch (#3269) gets a fix
+ * naming a branch, never a fetch that cannot create `origin/<base>`; a branch
+ * name keeps the fetch fix.
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import * as fs from 'node:fs';
@@ -113,5 +116,29 @@ describe('gstack-pregate context refusals through the CLI', () => {
     expect(ok).toMatchObject({ ok: true, status: 'complete' });
     expect(run.err).toMatch(/^GSTACK_RESULT: skill=pregate status=complete run=.*pregate\.json$/m);
     expect(fs.existsSync(ok.out)).toBe(true);
+  });
+
+  test('a --base that names a commit here but no origin branch says to pass a branch; a branch name keeps the fetch fix (#3269)', () => {
+    const repo = fixture();
+    const sha = repo.git('rev-parse', '--short=8', 'main');
+    repo.git('update-ref', 'refs/remotes/upstream/main', 'main');
+    repo.git('branch', 'unpushed', 'main');
+    for (const base of [sha, 'upstream/main']) {
+      const r = runBin(repo, 'gstack-pregate', ['--base', base, '--stage', 'preflight', '--json']);
+      expect(r.status).toBe(EXIT.refused);
+      const b = JSON.parse(r.out);
+      expect(b).toMatchObject({ ok: false, status: 'refused', code: 'POLICY_SOURCE_UNAVAILABLE' });
+      expect(b.detail).toStartWith(`origin/${base} is not a resolvable commit`);
+      expect(b.detail).toContain('--base takes a branch name on origin');
+      expect(b.fix).toContain('--base main');
+      expect(b.docs).toEndWith('#policy-source-unavailable');
+      const line = r.err.split('\n')[0]!;
+      expect(line).not.toContain('git fetch');
+      expect(line).toContain('the reviewed pin files cannot be read');
+      expect(line).toEndWith(`; fix: ${b.fix} (POLICY_SOURCE_UNAVAILABLE)`);
+    }
+    const unpushed = runBin(repo, 'gstack-pregate', ['--base', 'unpushed', '--stage', 'preflight', '--json']);
+    expect(unpushed.status).toBe(EXIT.refused);
+    expect(JSON.parse(unpushed.out).fix).toContain('git fetch origin unpushed --depth=1');
   });
 });

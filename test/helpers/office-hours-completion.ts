@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import * as path from 'node:path';
 import { renderOfficeHoursReviewerPrompt, validateOfficeHoursReview, renderOfficeHoursReview, extractOfficeHoursReviewBlock, parseOfficeHoursVerdictReceipt, verifyOfficeHoursVerdictReceipt, officeHoursDesignChanges, verifyOfficeHoursCitations, type OfficeHoursReview } from '../../lib/office-hours-review';
-import { verifySpecFixesAtCap, type SpecFix } from '../../lib/spec-review-cap';
+import { parseSpecFixes, verifySpecFixesAtCap, type SpecFix } from '../../lib/spec-review-cap';
 
 export type OfficeHoursFile = { path: string; content: string | null };
 /** The helper's captured diff before a later round; a missing snapshot fails closed. */
@@ -30,6 +30,21 @@ export interface OfficeHoursCompletionEvidence {
   toolCalls: Array<{ tool: string; input?: Record<string, unknown>; output?: string }>;
   /** The `--fixes` list the finalizer verified at the cap (plan B8); null or absent when none was supplied. */
   fixes?: SpecFix[] | null;
+}
+
+/**
+ * The cap fixes the agent saved for the finalizer: the last observed Write whose
+ * content is a valid `--fixes` list. Null when it saved none. The validator
+ * recomputes the cap record from this list, so a list that was not the one
+ * passed to finalize still produces a mismatch.
+ */
+export function observedSpecFixes(toolCalls: OfficeHoursCompletionEvidence['toolCalls']): SpecFix[] | null {
+  for (const call of toolCalls.toReversed()) {
+    if (call.tool !== 'Write') continue;
+    try { return parseSpecFixes(JSON.parse(String(call.input?.content ?? ''))); }
+    catch { /* not a fixes list */ }
+  }
+  return null;
 }
 
 export interface OfficeHoursReviewEvidence {

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /** Generate a reviewable catalog candidate from authenticated qualification statements. */
 import * as fs from 'node:fs';
 import * as path from 'node:path';

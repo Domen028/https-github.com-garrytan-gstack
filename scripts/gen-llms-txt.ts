@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * Generate gstack/llms.txt — a single discoverable index of every gstack
  * capability for AI agents.

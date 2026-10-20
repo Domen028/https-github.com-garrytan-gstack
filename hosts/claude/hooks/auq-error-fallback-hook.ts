@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * PostToolUse hook for AskUserQuestion — runtime reliability layer for the
  * AUQ-failure prose fallback (OV3:B).

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * C1 workflow-judge control bundles (pre-registered in docs/evals/judge-controls-2026-10.md).
  *

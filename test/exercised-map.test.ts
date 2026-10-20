@@ -326,6 +326,7 @@ describe('parity with the measured prototype', () => {
   /** Files the shipped function reaches beyond the prototype, each with the reviewed edge class behind it. */
   const REVIEWED_SUPERSET: Record<string, string> = {
     setup: './setup, $ROOT/setup and join(..., "setup") exec edges (plan A2-2); setup is a full-gate file, so the closure stops there',
+    'lib/bun-isolation.ts': 'GSTA-56: every bun launcher (script-invocation, restamp, qa-deadline, the hooks) imports it, so it reaches every consumer of those launchers',
   };
 
   test('the shipped map equals or is a reviewed superset of the prototype map on this checkout', () => {

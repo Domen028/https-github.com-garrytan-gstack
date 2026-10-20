@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * PostToolUse (Bash) hook declared in /plan-ceo-review's frontmatter.
  *

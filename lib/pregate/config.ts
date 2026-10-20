@@ -62,7 +62,7 @@ export interface Guard { id: string; when: string[]; command: string; fix?: stri
 export const DEFAULT_CONFIG: PregateConfig = { runner: null, dependencies: {}, empty_lanes: [], selection: {}, warn: [], strays: { allow: [] }, guards: [], serial_patterns: DEFAULT_SERIAL_PATTERNS, price_file: null, stall_timeout_s: null, remote_gate: null };
 export interface ConfigError { code: ResultCodeName; path: string; message: string }
 
-const MAX_LIST = 256;
+export const MAX_LIST = 256;
 const MAX_COMMAND = 512;
 const KEYS = ['runner', 'dependencies', 'empty_lanes', 'selection', 'warn', 'strays', 'guards', 'serial_patterns', 'price_file', 'sealed', 'stall_timeout_s', 'remote_gate'];
 const MAX_GUARDS = 32;
@@ -215,24 +215,11 @@ export function isConfigUnavailable(load: ConfigLoad): load is { unavailable: tr
   return (load as any).unavailable === true;
 }
 
-export function exampleConfigJson(): string {
-  const example = {
-    $schema: PREGATE_CONFIG_SCHEMA,
-    runner: null,
-    dependencies: { 'bin/example-tool': ['test/example-tool.test.ts'], 'docs/**': [] },
-    empty_lanes: [],
-    selection: {},
-    warn: [],
-    strays: { allow: [] },
-  };
-  return JSON.stringify(example, null, 2) + '\n';
-}
-
 export function explainConfig(): string {
   return [
     'runner: the test command with a {files} placeholder; null detects bun test / vitest / jest / pytest from the repo',
     'dependencies: glob → test files the import graph cannot see (subprocess targets, runtime reads, generated inputs); [] declares no lane needed',
-    'empty_lanes: extra globs treated as docs/no-tests when nothing else maps them. Built-in, with or without this file: any Markdown file the import graph maps to no test (a quoted path, a join() of path segments, an import, or a dependencies entry), plus README/CHANGELOG/CONTRIBUTING/LICENSE/AGENTS/CLAUDE. Source code and files under a test directory never qualify. A test that reads the file still selects that test',
+    'empty_lanes: extra globs treated as docs/no-tests when nothing else maps them. Built-in, with or without this file: any Markdown file the import graph maps to no test (a quoted path, a join() of path segments, an import, or a dependencies entry), plus README/CHANGELOG/CONTRIBUTING/LICENSE/AGENTS/CLAUDE and licence text under any name; assets (images, fonts, media) and allowlisted tool config take their own empty lane. Source code and files under a test directory never qualify. A test that reads the file still selects that test',
     'selection: <workflow.yml>/<job> → the runner-owned command that lists that lane’s test files when its matrix is planner-computed',
     `warn: check ids downgraded to warn; never ${NON_DOWNGRADABLE.join(', ')}; lanes keeps its required-lane and requires-remote verdicts`,
     'strays.allow: root files or new top-level directories that are intentional',

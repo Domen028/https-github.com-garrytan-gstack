@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /** A native parent publication barrier at Autoplan's exact Read boundaries. */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
