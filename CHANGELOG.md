@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.161.0] - 2026-10-19
 
 **`gstack-pregate` works on Django, Dart and Flutter repos, and on branches that only touch assets or tool config.** Before, a Django migration, an `admin.py`, a template, a font, a vendored licence or `.pre-commit-config.yaml` stopped `/ship` with `PREGATE_NO_LANE` in a repo that had never opted in, and every touched `_test.dart` file did the same. `gstack-pregate init` now drafts a policy from the repo instead of writing a fixed example. Contributed by @arlophoenix (#3285) and @szsunyuan (#3290); reported by @dgrant (#3266, #3267, #3268, #3269).
 
