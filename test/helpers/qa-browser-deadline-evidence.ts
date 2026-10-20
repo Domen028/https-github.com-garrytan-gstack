@@ -23,7 +23,7 @@ export function qaDeadlineShellPolicy(directory: string, guard: string, browse: 
     `git -C ${quote(directory)} log -1 --format=%cI`,
     `git -C ${quote(directory)} branch --show-current`];
   const file = path.join(directory, 'qa-reports/deadline.json');
-  return { allowed, file, prompt: `This native fixture accepts a deliberately narrow executable outer form. Run the BROWSER SETUP Aside readiness bash block verbatim, as its own Bash call (no appended commands). The fallback binary is already supplied. Other than that block, these standalone setup/bookkeeping Bash calls are allowed:
+  return { allowed, file, prompt: `This native fixture accepts a deliberately narrow executable outer form. Run the BROWSER SETUP Aside readiness bash block verbatim, as its own Bash call (no appended commands). The fallback binary is already supplied. Other than that block, these setup/bookkeeping Bash calls are allowed, each exactly as written. One Bash call may run one of them alone or join several of them and the shared-grammar reads below with ;, && or || (no cd in such a join):
 ${allowed.slice(1).join('\n')}
 ${readOnlyInterfaceText(directory)}
 Use Read/Glob for any other local inspection and Write only inside ${path.join(directory, 'qa-reports')}; the report and screenshots directories already exist. Memory files and learning stores outside that directory are not authorized. Write the initial charters and final report to the same caller-owned file ${path.join(directory, 'qa-reports/qa-only-report.md')}, not a separate charter file.
@@ -45,6 +45,38 @@ function literalArgv(command: string): string[] {
     rest = rest.slice(word.length).replace(/^[ \t]+/, '');
   }
   return words;
+}
+
+/**
+ * A ;, && or || join of the fixture's exact bookkeeping calls with each other and with shared-grammar
+ * reads, as the fixture prompt declares. Each joined command must be an exact bookkeeping call or a
+ * grammar read checked from the fixture root, so cd is excluded; guard calls and browser work never qualify.
+ */
+function bookkeepingJoin(command: string, bookkeeping: string[], root: string): boolean {
+  const segments: Array<{ text: string; exact: boolean }> = [];
+  let rest = command.trim();
+  while (true) {
+    let end = bookkeeping.find(entry => rest.startsWith(entry) && /^[ \t]*(?:;|&&|\|\||$)/.test(rest.slice(entry.length)))?.length;
+    const exact = end !== undefined;
+    if (end === undefined) {
+      let quoted = '';
+      for (end = 0; end < rest.length; end++) {
+        const c = rest[end];
+        if (quoted) { if (c === quoted) quoted = ''; else if (c === '\\' && quoted === '"') end++; }
+        else if (c === "'" || c === '"') quoted = c;
+        else if (c === '\\') end++;
+        else if (c === ';' || rest.startsWith('&&', end) || rest.startsWith('||', end)) break;
+      }
+    }
+    segments.push({ text: rest.slice(0, end).trim(), exact });
+    rest = rest.slice(end).replace(/^[ \t]+/, '');
+    if (!rest) break;
+    const operator = rest[0] === ';' ? 1 : 2;
+    rest = rest.slice(operator).replace(/^[ \t]+/, '');
+    if (!rest) { if (operator === 1) break; return false; }
+  }
+  return segments.length > 1 && segments.some(segment => segment.exact) && segments.every(segment => segment.exact
+    || (!/^cd(?:[ \t]|$)/.test(segment.text) && readOnlyCommandAllowed(segment.text, { root })));
 }
 
 function owned(file: string, root: string) {
@@ -215,7 +247,7 @@ export function assertQaBrowserDeadline(calls: Call[], options: Options & { expe
       if ((call.output ?? '').includes('QA_DEADLINE ')) fail('receipt outside trusted guard invocation');
       continue;
     }
-    if (readOnlyCommandAllowed(command, { root: directory })) {
+    if (readOnlyCommandAllowed(command, { root: directory }) || bookkeepingJoin(command, allowed.slice(1), directory)) {
       if ((call.output ?? '').split('\n').some(line => line.startsWith('QA_DEADLINE '))) fail('receipt outside trusted guard invocation');
       continue;
     }
