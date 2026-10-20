@@ -23,7 +23,7 @@
 # Environment: GSTACK_CAPY_ROOT (default ~/.local/share/gstack), GSTACK_CAPY_REPO,
 # GSTACK_CAPY_AUTO_UPGRADE=0 (never fast-forward), GSTACK_CAPY_FETCH_TIMEOUT (s).
 set -u
-GSTACK_CAPY_WRAPPER=3
+GSTACK_CAPY_WRAPPER=2
 
 self="$(cd "$(dirname "$0")" && pwd -P)/$(basename "$0")"
 root="${GSTACK_CAPY_ROOT:-$HOME/.local/share/gstack}"

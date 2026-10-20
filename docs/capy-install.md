@@ -408,14 +408,7 @@ working and print an owner action
 doctor's `wrapper` row warns (an active copy below the minimum is a WARN,
 never a FAIL; `bin/gstack-upgrade` never leaves a pending reinstall for it).
 Wrapper 2 only adds optional exports (the trailer's `latest:` note and the
-`cloned` line). Wrapper 3 raises the minimum to 3 because the skill folder
-gained guidance owners need in their copy (the "Working under a Captain"
-section and `captain.md`); the bootstrapper's behaviour is unchanged, and the
-notice stops once the owner copies the folder:
-
-```bash
-cp -R ~/.local/share/gstack/capy/skill/gstack/. ~/.capy/drive/<your user scope>/skills/gstack/
-```
+`cloned` line), so the minimum stays 1.
 
 ## Exit codes
 
