@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.172.0] - 2026-10-20
 
 **gstack now works the way Capy Captains run work: every decision goes to the Captain (or the person) in plain words, plan approvals arrive in a fixed before/after shape, each thread keeps a record of who approved what, and /ship's PR body shows before/after images of what changed.** Garry asked for this on 2026-10-20 ("make it much more obvious a/ how approvals work per thread, b/ for each plan approval i want a before/after, why it matters, what caused us to work on this, and big decisions you had to make, c/ when asking for merge guidance i want the PRs to show screenshots of what changed and why"). Everything below applies only when `GSTACK_CAPY=1` (the Capy launch line sets it). Other hosts keep their output, apart from one new `CAPY: off` STATUS line.
 
