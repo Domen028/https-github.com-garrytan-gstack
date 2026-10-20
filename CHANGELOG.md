@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.168.0] - 2026-10-20
 
 **Four QA paid cases stop failing on valid or unclear agent behavior: `qa-only-no-fix` accepts reads joined with its exact bookkeeping calls, and the QA-callers fixture says where the handoff check goes and stops counting the explicit plan check as a wasted rerun.** Daily flaky-fix pass (GSTA-57), from the captured events of Opus gate runs 39313931713, 39332134395, 39336730429, 39320737890, 39181697029 and 39351737002.
 
