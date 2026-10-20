@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.170.0] - 2026-10-20
 
 **/autoplan no longer stops a healthy run with a false "event order" or "init" denial when Claude Code is slow to write its session journal.** Daily flaky-fix pass, group 5 (other paid cases): the same pass clarifies how the office-hours reviewer recovers from a seal error and fixes two plan-review floor harness gaps in reading cropped permission menus.
 
