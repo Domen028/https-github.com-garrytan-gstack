@@ -3,7 +3,9 @@
  * merge trains (docs/ship-policy.md#run-a-merge-train; plan GSTA-49 T1, P1).
  *
  * Each merge needs a green train record that includes the PR at its pinned
- * head, with main's tree equal to the prefix before the PR (pre-merge:
+ * head, or at a head whose tree is the slot's prefix after it modulo stamps
+ * (from slot 2 on, the lane merges main into its pin so GitHub can merge it),
+ * with main's tree equal to the prefix before the PR (pre-merge:
  * MERGE_CONDITION) or after it (post-merge confirmation), modulo stamps
  * (lib/tree-receipt.ts). When a train stops partway (a mismatch or a moved
  * head after earlier slots merged) the queue freezes: the freeze is written
@@ -95,8 +97,10 @@ export async function verifyTrain(ctx: QueueContext, o: { pr: string; train: str
   }
   const headRef = o.noFetch ? '' : (git(ctx.repoRoot, ['fetch', '--no-tags', '-q', env.remote, `+refs/pull/${o.pr}/head:refs/gstack/queue/pr-${o.pr}`]).ok ? `refs/gstack/queue/pr-${o.pr}` : '');
   const head = headRef ? git(ctx.repoRoot, ['rev-parse', headRef]).out : t.slots[i]!.head;
-  const stampOnly = head === t.slots[i]!.head ? { same: true, detail: 'the pinned head' } : sameModuloStamps(env, t.slots[i]!.head, head);
-  if (!stampOnly.same) return stopped(env, t, 'QUEUE_TRAIN_MOVED', `#${o.pr} moved past its pinned head ${t.slots[i]!.head.slice(0, 12)} (${head.slice(0, 12)}: ${stampOnly.detail})`, main, lines);
+  const pinned = head === t.slots[i]!.head ? { same: true, detail: 'the pinned head' } : sameModuloStamps(env, t.slots[i]!.head, head);
+  const asPrefix = pinned.same ? null : sameModuloStamps(env, after.commit, head);
+  const stampOnly = asPrefix?.same ? { same: true, detail: `T${after.index} with main merged in, ${asPrefix.detail}` } : pinned;
+  if (!stampOnly.same) return stopped(env, t, 'QUEUE_TRAIN_MOVED', `#${o.pr} moved past its pinned head ${t.slots[i]!.head.slice(0, 12)} and is not T${after.index} modulo stamps (${head.slice(0, 12)}: ${pinned.detail})`, main, lines);
   return outOk([...lines, `main: ${main} = T${before.index} (${pre.detail})`, `head: ${head} (${stampOnly.detail})`,
     `VERIFY_TRAIN: #${o.pr} may merge as slot ${i + 1} of train ${t.nonce} (green run ${gate.run?.id ?? '-'}, ${env.train.full_gate_check} success)`, `MERGE_CONDITION: sha=${head}`],
   `merge #${o.pr} with expected head ${head.slice(0, 12)} (gstack-restamp stamps at merge), then ${Q} verify --pr ${o.pr} --train ${t.nonce}`, run);

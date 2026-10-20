@@ -521,4 +521,40 @@ describe('verify, freeze, repair and clear', () => {
     expect(JSON.parse(fs.readFileSync(freezeFile, 'utf8')).cleared_at).toBe('2026-10-18T12:00:00.000Z');
     expect(queue(fx, ['train', 'status']).out).not.toContain('QUEUE_TRAIN_FROZEN');
   }, 300_000);
+  test('from slot 2 on, a head that merges main into the pin verifies when its tree is the slot\'s prefix modulo stamps', () => {
+    const fx = make();
+    const { h2, nonce } = twoPrTrain(fx);
+    expect(queue(fx, ['train', 'verdict', '--train', nonce]).status).toBe(EXIT.ok);
+    const t = trainJson(fx, nonce);
+    const coord = coordinatorClone(fx.repo);
+    const v = (pr: string) => queue(fx, ['verify', '--pr', pr, '--train', nonce], {}, coord);
+    const main1 = publishMain(fx, t.prefixes[1].commit, '1.2.4.0');
+    expect(v('1').status).toBe(EXIT.ok);
+
+    const { repo } = fx;
+    const laneHead = (extra?: { file: string; text: string }) => {
+      repo.git('reset', '-q', '--hard');
+      repo.git('checkout', '-q', '-B', 'lane2', h2);
+      repo.git('rm', '-rq', '.');
+      repo.git('checkout', t.prefixes[2].commit, '--', '.');
+      fs.writeFileSync(path.join(repo.work, 'VERSION'), '1.2.5.0\n');
+      if (extra) fs.writeFileSync(path.join(repo.work, extra.file), extra.text);
+      repo.git('add', '-A');
+      const tree = repo.git('write-tree');
+      const head = repo.git('commit-tree', tree, '-p', h2, '-p', main1, '-m', 'merge main into #2, stamp 1.2.5.0');
+      repo.git('push', '-q', '-f', 'origin', `${head}:refs/pull/2/head`);
+      return head;
+    };
+
+    const merged = laneHead();
+    const ok = v('2');
+    expect(ok.status).toBe(EXIT.ok);
+    expect(ok.out).toMatch(new RegExp(`^head: ${merged} \\(T2 with main merged in, same modulo stamps`, 'm'));
+    expect(line(ok.out, 'MERGE_CONDITION:')).toBe(`MERGE_CONDITION: sha=${merged}`);
+
+    const stray = laneHead({ file: 'stray.txt', text: 'not in the train\n' });
+    const moved = v('2');
+    expect(moved.status).toBe(EXIT.fail);
+    expect(moved.err).toMatch(new RegExp(`#2 moved past its pinned head ${h2.slice(0, 12)} and is not T2 modulo stamps \\(${stray.slice(0, 12)}: .*\\(QUEUE_TRAIN_MOVED\\)`));
+  }, 300_000);
 });

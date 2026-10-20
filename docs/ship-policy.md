@@ -401,6 +401,19 @@ EVAL_POLICY.infraRedispatch allows: `train rebuild --train <nonce> --infra`.
 The rebuild-once rule lives in the train module beside that constant until
 EVAL_POLICY records it. Bisect results never turn a train green.
 
+**Stamping a slot.** When the slot is called, the lane stamps it at main plus PATCH. Slot 1's pin applies cleanly to main. From slot 2 on, main already carries the earlier slots' stamps, so the pin conflicts on CHANGELOG.md and GitHub can't merge it. The lane merges main into the pin first, then stamps:
+
+```bash
+git fetch origin main
+git merge --no-ff --no-commit origin/main        # expect a CHANGELOG.md conflict only
+bun --no-env-file --config=/dev/null -e "import { mergeChangelogs } from './lib/changelog-check'; import { spawnSync } from 'node:child_process'; import { writeFileSync } from 'node:fs'; const s = (n) => spawnSync('git', ['show', ':' + n + ':CHANGELOG.md'], { encoding: 'utf8', maxBuffer: 1 << 26, timeout: 30000 }).stdout; const m = mergeChangelogs(s(2), s(3)); if (!m) { console.error('CHANGELOG needs a hand merge'); process.exit(1); } writeFileSync('CHANGELOG.md', m);"
+git add CHANGELOG.md && git commit --no-edit
+gstack-restamp --next --base main --pr 42 --expect-base <main sha> --expect-order <order> --allow-repo-commands
+git add CHANGELOG.md VERSION package.json <release outputs> && git commit -m "v<X> stamp" && git push
+```
+
+A conflict in any file other than CHANGELOG.md means the merge isn't the train's prefix. Stop and report it. `verify` accepts the resulting head because its tree equals T<i> modulo stamps; the `head:` line says "T<i> with main merged in".
+
 **5. Coordinator: verify, merge, verify again.** For each slot in order:
 
 ```bash
@@ -410,7 +423,8 @@ gstack-ship-queue verify --pr 41 --train <nonce>   # VERIFY_TRAIN: #41 merged; m
 ```
 
 Before a merge, main's tree must equal the prefix before the PR modulo stamps
-and the PR must still be at its pin (stamps aside); after it, main's tree
+and the PR must be at its pin (stamps aside) or at T<i> modulo stamps (its pin
+with main merged in); after it, main's tree
 must equal the prefix after it. Anything else is `QUEUE_TRAIN_TREE_MISMATCH`
 (or `QUEUE_TRAIN_MOVED`). When nothing of the train has merged, that is a plain
 refusal: build a new train on current main. When earlier slots already
@@ -580,183 +594,3 @@ recorded predecessor head is no longer the predecessor PR's head (checked
 through `--predecessor-ref` or `gh pr view --predecessor-pr`) the receipt
 prints `PREDECESSOR MOVED <old> -> <new> — fix: gstack-restamp --after <pr>
 again (RESTAMP_PREDECESSOR_MOVED)` and refuses `eligible`.
-
-`/ship` Step 16 consults the receipt; when it says `eligible`, a repeated full
-gate needs `--force-gate <reason>`, and the coordinator makes the call.
-
-### The evidence bundle
-
-`gstack-evidence` is machine-local by design, so the portable form is a bundle:
-
-```bash
-gstack-evidence bundle --out evidence-bundle.json --label tests --label e2e --require tests,e2e \
-  --selection tests='bun run test' --run-url tests=https://github.com/.../actions/runs/1
-```
-
-A bundle binds to a committed head (`repo.commit`, `repo.tree`) and carries the
-comparison material (version source, CHANGELOG path, `stamp_paths`,
-`release_outputs`), the execution identity above, the required-lane manifest,
-and per lane the command, `cmd_sha256`, exit, timestamp, executed selection,
-run URL, log hash and whether it is `verified` (produced by the ledger on a
-clean committed tree at this head) or not (dirty tree, other commit, or an
-`--import`ed assertion). A fresh coordinator machine reads it with
-`gstack-tree-receipt --bundle` after the gate VM is gone; the receipt refuses
-reuse when the bundle was produced on another tree or lacks the identity
-(`EVIDENCE_IDENTITY_UNKNOWN`).
-
-<a id="ship-receipt"></a>
-## The ship receipt
-
-The handoff record is a fenced block, identifiers first, validated against
-`gstack-artifact schema ship-receipt`:
-
-````
-```gstack-ship-receipt
-{ "schema_version": 1, "pr": 42, "head": "<sha>", "version": "1.2.7.0", "base": "main",
-  "gated_tree": "<tree>", "predecessor": "<sha>", "tree": "same-modulo-stamps",
-  "gate_reuse": "eligible (reusable: tests; rerun: digest)", "gate": { "tests": { "pass": 10, "fail": 0, "skip": 1 } },
-  "ci": { "checks": 3, "failed": 0 }, "spend_usd": 0.42, "session_kind": "unattended",
-  "artifacts_consumed": "1/1", "run": "<run id>", "thread": "<thread id>", "policy": "base origin/main@<sha>" }
-```
-````
-
-`gstack-ship-receipt write --pr <n> --receipt <tree-receipt.json> --gate '<json>' --ci '<json>' --body <pr-body.md>`
-makes it the first section of the PR body (`/ship` Step 18) and prints
-`SHIP_RECEIPT: pr=… head=… version=…` for the first line of the completion
-message. `/land-and-deploy` reads it with `gstack-ship-receipt read --pr <n>
---json` (`RECEIPT_MISSING`, `RECEIPT_INVALID`).
-
-### The adoption census (P7)
-
-```bash
-gstack-ship-receipt census --repo garrytan/gstack --since v1.91.70.0 --cohort threads.txt
-```
-
-reads merged PRs since the tag through `gh`, parses each receipt, deduplicates
-by `run` and `thread`, and prints `CENSUS: … unattended=<n> consumed=<n>
-adoption=<consumed threads>/<cohort> durable=yes`. The cohort file lists one
-thread id per line (threads that never invoke gstack count in the
-denominator); without it the denominator is the threads the receipts name.
-
-## History policy and preregistration (C7)
-
-Under `history: merge-only`, `/ship` refuses a squash or rebase plan and merges
-the base branch instead: `gstack-ship-policy check-history --plan squash`
-prints `HISTORY: refused (…) (HISTORY_POLICY_VIOLATION)` with exit 3, and
-without `--plan` it prints `HISTORY: ok` or `HISTORY: rewritten …
-(HISTORY_POLICY_VIOLATION)` (exit 1) when the pushed branch is no longer an
-ancestor of HEAD. `gstack-evidence ancestor
---from-policy --base main` prints one `ANCESTOR: ok|missing <sha>` line per
-`preregistration_shas` entry (`PREREGISTRATION_NOT_ANCESTOR`, exit 1), and the
-ship receipt records the result in `preregistration`.
-
-## Contributor mode
-
-`/review` runs `gstack-contributor-mode detect` at Step 1 (decision D10). The PR
-author is outside the maintainer set when `maintainers` in `.gstack/ship-policy.json`
-on the base branch is non-empty and does not list the login (`source=policy`);
-with an empty list, when `gh api repos/<owner>/<repo>/collaborators/<login>/permission`
-reports less than push permission (`source=collaborators`, an egress receipt
-`contributor-mode` precedes the call); when neither is available the mode is off
-and `CONTRIBUTOR_SOURCE_UNAVAILABLE` names what was missing. `--contributor`
-forces it on (`source=flag`). `CODEOWNERS` is file ownership, not maintenance
-authority, and is never read. The printed line is
-`CONTRIBUTOR_MODE: on|off author=<login> source=flag|policy|collaborators|off`,
-followed when on by the evidence-first instructions: a table per change
-(evidence value, risk surfaces, `accept` / `supersede` / `decline`), where
-`accept` keeps a direct path for a correct outside implementation judged by the
-same bar as a maintainer change, `supersede` rewrites from our own plan only after
-a plain-language approval, and the credit lines (`Contributed by @handle`,
-`Co-Authored-By:`, `Supersedes #N`) appear only when a diagnosis or a test carried
-over. `gstack-contributor-mode instructions` prints the same text without detecting.
-
-## Banned terms
-
-`.gstack/banned-terms.json` lists terms the repository forbids outside named
-locations: `terms` (a string, or `{ "term", "allowed_paths", "reason" }`) and a
-top-level `allowed_paths` that every term inherits. Globs follow the same
-containment rules as the ship policy (repo-relative, no `..`, under 256
-characters). `gstack-banned-terms check --base <ref>` scans the lines the branch
-adds since its merge base (or whole files with `--files <csv>`), reading the term
-list from the committed copy on the base by default (`--policy-from head` reads
-the working tree). Each finding is one line,
-`BANNED_TERM: "<term>" <file>:<line> allowed: <locations> — <text>`, and the
-last line is `BANNED_TERMS: ok | found=<n> | none` (`none`: the repository keeps
-no list). Exit 0 for ok or none, 1 when found, 3 when the file is invalid
-(`BANNED_TERMS_INVALID`, also from `validate`). `/review` turns each finding into
-a Step 4 finding and `/document-release` into a documentation finding;
-`gstack-banned-terms init` writes a commented example.
-
-<a id="approval-classes"></a>
-## Approval classes
-
-`.gstack/approval-classes.json` names the changes that need the owner's
-approval before they ship: upgrade-time data rewrites, trust or visibility
-changes, existing-user default changes, data repairs, anything the owner wants
-cited. Each entry in `classes` has a `name` (lowercase, dashes) and at least
-one matcher: `paths` (globs of changed files), `patterns` (literal text in an
-added line, case-sensitive) or `migrations: true` (the files the ship policy's
-`migrations` key describes). `allowed_paths` exempts files, such as tests;
-`description` is for people. Globs follow the ship policy's containment rules.
-
-Classes come only from the copy committed on `origin/<base>`, so a branch can
-neither declare nor drop its own; `gstack-approval-classes validate` checks the
-working-tree copy before you commit it, and `init` writes an example.
-`gstack-approval-classes check --base <ref>` scans the branch's changes since
-the merge base and prints one `APPROVAL_CLASS: <class> <file>:<line>` line per
-hit, one `APPROVAL_SCOPE: <class>@<digest12>` line per declared class with hits,
-and `APPROVAL_CLASSES: ok | found=<n> | none` last (exit 0, 1 when found, 3 when
-the base file is invalid or `origin/<base>` does not resolve). Built-in
-detectors only report: the ship policy's migration files, when no class sets
-`migrations: true`, print as `(built-in, report-only)` and need no citation.
-
-The digest covers the class's effects: each matched file with its blob at the
-scanned head, and each matched added line. The scan reads git's native diff
-(`--no-ext-diff --no-textconv`), so a configured external diff driver or text
-conversion cannot hide a line; when the content diff cannot be read, or its
-added lines disagree with git's own count, `check` and the receipt refuse with
-`APPROVAL_SOURCE_UNAVAILABLE` instead of passing. Adding, removing or editing an
-effect changes the token, so an approval given earlier no longer binds.
-
-**Enforcement.** `gstack-ship-receipt write` refuses with
-`APPROVAL_CITATION_MISSING`, writing nothing, unless each declared class with
-hits has a line in the `--body` file (or an `--approval` value) of the form
-
-```
-Approved by <owner> <YYYY-MM-DD> via <ref> [for <class>@<digest12>[,<class>@<digest12>]]
-```
-
-that resolves and binds:
-
-- A plan sha (7 to 64 hex characters) must match the plan of an autoplan run
-  passed with `--approval-run <run dir>` whose gate is APPROVED, and the plan
-  must name the scope token, or the class and every effect path.
-- A GitHub comment or review URL must be written by a `maintainers` login from
-  the base's ship policy that equals the cited owner. A review must be in
-  state `APPROVED`; a comment-only, dismissed or changes-requested review is
-  not an approval. The evidence is the body's first non-blank line only. It
-  must start at column 0 with `Approved` or `Approve` (any case, optionally
-  in `**` bold; no list marker, quote or indent) and name the token, or the
-  class and every effect path. Nothing later in the body counts, so a
-  rejection that quotes or nests an example approval approves nothing. For
-  example, a comment whose first line is
-  `Approved data-repair@0123456789ab: preview-first, never at upgrade.`
-  verifies; one that opens with any other line does not.
-- A token is authoritative. Evidence that names the class with a different
-  digest approved earlier effects: it does not bind, and it never falls back
-  to matching the class and paths.
-- Anything else (a thread code, a chat message, a URL gstack cannot read) is
-  recorded `citation: unverified` for the coordinator, and only when the line
-  attests which scope it covers with `for <class>@<digest12>` matching the
-  current token.
-
-The receipt's `approval` object records the source, `status` (`checked`, or
-`unavailable` when `origin/<base>` does not resolve), one record per class
-(scope token, effects, `citation: verified | unverified`, owner, date, ref,
-`binding: token | paths | attested`, evidence) and any report-only hits; the
-`SHIP_RECEIPT:` line ends with `approval=verified`, `approval=unverified:<classes>`,
-`approval=none` or `approval=unchecked`. A repository without the file gets no
-`approval` object unless a built-in detector reported.
-
-A data repair is a class to declare, and /review checks its shape: explicit,
-preview-first, and never reachable from an upgrade or migration path.

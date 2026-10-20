@@ -1,5 +1,16 @@
 # Changelog
 
+## [Unreleased]
+
+**Merge trains can merge slot 2 onward.** After slot 1 merges, main carries the new stamp, so every later pin conflicts with main on the stamp files and GitHub can't squash it. A lane makes its PR mergeable by merging main into the pin before it stamps. `verify --pr <n> --train <nonce>` refused that head as moved off its pin. Now it also accepts a head whose tree equals the slot's train prefix (T<i>) modulo stamps: exactly the tree the train's gate covered, and what main becomes once the PR squash-merges. The first live train stopped at slot 2 on this (gate.train-ac4baf961759-43d6ed28f2bf-9a1dbb). Plan GSTA-49.
+
+### Fixed
+- **`lib/ship-queue-train-verify.ts`** accepts a slot head that is either its pin plus stamps (as before) or T<i> modulo stamps, and the `head:` line says which. A head that matches neither is still `QUEUE_TRAIN_MOVED`, and the queue still freezes when earlier slots have merged.
+- **`docs/ship-policy.md`** gives the per-slot lane procedure from slot 2 on: merge `origin/main` into the pin, resolve the CHANGELOG conflict with `mergeChangelogs`, then run `gstack-restamp --next`.
+
+### Gate integrity
+- `test/ship-queue-train.test.ts` builds a lane head with main merged into the pin and T2's tree stamped 1.2.5.0. It verifies, with `MERGE_CONDITION` at that head. The same head plus one file outside the train fails with `QUEUE_TRAIN_MOVED`. Without the fix, the positive case fails.
+
 ## [1.91.166.0] - 2026-10-20
 
 **Two load-sensitive free tests from the flaky ledger now measure what they test.** Daily flaky-fix pass, 2026-10-20, free and load-sensitive group.
