@@ -64,6 +64,16 @@ describe('validatePolicy (schema + containment, pure)', () => {
   });
 });
 
+describe("gstack's own .gstack/ship-policy.json", () => {
+  test('validates and declares the merge-train block against workflows that exist', () => {
+    const root = path.join(import.meta.dir, '..');
+    const raw = JSON.parse(fs.readFileSync(path.join(import.meta.dir, '..', '.gstack', 'ship-policy.json'), 'utf8'));
+    expect(validatePolicy(raw)).toEqual([]);
+    expect(raw.train).toMatchObject({ gate_workflow: 'evals.yml', free_workflow: 'free-tests.yml', full_gate_check: 'gstack/full-gate', record_artifact: 'gstack-train-record' });
+    for (const wf of [raw.train.gate_workflow, raw.train.free_workflow]) expect(fs.existsSync(path.join(root, '.github/workflows', wf))).toBe(true);
+  });
+});
+
 describe('gstack-ship-policy (bin)', () => {
   test('--help prints the exit table; no command is usage (2)', () => {
     const repo = fixture();

@@ -281,10 +281,11 @@ warning on stderr). A block for gstack itself would read:
 "min_gstack_version": "<the version that introduced train>"
 ```
 
-gstack's own policy does not carry it yet: trains go live for gstack only
-after the workflow side (the train-nonce record, the `cases` and
-`prefix_shas` inputs, the dispatched screen) has merged and one dry-run train
-of two already-merged heads has passed. `gate_workflow` is dispatched with
+gstack's own policy carries this block. It went live after the workflow side
+(the train-nonce record, the `cases` and `prefix_shas` inputs, the dispatched
+screen) merged and one dry-run train passed: two unstamped scratch docs PRs on
+a scratch base whose `route` step read the policy from that base instead of
+the default branch. `gate_workflow` is dispatched with
 `evals_all`, `expected_sha` and `nonce` (bisects add `cases` and
 `prefix_shas`, screens add `screen_pr`, `screen_merge_sha` and
 `screen_policy`). That run publishes `full_gate_check` as a check run on the

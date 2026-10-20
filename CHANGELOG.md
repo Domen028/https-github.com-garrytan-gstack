@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.91.164.0] - 2026-10-19
+
+**Merge trains are on for gstack: `.gstack/ship-policy.json` now carries the `train` block.** READY PRs merge in trains of up to 5 (or once the oldest READY is 3 hours old) behind one full gate on the train head, instead of one full gate per PR. Plan GSTA-49, go-live after lanes T1 and T1b. Garry approved going live once one dry-run train passed.
+
+### Changed
+- **`.gstack/ship-policy.json` declares `train`** (`gate_workflow` `evals.yml`, `free_workflow` `free-tests.yml`, `full_gate_check` `gstack/full-gate`, `record_artifact` `gstack-train-record`, `max_size` 5, `fill_hours` 3, `screen_selection` `gstack-paid`, `trial_reservation_usd` 1.5) and `min_gstack_version` 1.91.146.0, which `gstack-ship-policy validate` requires alongside `train`. From this merge on, a PR push routes to `pr-summary` instead of a paid PR gate, `ready` records the screen choice, `train build` dispatches the full gate, `verify --pr <n> --train <nonce>` is the merge check, and the main backstop gates any tree no green train covered.
+- **Dry-run evidence.** Train `gate.train-24672a1f5b96-b67778cdbbd3-58805a` merged two unstamped scratch docs PRs (#3313 and #3314, closed unmerged) onto a scratch base: main 85b0f531f plus this policy block plus one scratch-only `evals.yml` line that read the policy from that base. A `workflow_dispatch` reads it from the default branch, which had no `train` block yet. The real `train build` refused with `QUEUE_TRAIN_WAITING` until the 3-hour fill passed, then ran Free Tests green (run 39377354548) and dispatched one full gate (run 39377781282: `VERDICT GREEN`, rule 108/108, judge 24/24, behavior 0/0, `gstack/full-gate` success on the train head). `verify --pr 3313` printed `MERGE_CONDITION: sha=33fb98512123…`. Not exercised: the default-branch policy read itself (the scratch line replaced it), PR-push routing to `pr-summary`, a stamp at merge, a screen, a bisect and the main backstop.
+- **`docs/ship-policy.md`** now says gstack's own policy carries the block, replacing "does not carry it yet".
+- **`test/gstack-ship-policy.test.ts`** validates gstack's own `.gstack/ship-policy.json` and checks that its train workflows exist, so the policy file has a test lane.
+
 ## [1.91.163.0] - 2026-10-19
 
 **A gate red on one test now reruns that test once instead of the whole gate, and a pass is green with a flaky note.** Garry, 2026-10-19 (CREW rule 16): "you can just run the failed test again and note that it is flaky... You don't have to do the whole test pass again for one failed test." Plan GSTA-49, lane F1; the #3308 reuse miss is GSTA-53.
