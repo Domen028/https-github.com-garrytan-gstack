@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-windows-bash — the doctor's `windows bash` row: the Git Bash gstack's
  * TypeScript hands its bash scripts to on Windows, and what chose it

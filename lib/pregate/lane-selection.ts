@@ -11,7 +11,7 @@ import { GENERATED_PATH } from '../regen';
 import { runBashSync } from '../script-invocation';
 import { matchesAny } from '../ship-policy';
 import { PREGATE_CONFIG_PATH } from './config';
-import { isDocsEmptyLane } from './docs-lane';
+import { isDocsEmptyLane, isInertNoTests } from './docs-lane';
 import { buildGraph, isTestFile, listRepoFiles, testsFor, type Graph } from './import-graph';
 import type { PregateContext, RemoteObligation } from './types';
 import type { Lane } from './workflows';
@@ -21,6 +21,8 @@ export interface Selection {
   noLane: string[];
   /** Markdown (and `empty_lanes` paths) with no import-graph test: the docs/no-tests empty lane. */
   emptyLane: string[];
+  /** Assets and dotfile tool config with no import-graph test: files no runner loads, also an empty lane. */
+  inert: string[];
   /** Every test the touched files select, sorted. */
   tests: string[];
   /** Tests that run on this machine. */
@@ -80,6 +82,7 @@ export function selectLanes(ctx: PregateContext): Selection {
   const tests = new Set<string>();
   const noLane: string[] = [];
   const emptyLane: string[] = [];
+  const inert: string[] = [];
   const seeds = new Map<string, string>();
   for (const t of touched) { seeds.set(t.path, t.status === 'D' ? 'deleted' : 'touched'); if (t.renamedFrom) seeds.set(t.renamedFrom, `renamed to ${t.path}`); }
   for (const e of ctx.registry.entries) {
@@ -110,6 +113,11 @@ export function selectLanes(ctx: PregateContext): Selection {
       provenance.push(`${file}: docs/no-tests (empty lane)`);
       continue;
     }
+    if (isInertNoTests(file)) {
+      inert.push(file);
+      provenance.push(`${file}: no-tests (asset or tool config no runner loads)`);
+      continue;
+    }
     noLane.push(file);
   }
   const laneSets: Record<string, string[] | '?'> = {};
@@ -133,7 +141,7 @@ export function selectLanes(ctx: PregateContext): Selection {
   if (anyLocalAll || ctx.lanes.filter(l => l.runsTests && !l.manual && l.tier !== 'platform').length === 0) for (const t of selected) local.add(t);
   for (const t of selected) if (!local.has(t) && !remote.some(r => r.tests.includes(t))) local.add(t);
   if (local.size && tiers.size === 0) tiers.add('unit');
-  return { noLane: noLane.sort(), emptyLane: emptyLane.sort(), tests: selected, localTests: [...local].sort(), remote, tiersRan: [...tiers].sort(), laneSets, provenance };
+  return { noLane: noLane.sort(), emptyLane: emptyLane.sort(), inert: inert.sort(), tests: selected, localTests: [...local].sort(), remote, tiersRan: [...tiers].sort(), laneSets, provenance };
 }
 
 export function isTest(file: string): boolean { return isTestFile(file); }

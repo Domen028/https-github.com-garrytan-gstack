@@ -60,9 +60,9 @@ the byte-pinned `/ship` renders in `test/fixtures/golden/`).
 
 | Key | Meaning |
 |---|---|
-| `runner` | the local test command with `{files}` (gstack: `bun test {files}`); without it `lanes` is `incomplete` |
+| `runner` | the local test command with `{files}` (gstack: `bun test {files}`); unset, it is detected (bun, vitest, jest, pytest, `node --test`, and `flutter test`/`dart test` per Dart package root, through fvm when that package or an ancestor pins it with `.fvmrc` or `.fvm/fvm_config.json` and fvm is on PATH); nothing detected, a Dart SDK missing from PATH, or a `.dart` file with no `pubspec.yaml` above it is `incomplete` (the runnable groups still run, so a real failure still fails) |
 | `dependencies` | glob → test files for subprocess targets, runtime reads and generated inputs the import graph cannot see; `[]` declares "no lane needed" (docs, licences) |
-| `empty_lanes` | extra globs for the docs/no-tests empty lane. Any Markdown file already qualifies with no pin file when no test depends on it (the same import graph as other files: a quoted path, a `join()` of path segments, an import, or a `dependencies` entry). README, CHANGELOG, CONTRIBUTING, LICENSE, AGENTS and CLAUDE qualify even without `.md`. Source code and files under a test directory never qualify. A test that reads the file still selects that test |
+| `empty_lanes` | extra globs for the docs/no-tests empty lane. Any Markdown file already qualifies with no pin file when no test depends on it (the same import graph as other files: a quoted path, a `join()` of path segments, an import, or a `dependencies` entry). reStructuredText and AsciiDoc count as Markdown here. README, CHANGELOG, CONTRIBUTING, LICENSE, AGENTS and CLAUDE qualify even without `.md`, and so does licence text under any vendored name (`roboto-LICENSE.txt`, `LICENSE-MIT`, `licenses/*.txt`). Source code and files under a test directory never qualify. A test that reads the file still selects that test |
 | `selection` | `workflow.yml/job` → a command printing the lane's file list, for matrices a planner computes (gstack: `scripts/test-free-shards.ts --list`) |
 | `warn` | check ids downgraded to warn; `secrets` and required lanes never |
 | `strays.allow` | intentional root files or new top-level directories |
@@ -101,6 +101,15 @@ instead of falling back to defaults. A base copy git cannot read (and
 `git ls-tree` cannot confirm is absent) refuses with `POLICY_SOURCE_UNAVAILABLE`
 instead of handing the run to the user file.
 `gstack-pregate validate` / `init` cover the working-tree file.
+
+`gstack-pregate init` writes a draft built from the repo, not a fixed example.
+It prints the languages it found and the runner each language's tests would
+get, then maps every file the import graph cannot place to the tests of the
+nearest directory above it that holds at most 25 of them, up to the
+256-entry schema limit. The draft never
+writes `[]`, which would clear a file without a test. A file with no nearby
+test, and a lane whose matrix a planner computes, is printed as a `TODO`.
+Review each entry before committing the file on the base branch.
 
 ## `gstack-pregate`
 
@@ -148,7 +157,14 @@ Two stages with separate clocks, both printed:
 
 - `lanes`: touched files map to tests through `lib/pregate/import-graph.ts`
   (static imports ∪ repo-path string literals ∪ the `bin/<name>` →
-  `test/<name>*.test.ts` convention ∪ `dependencies`), transitively through
+  `test/<name>*.test.ts` convention ∪ `dependencies`; Dart `import`/`export`/`part`
+  directives resolve `package:<name>/x` through every tracked `pubspec.yaml`, and
+  `*_test.dart` files under a `test/` directory are tests, except under `integration_test/` and
+  `test_driver/`: they need a device, so pregate never runs them, and a touched
+  one has no lane until you declare `"**/integration_test/**": []` (and
+  `"**/test_driver/**": []`) under `dependencies` and let CI run them; Dart files, device tests
+  included, are source code, so a `dependencies` `[]` declaration clears them and `empty_lanes`
+  does not), transitively through
   non-test files; deleted and renamed files select the tests that named them.
   A touched source file with no lane is `FAIL lanes — <file> has no test lane`,
   never a pass. Markdown that no test depends on is a docs/no-tests empty lane
@@ -157,8 +173,29 @@ Two stages with separate clocks, both printed:
   as every other file, so a test that reads the Markdown (a fixture or a doc)
   still selects that test. `empty_lanes` adds globs for other documentation;
   it cannot clear a source file or a file under a test directory.
+  Files no test runner loads take a second empty lane by the same rule
+  (`no-tests (assets and tool config): …`): images, fonts, media and PDFs
+  outside snapshot, golden and fixture directories, plus an allowlist of tool
+  configuration (`.editorconfig`, `.gitignore`, `.pre-commit-config.yaml`,
+  lint and format config, `.vscode/`, `.idea/`, `.impeccable/`, and GitHub
+  issue templates, CODEOWNERS and dependabot config). Stylesheets (they import
+  each other), any other dotfile (`.rspec`, `.husky/` hooks, `.env*`, version
+  pins), CI workflows and actions, and `.gstack/` still need a lane.
+  In a Django project (a manage.py or code importing django, plus Python
+  code, not a string or comment, that assigns `INSTALLED_APPS` or
+  `ROOT_URLCONF`, or a config file names `DJANGO_SETTINGS_MODULE`), the files
+  Django loads by name get `framework` edges: every Python test depends on
+  each settings module; a dotted string in a settings module and an
+  `include("app.urls")` argument count as imports; an app's migrations,
+  `admin.py`, `templates/`, `static/`, `templatetags/`, `management/`,
+  `fixtures/` and `locale/` files select that app's tests and the tests that
+  reach its `models.py` (the settings module, so the suite, when the app has
+  no tests of its own); a template under a project-level `templates/`
+  directory selects the suite through the settings module.
   Lanes and platform tiers come from `.github/workflows/*.yml`
-  (`gstack-pregate lanes` prints them): local ones run through the runner under
+  (`gstack-pregate lanes` prints them; a test path a step names resolves against
+  that step's `working-directory`, else the job's or workflow's
+  `defaults.run.working-directory`): local ones run through the runner under
   `set -o pipefail`, judged on the runner's summary line (zero tests ran is a
   failure, a `| tail`-hidden exit is still an exit); a platform lane this
   machine cannot run becomes a `requires-remote` obligation naming
@@ -222,7 +259,7 @@ test-tier command:
   Per-file lines come from a progress adapter where the runner's reporter
   provides them: `bun test` (its `<file>:` headers) is the only adapter today;
   a one-file run (each serial file) reports its file from the launch for any
-  runner. Other runners (node --test, vitest, jest, pytest) get heartbeats
+  runner. Other runners (node --test, vitest, jest, pytest, flutter test, dart test) get heartbeats
   only. A heartbeat follows each 60 s with no progress line;
 - is killed as **stalled** when its log does not grow for the stall timeout
   (`--stall-timeout <s>`, else `stall_timeout_s`, else 300; `0` disables): the

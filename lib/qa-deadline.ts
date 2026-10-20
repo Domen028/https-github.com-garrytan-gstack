@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { bunIsolationArgs } from './bun-isolation';
 import { constants as osConstants } from 'node:os';
 import { initializeWindowsReviewJob } from './claude-code-windows-job';
 
@@ -215,7 +216,7 @@ export async function runQaWindowsWorker(args: string[], emit: Emit, entrypoint:
   captureFiles?: { stdout: number; stderr: number }): Promise<number> {
   try { await initializeWindowsReviewJob(); } catch { throw new QaDeadlineError('Windows process containment is unavailable; no command was started'); }
   return new Promise<number>(resolve => {
-    const worker = spawn(process.execPath, [...process.execArgv, entrypoint, '--receipt-worker', ...args], {
+    const worker = spawn(process.execPath, [...bunIsolationArgs(), ...process.execArgv, entrypoint, '--receipt-worker', ...args], {
       stdio: ['inherit', captureFiles?.stdout ?? 'inherit', captureFiles?.stderr ?? 'inherit', 'ipc'], windowsHide: true,
     });
     const kill = () => { worker.kill('SIGKILL'); };

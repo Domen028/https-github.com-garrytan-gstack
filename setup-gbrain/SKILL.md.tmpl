@@ -116,7 +116,7 @@ continue immediately with Step 2:
 
 ```bash
 [ -f ~/.claude/skills/gstack/bin/gstack-code-intelligence ] \
-  && bun ~/.claude/skills/gstack/bin/gstack-code-intelligence select gbrain 2>/dev/null \
+  && bun --no-env-file --config=/dev/null ~/.claude/skills/gstack/bin/gstack-code-intelligence select gbrain 2>/dev/null \
   || true
 ```
 

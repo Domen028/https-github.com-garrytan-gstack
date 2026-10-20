@@ -17,7 +17,7 @@ import { isRegistryUnavailable, loadRegistryFromBase, loadRegistryFromHead, type
 import { resolveStateRoot } from '../state-root';
 import { RESULT_CODES, TROUBLESHOOTING_DOC, resultLine } from '../result-codes';
 import { runScriptSync, wtreeFingerprint, type InvocationOptions, type WtreeResult } from '../script-invocation';
-import { policyUnavailableLine } from '../ship-policy';
+import { policyUnavailableLine, resolveBaseBranch } from '../ship-policy';
 import { PREGATE_CONFIG_PATH, isConfigUnavailable, loadConfigFromBase, loadConfigFromHead, loadConfigFromUser, type ConfigError, type ConfigLoad, type PregateConfig } from './config';
 import type { CheckResult, PregateContext, TouchedFile } from './types';
 import { discoverLanes } from './workflows';
@@ -45,7 +45,7 @@ export function readTestBackend(env: NodeJS.ProcessEnv, invocation?: InvocationO
 export interface ContextRefusal {
   code: 'POLICY_SOURCE_UNAVAILABLE' | 'PREGATE_CONFIG_INVALID' | 'REGEN_REGISTRY_INVALID' | 'WTREE_UNAVAILABLE';
   message: string;
-  /** A cause-specific fix that replaces the code's own (a gstack-wtree exit names its repair). */
+  /** A cause-specific fix that replaces the code's own (a gstack-wtree exit names its repair; so does a `--base` that is no origin branch). */
   fix?: string;
   errors?: Array<ConfigError | RegistryError>;
 }
@@ -67,16 +67,36 @@ export function wtreeRefusal(fp: Extract<WtreeResult, { error: string }>): Conte
   return { code: 'WTREE_UNAVAILABLE', message: fp.error, fix: 'run bin/gstack-wtree in the repository to see why it fails (it exits 1 outside a git repository, in one with no commits, or when a write fails), repair that, then rerun gstack-pregate' };
 }
 
+/**
+ * `origin/<base>` does not resolve, yet `<base>` names a commit here and no local
+ * branch: a SHA, a tag or another remote's ref (`upstream/main` in a fork clone).
+ * `git fetch origin <base>` never creates `origin/<base>` for those (#3269), so the
+ * fix names an origin branch instead. A local branch, or a name that resolves
+ * nowhere, keeps the code's fetch fix: that is the shallow or never-fetched
+ * checkout it repairs.
+ */
+function notAnOriginBranch(repoRoot: string, base: string): ContextRefusal | null {
+  if (git(repoRoot, ['rev-parse', '--verify', '--quiet', `refs/heads/${base}`]).ok) return null;
+  if (!git(repoRoot, ['rev-parse', '--verify', '--quiet', `${base}^{commit}`]).ok) return null;
+  const fallback = resolveBaseBranch(repoRoot);
+  const example = git(repoRoot, ['rev-parse', '--verify', '--quiet', `origin/${fallback}^{commit}`]).ok ? `, such as --base ${fallback}` : '';
+  return { code: 'POLICY_SOURCE_UNAVAILABLE', message: `origin/${base} is not a resolvable commit; ${base} names a commit here, but --base takes a branch name on origin`, fix: `pass a branch that exists on origin${example} (git branch -r --list 'origin/*' lists them)` };
+}
+
 export interface RefusalReport { code: ContextRefusal['code']; detail: string; fix: string; docs: string; line: string }
 
-/** One context refusal as its stderr line and as the fields of the `--json` envelope. */
+/**
+ * One context refusal as its stderr line and as the fields of the `--json` envelope.
+ * A cause-specific `fix` replaces the code's own. The shared POLICY_SOURCE_UNAVAILABLE
+ * summary names the ship policy; pregate's line says "pin files".
+ */
 export function describeRefusal(refused: ContextRefusal, base: string, context = 'gstack-pregate'): RefusalReport {
   const { code, message } = refused;
   const row = RESULT_CODES[code];
   const docs = `${TROUBLESHOOTING_DOC}#${row.anchor}`;
-  if (code === 'POLICY_SOURCE_UNAVAILABLE') return { code, detail: message, fix: row.fix.replace('<base>', base), docs, line: policyUnavailableLine(context, base, message).replace('.gstack/ship-policy.json', 'pin files') };
+  if (code === 'POLICY_SOURCE_UNAVAILABLE' && !refused.fix) return { code, detail: message, fix: row.fix.replace('<base>', base), docs, line: policyUnavailableLine(context, base, message).replace('.gstack/ship-policy.json', 'pin files') };
   if (!refused.fix) return { code, detail: message, fix: row.fix, docs, line: resultLine(context, code, message) };
-  return { code, detail: message, fix: refused.fix, docs, line: `${context}: ${row.summary} (${message}); fix: ${refused.fix} (${code})` };
+  return { code, detail: message, fix: refused.fix, docs, line: `${context}: ${row.summary.replace('.gstack/ship-policy.json', 'pin files')} (${message}); fix: ${refused.fix} (${code})` };
 }
 
 function git(cwd: string, args: string[], env?: NodeJS.ProcessEnv): { ok: boolean; out: string; err: string } {
@@ -144,7 +164,7 @@ export function buildContext(o: BuildContextOptions): ContextLoad {
   const base = o.base.replace(/^origin\//, '');
   const baseRef = `origin/${base}`;
   const baseSha = git(o.repoRoot, ['rev-parse', '--verify', '--quiet', `${baseRef}^{commit}`]);
-  if (!baseSha.ok || !baseSha.out) return { refused: { code: 'POLICY_SOURCE_UNAVAILABLE', message: `${baseRef} is not a resolvable commit` } };
+  if (!baseSha.ok || !baseSha.out) return { refused: notAnOriginBranch(o.repoRoot, base) ?? { code: 'POLICY_SOURCE_UNAVAILABLE', message: `${baseRef} is not a resolvable commit` } };
   const head = git(o.repoRoot, ['rev-parse', 'HEAD']).out;
   const mergeBase = git(o.repoRoot, ['merge-base', baseSha.out, 'HEAD']).out || baseSha.out;
   let configLoad: ConfigLoad = o.policyFrom === 'head' ? loadConfigFromHead(o.repoRoot, o.knownChecks) : loadConfigFromBase(o.repoRoot, base, o.knownChecks);

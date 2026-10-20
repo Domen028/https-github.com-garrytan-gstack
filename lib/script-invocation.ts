@@ -32,6 +32,7 @@ import { spawnSync, type SpawnSyncOptions, type SpawnSyncOptionsWithStringEncodi
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { bunIsolationArgs } from './bun-isolation';
 import { resultLine } from './result-codes';
 
 export const BIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin');
@@ -205,9 +206,7 @@ function windowsBash(o: InvocationOptions): { ok: true; bash: string } | { ok: f
 
 /** How to run a gstack shebang bin on this platform. */
 export function scriptInvocation(script: string, args: readonly string[], o: InvocationOptions = {}): Invocation {
-  const shebang = readShebang(script);
-  // `bun <script>` ignores the shebang's flags, so a --no-env-file there (a checkout's .env must not reach the bin) is carried over.
-  if (/^#!.*\bbun\b/.test(shebang)) return { ok: true, cmd: o.bunExe ?? bunExecutable(), argv: [...(/\s--no-env-file(\s|$)/.test(shebang) ? ['--no-env-file'] : []), script, ...args] };
+  if (/^#!.*\bbun\b/.test(readShebang(script))) return { ok: true, cmd: o.bunExe ?? bunExecutable(), argv: [...bunIsolationArgs((o.platform ?? process.platform) as NodeJS.Platform), script, ...args] };
   if ((o.platform ?? process.platform) !== 'win32') return { ok: true, cmd: script, argv: [...args] };
   const bash = windowsBash(o);
   return bash.ok ? { ok: true, cmd: bash.bash, argv: [slash(script), ...args] } : bash;

@@ -1,4 +1,4 @@
-#!/usr/bin/env -S bun --no-env-file run
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-docs-candidate — /ship's documentation-audit snapshot and its later check.
  *

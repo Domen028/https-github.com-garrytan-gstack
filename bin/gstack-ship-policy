@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-ship-policy — read, validate and explain `.gstack/ship-policy.json` (plan C1).
  *

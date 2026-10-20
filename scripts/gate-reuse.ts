@@ -33,6 +33,17 @@
  * byte, a missing receipt or merge-base, gh or git errors, a selection change)
  * leaves no candidate, and the run executes the full gate. The free suite and
  * every other check run on the new head regardless.
+ *
+ * Dispatched screens (plan GSTA-49 T1b): a workflow_dispatch run with
+ * screen_pr tests the refs/pull/<n>/merge commit gstack-ship-queue pinned.
+ * Its run name ends ` screen #<n>`, and its binding adds the tested merge
+ * commit and the screen policy. A screen's find lists both events filtered by
+ * the PR, so every newer-run veto spans pull_request runs and screens. A
+ * dispatched binding is accepted only when it names this PR and repository,
+ * its head is one of the PR's commits, its tested commit merges that head
+ * into the bound base, and its policy equals this screen's (a pull_request
+ * run counts as broad: today's full PR selection). Train and bisect runs never
+ * bind and are never listed, so they neither reuse nor are reused.
  */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
@@ -43,7 +54,7 @@ import { receiptDigest } from '../lib/ship-queue';
 import { isUnavailable, loadPolicyFromBase, matchesAny, type ShipPolicy } from '../lib/ship-policy';
 import { rewriteStamps } from '../lib/restamp';
 import { buildReceipt } from '../lib/tree-receipt';
-import { acceptedRun, ghFailureReason, runGh, type GhRunner, type WorkflowRun } from './recover-receipts';
+import { ghFailureReason, listGateRuns, runGh, type GhRunner, type WorkflowRun } from './recover-receipts';
 import type { PaidRunManifest } from './lib/paid-plan';
 
 export const BINDING_FILE = 'gate-binding.json';
@@ -67,7 +78,15 @@ export interface GateBinding {
   /** Cases accepted manually (unscored); a gate with any is never reused as a clean pass. */
   manual_accepted: number;
   selection_sha256: string;
+  /** Dispatched screens only: the purpose, the refs/pull/<n>/merge commit it tested, and the screen policy. */
+  purpose?: 'screen';
+  tested_sha?: string;
+  screen_policy?: ScreenPolicy;
 }
+
+export type ScreenPolicy = 'narrow' | 'broad';
+/** What a run is for: train and bisect runs never bind a verdict and are never reused. */
+export type RunPurpose = 'pr' | 'screen' | 'train' | 'bisect' | 'dispatch';
 
 export interface GateReuse {
   schema: 1;
@@ -91,6 +110,8 @@ export interface GateReuse {
   gated_merge_base?: string;
   merge_base?: string;
   own_diff_sha256?: string;
+  /** The reused run was a dispatched screen with this policy. */
+  reused_screen_policy?: ScreenPolicy;
 }
 
 /** The cases, trial plans and verdict-relevant plan fields a run executes; slice packing and receipts are excluded. */
@@ -112,6 +133,7 @@ export function parseBinding(value: unknown): GateBinding | null {
   if (!b || b.schema !== 1 || typeof b.repository !== 'string' || !Number.isSafeInteger(b.pr) || !Number.isSafeInteger(b.run_id)
     || !Number.isSafeInteger(b.run_attempt) || !SHA.test(b.head_sha ?? '') || !SHA.test(b.base_sha ?? '') || typeof b.profile !== 'string'
     || !Number.isSafeInteger(b.reconcile_exit) || typeof b.verdict !== 'string' || !Number.isSafeInteger(b.manual_accepted) || b.manual_accepted < 0 || !SHA256.test(b.selection_sha256 ?? '')) return null;
+  if (b.purpose !== undefined && (b.purpose !== 'screen' || !SHA.test(b.tested_sha ?? '') || (b.screen_policy !== 'narrow' && b.screen_policy !== 'broad'))) return null;
   return b;
 }
 
@@ -250,7 +272,8 @@ export function ownDiffSignature(git: Git, mergeBase: string, head: string, stam
 
 /** slices-report: what this executed run proved, or why it binds nothing. */
 export function buildBinding(o: { repository: string; pr: number; runId: number; runAttempt: number; headSha: string; baseSha: string | null;
-  profile: string; reconcileExit: number; reportDir: string }): { binding: GateBinding | null; reason: string } {
+  profile: string; reconcileExit: number; reportDir: string; purpose?: RunPurpose; testedSha?: string; screenPolicy?: string }): { binding: GateBinding | null; reason: string } {
+  if (o.purpose && o.purpose !== 'pr' && o.purpose !== 'screen') return { binding: null, reason: `a ${o.purpose} run never binds a verdict for reuse` };
   if (fs.existsSync(path.join(o.reportDir, REUSE_FILE))) return { binding: null, reason: 'this run reused a verdict; only executed gates bind' };
   if (!o.baseSha) return { binding: null, reason: 'the tested base is unknown' };
   const manifest = readJson<PaidRunManifest>(path.join(o.reportDir, 'manifest.json'));
@@ -258,7 +281,8 @@ export function buildBinding(o: { repository: string; pr: number; runId: number;
   const outcomes = readJson<{ verdict?: { verdict?: string }; totals?: { manual_accepted?: number } }>(path.join(o.reportDir, 'collector-outcomes.json'));
   const binding: GateBinding = { schema: 1, repository: o.repository, pr: o.pr, run_id: o.runId, run_attempt: o.runAttempt,
     head_sha: o.headSha, base_sha: o.baseSha, profile: o.profile, reconcile_exit: o.reconcileExit,
-    verdict: outcomes?.verdict?.verdict ?? 'MISSING', manual_accepted: outcomes?.totals?.manual_accepted ?? -1, selection_sha256: selectionFingerprint(manifest) };
+    verdict: outcomes?.verdict?.verdict ?? 'MISSING', manual_accepted: outcomes?.totals?.manual_accepted ?? -1, selection_sha256: selectionFingerprint(manifest),
+    ...(o.purpose === 'screen' ? { purpose: 'screen' as const, tested_sha: o.testedSha ?? '', screen_policy: o.screenPolicy as ScreenPolicy } : {}) };
   return parseBinding(binding)
     ? { binding, reason: `bound ${binding.verdict} at ${binding.head_sha.slice(0, 12)} on base ${binding.base_sha.slice(0, 12)} (reconcile exit ${binding.reconcile_exit})` }
     : { binding: null, reason: 'binding fields are incomplete' };
@@ -266,22 +290,27 @@ export function buildBinding(o: { repository: string; pr: number; runId: number;
 
 /**
  * A newer completed run with no binding is passed over only when no paid
- * slice of it finished: superseded, readiness-blocked, a reuse, or cancelled
- * before or during its slices. A slice that finished (success, failure,
- * timed out) without a bound verdict blocks reuse of an older GREEN, so a
- * newer red or partial result is never skipped.
+ * slice of it ran: superseded, readiness-blocked, a reuse, or cancelled
+ * before its slice step started. A slice that finished (success, failure,
+ * timed out) without a bound verdict blocks reuse of an older GREEN, and so
+ * does a slice cancelled after its slice step started (killed before its
+ * upload step: its paid results are unknown, so it counts as incomplete), so a
+ * newer red, partial or unknown result is never skipped.
  */
 export function unboundRunVerdict(gh: GhRunner, repo: string, run: WorkflowRun, timeoutMs: number): string | null {
   const listed = gh(['api', '-X', 'GET', `repos/${repo}/actions/runs/${run.id}/jobs`, '-f', 'filter=latest', '-f', 'per_page=100'], timeoutMs);
   if (listed.status !== 0) return `cannot list run ${run.id}'s jobs (${ghFailureReason(listed.stderr)})`;
-  let slices: Array<{ name: string; conclusion: string | null }>;
+  type Job = { name: string; conclusion: string | null; steps?: Array<{ name: string; status?: string; conclusion?: string | null }> };
+  let slices: Job[];
   try {
-    slices = ((JSON.parse(listed.stdout).jobs ?? []) as Array<{ name: string; conclusion: string | null }>)
-      .filter(job => job.name === 'eval-slices' || job.name.startsWith('eval-slices '));
+    slices = ((JSON.parse(listed.stdout).jobs ?? []) as Job[]).filter(job => job.name === 'eval-slices' || job.name.startsWith('eval-slices '));
   } catch { return `run ${run.id}'s job list is unreadable`; }
   const finished = slices.find(job => job.conclusion !== null && job.conclusion !== 'skipped' && job.conclusion !== 'cancelled');
-  return finished
-    ? `newer run ${run.id} (${run.head_sha.slice(0, 12)}) finished a paid slice (${finished.conclusion}) but bound no verdict (conclusion ${run.conclusion})`
+  if (finished) return `newer run ${run.id} (${run.head_sha.slice(0, 12)}) finished a paid slice (${finished.conclusion}) but bound no verdict (conclusion ${run.conclusion})`;
+  const killed = slices.find(job => job.conclusion === 'cancelled' && (job.steps ?? []).some(step => step.name.startsWith('Run slice')
+    && step.status !== 'queued' && step.status !== 'pending' && step.conclusion !== 'skipped'));
+  return killed
+    ? `newer run ${run.id} (${run.head_sha.slice(0, 12)}) had a paid slice (${killed.name}) killed after its slice step started and before its upload step; its results are unknown, so it counts as incomplete`
     : null;
 }
 
@@ -292,8 +321,10 @@ export interface FindOptions {
   branch: string;
   selfRunId: number;
   headSha: string;
-  /** This run's tested merge commit (github.sha); its first parent is the base. */
+  /** This run's tested merge commit (github.sha, or a screen's refs/pull/<n>/merge commit); its first parent is the base. */
   testedSha: string;
+  /** A dispatched screen: its policy; pull_request runs and earlier screens of this PR are both candidates. */
+  screen?: { policy: ScreenPolicy };
   /** A base-ref checkout to fetch into and run the receipt in. */
   repoRoot: string;
   out: string;
@@ -315,13 +346,9 @@ export function findReusableGate(o: FindOptions): { candidate: GateReuse | null;
   const refuse = (reason: string) => { lines.push(`no gate reuse: ${reason}; the full gate runs`); return { candidate: null, lines }; };
   if (!SHA.test(o.headSha) || !SHA.test(o.testedSha)) return refuse('this run has no exact head and tested commit');
 
-  const listed = gh(['api', '-X', 'GET', `repos/${o.repo}/actions/workflows/evals.yml/runs`, '-f', 'event=pull_request', '-f', `branch=${o.branch}`, '-f', 'per_page=50'], left());
-  if (listed.status !== 0) return refuse(ghFailureReason(listed.stderr));
-  let runs: WorkflowRun[];
-  try { runs = (JSON.parse(listed.stdout).workflow_runs ?? []) as WorkflowRun[]; } catch { return refuse('gh returned an unreadable run list'); }
-  const scope = { pr: o.pr, headRepo: o.headRepo, selfRunId: o.selfRunId };
-  const older = runs.filter(run => acceptedRun(run, scope) && run.id < o.selfRunId)
-    .sort((a, b) => b.id - a.id).slice(0, o.maxRuns ?? 10);
+  const listed = listGateRuns(gh, { repo: o.repo, pr: o.pr, headRepo: o.headRepo, branch: o.branch, selfRunId: o.selfRunId, screens: !!o.screen }, left);
+  if ('error' in listed) return refuse(listed.error);
+  const older = listed.runs.filter(run => run.id < o.selfRunId).sort((a, b) => b.id - a.id).slice(0, o.maxRuns ?? 10);
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-reuse-'));
   try {
@@ -352,8 +379,14 @@ export function findReusableGate(o: FindOptions): { candidate: GateReuse | null;
     if (!found) return refuse('no earlier executed gate on this PR bound a verdict');
     const { run, binding } = found;
     if (!binding) return refuse(`run ${run.id}'s gate binding is missing or malformed`);
-    if (binding.run_id !== run.id || binding.pr !== o.pr || binding.repository !== o.repo || binding.head_sha !== run.head_sha) {
+    const screenRun = run.event === 'workflow_dispatch';
+    if (binding.run_id !== run.id || binding.pr !== o.pr || binding.repository !== o.repo
+      || (screenRun ? binding.purpose !== 'screen' : binding.head_sha !== run.head_sha || binding.purpose !== undefined)) {
       return refuse(`run ${run.id}'s gate binding does not match the run it came from`);
+    }
+    const boundPolicy = binding.screen_policy ?? 'broad';
+    if (o.screen && boundPolicy !== o.screen.policy) {
+      return refuse(`run ${run.id} gated the ${boundPolicy} selection; a ${o.screen.policy} screen never adopts it`);
     }
     if (run.conclusion !== 'success' || binding.verdict !== 'GREEN' || binding.reconcile_exit !== 0) {
       return refuse(`the newest executed gate (run ${run.id}, ${binding.head_sha.slice(0, 12)}) is ${binding.verdict}, reconcile exit ${binding.reconcile_exit}, conclusion ${run.conclusion}`);
@@ -364,8 +397,17 @@ export function findReusableGate(o: FindOptions): { candidate: GateReuse | null;
     if (binding.profile !== 'pr') return refuse(`run ${run.id} ran the ${binding.profile} profile, not the PR gate`);
     if (binding.head_sha === o.headSha) return refuse(`run ${run.id} gated this same head; a re-run executes fresh`);
 
-    const fetched = git(['fetch', '--no-tags', '--depth=1', 'origin', binding.head_sha, o.headSha, o.testedSha]);
+    if (screenRun) {
+      const commits = gh(['api', `repos/${o.repo}/pulls/${o.pr}/commits`, '--paginate', '--jq', '.[].sha'], left());
+      if (commits.status !== 0) return refuse(`cannot list PR #${o.pr}'s commits (${ghFailureReason(commits.stderr)})`);
+      if (!commits.stdout.split('\n').includes(binding.head_sha)) return refuse(`screen run ${run.id}'s head ${binding.head_sha.slice(0, 12)} is not a commit of PR #${o.pr}`);
+    }
+    const fetched = git(['fetch', '--no-tags', '--depth=1', 'origin', binding.head_sha, o.headSha, o.testedSha, ...(binding.tested_sha ? [binding.tested_sha] : [])]);
     if (!fetched.ok) return refuse(`cannot fetch the gated and current commits (${fetched.out.split('\n')[0]})`);
+    if (screenRun) {
+      const gatedBase = testedBase(git, binding.tested_sha!, binding.head_sha);
+      if ('error' in gatedBase || gatedBase.base !== binding.base_sha) return refuse(`screen run ${run.id}'s tested commit does not merge its head into its bound base (${'error' in gatedBase ? gatedBase.error : gatedBase.base.slice(0, 12)})`);
+    }
     const tested = testedBase(git, o.testedSha, o.headSha);
     if ('error' in tested) return refuse(tested.error);
     const baseSha = tested.base;
@@ -376,7 +418,8 @@ export function findReusableGate(o: FindOptions): { candidate: GateReuse | null;
     if (isUnavailable(policy)) return refuse(`the base's ship policy is unavailable (${policy.detail})`);
     if (policy.errors.length) return refuse(`the base's ship policy is invalid (${policy.errors[0]!.message})`);
     const common = { schema: 1 as const, pr: o.pr, reused_run_id: run.id, reused_run_attempt: binding.run_attempt, gated_head: binding.head_sha,
-      current_head: o.headSha, gated_base: binding.base_sha, base_sha: baseSha, selection_sha256: binding.selection_sha256 };
+      current_head: o.headSha, gated_base: binding.base_sha, base_sha: baseSha, selection_sha256: binding.selection_sha256,
+      ...(binding.screen_policy ? { reused_screen_policy: binding.screen_policy } : {}) };
 
     let candidate: GateReuse;
     if (binding.base_sha === baseSha) {
@@ -439,7 +482,7 @@ export function reuseReport(reuse: GateReuse, repo: string): string {
     : [`OWN DIFF: identical sha256=${reuse.own_diff_sha256} (merge-base ${reuse.gated_merge_base} -> ${reuse.merge_base}; stamp files excluded)`];
   return [
     `GATE REUSED (${reuse.kind === 'restamp-only' ? 'R2a, restamp-only' : 'R2, main moved'}): no paid case ran on ${reuse.current_head}`,
-    `reused verdict: GREEN from run ${reuse.reused_run_id} attempt ${reuse.reused_run_attempt} at ${reuse.gated_head} (https://github.com/${repo}/actions/runs/${reuse.reused_run_id})`,
+    `reused verdict: GREEN from run ${reuse.reused_run_id} attempt ${reuse.reused_run_attempt}${reuse.reused_screen_policy ? ` (a ${reuse.reused_screen_policy} screen)` : ''} at ${reuse.gated_head} (https://github.com/${repo}/actions/runs/${reuse.reused_run_id})`,
     `why: ${reuse.why}`,
     `base: ${reuse.gated_base} -> ${reuse.base_sha}`,
     ...evidence,
@@ -450,9 +493,11 @@ export function reuseReport(reuse: GateReuse, repo: string): string {
 
 const USAGE = `usage:
   bun run scripts/gate-reuse.ts bind <report dir> --out <dir> --repo <owner/name> --pr <n> --run-id <id> --run-attempt <n>
-      --head-sha <sha> --tested-sha <merge sha> --profile <pr|full> --reconcile-exit <n>
+      --head-sha <sha> --tested-sha <merge sha> --profile <pr|full> --reconcile-exit <n> [--purpose pr|screen|train|bisect|dispatch]
+      [--screen-policy narrow|broad]
   bun run scripts/gate-reuse.ts find --repo <owner/name> --pr <n> --head-repo <owner/name> --branch <head branch> --run-id <id>
-      --head-sha <sha> --tested-sha <merge sha> --out <dir> [--budget-seconds 90]
+      --head-sha <sha> --tested-sha <merge sha> --out <dir> [--screen-policy narrow|broad] [--budget-seconds 90]
+--screen-policy marks a dispatched screen (its tested sha is the pinned refs/pull/<n>/merge commit).
   bun run scripts/gate-reuse.ts confirm <candidate dir> <manifest.json> --out <paid-plan dir> [--github-output <file>]
   bun run scripts/gate-reuse.ts report <gate-reuse.json> --repo <owner/name>
 bind and find never fail the run; no candidate means the full gate runs.`;
@@ -468,9 +513,12 @@ if (import.meta.main) {
     const git = gitIn(process.cwd());
     if (!commitParents(git, testedSha!)) git(['fetch', '--no-tags', '--depth=1', 'origin', testedSha!]);
     const tested = testedBase(git, testedSha!, headSha!);
+    const purpose = (flag('purpose') || 'pr') as RunPurpose;
+    if (!['pr', 'screen', 'train', 'bisect', 'dispatch'].includes(purpose) || (purpose === 'screen' && !['narrow', 'broad'].includes(flag('screen-policy') ?? ''))) usage();
     const { binding, reason } = buildBinding({ repository: repository!, pr: int('pr'), runId: int('run-id'), runAttempt: int('run-attempt'),
       headSha: headSha!, baseSha: 'base' in tested ? tested.base : null, profile: profile!,
-      reconcileExit: /^\d+$/.test(flag('reconcile-exit') ?? '') ? int('reconcile-exit') : -1, reportDir: reportDir! });
+      reconcileExit: /^\d+$/.test(flag('reconcile-exit') ?? '') ? int('reconcile-exit') : -1, reportDir: reportDir!,
+      purpose, testedSha: testedSha!, screenPolicy: flag('screen-policy') });
     if (binding) {
       fs.mkdirSync(out!, { recursive: true });
       fs.writeFileSync(path.join(out!, BINDING_FILE), `${JSON.stringify(binding, null, 2)}\n`);
@@ -478,9 +526,12 @@ if (import.meta.main) {
     console.log(`- Gate binding: ${reason}${'error' in tested ? ` (${tested.error})` : ''}`);
   } else if (command === 'find') {
     const [repo, headRepo, branch, headSha, testedSha, out] = [flag('repo'), flag('head-repo'), flag('branch'), flag('head-sha'), flag('tested-sha'), flag('out')];
-    if (!repo || !headRepo || !branch || !headSha || !testedSha || !out || !Number.isSafeInteger(int('pr')) || !Number.isSafeInteger(int('run-id'))) usage();
+    const policy = flag('screen-policy');
+    if (!repo || !headRepo || !branch || !headSha || !testedSha || !out || !Number.isSafeInteger(int('pr')) || !Number.isSafeInteger(int('run-id'))
+      || (policy !== undefined && policy !== 'narrow' && policy !== 'broad')) usage();
     const { lines } = findReusableGate({ repo: repo!, pr: int('pr'), headRepo: headRepo!, branch: branch!, selfRunId: int('run-id'), headSha: headSha!,
-      testedSha: testedSha!, repoRoot: process.cwd(), out: out!, budgetMs: Number(flag('budget-seconds') ?? '90') * 1000 });
+      testedSha: testedSha!, repoRoot: process.cwd(), out: out!, budgetMs: Number(flag('budget-seconds') ?? '90') * 1000,
+      ...(policy ? { screen: { policy: policy as ScreenPolicy } } : {}) });
     console.log('### Paid-gate verdict reuse (R2a restamp-only, R2 main moved)');
     for (const line of lines) console.log(`- ${line}`);
   } else if (command === 'confirm') {

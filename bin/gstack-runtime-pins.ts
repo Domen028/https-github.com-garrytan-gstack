@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-runtime-pins — the doctor's `project pins` row (lib/runtime-pins.ts).
  *

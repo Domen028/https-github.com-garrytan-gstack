@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /** Generic producer runner. Compile this file before moving it to a clean producer host. */
 import * as fs from 'node:fs';
 import { createHash } from 'node:crypto';
@@ -179,8 +179,8 @@ function emptyArtifactInventory(): ProducerArtifactInventory {
   return { ...base, identityHash: producerArtifactInventoryHash(base) };
 }
 
-/** A whole path component that is one of the helper's own identifiers: `<epoch ms>-<hex>` run and replay IDs, retired runs, and hex artifact IDs with an optional lowercase-word prefix (`gitleaks-<hex>-<hex>.json`). */
-const HELPER_ID_COMPONENT = /^(?:\d{13}-[a-f0-9]{16}|\.retired-\d{13}-[a-f0-9]{16}-[a-f0-9]{32}|(?:[a-z]+-)*[a-f0-9]{16,64}(?:-[a-f0-9]{16})*(?:\.[a-z]+)?)$/;
+/** A whole path component that is one of the helper's own identifiers: `<epoch ms>-<hex>` run and replay IDs, retired runs, hex artifact IDs with an optional lowercase-word prefix (`gitleaks-<hex>-<hex>.json`), and dependency-closure files (`<finding id>-before|after-<plan hash>.json`). */
+const HELPER_ID_COMPONENT = /^(?:\d{13}-[a-f0-9]{16}|\.retired-\d{13}-[a-f0-9]{16}-[a-f0-9]{32}|(?:[a-z]+-)*[a-f0-9]{16,64}(?:-[a-f0-9]{16})*(?:\.[a-z]+)?|(?:[a-f0-9]{32}){1,2}-(?:before|after)-[a-f0-9]{16}\.json)$/;
 
 /**
  * Helper artifact paths are `<repoId>/<runId>/...` plus the helper's public-cache/ and legacy-imports/. Components that

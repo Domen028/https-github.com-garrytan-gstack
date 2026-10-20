@@ -3,7 +3,7 @@
  * and a fake clock: no network, no sleeping.
  */
 import { describe, expect, test } from 'bun:test';
-import { freeTestsState, readinessDecision, waitForReadiness, type FreeTestsRun } from '../scripts/eval-readiness';
+import { freeTestsState, readinessDecision, screenTarget, waitForReadiness, type FreeTestsRun } from '../scripts/eval-readiness';
 import type { GhRunner } from '../scripts/recover-receipts';
 
 const HEAD = 'a'.repeat(40);
@@ -125,5 +125,43 @@ describe('waitForReadiness', () => {
     const c = clock(CREATED + 60_000);
     expect(waitForReadiness({ ...base, gh, now: c.now, sleep: c.sleep }).decision.kind).toBe('ready');
     expect(c.sleeps[0]).toBe(10 * 60_000);
+  });
+});
+
+describe('dispatched screens (GSTA-49 T1b): the merge commit is checked against the PR before Free Tests is read on its head', () => {
+  const MERGE = 'c'.repeat(40);
+  const BASE = 'd'.repeat(40);
+  const pull = (over: Record<string, unknown> = {}) => ({ state: 'open', head: { sha: HEAD, ref: 'feature', repo: { full_name: 'garrytan/gstack' } }, base: { repo: { full_name: 'garrytan/gstack' } }, ...over });
+  const gh = (pr: unknown, parents: string[] | null): GhRunner => (args) => {
+    const target = args.find(a => a.startsWith('repos/')) ?? '';
+    if (target.endsWith('/pulls/42')) return pr ? { status: 0, stdout: JSON.stringify(pr), stderr: '' } : { status: 1, stdout: '', stderr: 'HTTP 404: Not Found' };
+    if (target.endsWith(`/commits/${MERGE}`)) return parents ? { status: 0, stdout: JSON.stringify({ parents: parents.map(sha => ({ sha })) }), stderr: '' } : { status: 1, stdout: '', stderr: 'HTTP 422' };
+    return { status: 1, stdout: '', stderr: 'unexpected' };
+  };
+
+  test("an open same-repository PR's merge commit names its head (second parent) and tested base (first parent)", () => {
+    expect(screenTarget(gh(pull(), [BASE, HEAD]), 'garrytan/gstack', 42, MERGE)).toEqual({ head: HEAD, base: BASE, branch: 'feature' });
+  });
+
+  test('a fork PR, a closed PR, a non-merge commit, a short SHA or an unreadable PR is refused', () => {
+    const refused: Array<[GhRunner, string, string]> = [
+      [gh(pull({ head: { sha: HEAD, ref: 'feature', repo: { full_name: 'fork/gstack' } } }), [BASE, HEAD]), MERGE, 'not a same-repository PR'],
+      [gh(pull({ head: { sha: HEAD, ref: 'feature', repo: null } }), [BASE, HEAD]), MERGE, 'not a same-repository PR'],
+      [gh(pull({ state: 'closed' }), [BASE, HEAD]), MERGE, 'is closed, not open'],
+      [gh(pull(), [BASE]), MERGE, 'is not a two-parent merge commit'],
+      [gh(pull(), null), MERGE, 'cannot read the merge commit'],
+      [gh(null, [BASE, HEAD]), MERGE, 'cannot read PR #42'],
+      [gh(pull(), [BASE, HEAD]), MERGE.slice(0, 12), 'is not a full commit SHA'],
+    ];
+    for (const [runner, merge, why] of refused) expect((screenTarget(runner, 'garrytan/gstack', 42, merge) as { error?: string }).error, why).toContain(why);
+  });
+
+  test('the screen then waits on Free Tests for the PR head with no quiet window, and a moved head is superseded', () => {
+    const { gh: ready } = fakeGh([{ free: [free(5, 'completed', 'success')] }]);
+    const c = clock(CREATED);
+    expect(waitForReadiness({ ...base, quietMs: 0, gh: ready, now: c.now, sleep: c.sleep }).decision.kind).toBe('ready');
+    expect(c.sleeps).toEqual([]);
+    const { gh: moved } = fakeGh([{ free: [free(5, 'completed', 'success')], prHead: NEWER }]);
+    expect(waitForReadiness({ ...base, quietMs: 0, gh: moved, now: c.now, sleep: c.sleep }).decision).toEqual({ kind: 'superseded', by: NEWER });
   });
 });

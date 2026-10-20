@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * gstack-gate-diff — list the gate edits in a candidate so a human can
  * disposition each one (W1 of docs/designs/HONEST_WORK_GATE_INTEGRITY.md).

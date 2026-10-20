@@ -172,9 +172,17 @@ the readiness dashboard and the PR body, and never count it as a pass.
   review, including the `execution` gate behind `/codex` consult and challenge.
   A reply whose last `Verdict:` line says `not ready` but carries no readable
   severity prints `FINDINGS: unspecified` and exits 3 like a blocking finding.
-- **No findings.** A review with no tag and no label is `clean` only when it
-  says so explicitly (`NO_FINDINGS`, "no issues", "did not find any bugs").
-  Otherwise it is `unverified` (see below), never `clean`. A `/codex` consult
+- **No findings.** A review with no tag and no label is `clean` only when its
+  conclusion says so: the last sentence (or its last ", and" clause), or the
+  `because` clause of its `Recommendation:` line, opens with `NO_FINDINGS`,
+  "No issues found", "I found no actionable regressions" or "I did not find
+  any bugs", with no "but", "however", "except", "other than" or "elsewhere".
+  When other prose comes first, anything after that statement except a
+  predicate ("were found", "is evident") or a colon explanation must scope it
+  to the change as a whole ("in this change", "in the staged changes"); "No
+  issues in the parser." does not conclude the review. A "no issues" phrase
+  anywhere else in the reply does not count. Otherwise the review is
+  `unverified` (see below), never `clean`. A `/codex` consult
   answer with no severity labels at all is not a review summary and stays
   `clean`.
 - **Design proposals** (the design-direction voices in /design-consultation
@@ -2366,6 +2374,12 @@ then pick the user policy: run `gstack-pregate` directly or as
 branch's own file deliberately, pass `--policy-from head --allow-repo-commands`;
 the receipt then says `policy: head (unreviewed)`.
 
+`--base` names a branch on `origin`. A commit SHA, a tag or another remote's
+ref (`upstream/main` in a fork clone) never resolves as `origin/<base>`, and
+fetching it cannot create that ref, so pass a branch that exists on `origin`
+(`git branch -r --list 'origin/*'` lists them). `gstack-pregate` says so in
+its fix instead of suggesting the fetch.
+
 <a id="policy-invalid"></a>
 ### `POLICY_INVALID`
 
@@ -2857,17 +2871,25 @@ and Heavy-only files included.
 
 **Meaning.** A touched source file maps to no test through static imports,
 repo-path string literals, the `bin/<name>` → `test/<name>*.test.ts` convention
-or a `dependencies` declaration. That is a failure, not a pass. Markdown no
+or a `dependencies` declaration (in a Django project, also the files Django
+loads by name: settings strings, `include()`, app migrations, admin, templates
+and static files). That is a failure, not a pass. Markdown no
 test depends on is a docs/no-tests empty lane and is not this error, whether
 or not the name says plan, evidence or redproof. A test that reads one of
 those files (a quoted path or a `join()` of path segments) still selects that
 test. An unmapped source or code file still fails. A file under a test
-directory is not this empty lane.
+directory is not this empty lane. Images, fonts and media, and
+allowlisted tool config no test names, are the assets-and-tool-config empty lane,
+not this error.
 
 **Fix.** Add a test that names the file, or declare its lane (an explicit `[]`
 for files with no behaviour) under `dependencies` in `.gstack/pregate.json` (or the user-owned file the message names).
 Other non-Markdown documentation goes in `empty_lanes` on the base branch.
-`--explain` prints every mapping and why. For a file with no lane it also prints the import
+Dart files under `integration_test/` or `test_driver/` need a device, so pregate
+never runs them: declare `"**/integration_test/**": []` (and
+`"**/test_driver/**": []`) under `dependencies` and let CI run them.
+With no policy yet, `gstack-pregate init` drafts the `dependencies` entries
+from the repo and lists the files it could not place. `--explain` prints every mapping and why. For a file with no lane it also prints the import
 specifiers in test files that resolved to no repo file (for example a
 `tsconfig.json` `paths` alias such as `@/lib/x` whose target is missing) and any
 `extends` hop that was not followed (only relative `extends`, at most 4 hops). If
@@ -2890,8 +2912,10 @@ should have found it, report the specifier as a resolver gap.
 allowed, or the working tree changed while the check ran. Incomplete is never
 pass and blocks publication.
 
-**Fix.** Pass `--allow-repo-commands`, install the tool, raise `--timeout`, or
-keep the tree still, then rerun.
+**Fix.** Pass `--allow-repo-commands`, install the tool (for a Dart package the
+message names `not on PATH: dart` or `flutter`; fvm also works when the repo pins
+it), commit the `pubspec.yaml` of a Dart package the message says has none (or
+declare `runner`), raise `--timeout`, or keep the tree still, then rerun.
 
 <a id="pregate-stalled"></a>
 ### `PREGATE_STALLED`
@@ -3701,6 +3725,198 @@ result would not describe the gated tree.
 and the current one. Record the live attempt, or prepare a new one with
 `gate-ahead --after <pr>` and run the gate there without editing tracked
 files.
+
+<a id="queue-train-off"></a>
+### `QUEUE_TRAIN_OFF`
+
+**Meaning.** A merge-train command (`train …` or `verify --train`) ran
+against a base revision whose `.gstack/ship-policy.json` declares no `train`
+block, so the train surface is off and the per-PR queue applies. Nothing was
+written.
+
+**Fix.** Use the per-PR queue (`ready --pr <n>`, `stamp`, `verify`), or land
+a `train` block with `min_gstack_version` on the base branch first
+([Run a merge train](ship-policy.md#run-a-merge-train)).
+
+<a id="queue-train-untrusted"></a>
+### `QUEUE_TRAIN_UNTRUSTED`
+
+**Meaning.** A pinned PR's head repository is not the base repository. The
+train branch and its dispatches run with repository secrets, so fork work
+never rides a train.
+
+**Fix.** Run the printed `train build --prs <list without it>`; the fork PR
+stays on the trusted-branch path.
+
+<a id="queue-train-moved"></a>
+### `QUEUE_TRAIN_MOVED`
+
+**Meaning.** A PR's head is no longer the SHA the train pinned (at build, or
+past its pin beyond stamps at verify), so the train would not test what
+merges. At verify after earlier slots merged, the queue also freezes
+(`QUEUE_TRAIN_FROZEN`).
+
+**Fix.** Ask the lane for a fresh READY on the new head, then build the train
+with the new pin (`train build --prs <n>@<new sha>,…`).
+
+<a id="queue-train-conflict"></a>
+### `QUEUE_TRAIN_CONFLICT`
+
+**Meaning.** Merging a PR onto the prefix before it conflicts outside the
+version files and the CHANGELOG. The `QUEUE_TRAIN_CONFLICT:` line names the
+PR, the conflicting files and the PRs merged before it. Nothing was
+dispatched and no branch was pushed.
+
+**Fix.** Run the printed `train build --prs <list without that PR>`. The PR's
+lane merges main (with the earlier PRs once they land) and reports READY
+again.
+
+<a id="queue-train-free-red"></a>
+### `QUEUE_TRAIN_FREE_RED`
+
+**Meaning.** The free tests dispatched on `train/<nonce>` are red, cancelled,
+missing (no `workflow_dispatch` run appeared before `--free-timeout`) or ran
+on another SHA, so the paid gate was not dispatched.
+
+**Fix.** Read the free-tests run. A PR-caused red drops that PR (`train build
+--prs <list without it>`); a flaky test goes to its owner before the next
+build.
+
+<a id="queue-train-dispatch-unknown"></a>
+### `QUEUE_TRAIN_DISPATCH_UNKNOWN`
+
+**Meaning.** A train dispatch was attempted, but no run carrying its nonce
+appeared, so whether it started is unknown (`gh workflow run` can fail after
+GitHub accepted the dispatch). It is never dispatched again blindly.
+
+**Fix.** Run `gstack-ship-queue train status --train <nonce>`. It adopts the
+run carrying the nonce, or marks the dispatch absent; only then does
+`train build --train <nonce>` dispatch it again, under the same nonce.
+
+<a id="queue-train-waiting"></a>
+### `QUEUE_TRAIN_WAITING`
+
+**Meaning.** The train has fewer PRs than `train.max_size` and its oldest
+READY PR has waited less than `train.fill_hours`, so it does not dispatch
+yet. The message prints when it will.
+
+**Fix.** Add READY PRs, rerun after the printed time, or pass `--urgent` for a
+one-PR train.
+
+<a id="queue-train-pending"></a>
+### `QUEUE_TRAIN_PENDING`
+
+**Meaning.** The train's run (free tests, the full gate or the bisect) has
+not finished, so there is no verdict yet.
+
+**Fix.** Rerun the printed `NEXT:` command later. Nothing is dispatched again
+while a run is pending.
+
+<a id="queue-train-incomplete"></a>
+### `QUEUE_TRAIN_INCOMPLETE`
+
+**Meaning.** The train gate did not complete its census: INFRA or INCOMPLETE
+panels, an unbound, partial or cancelled shard, a slice killed before its
+upload, a record bound to another nonce, head or tree, or no published
+record. An incomplete gate is never green.
+
+**Fix.** When every gap is machine-classified INFRA or INCOMPLETE, take the
+one re-dispatch EVAL_POLICY.infraRedispatch allows (`train rebuild --train
+<nonce> --infra`) and report both runs. Otherwise diagnose the run.
+
+<a id="queue-train-red"></a>
+### `QUEUE_TRAIN_RED`
+
+**Meaning.** The train's full gate is red on the train tree; the message names
+the red cases. Its PRs do not merge, and nothing is retried to change the
+verdict.
+
+**Fix.** Bisect the red cases (`train bisect --train <nonce> --spend-cap
+<usd>`). After a rebuild's second red, route the cases to a repair lane.
+
+<a id="queue-train-red-on-main"></a>
+### `QUEUE_TRAIN_RED_ON_MAIN`
+
+**Meaning.** The bisect found the red cases red on every prefix, main (T0)
+included: main is broken, not the train's PRs.
+
+**Fix.** Fix forward on main first (a one-PR train), then rebuild this train
+unchanged.
+
+<a id="queue-train-unattributed"></a>
+### `QUEUE_TRAIN_UNATTRIBUTED`
+
+**Meaning.** The bisect pattern blames no PR and not main: all green, or not
+monotone. One trial per prefix cannot tell a flake from a break.
+
+**Fix.** All green: the one preregistered rebuild (`train rebuild --train
+<nonce>`), reporting both runs. Any other pattern: a repair lane, then a
+changed train once the repair merges.
+
+<a id="queue-train-bisect-capped"></a>
+### `QUEUE_TRAIN_BISECT_CAPPED`
+
+**Meaning.** The bisect's reserved price (every case×prefix trial, trials
+without cost data at `train.trial_reservation_usd`) passes `--spend-cap`.
+Prefixes that fit were launched, completed prefixes are kept, and the
+outcome stays unattributed; it is never green.
+
+**Fix.** Resume with a higher cap (`train bisect --train <nonce> --spend-cap
+<usd>`). Only prefixes without a result run.
+
+<a id="queue-train-prefix-invalid"></a>
+### `QUEUE_TRAIN_PREFIX_INVALID`
+
+**Meaning.** A bisect prefix is not an ancestor of the train head on
+`train/<nonce>` (the branch moved), or a red case is not in the gate's plan,
+so the bisect inputs are refused before any dispatch.
+
+**Fix.** Check that `train/<nonce>` still points at the recorded head
+(`train status`). A moved branch needs a new train.
+
+<a id="queue-train-rebuild-refused"></a>
+### `QUEUE_TRAIN_REBUILD_REFUSED`
+
+**Meaning.** `train rebuild` is not allowed: there is no bisect record (or,
+with `--infra`, no INFRA/INCOMPLETE-only census), the bisect was not all
+green, or the train was already rebuilt or re-dispatched once.
+
+**Fix.** Route the red cases to a repair lane; the train is rebuilt only once
+the repair merges (a changed train).
+
+<a id="queue-train-tree-mismatch"></a>
+### `QUEUE_TRAIN_TREE_MISMATCH`
+
+**Meaning.** Main's tree is neither the train's prefix before this PR nor the
+one after it, modulo stamps, so the merge would not publish what the gate
+tested.
+
+**Fix.** Stop merging. If earlier PRs of the train merged, the queue is now
+frozen (`QUEUE_TRAIN_FROZEN`); otherwise build a new train on current main.
+
+<a id="queue-train-frozen"></a>
+### `QUEUE_TRAIN_FROZEN`
+
+**Meaning.** A train stopped partway through publication, so main holds a
+prefix no gate covered on its own. The `QUEUE_TRAIN_FROZEN:` line lists the
+merged PRs, main's tree and the backstop run dispatched on main's SHA. The
+freeze lives in local state and on `refs/notes/gstack-trains`. Ordinary
+trains and other trains' merges are refused until a repair lands.
+
+**Fix.** Admit one repair PR at its exact head (`train build --repair --prs
+<n>@<sha>`). The freeze clears when verify finds main's tree after that merge
+in a green record; `NEXT:` then builds a train of the PRs still unmerged.
+
+<a id="ready-screen-choice-required"></a>
+### `READY_SCREEN_CHOICE_REQUIRED`
+
+**Meaning.** The base policy turns trains on, so READY needs an explicit
+screen choice: `--screen` (pay for a screen on the PR's merge SHA now) or
+`--no-screen`. The `SCREEN:` lines show the selection and the recommendation.
+
+**Fix.** Rerun `gstack-ship-queue ready` with the printed recommendation. A
+lane that already ran focused local cases says so in the READY block and may
+pass `--no-screen`.
 
 <a id="pregate-timing-assertion"></a>
 ### `PREGATE_TIMING_ASSERTION`

@@ -16,6 +16,13 @@
  * the gate (a re-run keeps the run's original creation time, so it does not
  * wait out the window again). A head that is no longer the PR's head reports
  * superseded and plans nothing.
+ *
+ * Dispatched screens (plan GSTA-49 T1b): `--merge-sha` names the
+ * refs/pull/<n>/merge commit `gstack-ship-queue ready --screen` pinned. The
+ * screen is accepted only for an open same-repository PR whose current head
+ * is that merge commit's second parent; its first parent is the tested base.
+ * The same Free Tests rule then applies to the PR head, with no quiet window
+ * (a screen is an explicit request).
  */
 import * as fs from 'node:fs';
 import { runGh, type GhRunner } from './recover-receipts';
@@ -73,6 +80,23 @@ function ghJson<T>(gh: GhRunner, args: string[]): { ok: true; value: T } | { ok:
   try { return { ok: true, value: JSON.parse(out.stdout) as T }; } catch { return { ok: false, error: 'gh returned unreadable JSON' }; }
 }
 
+export interface ScreenTarget { head: string; base: string; branch: string }
+
+/** A screen's merge commit, checked against the PR: same repository, open, and merging the PR's current head into its base. */
+export function screenTarget(gh: GhRunner, repo: string, pr: number, mergeSha: string): ScreenTarget | { error: string } {
+  if (!/^[0-9a-f]{40}$/.test(mergeSha)) return { error: `screen_merge_sha ${JSON.stringify(mergeSha)} is not a full commit SHA` };
+  const pull = ghJson<{ state?: string; head?: { sha?: string; ref?: string; repo?: { full_name?: string } | null }; base?: { repo?: { full_name?: string } } }>(gh, ['api', `repos/${repo}/pulls/${pr}`]);
+  if (!pull.ok) return { error: `cannot read PR #${pr} (${pull.error})` };
+  const p = pull.value;
+  if (p.base?.repo?.full_name !== repo || p.head?.repo?.full_name !== repo) return { error: `PR #${pr} is not a same-repository PR of ${repo}; fork work is screened on a trusted branch` };
+  if (p.state !== 'open') return { error: `PR #${pr} is ${p.state ?? 'unreadable'}, not open` };
+  const commit = ghJson<{ parents?: Array<{ sha?: string }> }>(gh, ['api', `repos/${repo}/commits/${mergeSha}`]);
+  if (!commit.ok) return { error: `cannot read the merge commit ${mergeSha.slice(0, 12)} (${commit.error})` };
+  const parents = (commit.value.parents ?? []).map(parent => parent.sha ?? '');
+  if (parents.length !== 2 || !parents.every(sha => /^[0-9a-f]{40}$/.test(sha))) return { error: `${mergeSha.slice(0, 12)} is not a two-parent merge commit` };
+  return { head: parents[1]!, base: parents[0]!, branch: p.head?.ref ?? '' };
+}
+
 /** Waits until the head is ready, superseded or blocked; never longer than the deadline. */
 export function waitForReadiness(o: WaitOptions): { decision: ReadinessDecision; lines: string[] } {
   const gh = o.gh ?? runGh;
@@ -110,28 +134,39 @@ export function waitForReadiness(o: WaitOptions): { decision: ReadinessDecision;
   }
 }
 
-const USAGE = `usage: bun run scripts/eval-readiness.ts wait --repo <owner/name> --pr <n> --head-sha <sha> --run-id <id>
+const USAGE = `usage: bun run scripts/eval-readiness.ts wait --repo <owner/name> --pr <n> (--head-sha <sha> | --merge-sha <sha>) --run-id <id>
     [--quiet-minutes 10] [--deadline-minutes 80] [--poll-seconds 60] [--github-output <file>] [--summary <file>]
-Exit 0 when ready or superseded (output superseded=true), 1 when blocked, 2 on usage.`;
+--merge-sha (a dispatched screen) waits on the PR head that merge commit merges and writes head_sha, base_sha and
+head_branch outputs. Exit 0 when ready or superseded (output superseded=true), 1 when blocked, 2 on usage.`;
 
 if (import.meta.main) {
   const [command, ...rest] = process.argv.slice(2);
   const flag = (name: string) => { const i = rest.indexOf(`--${name}`); return i >= 0 ? rest[i + 1] : undefined; };
   const num = (name: string, fallback: number) => { const value = flag(name); return value === undefined || value === '' ? fallback : Number(value); };
-  const [repo, headSha] = [flag('repo'), flag('head-sha')];
+  const [repo, mergeSha] = [flag('repo'), flag('merge-sha')];
   const [pr, runId, quiet, deadline, poll] = [Number(flag('pr')), Number(flag('run-id')), num('quiet-minutes', 10), num('deadline-minutes', 80), num('poll-seconds', 60)];
-  if (command !== 'wait' || !repo || !headSha || !/^[0-9a-f]{40}$/.test(headSha) || !Number.isSafeInteger(pr) || !Number.isSafeInteger(runId)
+  if (command !== 'wait' || !repo || !(flag('head-sha') ?? mergeSha) || !Number.isSafeInteger(pr) || !Number.isSafeInteger(runId)
     || ![quiet, deadline, poll].every(value => Number.isFinite(value) && value >= 0)) {
     console.error(USAGE);
     process.exit(2);
   }
-  const { decision, lines } = waitForReadiness({ repo, pr, headSha, runId, quietMs: quiet * 60_000, deadlineMs: deadline * 60_000, pollMs: Math.max(5, poll) * 1000 });
+  const output = flag('github-output');
   const summary = flag('summary');
+  const target = mergeSha ? screenTarget(runGh, repo, pr, mergeSha) : null;
+  if (target && 'error' in target) {
+    console.error(`::error::screen refused: ${target.error}`);
+    if (summary) fs.appendFileSync(summary, `- Screen refused: ${target.error}\n`);
+    process.exit(1);
+  }
+  const headSha = target ? target.head : flag('head-sha')!;
+  if (!/^[0-9a-f]{40}$/.test(headSha)) { console.error(USAGE); process.exit(2); }
+  if (target && output) fs.appendFileSync(output, `head_sha=${target.head}\nbase_sha=${target.base}\nhead_branch=${target.branch}\n`);
+  const { decision, lines } = waitForReadiness({ repo, pr, headSha, runId, quietMs: quiet * 60_000, deadlineMs: deadline * 60_000, pollMs: Math.max(5, poll) * 1000 });
+  if (target) lines.unshift(`Screen of PR #${pr}: merge ${mergeSha} merges head ${target.head.slice(0, 12)} into base ${target.base.slice(0, 12)}`);
   for (const line of lines) {
     console.log(line);
     if (summary) fs.appendFileSync(summary, `- ${line}\n`);
   }
-  const output = flag('github-output');
   if (output && decision.kind === 'superseded') fs.appendFileSync(output, 'superseded=true\n');
   if (decision.kind === 'blocked') console.error(`::error::${decision.reason}`);
   process.exit(decision.kind === 'blocked' ? 1 : 0);

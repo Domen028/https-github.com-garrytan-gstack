@@ -374,7 +374,7 @@ status_bridge() {
     # JSON; a failed query is reported as unknown, never as an empty history.
     local egress_json
     if egress_json="$("$EGRESS_BIN" list --sink "$SINK" --json 2>/dev/null)"; then
-      n="$(printf '%s' "$egress_json" | bun -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")||"[]");console.log(Array.isArray(a)?a.length:0)' 2>/dev/null)"
+      n="$(printf '%s' "$egress_json" | bun --no-env-file --config=/dev/null -e 'const a=JSON.parse(require("fs").readFileSync(0,"utf8")||"[]");console.log(Array.isArray(a)?a.length:0)' 2>/dev/null)"
       case "$n" in *[!0-9]*|"") n="unknown (could not parse gstack-egress output)" ;; esac
     else
       n="unknown (gstack-egress list failed; run it yourself)"

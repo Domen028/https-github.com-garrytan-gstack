@@ -576,7 +576,7 @@ PYEOF
 CONSENT_TS="$SCRIPT_DIR/../lib/transcript-consent.ts"
 transcript_policy() {
   command -v bun >/dev/null 2>&1 || return 2
-  GSTACK_STATE_ROOT="$GSTACK_HOME" bun run "$CONSENT_TS" "$@"
+  GSTACK_STATE_ROOT="$GSTACK_HOME" bun --no-env-file --config=/dev/null run "$CONSENT_TS" "$@"
 }
 
 # 0 when staged transcript pages may sync at all.

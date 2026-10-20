@@ -25,7 +25,7 @@ test('replacing the shipped catalog changes role choices, not eval rulers, overl
     fs.writeFileSync(entry, `
 import { createHash } from 'node:crypto';
 import { resolvePlanReviewModel, resolveImplementationModels } from './lib/model-policy';
-import { CLAUDE_FRONTIER_EVAL_MODEL, resolveEvalModel } from './lib/eval-model';
+import { CLAUDE_CAPTURE_EVAL_MODEL, CLAUDE_JUDGE_EVAL_MODEL, resolveEvalModel } from './lib/eval-model';
 import { CODEX_FRONTIER_MODEL } from './scripts/resolvers/constants';
 import { resolveCodexRuntimeModel, resolveCodexGenerationModel } from './scripts/resolve-codex-generation-model';
 import { ALL_MODEL_NAMES, resolveClaudeOverlay } from './scripts/models';
@@ -37,7 +37,7 @@ console.log(JSON.stringify({
   roles: ['anthropic', 'openai'].map(provider => resolvePlanReviewModel({ ...scope, provider }).requestedModel)
     .concat(resolveImplementationModels(scope).map(selection => selection.requestedModel)),
   independent: {
-    claudeRuler: CLAUDE_FRONTIER_EVAL_MODEL, openaiRuler: CODEX_FRONTIER_MODEL,
+    claudeRuler: CLAUDE_CAPTURE_EVAL_MODEL, claudeJudge: CLAUDE_JUDGE_EVAL_MODEL, openaiRuler: CODEX_FRONTIER_MODEL,
     capture: resolveEvalModel('capture'), judge: resolveEvalModel('judge'),
     codexExec: resolveCodexRuntimeModel({ kind: 'exec' }).model,
     codexReview: resolveCodexRuntimeModel({ kind: 'review' }).model,
@@ -63,7 +63,7 @@ console.log(JSON.stringify({
     const before = inspect();
     expect(before.roles).toEqual(['claude-fable-5-1', 'gpt-6-astra', 'claude-opus-5-5', 'gpt-6.1-sol']);
     expect(before.independent).toMatchObject({
-      claudeRuler: 'claude-fable-5-1', openaiRuler: 'gpt-6-astra', capture: 'claude-fable-5-1',
+      claudeRuler: 'claude-opus-5-5', claudeJudge: 'claude-fable-5-1', openaiRuler: 'gpt-6-astra', capture: 'claude-opus-5-5',
       judge: 'claude-fable-5-1', codexExec: 'gpt-6-astra', codexReview: 'gpt-6-astra', codexOverlay: 'gpt-6-astra',
     });
     expect(before.independent.claudeArgs.some((arg: string) => arg.startsWith('--model'))).toBe(false);

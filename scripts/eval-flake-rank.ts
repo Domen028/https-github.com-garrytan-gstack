@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 /**
  * eval-pass-rates (alias: eval-flake-rank) — per-case trial pass rates.
  *

@@ -1,4 +1,4 @@
-#!/usr/bin/env bun
+#!/usr/bin/env -S bun --no-env-file --config=/dev/null
 // compare-pr-version — CI gate helper. Validates the PR's branch VERSION
 // against the queue of other open PRs' claimed versions. Exits 0 (pass)
 // or 1 (confirmed collision).

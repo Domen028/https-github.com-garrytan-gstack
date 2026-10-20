@@ -437,14 +437,13 @@ describe('gen-skill-docs', () => {
   });
 
   test('benchmark routing is scoped to web page performance', () => {
-    const generated = fs.readFileSync(path.join(ROOT, 'benchmark', 'SKILL.md'), 'utf-8');
+    // The template description is the routing source; the Claude catalog trim
+    // drops its tail from benchmark/SKILL.md.
     const template = fs.readFileSync(path.join(ROOT, 'benchmark', 'SKILL.md.tmpl'), 'utf-8');
-    for (const content of [generated, template]) {
-      const useWhen = content.match(/Use when:[\s\S]*?(?=\n\n|\(gstack\))/)?.[0] ?? '';
-      expect(useWhen).toContain('"web performance benchmark"');
-      expect(useWhen).not.toMatch(/"benchmark"|"performance"/);
-      expect(content).toContain('/benchmark-models');
-    }
+    const useWhen = template.match(/Use when:[\s\S]*?(?=\n\n|\(gstack\))/)?.[0] ?? '';
+    expect(useWhen).toContain('"web performance benchmark"');
+    expect(useWhen).not.toMatch(/"benchmark"|"performance"/);
+    expect(template).toContain('/benchmark-models');
     const router = fs.readFileSync(path.join(ROOT, 'SKILL.md.tmpl'), 'utf-8');
     expect(router).toContain('web performance regression → invoke `/benchmark`');
     expect(router).toContain('model or skill benchmarks → invoke `/benchmark-models`');
@@ -2718,7 +2717,7 @@ describe('DESIGN_DETECTOR resolver', () => {
         expect(block).not.toContain('npx impeccable');
         for (const line of block.split('\n')) {
           if (!line.includes('gstack-design-detect.ts')) continue;
-          expect(line).toContain('bun --no-env-file run ');
+          expect(line).toContain('bun --no-env-file --config=/dev/null run ');
           if (/gstack-design-detect\.ts scan /.test(line)) expect(line).toContain('echo "DETECT_EXIT_CODE=$?"');
         }
       }
@@ -2778,7 +2777,7 @@ describe('DESIGN_MD_CHECK resolver and open DESIGN.md adoption', () => {
   test('every rendered gstack-design-md invocation uses bun --no-env-file', () => {
     for (const content of [readSkillUnion('design-consultation'), fs.readFileSync(path.join(ROOT, 'design-review', 'SKILL.md'), 'utf-8'), readSkillUnion('ship')]) {
       for (const line of content.split('\n')) {
-        if (line.includes('gstack-design-md.ts')) expect(line).toContain('bun --no-env-file run ');
+        if (line.includes('gstack-design-md.ts')) expect(line).toContain('bun --no-env-file --config=/dev/null run ');
       }
     }
   });
@@ -4444,10 +4443,27 @@ describe('voice-triggers processing', () => {
     expect(processVoiceTriggers(content)).toBe(content);
   });
 
-  test('generated CSO SKILL.md contains voice triggers in description', () => {
-    const content = fs.readFileSync(path.join(ROOT, 'cso', 'SKILL.md'), 'utf-8');
+  test('CSO voice triggers fold into the full description', () => {
+    // The Claude catalog trim drops this line from cso/SKILL.md; full-mode and
+    // other-host renders still carry it.
+    const content = processVoiceTriggers(fs.readFileSync(path.join(ROOT, 'cso', 'SKILL.md.tmpl'), 'utf-8'));
     expect(content).toContain('"see-so"');
     expect(content).toContain('Voice triggers (speech-to-text aliases):');
+  });
+
+  test('Claude root router routes every skill voice trigger the catalog trim drops', () => {
+    const routing = between(fs.readFileSync(path.join(ROOT, 'SKILL.md'), 'utf-8'), '**Routing rules', '**Route only to skills');
+    const skills = fs.readdirSync(ROOT).filter(d => !fs.lstatSync(path.join(ROOT, d)).isSymbolicLink() && fs.existsSync(path.join(ROOT, d, 'SKILL.md.tmpl')));
+    let routed = 0;
+    for (const skill of skills) {
+      const triggers = extractVoiceTriggers(fs.readFileSync(path.join(ROOT, skill, 'SKILL.md.tmpl'), 'utf-8').replace(/\r\n/g, '\n'));
+      if (triggers.length === 0) continue;
+      const line = routing.split('\n').find(l => l.endsWith(`→ invoke \`/${skill}\``) && l.startsWith('- Voice trigger '));
+      expect(line, skill).toBeDefined();
+      for (const t of triggers) expect(line, skill).toContain(`"${t}"`);
+      routed++;
+    }
+    expect(routed).toBeGreaterThan(0);
   });
 
   test('generated CSO SKILL.md does NOT contain raw voice-triggers field', () => {

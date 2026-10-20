@@ -58,7 +58,7 @@ probe() {
     else PROBE_OUT=$(cd "$ROOT" && node -e "$PROBE" </dev/null 2>&1); PROBE_RC=$?; fi
   elif command -v bun >/dev/null 2>&1; then
     ENGINE=bun
-    PROBE_OUT=$(cd "$ROOT" && bun -e "$PROBE" </dev/null 2>&1); PROBE_RC=$?
+    PROBE_OUT=$(cd "$ROOT" && bun --no-env-file --config=/dev/null -e "$PROBE" </dev/null 2>&1); PROBE_RC=$?
   else
     fail "neither node nor bun is on PATH to launch Chromium" "install Node.js (https://nodejs.org) or Bun, then re-run $0"
   fi

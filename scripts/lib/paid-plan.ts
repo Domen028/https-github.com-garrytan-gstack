@@ -10,7 +10,8 @@ import { evalEntryOutcome, type EvalCaseKind } from '../../test/helpers/eval-sto
 import { E2E_KINDS } from '../../test/helpers/touchfiles-data';
 import { prProfileCaseAllowed, prProfileFileMap, type PrProfileSelection } from '../test-pr-profile';
 import { E2E_TOUCHFILES, E2E_TIERS, LLM_JUDGE_TOUCHFILES } from '../../test/helpers/touchfiles';
-import { CASE_KEY_SEPARATOR, CASE_SHARDED_FILES, type CaseTrialPlan, caseTrialPlan, codexShardAccess, expandCaseShards, expandTrialShards, isIsolatedCase, partitionCaseExclusions, sameTrialPlan, shardCaseId, shardFile, shardTrial } from './paid-cases';
+import { CASE_KEY_SEPARATOR, CASE_SHARDED_FILES, type CaseTrialPlan, caseTrialPlan, codexShardAccess, expandCaseShards, expandTrialShards, isIsolatedCase, partitionCaseExclusions, partitionHostExclusions, sameTrialPlan, shardCaseId, shardFile, shardTrial } from './paid-cases';
+import { EVAL_HOSTS, type EvalHost, resolveEvalHost } from '../../test/helpers/e2e-hosts';
 import { DEFAULT_JOBS, OVERLAY_MAX_ACTIVE_SHARDS, PAID_TIERS, SLICE_UPLOAD_RESERVE_MS, type PaidCaseSelection, type PaidProfile, type PaidShardBudget, type PaidTier, ROOT, type ShardOutcome, type ShardStatus, type ShardTrialRecord, isOverlayTestFile } from './paid-types';
 import { collectPaidTestFiles, computePaidCaseSelection, expectedPrCaseCount, isAllSkippedPass, paidShardWallUpperBoundMs, partitionShardsByDiffSelection, planPaidShards, prProfileFileSelected, resolvePaidShardBudget, resolvePaidShardTimeoutMs, sameBudget, selectPaidTestFiles, shardSlug, validatedProfile } from './paid-select';
 
@@ -58,6 +59,8 @@ export interface PaidRunManifest {
   evalsAll: boolean;
   sliceCount: number;
   selectionReason: string;
+  /** The agent host every session runs on (EVALS_HOST); absent means claude. */
+  host?: EvalHost;
   /** Legacy v1 manifests omit these; new plans bind case-level execution. */
   profile?: PaidProfile;
   selection?: PaidCaseSelection;
@@ -314,9 +317,11 @@ export function buildRunManifest(opts: {
   const quarantine = opts.quarantine ?? CASE_QUARANTINE;
   const notLive = [...Object.keys(kinds).filter(id => kinds[id] === 'behavior'), ...Object.keys(quarantine)].filter(id => !Object.hasOwn(E2E_TIERS, id));
   if (notLive.length) throw new Error(`Only live E2E cases can be behavior or quarantined (judges sample their panel inside the case): ${notLive.join(', ')}`);
-  const caseKeys = partitionCaseExclusions(expandCaseShards(selected, opts.tier, rootDir));
+  const host = resolveEvalHost(env);
+  const ciKeys = partitionCaseExclusions(expandCaseShards(selected, opts.tier, rootDir));
+  const caseKeys = partitionHostExclusions(ciKeys.runnable, opts.tier, host, rootDir);
   const excluded = [...tierSelection.excluded, ...(opts.skipJudges ? tierSelection.selected.filter(judge)
-    .map(file => ({ file, reason: 'skipped: LLM judges run in the periodic census and PR gate lanes' })) : []), ...caseKeys.excluded];
+    .map(file => ({ file, reason: 'skipped: LLM judges run in the periodic census and PR gate lanes' })) : []), ...ciKeys.excluded, ...caseKeys.excluded];
   const expansion = expandTrialShards(caseKeys.runnable, opts.tier, rootDir, { kinds, quarantine });
   const excludeOf = (key: string) => expansion.excludeCases[normalizeRelativePath(key)] ?? [];
   const shards = planPaidShards(expansion.keys, { maxFilesPerShard: 1 });
@@ -346,7 +351,7 @@ export function buildRunManifest(opts: {
     entries.sort((a, b) => (a.file < b.file ? -1 : 1));
     return parseRunManifest(JSON.stringify({
       version: 1, tier: opts.tier, evalsAll: opts.evalsAll, sliceCount: plan.slices.length,
-      selectionReason: cases.reason, profile, selection: cases.selection,
+      selectionReason: cases.reason, ...(host !== 'claude' ? { host } : {}), profile, selection: cases.selection,
       ...(cases.coverage ? { prCoverage: cases.coverage } : {}),
       plan: { sliceBudgetMs: opts.sliceBudgetMs!, jobs: opts.jobs!, estimatedSliceMs: plan.estimatedSliceMs, ciTimeoutMinutes: plan.ciTimeoutMinutes,
         sliceCiTimeoutMinutes: plan.sliceCiTimeoutMinutes, codexSlices: codexSlicesOf(opts.tier, entries) },
@@ -466,6 +471,7 @@ export function buildRunManifest(opts: {
     evalsAll: opts.evalsAll,
     sliceCount,
     selectionReason: cases.reason,
+    ...(host !== 'claude' ? { host } : {}),
     profile,
     selection: cases.selection,
     ...(cases.coverage ? { prCoverage: cases.coverage } : {}),
@@ -479,6 +485,7 @@ export function parseRunManifest(raw: string): PaidRunManifest {
   if (parsed.version !== 1) throw new Error(`unsupported manifest version: ${(parsed as { version?: unknown }).version}`);
   if (!PAID_TIERS.includes(parsed.tier)) throw new Error(`manifest tier invalid: ${parsed.tier}`);
   if (parsed.profile !== undefined && parsed.profile !== 'pr' && parsed.profile !== 'full') throw new Error('manifest profile invalid');
+  if (parsed.host !== undefined && (parsed.host === 'claude' || !EVAL_HOSTS.includes(parsed.host))) throw new Error(`manifest host invalid: ${parsed.host}`);
   if (parsed.selection !== undefined) {
     for (const [key, inventory] of [['e2e', E2E_TOUCHFILES], ['judges', LLM_JUDGE_TOUCHFILES]] as const) {
       const ids = parsed.selection?.[key];

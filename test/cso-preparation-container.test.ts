@@ -3,8 +3,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { createPreparedExport, recordNpmArchiveEntry } from '../lib/cso/preparation-container';
-import { materializePreparedExport } from '../lib/cso/preparation-docker';
+import { materializePreparedExport, writeOfflineTransformations } from '../lib/cso/preparation-docker';
 import { heldApplicationReady, validateSingleContainerProcessOutput } from '../lib/cso/docker';
 
 const roots: string[] = [];
@@ -66,5 +67,30 @@ describe('CSO preparation container archive limits', () => {
     expect(heldApplicationReady('PID COMMAND\n1 sh\n2 cp\n')).toBe(false);
     expect(heldApplicationReady('PID COMMAND\n1 sh\n2 sleep\n')).toBe(false);
     expect(heldApplicationReady('PID COMMAND\n1 sh\n')).toBe(false);
+  });
+});
+
+describe('offline transformations in an execution copy', () => {
+  test.skipIf(process.platform === 'win32')('replace a read-only copied file under a read-only directory instead of writing through it', () => {
+    const source = temporary(), config = path.join(source, 'config'), database = path.join(config, 'database.yml'), outside = path.join(temporary(), 'outside.yml');
+    fs.mkdirSync(config);
+    fs.writeFileSync(database, 'production: sealed\n');
+    fs.chmodSync(database, 0o444);
+    fs.chmodSync(config, 0o555);
+    fs.writeFileSync(outside, 'untouched\n');
+    const content = 'test:\n  adapter: sqlite3\n', sha256 = createHash('sha256').update(content).digest('hex');
+    writeOfflineTransformations(source, [
+      { path: 'config/database.yml', content, sha256, reason: 'helper test configuration' },
+      { path: 'config/initializers/zzzz_cso_test.rb', content, sha256, reason: 'helper test configuration' },
+    ]);
+    expect(fs.readFileSync(database, 'utf8')).toBe(content);
+    expect(fs.statSync(database).mode & 0o777).toBe(0o600);
+    expect(fs.readFileSync(path.join(config, 'initializers', 'zzzz_cso_test.rb'), 'utf8')).toBe(content);
+    expect(() => writeOfflineTransformations(source, [{ path: 'config/database.yml', content, sha256: 'f'.repeat(64), reason: 'tampered' }])).toThrow('Offline transformation content hash changed');
+    fs.rmSync(database);
+    fs.symlinkSync(outside, database);
+    writeOfflineTransformations(source, [{ path: 'config/database.yml', content, sha256, reason: 'helper test configuration' }]);
+    expect(fs.lstatSync(database).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(outside, 'utf8')).toBe('untouched\n');
   });
 });

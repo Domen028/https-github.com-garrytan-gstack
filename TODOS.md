@@ -1645,18 +1645,24 @@ and `test/dx-selected-navigation-ap.test.ts`. One shared table run once against 
 only after `engFirstReviewAUQ` checks native completion once at entry; today each branch gates it
 separately, so the change alters a paid verdict and needs its own paid run.
 
-### P3: Re-pin the five remaining claude-opus-4-7 paid files
+### P3: Follow-ups from re-baselining the old-model paid pins on the current generation
 
-**What:** The 2026-09 audit moved seven paid evals to the default capture model (`resolveEvalModel('capture')`).
-`skill-e2e-design`, `skill-e2e-office-hours-phase4`, `skill-e2e-plan-prosons` and `skill-e2e-plan` keep
-`claude-opus-4-7` because six cases failed on the default model in one run (plan-design-review-plan-mode timeout,
-office-hours-phase4-fork format, plan-review-prosons-neutral-neg missing output, plan-ceo-review-selective and
-plan-eng-review 600 s timeouts, plan-ceo-review-expansion-energy posture score 3). `skill-e2e-qa-bugs` returned
-to `claude-opus-4-7` after `qa-b6-static` timed out on the default model in two of three runs (census 36597762183
-and a targeted local rerun): each time the stream stopped mid-message, with no pending tool, right after the model
-found the disabled submit button, and emitted nothing until the 300 s case deadline. They measure an old model.
+**What:** GSTA-49 TM3 (2026-10-18) moved every remaining old-model paid pin to the current generation: the
+`claude-opus-4-7` pins in `skill-e2e-{plan,plan-prosons,design,office-hours-phase4,qa-bugs}` follow
+`resolveEvalModel('capture')`, the overlay fixtures pin `claude-opus-5-5` and `claude-sonnet-5-5`, the cookie workflow
+judge pins `claude-sonnet-5-5`, and `codex-sol-scope-termination` runs on `gpt-6.1-sol` (still rendering the
+`gpt-5.6-sol` overlay). Three things remain:
 
-**Re-entry:** fix the prompt, budget or rubric so each case passes on the default model in one run, then drop the pin.
+- The base `claude-dedicated-tools-vs-bash` fixture now duplicates `claude-dedicated-tools-vs-bash-opus-5-5`.
+- The `opus-4-7-*` fixtures measure `model-overlays/opus-4-7.md` on Opus 5.5, which gets the generic `claude`
+  overlay in product.
+- Opus 5.5 refuses (stop category `reasoning_extraction`) capture prompts that ask for the "verbatim text" of a
+  question "you would have made" with "Do NOT paraphrase"; that wording stopped 7 of 16 replays of a prosons
+  request and 0 of 24 without it. `skill-e2e-plan-prosons` dropped it; `skill-e2e-plan-format` and
+  `skill-e2e-office-hours-phase4` still use it.
+
+**Re-entry:** retire one dedicated-tools fixture, decide the opus-4-7 overlay's future, and drop the extraction
+wording from the remaining capture prompts with a paid run each.
 
 ### P3: Retire the unused CEO payment seeder
 
@@ -5470,10 +5476,11 @@ Garry for each; revisit 2026-10-29 unless a date says otherwise.
   16-worker duration recording on 2026-10-15 the event had not landed
   (`['paste', 'enter', 'end_turn']`). Wait for the CLI's own write instead of a
   timer (docs/TESTING_INTERNALS.md#flake-ledger). **Effort:** S. **Priority:** P2.
-- **Split the free files the 2026-10-15 seed put over 60 s** —
-  `test/setup-install-registry.test.ts` (82 s), `test/host-renders-prune.test.ts`
-  (64 s) and `test/setup-codex-scope.test.ts` (60.4 s) are allowlisted with this
-  todo in `scripts/free-test-seed-allowlist.json`; `test/brain-sync.test.ts`
-  (57 s) and `test/setup-codex-scope-namespaces.test.ts` (57 s) are next. Split
+- **Split the free files the weekly seed puts over 60 s** —
+  `test/setup-install-registry.test.ts` (84 s), `test/brain-sync.test.ts` (89 s)
+  and `test/setup-codex-scope.test.ts` (64 s) are allowlisted with this todo in
+  `scripts/free-test-seed-allowlist.json` (2026-10-19 recording);
+  `test/host-renders-prune.test.ts` (57 s) and
+  `test/setup-codex-scope-namespaces.test.ts` are next. Split
   each by describe block, rerun `bun run test:ubicloud --record-durations` and
   delete the entries. **Effort:** S each. **Priority:** P2.

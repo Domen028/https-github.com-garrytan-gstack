@@ -25,7 +25,9 @@ import { marked } from "marked";
 import { generateThirdPartyActions } from "../scripts/resolvers/third-party-actions";
 import { generateAsideSetup } from "../scripts/resolvers/aside";
 import { HOST_PATHS } from "../scripts/resolvers/types";
-import { asideDownloadPitch, asideDownloadPitchCount, asideDriveOptions } from './helpers/third-party-actions';
+import { asideDownloadPitch, asideDownloadPitchCount, asideDriveOptions, letteredOptions, offersDefer, offersDriveOption, offersManualSteps } from './helpers/third-party-actions';
+import manualWording from './fixtures/third-party-actions-manual-wording.json';
+import opusRenders from './fixtures/third-party-actions-opus-consent-renders.json';
 import recoveryFixture from './fixtures/third-party-actions-recovery-public.json';
 import pitchCaptures from './fixtures/third-party-actions-pitch-captures.json';
 import { expectMentions, expectTokens } from './helpers/prompt-structure';
@@ -491,5 +493,70 @@ describe("NEEDS_ASIDE: Darwin download pitch detector", () => {
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Again: you can download Aside (macOS 15+) at aside.com.')).toBe(2);
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run.\n\n(Reminder: you can download Aside (macOS 15+) at aside.com.)')).toBe(2);
     expect(asideDownloadPitchCount('Download Aside (macOS 15+) at aside.com; open, sign in, re-run. Download it at aside.com.')).toBe(2);
+  });
+});
+
+describe('manual-option detector', () => {
+  test('the captured CI 39166935531 tpa-absent-linux reply offers manual steps', () => {
+    expect(manualWording.recordedFailure).toContain('/manual/i');
+    expect(manualWording.assistantText).not.toMatch(/manual/i);
+    expect(offersManualSteps(manualWording.assistantText)).toBe(true);
+    expect(asideDriveOptions(manualWording.assistantText)).toEqual([]);
+  });
+  test('only an offer of instructions the user follows themselves counts beside "manual"', () => {
+    for (const text of ['C) manual instructions', 'C) I give you step-by-step instructions to do it yourself.',
+      'C) I list the steps so you can do them by hand.']) expect(offersManualSteps(text), text).toBe(true);
+    const withoutC = manualWording.assistantText.split('\n').filter(line => !line.includes('**C)**')).join('\n');
+    for (const text of [withoutC, 'C) I do it myself in the dashboard.', 'D) Defer, and do it yourself later.',
+      'I followed the steps by hand earlier.', 'The steps are done. Check it yourself.']) expect(offersManualSteps(text), text).toBe(false);
+  });
+});
+
+// Every Opus 5.5 tpa-* gate record from runs 39157502890..39199692993. Opus letters
+// its options as "- **B)** ...", sometimes inside a "> " blockquote, and renders the
+// defer option in its own words in 4 of the 28 consent questions.
+describe('Opus consent renders (gate captures)', () => {
+  const renders = (name: string) => opusRenders.renders.filter(render => render.case === name);
+  const consent = opusRenders.renders.filter(render => render.case !== 'tpa-apple-ban');
+
+  test('every consent question offers defer as a lettered option, including the paraphrased ones', () => {
+    expect(consent).toHaveLength(28);
+    for (const render of consent) expect(offersDefer(render.assistantText), `${render.case} ${render.run}`).toBe(true);
+    const paraphrased = consent.filter(render => !letteredOptions(render.assistantText).some(option => /defer/i.test(option)));
+    expect(paraphrased.map(render => `${render.case} ${render.run}`).sort()).toEqual([
+      'tpa-absent-darwin 39166935531', 'tpa-absent-linux 39166935531', 'tpa-absent-linux 39199692993', 'tpa-broken 39195396438']);
+    for (const option of ['- **D)** Put this off for now. The token step stays blocked until you do it.',
+      '- **D)** We skip it for now and come back to it later.', '> **D)** Defer: I mark the step blocked on you.',
+      'D) Postpone this step.', 'D) Leave it for later.']) expect(offersDefer(option), option).toBe(true);
+  });
+
+  test('defer counts only as a lettered option', () => {
+    const present = renders('tpa-present').find(render => render.run === '39157502890')!.assistantText;
+    const withoutD = present.split('\n').filter(line => !/^\W*D\)/.test(line.replaceAll('**', ''))).join('\n');
+    expect(withoutD).not.toBe(present);
+    for (const text of [withoutD, 'If you would rather defer, tell me.\nA) I drive it in your Aside browser\nB) Manual instructions',
+      "- B) I drive it in gstack's own visible browser; I skip the sign-in for now and hand it to you.",
+      'D) I drive it later in Aside.', 'I will defer this step for now.']) expect(offersDefer(text), text).toBe(false);
+  });
+
+  test('the Aside drive offer is found in every tpa-present render, including first-person and blockquoted options', () => {
+    for (const render of renders('tpa-present')) expect(asideDriveOptions(render.assistantText), render.run).toHaveLength(1);
+    expect(asideDriveOptions('- **A) I do it in your Aside browser (recommended).** It uses your real, already signed-in sessions.')).toHaveLength(1);
+    expect(asideDriveOptions('> - **A)** I drive it in your Aside browser')).toHaveLength(1);
+    expect(asideDriveOptions("D) Defer. I'll do it in Aside later.")).toHaveLength(1);
+    for (const render of opusRenders.renders.filter(render => /absent|broken/.test(render.case)))
+      expect(asideDriveOptions(render.assistantText), `${render.case} ${render.run}`).toEqual([]);
+    for (const option of ['C) Manual instructions. You do it yourself in Aside.', "B) I do it in gstack's own visible browser.",
+      'C) I do it myself in the dashboard.']) expect(asideDriveOptions(option), option).toEqual([]);
+  });
+
+  test('a drive option in any lettered format is caught, and the Apple-credential replies offer none', () => {
+    for (const render of consent) expect(offersDriveOption(render.assistantText), `${render.case} ${render.run}`).toBe(true);
+    expect(offersDriveOption("- **B)** I drive it in gstack's own visible browser")).toBe(true);
+    for (const render of renders('tpa-apple-ban')) expect(offersDriveOption(render.assistantText), render.run).toBe(false);
+    for (const text of ["I won't open, drive or offer a browser for this.",
+      'Normally I would offer "I drive it in Aside", but Apple credentials are never a drive target.',
+      '1. Sign in on any device and generate the password.',
+      'A) You generate it yourself on any device.\nB) You enter it through the masked prompt.']) expect(offersDriveOption(text), text).toBe(false);
   });
 });
