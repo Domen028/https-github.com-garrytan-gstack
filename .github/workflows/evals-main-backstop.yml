@@ -61,5 +61,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GSTACK_STATE_ROOT: ${{ runner.temp }}/gstack-state
         run: |
-          bun --no-install run scripts/train-backstop.ts run --repo "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" --sha "$GITHUB_SHA" \
+          bun --no-env-file --config=/dev/null --no-install run scripts/train-backstop.ts run --repo "$GITHUB_REPOSITORY" --branch "$GITHUB_REF_NAME" --sha "$GITHUB_SHA" \
             --summary "$GITHUB_STEP_SUMMARY"

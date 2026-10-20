@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.162.0] - 2026-10-19
 
 **The evals workflow carries merge trains: a train's own gate publishes its record and the `gstack/full-gate` check, bisects run one executor per prefix, `ready --screen` dispatches a real screen, and a main backstop gates any tree no green train covered.** All of it stays off unless the base revision's `.gstack/ship-policy.json` declares a `train` block. Without one, a PR push and every eval-bg dispatch run today's jobs and steps with today's values. The one addition is a free `route` job that reads the policy with git and jq. gstack's own policy still has no `train` block; turning it on is a separate one-line policy PR. Plan GSTA-49, lane T1b.
 

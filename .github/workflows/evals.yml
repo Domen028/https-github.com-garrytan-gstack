@@ -226,7 +226,7 @@ jobs:
             echo "mode=${mode}" >> "$GITHUB_OUTPUT"
             echo "- Run mode: ${mode}" >> "$GITHUB_STEP_SUMMARY"
           elif [ -f scripts/train-gate.ts ]; then
-            bun --no-install run scripts/train-gate.ts route --github-output "$GITHUB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
+            bun --no-env-file --config=/dev/null --no-install run scripts/train-gate.ts route --github-output "$GITHUB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
           elif [ -n "${CASES}${PREFIX_SHAS}${SCREEN_PR}${SCREEN_MERGE_SHA}${SCREEN_POLICY}" ]; then
             echo "::error::${GITHUB_REF_NAME} has no scripts/train-gate.ts to validate the train or screen inputs; dispatch from a ref that has it"
             exit 1
@@ -258,7 +258,7 @@ jobs:
           PREFIXES: ${{ steps.route.outputs.prefixes }}
           NONCE: ${{ inputs.nonce }}
         run: |
-          bun --no-install run scripts/train-gate.ts bisect-plan --cases "$CASES" --prefixes "$PREFIXES" --nonce "$NONCE" \
+          bun --no-env-file --config=/dev/null --no-install run scripts/train-gate.ts bisect-plan --cases "$CASES" --prefixes "$PREFIXES" --nonce "$NONCE" \
             --out /tmp/train-bisect/bisect.json --github-output "$GITHUB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Hand the bisect plan to its executors
@@ -477,7 +477,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           EVALS_TIER=gate bun --no-install run scripts/test-paid-shards.ts --tier gate --emit-plan /tmp/paid-plan/manifest.json --slices 1
-          bun --no-install run scripts/train-gate.ts screen-summary /tmp/paid-plan/manifest.json --pr "$PR_NUMBER" >> "$GITHUB_STEP_SUMMARY"
+          bun --no-env-file --config=/dev/null --no-install run scripts/train-gate.ts screen-summary /tmp/paid-plan/manifest.json --pr "$PR_NUMBER" >> "$GITHUB_STEP_SUMMARY"
           bun --no-install run scripts/test-pr-profile.ts summary /tmp/paid-plan/manifest.json >> "$GITHUB_STEP_SUMMARY"
 
   # ── Sliced lane (the ONLY paid lane; legacy 17-row matrix deleted) ──────────
@@ -881,7 +881,7 @@ jobs:
           EVALS_JOBS: "1"
           EVALS_CONCURRENCY: "1"
           SLICE: ${{ matrix.slice }}
-        run: EVALS_TIER=gate bun run scripts/train-gate.ts bisect-prefix --plan /tmp/train-bisect/bisect.json --index "$SLICE" --out /tmp/train-bisect/out
+        run: EVALS_TIER=gate bun --no-env-file --config=/dev/null run scripts/train-gate.ts bisect-prefix --plan /tmp/train-bisect/bisect.json --index "$SLICE" --out /tmp/train-bisect/out
 
       - name: Upload the prefix record
         if: always() && steps.prefix.outputs.short != ''
@@ -1092,7 +1092,7 @@ jobs:
           RECORD: ${{ needs.plan-slices.outputs.record_artifact }}
           RECONCILE_EXIT: ${{ steps.reconcile.outputs.exit }}
         run: |
-          bun --no-install run scripts/train-gate.ts train-record /tmp/paid-report --nonce "$NONCE" --head "$HEAD_SHA" \
+          bun --no-env-file --config=/dev/null --no-install run scripts/train-gate.ts train-record /tmp/paid-report --nonce "$NONCE" --head "$HEAD_SHA" \
             --reconcile-exit "$RECONCILE_EXIT" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --repo "$GITHUB_REPOSITORY" \
             --out "/tmp/train-record/${RECORD}.json" >> "$GITHUB_STEP_SUMMARY"
 
