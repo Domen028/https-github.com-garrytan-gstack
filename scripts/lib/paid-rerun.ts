@@ -37,7 +37,7 @@ import { expectedPrCaseCount, shardSlug } from './paid-select';
 import { ROOT } from './paid-types';
 
 export const FLAKE_RECORDS_FILE = 'flake-records.jsonl';
-/** Each attempt's rerun manifest lands in the report dir as `<RERUN_PLAN_ARTIFACT>-a<attempt>/manifest.json`. */
+/** Each attempt's rerun manifest lands in the report dir as `<RERUN_PLAN_ARTIFACT>-a<attempt>/manifest.json` (one level deeper when several attempts' plans download). */
 export const RERUN_PLAN_ARTIFACT = 'rerun-plan';
 
 export type Phase = 'first' | 'rerun';
@@ -185,7 +185,10 @@ export function observationSets(reportDir: string, manifest: PaidRunManifest, fi
   const reruns = loadSliceArtifacts(reportDir, { reruns: true });
   for (const attempt of [...new Set(reruns.map(a => a.result.attempt ?? 1))].sort((a, b) => a - b)) {
     let rerunManifest: PaidRunManifest;
-    try { rerunManifest = parseRunManifest(fs.readFileSync(path.join(reportDir, `${RERUN_PLAN_ARTIFACT}-a${attempt}`, 'manifest.json'), 'utf8')); } catch (error) {
+    // download-artifact unpacks a lone pattern match into the report dir and each of several into its own directory.
+    const dir = path.join(reportDir, `${RERUN_PLAN_ARTIFACT}-a${attempt}`);
+    const file = [path.join(dir, 'manifest.json'), path.join(dir, path.basename(dir), 'manifest.json')].find(candidate => fs.existsSync(candidate)) ?? path.join(dir, 'manifest.json');
+    try { rerunManifest = parseRunManifest(fs.readFileSync(file, 'utf8')); } catch (error) {
       ignored.push(`attempt ${attempt}: rerun results without a readable rerun manifest (${error instanceof Error ? error.message : String(error)})`);
       continue;
     }

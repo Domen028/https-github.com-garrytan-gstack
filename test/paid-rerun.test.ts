@@ -250,6 +250,23 @@ describe('negative controls: rule 16 never turns a real red green', () => {
     expect(r.flakes).toEqual([]);
   });
 
+  test('the rerun reads the same in both download-artifact layouts: a lone match unpacked into its path, or each in its own directory', () => {
+    const lone = withRerun(PASS);
+    fs.mkdirSync(path.join(lone, 'reruns'));
+    fs.renameSync(path.join(lone, 'paid-rerun-1-a1'), path.join(lone, 'reruns', 'only'));
+    const several = withRerun(PASS);
+    const planDir = path.join(several, `${RERUN_PLAN_ARTIFACT}-a1`);
+    fs.renameSync(planDir, `${planDir}.tmp`);
+    fs.mkdirSync(planDir);
+    fs.renameSync(`${planDir}.tmp`, path.join(planDir, `${RERUN_PLAN_ARTIFACT}-a1`));
+    for (const dir of [lone, several]) {
+      const r = report(dir);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain('FLAKY 1');
+      expect(r.flakes.map((f: any) => f.case)).toEqual([CASE]);
+    }
+  });
+
   test('a rerun result that does not match its manifest is set aside and the red stays', () => {
     const r = report(withRerun(PASS, slice => { slice.sliceCount = 9; }));
     expect(r.status, r.out).toBe(1);

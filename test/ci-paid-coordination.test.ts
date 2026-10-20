@@ -167,7 +167,7 @@ describe('paid CI coordination stays off the eval image', () => {
       if (name === 'evals.yml') expect(String(bisectLogs?.with?.path)).toBe(String(logs?.with?.path));
       // F1: the rule-16 eval-rerun keeps the same shard-log upload under its own name.
       const rerunLogs = name === 'evals.yml'
-        ? jobs['eval-rerun'].steps.find(step => step.with?.name === 'paid-rerun-logs-${{ matrix.slice }}-a${{ github.run_attempt }}') : undefined;
+        ? jobs['eval-rerun'].steps.find(step => step.with?.name === 'rerun-logs-${{ matrix.slice }}-a${{ github.run_attempt }}') : undefined;
       if (name === 'evals.yml') expect(String(rerunLogs?.with?.path)).toBe(String(logs?.with?.path));
       expect(hiddenUploads.filter(step => !captures.includes(step))).toEqual([logs!, ...(codexLogs ? [codexLogs] : []), ...(rerunLogs ? [rerunLogs] : []), ...(bisectLogs ? [bisectLogs] : [])]);
     });

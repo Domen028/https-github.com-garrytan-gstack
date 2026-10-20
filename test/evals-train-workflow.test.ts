@@ -327,16 +327,31 @@ describe('rule-16 rerun wiring (F1)', () => {
   test('the rerun runs its own attempt-scoped manifest fresh: no receipts in, none out, results under paid-rerun-*', () => {
     const job = evals.jobs['eval-rerun']!;
     expect(job.strategy!.matrix.slice).toBe('${{ fromJSON(needs.rerun-plan.outputs.slices) }}');
-    expect(job.steps.find(st => st.uses?.startsWith('actions/download-artifact@'))!.with).toEqual({ name: 'rerun-plan-a${{ github.run_attempt }}', path: '/tmp/paid-plan' });
+    expect(job.steps.find(st => st.uses?.startsWith('actions/download-artifact@'))!.with).toEqual({ name: 'rerun-plan-a${{ github.run_attempt }}', path: '/tmp/paid-rerun-plan' });
     const run = job.steps.find(st => st.name === 'Rerun slice ${{ matrix.slice }} (rule 16, once)')!;
-    expect(run.run).toContain('--plan /tmp/paid-plan/manifest.json --slice ${{ matrix.slice }}');
+    expect(run.run).toContain('--plan /tmp/paid-rerun-plan/rerun-plan-a${{ github.run_attempt }}/manifest.json --slice ${{ matrix.slice }}');
     expect(Object.keys(run.env!).filter(key => key.startsWith('EVALS_CACHE'))).toEqual([]);
     expect(JSON.stringify(job)).not.toContain('receipts');
-    expect(job.steps.find(st => st.name === 'Upload rerun results')!.with).toMatchObject({ name: 'paid-rerun-${{ matrix.slice }}-a${{ github.run_attempt }}', path: '/tmp/paid-rerun-results' });
+    expect(job.steps.find(st => st.name === 'Upload rerun results')!.with).toMatchObject({ name: 'paid-rerun-${{ matrix.slice }}-a${{ github.run_attempt }}', path: run.env!.GSTACK_EVAL_DIR });
+    const uploads = Object.values(evals.jobs).flatMap(j => j.steps).map(st => String(st.with?.name ?? '')).filter(Boolean);
+    expect(uploads.filter(name => name.startsWith('paid-rerun-'))).toEqual(['paid-rerun-${{ matrix.slice }}-a${{ github.run_attempt }}']);
     const plan = evals.jobs['rerun-plan']!;
     expect(plan.permissions).toEqual({ contents: 'read' });
     expect(JSON.stringify(plan)).not.toMatch(/secrets\.|restore-deps|bun install/);
-    expect(plan.steps.find(st => st.name === "Plan the rule-16 rerun of this attempt's failed cases")!.run!.replace(/\s*\\\n\s*/g, ' ')).toContain('--report /tmp/paid-report --rerun-plan /tmp/paid-rerun');
+    expect(plan.steps.find(st => st.name === "Plan the rule-16 rerun of this attempt's failed cases")!.run!.replace(/\s*\\\n\s*/g, ' '))
+      .toContain('--report /tmp/paid-report --rerun-plan "/tmp/paid-rerun-plan/rerun-plan-a$GITHUB_RUN_ATTEMPT"');
+    expect(plan.steps.find(st => st.name === 'Hand the rerun manifest to its executors and the report')!.with).toMatchObject({ name: 'rerun-plan-a${{ github.run_attempt }}', path: '/tmp/paid-rerun-plan' });
+  });
+
+  test('a lone rerun artifact never unpacks over the report root or the plan manifest (run 39363705692 did)', () => {
+    for (const id of ['rerun-plan', 'slices-report']) {
+      const downloads = evals.jobs[id]!.steps.filter(st => st.uses?.startsWith('actions/download-artifact@') && /^(paid-rerun|rerun-plan)-/.test(String(st.with?.pattern ?? '')));
+      expect(downloads.map(st => st.with), id).toEqual([{ pattern: 'paid-rerun-*', path: '/tmp/paid-report/reruns' }, { pattern: 'rerun-plan-a*', path: '/tmp/paid-report' }]);
+    }
+    // The plan artifact's root is a directory holding rerun-plan-a<attempt>/manifest.json, written there by the planner.
+    const plan = evals.jobs['rerun-plan']!;
+    expect(plan.steps.find(st => st.name === 'Hand the rerun manifest to its executors and the report')!.with!.path).toBe('/tmp/paid-rerun-plan');
+    expect(plan.steps.find(st => st.name === "Plan the rule-16 rerun of this attempt's failed cases")!.run).toContain('PLAN="/tmp/paid-rerun-plan/rerun-plan-a$GITHUB_RUN_ATTEMPT/manifest.json"');
   });
 
   test('the report reads every attempt and rerun, publishes flake records, and the comment never hides a non-flaky failed record', () => {

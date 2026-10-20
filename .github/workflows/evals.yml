@@ -832,23 +832,28 @@ jobs:
         continue-on-error: true
         with:
           pattern: paid-rerun-*
-          path: /tmp/paid-report
+          # Its own directory: download-artifact unpacks a lone match into its path itself, so the
+          # report root would otherwise take a rerun slice's files (run 39363705692).
+          path: /tmp/paid-report/reruns
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           pattern: rerun-plan-a*
+          # Each artifact holds rerun-plan-a<attempt>/manifest.json, so even a lone match never
+          # lands on the plan's own manifest.json (run 39363705692).
           path: /tmp/paid-report
 
       - name: Plan the rule-16 rerun of this attempt's failed cases
         id: plan
         run: |
           EVALS_TIER=gate bun --no-env-file --config=/dev/null --no-install run scripts/test-paid-shards.ts --tier gate --report /tmp/paid-report \
-            --rerun-plan /tmp/paid-rerun >> "$GITHUB_STEP_SUMMARY"
-          if [ -f /tmp/paid-rerun/manifest.json ]; then
+            --rerun-plan "/tmp/paid-rerun-plan/rerun-plan-a$GITHUB_RUN_ATTEMPT" >> "$GITHUB_STEP_SUMMARY"
+          PLAN="/tmp/paid-rerun-plan/rerun-plan-a$GITHUB_RUN_ATTEMPT/manifest.json"
+          if [ -f "$PLAN" ]; then
             { echo "planned=true"
-              echo "slices=$(jq -c '[range(1; .sliceCount + 1)]' /tmp/paid-rerun/manifest.json)"
-              echo "slice_timeouts=$(jq -ec '[0] + .plan.sliceCiTimeoutMinutes' /tmp/paid-rerun/manifest.json)"; } >> "$GITHUB_OUTPUT"
+              echo "slices=$(jq -c '[range(1; .sliceCount + 1)]' "$PLAN")"
+              echo "slice_timeouts=$(jq -ec '[0] + .plan.sliceCiTimeoutMinutes' "$PLAN")"; } >> "$GITHUB_OUTPUT"
           else
             echo "planned=false" >> "$GITHUB_OUTPUT"
           fi
@@ -858,7 +863,7 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: rerun-plan-a${{ github.run_attempt }}
-          path: /tmp/paid-rerun/manifest.json
+          path: /tmp/paid-rerun-plan
           retention-days: 90
 
   eval-rerun:
@@ -911,7 +916,7 @@ jobs:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: rerun-plan-a${{ github.run_attempt }}
-          path: /tmp/paid-plan
+          path: /tmp/paid-rerun-plan
 
       - name: Authenticate the Codex CLI
         shell: bash
@@ -941,7 +946,7 @@ jobs:
           EVALS_JOBS: "2"
           EVALS_CONCURRENCY: "2"
           GSTACK_EVAL_DIR: /tmp/paid-rerun-results
-        run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --plan /tmp/paid-plan/manifest.json --slice ${{ matrix.slice }}
+        run: EVALS_TIER=gate bun run scripts/test-paid-shards.ts --tier gate --plan /tmp/paid-rerun-plan/rerun-plan-a${{ github.run_attempt }}/manifest.json --slice ${{ matrix.slice }}
 
       - name: Upload rerun results
         if: always()
@@ -969,7 +974,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: paid-rerun-logs-${{ matrix.slice }}-a${{ github.run_attempt }}
+          name: rerun-logs-${{ matrix.slice }}-a${{ github.run_attempt }}
           include-hidden-files: true
           path: |
             /home/runner/.cache/gstack-paid-shard-*.log
@@ -1178,12 +1183,16 @@ jobs:
         continue-on-error: true
         with:
           pattern: paid-rerun-*
-          path: /tmp/paid-report
+          # Its own directory: download-artifact unpacks a lone match into its path itself, so the
+          # report root would otherwise take a rerun slice's files (run 39363705692).
+          path: /tmp/paid-report/reruns
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           pattern: rerun-plan-a*
+          # Each artifact holds rerun-plan-a<attempt>/manifest.json, so even a lone match never
+          # lands on the plan's own manifest.json (run 39363705692).
           path: /tmp/paid-report
 
       - name: Reconcile slices against the manifest (fail-closed)
