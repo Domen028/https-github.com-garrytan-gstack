@@ -56,6 +56,15 @@ describe('diff and hunks', () => {
     expect('code' in same && same.code).toBe('PR_SHOTS_IDENTICAL');
   });
 
+  test('a whole rewrite is marked once per pane instead of highlighting every line', () => {
+    const page = buildPage({ before: { text: 'old one\nold two', label: 'B' }, after: { text: 'new one\nnew two\nnew three', label: 'A' }, title: 't', caption: 'c', kind: 'prompt' });
+    if ('code' in page) throw new Error(page.message);
+    expect(page.html).toContain('rewritten entirely: every line is removed (−)');
+    expect(page.html).toContain('rewritten entirely: every line is new (+)');
+    expect(page.html).not.toContain('class="row add"');
+    expect(page.html).toContain('<span class="m">+</span><span class="t">new three</span>');
+  });
+
   test('the text version uses a fence longer than any tilde run inside', () => {
     const page = buildPage({ before: { text: '~~~\nold', label: 'B' }, after: { text: '~~~\nnew', label: 'A' }, title: 't', caption: 'c', kind: 'prompt' });
     if ('code' in page) throw new Error(page.message);

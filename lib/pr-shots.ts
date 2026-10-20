@@ -156,8 +156,9 @@ export function hunks(ops: Op[]): Array<{ gapBefore: number; ops: Op[] }> {
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-function paneRows(hs: Array<{ gapBefore: number; ops: Op[] }>, side: 'a' | 'b', total: number): string[] {
+function paneRows(hs: Array<{ gapBefore: number; ops: Op[] }>, side: 'a' | 'b', total: number, whole: boolean): string[] {
   const rows: string[] = [];
+  if (whole) rows.push(`<div class="gap">rewritten entirely: every line ${side === 'a' ? 'is removed (−)' : 'is new (+)'}</div>`);
   let shown = 0; let hidden = 0;
   for (const h of hs) {
     const mine = h.ops.filter(o => o.t === ' ' || (side === 'a' ? o.t === '-' : o.t === '+'));
@@ -165,7 +166,7 @@ function paneRows(hs: Array<{ gapBefore: number; ops: Op[] }>, side: 'a' | 'b', 
     if (h.gapBefore) rows.push(`<div class="gap">⋯ ${h.gapBefore} unchanged line${h.gapBefore === 1 ? '' : 's'}</div>`);
     for (const o of mine) {
       if (shown >= MAX_ROWS) { hidden++; continue; }
-      const cls = o.t === ' ' ? 'ctx' : side === 'a' ? 'del' : 'add';
+      const cls = o.t === ' ' || whole ? 'ctx' : side === 'a' ? 'del' : 'add';
       const mark = o.t === ' ' ? ' ' : side === 'a' ? '−' : '+';
       rows.push(`<div class="row ${cls}"><span class="n">${(side === 'a' ? o.a : o.b) ?? ''}</span><span class="m">${mark}</span><span class="t">${esc(o.line) || ' '}</span></div>`);
       shown++;
@@ -187,7 +188,8 @@ export function buildPage(o: { before: Side; after: Side; title: string; caption
   if (!Array.isArray(ops)) return ops;
   const hs = hunks(ops);
   const changed = ops.filter(x => x.t !== ' ').length;
-  const pane = (s: Side, side: 'a' | 'b', total: number) => `<section class="pane"><div class="label">${esc(s.label)}</div>${s.text === null ? `<div class="absent">(${esc(s.absent ?? 'absent')})</div>` : `<div class="code">${paneRows(hs, side, total).join('')}</div>`}</section>`;
+  const whole = a.length > 0 && b.length > 0 && !ops.some(x => x.t === ' ' && x.line.trim());
+  const pane = (s: Side, side: 'a' | 'b', total: number) => `<section class="pane"><div class="label">${esc(s.label)}</div>${s.text === null ? `<div class="absent">(${esc(s.absent ?? 'absent')})</div>` : `<div class="code">${paneRows(hs, side, total, whole).join('')}</div>`}</section>`;
   const dark = o.kind === 'terminal';
   const css = [
     "*{box-sizing:border-box}body{margin:0;background:#f6f7f9}",
