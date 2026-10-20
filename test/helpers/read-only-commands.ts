@@ -7,7 +7,8 @@
  * happen keep their narrow lists.
  *
  * Accepted: one line of simple commands from READ_TOOLS joined by ;, && or ||,
- * where a | pipe may feed only a STDIN_TOOLS filter, plus cd into a directory
+ * where a | pipe may feed only a STDIN_TOOLS filter (tr only there, with literal
+ * sets), plus cd into a directory
  * inside the root. Every path operand, path-valued option and unquoted glob
  * match must resolve physically (symlinks and .. applied) inside the fixture
  * root and outside its denied paths.
@@ -95,11 +96,12 @@ export const READ_TOOLS: Readonly<Record<string, ToolSpec>> = {
   echo: { flag: /^-[neE]+$/, literal: true },
   printf: { flag: /^--$/, literal: true },
   readlink: { flag: /^-[efmnqsvz]+$/ },
+  tr: { flag: /^-[cCdst]+$/, maxOperands: 2 },
   realpath: { flag: /^-[eLmPqsz]+$/ },
 };
 
 /** Tools that may receive a pipe. Each one only prints what it reads. */
-export const STDIN_TOOLS: ReadonlySet<string> = new Set(['wc', 'head', 'tail', 'cat', 'grep', 'rg', 'sort', 'uniq', 'cut', 'nl', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'sed']);
+export const STDIN_TOOLS: ReadonlySet<string> = new Set(['wc', 'head', 'tail', 'cat', 'grep', 'rg', 'sort', 'uniq', 'cut', 'nl', 'sha256sum', 'sha1sum', 'sha512sum', 'md5sum', 'sed', 'tr']);
 
 const FIND_FLAGS = new Set(['-print', '-print0', '-prune', '-empty', '-true', '-false', '-a', '-o', '-and', '-or', '-not',
   '-readable', '-writable', '-executable', '-depth', '-nowarn', '-xdev', '-mount', '-quit', '-ls', '(', ')', '!', ',']);
@@ -110,7 +112,7 @@ const FIND_PATHS = new Set(['-newer', '-anewer', '-cnewer', '-samefile']);
 
 /** Interface text an opted-in fixture declares to its actor. */
 export function readOnlyInterfaceText(root: string): string {
-  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; sed only as -n with a line-range print script such as sed -n 1,200p; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v). Join only these reads with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects other than 2>/dev/null or 2>&1 right after a read's arguments, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
+  return `Shared read-only grammar: Bash also accepts pure local reads whose every path, unquoted glob matches included, resolves inside ${root} with no .., symlink or absolute-path escape: ${Object.keys(READ_TOOLS).join(', ')} (find without -exec, -ok, -delete or -fprint*; sed only as -n with a line-range print script such as sed -n 1,200p; no output-file, symlink-following or external-program options; echo and printf with literal arguments only, no printf -v; tr only after a pipe, with -c, -C, -d, -s or -t and one or two literal sets that hold no $, backtick, brace or unquoted glob). Join only these reads with ;, && or ||, pipe only into ${[...STDIN_TOOLS].join(', ')}, and cd only into a directory inside that root. Redirects other than 2>/dev/null or 2>&1 right after a read's arguments, tee, substitutions, variables, tilde or brace expansion, background jobs, multi-line commands and every other tool stay outside this grammar.`;
 }
 
 export function readOnlyCommandAllowed(command: string, scope: ReadOnlyScope): boolean {
@@ -236,6 +238,7 @@ function commandRejection(words: Word[], piped: boolean, cwds: string[], context
   if (!spec) return `unlisted tool: ${name.text}`;
   if (piped && !STDIN_TOOLS.has(name.text)) return `${name.text} cannot read a pipe`;
   if (name.text === 'find') return findRejection(args, cwds, context);
+  if (name.text === 'tr') return trRejection(args, piped);
   if (name.text === 'sed') {
     const start = args.findIndex(arg => !/^(?:-n|--quiet|--silent)$/.test(arg.text));
     const [script, ...files] = start < 0 ? [] : args.slice(start);
@@ -284,6 +287,19 @@ function commandRejection(words: Word[], piped: boolean, cwds: string[], context
   const recursive = spec.recursive?.(options) ?? false;
   if (recursive && !operands.length) operands.push({ text: '.', glob: false, quoted: true });
   return pathsRejection([...operands.filter(operand => operand.text !== '-'), ...paths], cwds, context, recursive);
+}
+
+function trRejection(args: Word[], piped: boolean): string | undefined {
+  if (!piped) return 'tr reads only a pipe';
+  let start = 0;
+  while (start < args.length && args[start].text.startsWith('-') && args[start].text.length > 1) {
+    if (args[start].text === '--') { start++; break; }
+    if (!READ_TOOLS.tr.flag.test(args[start].text)) return `unsupported tr option: ${args[start].text}`;
+    start++;
+  }
+  const sets = args.slice(start);
+  if (!sets.length || sets.length > READ_TOOLS.tr.maxOperands!) return 'tr takes one or two literal sets';
+  if (sets.some(set => set.glob || /[$`{}]/.test(set.text))) return 'tr sets must be literal';
 }
 
 function findRejection(args: Word[], cwds: string[], context: Context): string | undefined {

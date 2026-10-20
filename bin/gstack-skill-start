@@ -148,6 +148,13 @@ eval "$("$_BIN/gstack-repo-mode" 2>/dev/null)" 2>/dev/null || true
 REPO_MODE=${REPO_MODE:-unknown}
 echo "REPO_MODE: $REPO_MODE"
 echo "SESSION_KIND: $_SESSION_KIND$_SESSION_KIND_NOTE"
+# Capy (capy/skill/gstack/captain.md): GSTACK_CAPY=1 comes from the Capy launch
+# line. On, every decision goes through Capy (Captain or person) and the
+# capy-asks block below says how; GSTACK_CAPY_ASKS=0 keeps the line but drops
+# the block.
+_CAPY=off
+[ "${GSTACK_CAPY:-}" = "1" ] && _CAPY=on
+if [ "$_CAPY" = "on" ] && [ "${GSTACK_CAPY_ASKS:-}" = "0" ]; then echo "CAPY: on (asks block off: GSTACK_CAPY_ASKS=0)"; else echo "CAPY: $_CAPY"; fi
 echo "STATE_ROOT: $_GH durable=$_DURABLE"
 echo "SESSIONS: ${_SESSIONS:-0}"
 # Install admission (field wave A2): an unattended or Capy-spawned run on an
@@ -636,6 +643,17 @@ fi # end interactive-onboarding guard (kind != spawned/unattended)
 if [ "$_SESSION_KIND" = "unattended" ]; then
   _emit_block unattended-session <<EOI
 You are running unattended: a parent agent started this run and will read its artifacts (plan.md, review-record.md, tasks.jsonl, decisions.jsonl, findings.jsonl, timing.json, run.json; see docs/unattended.md), not your prose. Rules: do NOT call AskUserQuestion and do NOT render prose decision briefs. At every question take the option marked (recommended) and append it to decisions.jsonl with kind "auto". A question with no recommendation, any consent, any destructive or irreversible option, and the final approval gate are appended with kind "approval" and status "pending": never choose them. The final approval gate is written as a gate list (gstack-gate render) and this run ENDS there with \`GSTACK_RESULT: skill=<name> status=gate_pending run=<dir>\`; you never approve it, never mark a plan APPROVED, never publish, push, sync or send data off this machine, and never record a consent. Skip every onboarding, upgrade, telemetry, routing and lake instruction. Host adaptation: there may be no Skill tool, no slash commands and no hooks here; read the skill file with your file-reading tool, run its bash blocks as written, treat each bash block's printed STATUS lines as the only source of session facts, and write results to files the parent names rather than relying on chat text being read.
+EOI
+fi
+
+# Capy asks (capy/skill/gstack/captain.md): who to ask and in what shape when
+# gstack runs under Capy. Printed for every session kind, after the unattended
+# block, so the pending gate items that block writes reach a person through
+# the right channel. Generic policy only: a Captain's own standing approvals
+# live in its rules, never here.
+if [ "$_CAPY" = "on" ] && [ "${GSTACK_CAPY_ASKS:-}" != "0" ]; then
+  _emit_block capy-asks <<EOI
+You run under Capy. Every decision this workflow cannot take itself (a pending gate item, a consent, an unrecommended question, a plan approval) goes through Capy's messaging, never as a bare question or gate codes: in a crew thread, a needs-you report to your Captain; with no Captain, a Capy question to the person. Write it in plain language: what it is, why it matters, what each answer does and costs, your pick, and the one-word reply. A plan approval is rendered with \`gstack-owner-brief render --captain --out <run dir>\` (before -> after, why it matters, what caused this work, big decisions, what we need) and relayed whole; fix the plan first if it exits CAPTAIN_BRIEF_INCOMPLETE. Record every answer with the person's exact words: \`gstack-approvals add\` (or \`gstack-approvals import --autoplan <run dir>\` after an autoplan answer). Cite standing approvals your Captain lists instead of asking again; always ask fresh for a product or behaviour decision, spend over a stated cap, anything published outside the repository, a threshold, budget or trial-count change, closing someone's contribution without landing it, and anything destructive. A pull request opened by /ship follows its Capy section (What changed with before/after images, Why, Approvals). Guide: capy/skill/gstack/captain.md in the gstack checkout.
 EOI
 fi
 

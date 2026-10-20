@@ -205,11 +205,15 @@ function croppedEditPane(screen: string) {
   const text = screen.replace(/\r+\n?/g, '\n');
   // Cropping may begin inside a wrapped added/deleted diff row (four/five-space gutter).
   // Still require numbered rows below and the full native footer; never a quoted AUQ.
-  // The heading can be cropped one row earlier, leaving the complete path.
+  // A quote or fence starts within four columns; a soft-wrapped row continues at five or more.
+  // The heading can be cropped one row earlier, leaving the complete path, or
+  // the cwd-relative file row (a bare basename for a cwd file) that names the menu's own file.
   // Keep it only when the existing menu independently identifies that target.
+  const prompt = [...text.matchAll(/^ {0,3}Do you want to make this edit to ([^\n?\/\\]+)\?[ \t]*\n([\s\S]*)$/gm)].at(-1);
   const header = /^ {0,3}([^\n]+)\n[╌─━]{3,}[ \t]*\n/.exec(text);
   const headerPath = header?.[1]?.trim();
-  const pathOnly = headerPath && (path.isAbsolute(headerPath) || /^\.\.?[/\\]/.test(headerPath));
+  const pathOnly = headerPath && (path.isAbsolute(headerPath) || /^\.\.?[/\\]/.test(headerPath) ||
+    (!/^[1-9]\d*(?:\s|$)/.test(headerPath) && path.basename(headerPath) === prompt?.[1]?.trim()));
   // A crop can start on the single native rule immediately above the diff.
   let diff = pathOnly ? text.slice(header![0].length) : text.replace(/^[╌─━]{3,}[ \t]*\n/, '');
   // A crop may start partway through several soft-wrapped pieces of one
@@ -230,8 +234,7 @@ function croppedEditPane(screen: string) {
     continuation = { tail: tails.join('').trimEnd(), nextLine: Number(nextRow[2]) };
     diff = diff.slice(nextRow.index);
   }
-  if (!/^(?:\s*\d+\s+[ +\-]?| {4,5}[+\-])/.test(diff) || /[☐□]|^\s*(?:>|`{3}|~{3})/m.test(text)) return undefined;
-  const prompt = [...text.matchAll(/^ {0,3}Do you want to make this edit to ([^\n?\/\\]+)\?[ \t]*\n([\s\S]*)$/gm)].at(-1);
+  if (!/^(?:\s*\d+\s+[ +\-]?| {4,5}[+\-])/.test(diff) || /[☐□]|^ {0,4}(?:>|`{3}|~{3})/m.test(text)) return undefined;
   if (!prompt || (text.slice(0, prompt.index).match(/^\s*\d+\s+/gm)?.length ?? 0) < 2) return undefined;
   // The unselected option supplies path identity only. Input remains one-time Yes.
   // A redraw can leave this exact keyboard-hint tail on the unselected No row.
@@ -286,7 +289,8 @@ function croppedEditTarget(screen: string, cwd: string, expected: string): strin
 function croppedCreatePane(screen: string, expected: string): { basename: string; preview: string } | undefined {
   const text=screen.replace(/\r+\n?/g,'\n');
   const pane=/^([\s\S]+)\n[╌─━]{3,}[ \t]*\n {0,3}Do you want to create ([^\n?\/\\]+)\?[ \t]*\n {0,3}❯[ \t]*1\.[ \t]*Yes[ \t]*\n\s*2\.[ \t]*Yes,\s+and\s+switch\s+to\s+accept\s+edits\s+\(auto-approve\s+file\s+edits\s+and\s+common\s+file\s+commands\)\s+for\s+this\s+session(?:;\s+Yes,\s+and\s+always\s+allow\s+access\s+to\s+([^\r\n]+?)\s+for\s+this\s+session)?(?:\s*\(shift\+tab\))?\s*\n\s*3\.[ \t]*No[ \t]*\n\s*Esc to cancel [·•] Tab to amend\s*$/.exec(text);
-  if (!pane || /[☐□]|^\s*(?:>|`{3}|~{3})/m.test(pane[1]!)) return undefined;
+  // As in croppedEditPane, a wrapped continuation row (five or more columns) may begin with '>'.
+  if (!pane || /[☐□]|^ {0,4}(?:>|`{3}|~{3})/m.test(pane[1]!)) return undefined;
   // Native option 2 can combine accept-edits with directory access. It remains
   // unselected: its directory must agree, and the pending Write still owns every
   // preview row. Never infer ownership from this optional directory alone.

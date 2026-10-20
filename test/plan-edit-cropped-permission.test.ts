@@ -175,6 +175,34 @@ test.each(['t07','t08'])('%s: an unpublished owned Edit is granted once from its
  }finally{f.close();}
 });
 
+// Gate 39293281037 attempt 1: the viewport kept the bare cwd-relative file row above the diff rule.
+test('ci-39293281037-a1: a crop headed by the owned cwd-relative file row is granted once from its PreToolUse input',()=>{
+ const f=edits('ci-39293281037-a1');try{
+  expect(f.c.recorded).toMatchObject({outcome:'timeout',transcriptStatus:'ready',publishedEdits:0});
+  expect(createHash('sha256').update(f.c.screen).digest('hex')).toBe(f.c.screenSha256);
+  expect(f.c.screen.split('\n')[0]).toBe(' gstack-test-plan-ceo-floor.md');
+  expect(isCroppedEditPermissionVisible(f.c.screen)).toBe(true);
+  const [edit]=f.pending;expect(f.read()).toBeNull();
+  f.hook('PreToolUse','Edit',edit!.id,edit!.input);
+  expect(f.read()?.pendingId).toBe(`${f.sid}:${edit!.id}`);
+  const guard=createPlanCountPermissionGuard();expect(guard(f.c.screen,'',f.read())).toBe('grant');expect(guard(f.c.screen,'',f.read())).toBe('handled');
+  expect(isPermissionDialogVisible(f.c.screen)).toBe(false);
+ }finally{f.close();}
+});
+
+test.each(['foreign-directory','foreign-basename','numbered-row','changed-row','unwitnessed'])('ci-39293281037-a1 header negative control: %s is refused',mode=>{
+ const f=edits('ci-39293281037-a1');try{
+  const [edit]=f.pending;let screen=f.c.screen;
+  if(mode!=='unwitnessed')f.hook('PreToolUse','Edit',edit!.id,edit!.input);
+  if(mode==='foreign-directory')screen=screen.replace(' gstack-test-plan-ceo-floor.md\n',' other/gstack-test-plan-ceo-floor.md\n');
+  if(mode==='foreign-basename')screen=screen.replace(' gstack-test-plan-ceo-floor.md\n',' notes.md\n');
+  if(mode==='numbered-row')screen=screen.replace(' gstack-test-plan-ceo-floor.md\n',' 58  gstack-test-plan-ceo-floor.md\n');
+  if(mode==='changed-row')screen=screen.replace('Header: Premise','Header: Pricing');
+  expect(f.read(screen)).toBeFalsy();
+  expect(createPlanCountPermissionGuard()(screen,'',f.read(screen))).not.toBe('grant');
+ }finally{f.close();}
+});
+
 test.each(['before','after'])('t04: the menu binds to the one of three pending owned Edits its diff shows (later hooks %s the menu)',order=>{
  const f=edits('t04');try{
   expect(f.c.recorded).toMatchObject({outcome:'permission_unanswered',publishedEdits:3});

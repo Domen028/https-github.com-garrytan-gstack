@@ -36,6 +36,7 @@ import { ANSWERED_BY_RE } from '../lib/gate-list';
 import { checkpointLines, checkpointRun, restoreCheckpoint, type CheckpointMoment } from '../lib/autoplan-checkpoint';
 import { admit, touchInstallLease } from '../lib/autoplan-admission';
 import { exportRun } from '../lib/autoplan-export';
+import { capyRelayLine } from '../lib/captain-brief';
 import { exportPublic } from '../lib/autoplan-public';
 import { migrateRun } from '../lib/autoplan-migrate';
 import { reviseRun } from '../lib/autoplan-revise';
@@ -184,11 +185,17 @@ function doNext(out: string, rest: string[], json: boolean): number {
   moment = fresh ? 'init' : r.attempts.some(a => a.new) || r.lines.some(l => l.startsWith('PHASE_DEFERRED: ')) ? 'transition' : undefined;
   const status = r.state.status;
   const lines = [...initLines, ...r.lines];
-  if (status === 'gate_pending') lines.push(`GATE: gate_rev=${r.state.gate_rev} render with: gstack-gate render ${path.join(out, 'gate.json')}`);
+  if (status === 'gate_pending') lines.push(...gateLines(r.state.gate_rev, out));
   if (status === 'running') lines.push(`NEXT: gstack-autoplan next --out ${out}`);
   lines.push(resultLineFor(status, out));
   emit(json, lines, { run: r.state.run, status, phase: r.phase ?? null, attempts: r.attempts, gate_rev: r.state.gate_rev ?? null, out });
   return EXIT.ok;
+}
+
+/** The gate pointer, plus the owner-facing render to relay under Capy (lib/captain-brief.ts). */
+function gateLines(gateRev: number | undefined, out: string): string[] {
+  const relay = capyRelayLine(out);
+  return [`GATE: gate_rev=${gateRev} render with: gstack-gate render ${path.join(out, 'gate.json')}`, ...(relay ? [relay] : [])];
 }
 
 function doSubmit(out: string, rest: string[], json: boolean): number {
@@ -204,7 +211,7 @@ function doSubmit(out: string, rest: string[], json: boolean): number {
     unavailable, failed, runner: flag(rest, '--runner'), usageUsd: num(rest, '--usage-usd'), reconcile: flag(rest, '--reconcile'), cwd: process.cwd() });
   const status = r.state.status;
   const lines = [...r.lines];
-  if (status === 'gate_pending') lines.push(`GATE: gate_rev=${r.state.gate_rev} render with: gstack-gate render ${path.join(out, 'gate.json')}`);
+  if (status === 'gate_pending') lines.push(...gateLines(r.state.gate_rev, out));
   if (status === 'running') lines.push(`NEXT: gstack-autoplan next --out ${out}`);
   lines.push(resultLineFor(status, out));
   emit(json, lines, { run: r.state.run, status, phase, voice, attempt: r.state.phases[phase]?.[voice]?.attempt ?? attempt ?? null, closed: r.closed, findings: r.findings, gate_rev: r.state.gate_rev ?? null, out });
@@ -235,7 +242,7 @@ function doClose(out: string, rest: string[], json: boolean): number {
   const r = closeDeferred(state, phase as Phase, { reason: reason.trim(), by, cause: 'owner' });
   moment = 'transition';
   const lines = [...r.lines, ...(stopped ? liftStop(state, `${phase} closed deferred by ${by}`) : [])];
-  if (!currentPhase(state)) { finishGate(state); lines.push(`GATE: gate_rev=${state.gate_rev} render with: gstack-gate render ${path.join(out, 'gate.json')}`); }
+  if (!currentPhase(state)) { finishGate(state); lines.push(...gateLines(state.gate_rev, out)); }
   else { state.status = 'running'; lines.push(`NEXT: gstack-autoplan next --out ${out}`); }
   writeState(state);
   lines.push(resultLineFor(state.status, out));

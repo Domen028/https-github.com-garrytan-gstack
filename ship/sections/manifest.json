@@ -83,6 +83,12 @@
       "trigger": "preparing the title and creating or updating the PR/MR with the verified documentation outcome (Steps 18-19)"
     },
     {
+      "id": "capy-pr",
+      "file": "capy-pr.md",
+      "title": "Capy PR body: What changed (before/after images), Why, Approvals",
+      "trigger": "Step 19 printed CAPY_PR: on (a Capy session, GSTACK_CAPY=1) — read before composing the PR body"
+    },
+    {
       "id": "handoff",
       "file": "handoff.md",
       "title": "Handoff without a PR (automation lanes)",

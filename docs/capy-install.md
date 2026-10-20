@@ -381,6 +381,17 @@ the baked `~/.bun/bin` reaches workflows through the `GSTACK_LAUNCH` line. The
 project Setup is shared by every thread in the project, so changing it is the
 project's decision.
 
+## Working under a Captain
+
+In a Capy session (`GSTACK_CAPY=1`, set by the launch line) every workflow
+prints `CAPY: on` and a `capy-asks` block: decisions go through Capy (a crew
+thread asks its Captain, otherwise the person), plan approvals are rendered
+with `gstack-owner-brief render --captain`, answers are recorded with
+`gstack-approvals`, and /ship's PR body opens with before/after images
+(`gstack-pr-shots`), Why and Approvals. The guide is
+[`capy/skill/gstack/captain.md`](../capy/skill/gstack/captain.md);
+`GSTACK_CAPY_ASKS=0` drops the block for one session.
+
 ## Raising the supported minimum
 
 `capy/support.env` holds `GSTACK_MIN_REVISION` and `GSTACK_CAPY_MIN_WRAPPER`.

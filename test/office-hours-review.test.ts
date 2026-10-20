@@ -159,6 +159,12 @@ describe('office-hours severity-based convergence', () => {
     expect(prompt).toMatch(/- \*\*minor\*\*: clarity, wording, or polish[^\n]+Example:/);
     expect(prompt).toMatch(/never relabel it minor/);
   });
+
+  test('a seal error is corrected by rewriting the whole verdict, never by Edit (ohsl flaky ledger 2026-10-19)', () => {
+    const prompt = renderOfficeHoursReviewerPrompt({ document: '/tmp/design.md', verdictPath: '/tmp/round-1.json' });
+    expect(prompt).toContain('Never use Edit on any file, your verdict file included');
+    expect(prompt).toMatch(/If it reports an error, Write the complete corrected JSON to the same path \(never Edit[^)]*\) and run the same command again\./);
+  });
 });
 
 describe('office-hours delta re-review', () => {

@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { observeQAWrites, type QAWriteObservation } from './qa-functional-observer';
 import { nativeCalls } from './qa-checkpoint-evidence';
 import type { SkillTestResult } from './session-runner';
-import { DOC_PATH, type DocsScenario, type fixtureDocs } from './docsync-fixture';
+import { DOC_PATH, docsConfigDir, type DocsScenario, type fixtureDocs } from './docsync-fixture';
 import { sliceBetween } from './skill-fixture';
 import { readOnlyCommandAllowed, readOnlyInterfaceText } from './read-only-commands';
 
@@ -227,7 +227,7 @@ function unwrapHarmlessRead(text: string, fixture: ReturnType<typeof fixtureDocs
 export function docsCommandAllowed(command: string, fixture: ReturnType<typeof fixtureDocs>, scripts: string[] = []): boolean {
   const text = command.trim();
   if (docsPreambleCommands(fixture).some(block => block.trim() === text)) return true;
-  if (readOnlyCommandAllowed(text, docsReadOnlyScope(fixture))) return true;
+  if (readOnlyCommandAllowed(text, docsReadOnlyScope(fixture)) || docsComposedReadAllowed(text, fixture)) return true;
   const insert = /^cat (['"]?)([^\s'"]+)\1 >> (['"]?)([^\s'"]+)\3$/.exec(text);
   if (insert) return [insert[2], insert[4]].every(file => path.isAbsolute(file) && /\.md$/i.test(file) &&
     !/[\x00-\x1f\x7f;&|<>`$\\()*?\[\]{}~#]/.test(file) && docsPrivateArtifact(file, fixture, scripts));
@@ -240,6 +240,81 @@ export function docsCommandAllowed(command: string, fixture: ReturnType<typeof f
     return DOCS_READ_COMMANDS.includes(name) || name === 'git';
   }
   return literalDocsCommandAllowed(text, fixture, scripts);
+}
+
+const DOCS_LOOP_WORD = /^[A-Za-z0-9_./@%+,:=-]+$/;
+
+/** Unquoted ;, &&, || and | split a line into commands; null for an unterminated quote. */
+function docsTopLevelSegments(text: string): { start: number; end: number; op: string }[] | null {
+  const segments: { start: number; end: number; op: string }[] = [];
+  let quote = '';
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote) { if (c === quote) quote = ''; continue; }
+    if (c === "'" || c === '"') { quote = c; continue; }
+    const op = text.startsWith('&&', i) || text.startsWith('||', i) ? text.slice(i, i + 2) : c === ';' || c === '|' ? c : '';
+    if (!op) continue;
+    segments.push({ start, end: i, op });
+    start = i + op.length;
+    i += op.length - 1;
+  }
+  if (quote) return null;
+  segments.push({ start, end: text.length, op: '' });
+  return segments;
+}
+
+/**
+ * Each unquoted `for <var> in <words>; do <body>; done` in a line, replaced by its
+ * passes (the body once per word, the variable substituted). Null when a loop is
+ * not a plain loop over literal words: a lowercase variable, words without quotes,
+ * globs or $, no other variable in the body and no nested loop.
+ */
+function docsUnrollLoops(text: string): string | null {
+  const segments = docsTopLevelSegments(text);
+  if (!segments) return text;
+  let out = '';
+  let copied = 0;
+  for (let i = 0; i < segments.length; i++) {
+    const head = text.slice(segments[i]!.start, segments[i]!.end).trim();
+    if (!/^for(?:\s|$)/.test(head)) continue;
+    const loop = /^for\s+([a-z][a-z0-9]*)\s+in\s+(\S.*)$/.exec(head);
+    const close = segments.findIndex((segment, index) => index > i + 1 && text.slice(segment.start, segment.end).trim() === 'done');
+    const opening = segments[i + 1] && /^\s*do\s+/.exec(text.slice(segments[i + 1]!.start, segments[i + 1]!.end));
+    if (!loop || segments[i]!.op !== ';' || !opening || close < 0 || segments[close - 1]!.op !== ';') return null;
+    const body = text.slice(segments[i + 1]!.start + opening[0].length, segments[close - 1]!.end).trim();
+    const words = loop[2]!.trim().split(/\s+/);
+    const reference = new RegExp(`\\$(?:\\{${loop[1]}\\}|${loop[1]}(?![A-Za-z0-9_]))`, 'g');
+    if (!words.every(word => DOCS_LOOP_WORD.test(word)) || body.replace(reference, '').includes('$') || /(?:^|[;&|]\s*)for\s/.test(body)) return null;
+    out += text.slice(copied, segments[i]!.start) + words.map(word => body.replace(reference, word)).join('; ');
+    copied = segments[close]!.end;
+    i = close;
+  }
+  return out + text.slice(copied);
+}
+
+/**
+ * A read-only line the shared grammar cannot see whole: loops are checked as
+ * their unrolled passes, and each declared Git read joined to grammar reads
+ * (never after a cd, never fed by a pipe) is checked literally and then stands
+ * in the line as a neutral read for the grammar.
+ */
+function docsComposedReadAllowed(text: string, fixture: ReturnType<typeof fixtureDocs>): boolean {
+  const line = docsUnrollLoops(text);
+  if (line === null) return false;
+  if (line !== text && readOnlyCommandAllowed(line, docsReadOnlyScope(fixture))) return true;
+  const segments = docsTopLevelSegments(line);
+  if (!segments) return false;
+  const commands = segments.map(segment => line.slice(segment.start, segment.end).trim());
+  const git = commands.flatMap((command, index) => /^git(?:\s|$)/.test(command) ? [index] : []);
+  if (!git.length || commands.some(command => /^cd(?:\s|$)/.test(command))) return false;
+  let neutral = line;
+  for (const index of git.reverse()) {
+    const read = unwrapHarmlessRead(commands[index]!, fixture);
+    if (segments[index - 1]?.op === '|' || read === null || !/^git\s/.test(read) || !literalDocsCommandAllowed(read, fixture, [])) return false;
+    neutral = `${neutral.slice(0, segments[index]!.start)} pwd ${neutral.slice(segments[index]!.end)}`;
+  }
+  return readOnlyCommandAllowed(neutral, docsReadOnlyScope(fixture));
 }
 
 /** The shared read-only grammar inside the owned fixture home; private actor state and every Claude config file but settings.json (.claude.json holds the API key) stay unreadable. */
@@ -311,7 +386,7 @@ function literalDocsCommandAllowed(text: string, fixture: ReturnType<typeof fixt
 
 export function docsNativeInterface(fixture: Pick<ReturnType<typeof fixtureDocs>, 'home' | 'repo' | 'skills'>, scripts: string[] = [], transport = false, insert = false, file?: string): string {
   const skills = fixture.skills.split(path.sep).join('/');
-  return `Fixture observation interface (applies to parent and every child; ${file ? `saved at ${file}: each child prompt tells the child to Read that file first instead of copying this text` : 'include this interface in child prompts'}): Bash may execute only separate literal pwd, ls, cat, stat, sha256sum, Git read commands (status, diff, show, log, ls-files, ls-tree, check-ignore, rev-parse, merge-base, hash-object without -w, branch --show-current, describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision), the exact generated Preamble block with its spawned prefix, literal installed gstack-skill-start/gstack-skill-end commands for document-release (start requires GSTACK_SESSION_KIND=spawned) or their own --help, or the literal installed ${skills}/bin/gstack-docs-candidate snapshot (its --out a private .json under ${fixture.home}), compare <that .json> and --help commands. ${readOnlyInterfaceText(fixture.home)} Git reads, the Preamble block, lifecycle and candidate commands and scripts never join such a line: run each as its own Bash call, never joined to another command with ;, &&, || or a pipe, not even to another Git read. Otherwise no shell composition, custom interpreters, arbitrary scripts, inline eval or memory-mapped writes. The only additional scripts are ${scripts.length ? scripts.join(', ') : 'none'}.${insert ? ` To insert one saved private Markdown artifact into another (a saved section file into a report), Bash may also run the single literal command cat SOURCE.md >> TARGET.md with absolute paths under ${fixture.home}.` : ''} Read/Glob/Grep remain available; Read skill and section files with Read (offset/limit for ranges), because Bash output over 30KB becomes a truncated preview. Use Write/Edit for permitted docs and private JSON/Markdown artifacts under ${fixture.home}; do not rewrite installed skills, config, actor state or scripts. No effects outside the owned fixture. The owner preserves evidence and cleans up. Missing observer coverage blocks acceptance; the Linux kernel monitor covers syscall writes in the product tree, not hostile processes or arbitrary external destinations.
+  return `Fixture observation interface (applies to parent and every child; ${file ? `saved at ${file}: each child prompt tells the child to Read that file first instead of copying this text` : 'include this interface in child prompts'}): Bash may execute only separate literal pwd, ls, cat, stat, sha256sum, Git read commands (status, diff, show, log, ls-files, ls-tree, check-ignore, rev-parse, merge-base, hash-object without -w, branch --show-current, describe with only --tags, --always, --abbrev=<n> or --exact-match and at most one revision), the exact generated Preamble block with its spawned prefix, literal installed gstack-skill-start/gstack-skill-end commands for document-release (start requires GSTACK_SESSION_KIND=spawned) or their own --help, or the literal installed ${skills}/bin/gstack-docs-candidate snapshot (its --out a private .json under ${fixture.home}), compare <that .json> and --help commands. ${readOnlyInterfaceText(fixture.home)} The Git reads above may join such a line too, but not in a line with cd. A for loop over literal words (a lowercase loop variable; words without quotes, globs or $) whose body uses only such reads counts as those reads, one pass per word, wherever it sits in the line. Every read stays off actor-state.json and off ${docsConfigDir(fixture.home)} except its settings.json: that directory holds Claude's credentials and every agent's session transcript, so judge a child only by the output it returns (its echoed SESSION_KIND line included) and by the repository. The Preamble block, lifecycle and candidate commands and scripts never join such a line: run each as its own Bash call, never joined to another command with ;, &&, || or a pipe. Otherwise no shell composition, custom interpreters, arbitrary scripts, inline eval or memory-mapped writes. The only additional scripts are ${scripts.length ? scripts.join(', ') : 'none'}.${insert ? ` To insert one saved private Markdown artifact into another (a saved section file into a report), Bash may also run the single literal command cat SOURCE.md >> TARGET.md with absolute paths under ${fixture.home}.` : ''} Read/Glob/Grep remain available; Read skill and section files with Read (offset/limit for ranges), because Bash output over 30KB becomes a truncated preview. Use Write/Edit for permitted docs and private JSON/Markdown artifacts under ${fixture.home}; do not rewrite installed skills, config, actor state or scripts. No effects outside the owned fixture. The owner preserves evidence and cleans up. Missing observer coverage blocks acceptance; the Linux kernel monitor covers syscall writes in the product tree, not hostile processes or arbitrary external destinations.
 
 The working directory for parent and child Bash calls is already ${fixture.repo}. Run Git reads directly, for example: git status, git diff --cached, git merge-base main HEAD, git rev-parse HEAD. Do not use Git global options such as -C, -c, --git-dir or --work-tree, and do not prepend cd or another shell wrapper. The literal git subcommand must immediately follow git; an absolute owned repository path does not make git -C an allowed command.
 
@@ -419,8 +494,10 @@ export function docsCompletedRead(result: SkillTestResult, file: string, fixture
     const read = call.tool === 'Read' && resolve(call.input?.file_path ?? '') === target;
     const command = String(call.input?.command ?? '').trim();
     const literal = /^cat\s+/.test(command) && !/[\n\r;&|<>`$\\(){}]/.test(command);
-    const grammar = !literal && !/(?:^|[;&|]\s*)cd\s/.test(command) && readOnlyCommandAllowed(command, docsReadOnlyScope(fixture));
-    const catArgs = !literal && !grammar ? [] : command.split(/\s*(?:;|&&|\|\|)\s*/).filter(part => /^cat\s/.test(part) && !part.includes('|'))
+    const expanded = docsUnrollLoops(command);
+    const grammar = !literal && expanded !== null && !/(?:^|[;&|]\s*)cd\s/.test(command)
+      && (readOnlyCommandAllowed(command, docsReadOnlyScope(fixture)) || docsComposedReadAllowed(command, fixture));
+    const catArgs = !literal && !grammar ? [] : (expanded ?? command).split(/\s*(?:;|&&|\|\|)\s*/).filter(part => /^cat\s/.test(part) && !part.includes('|'))
       .flatMap(part => part.match(/'[^']*'|"[^"]*"|[^\s'"]+/g)?.slice(1).map(arg => /^['"]/.test(arg) ? arg.slice(1, -1) : arg) ?? []);
     const cat = call.tool === 'Bash' && catArgs.some(arg => resolve(arg) === target);
     if ((read || cat) && !/^(?:<tool_use_error>|Error(?: reading file|:)|Exit code [1-9]\d*\b)/i.test(call.output.trimStart()) &&
