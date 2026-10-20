@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.165.0] - 2026-10-20
 
 **The Version Gate accepts an unstamped READY head under merge trains.** Under the train policy a lane's head keeps VERSION, package.json and the agents digest at main's version and writes its CHANGELOG entry under `[Unreleased]`. The gate still demanded a bump, so every unstamped PR showed "VERSION not bumped", and `gstack-ship-queue ready` refused it with `QUEUE_NOT_READY` (#3320, #3321). That blocked every train. Plan GSTA-49, S1 for the queue.
 
