@@ -8,7 +8,7 @@
  * (#3130: the 5.1 legacy mode stripped the double quotes inside the bash -c
  * script, and bash failed with "unexpected EOF").
  */
-import { describe, test, expect, afterEach } from 'bun:test';
+import { describe, test, expect, afterEach, beforeAll } from 'bun:test';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -65,6 +65,13 @@ function runPs1(dir: string, args: string[], env: Record<string, string | undefi
 }
 
 describe('setup.ps1', () => {
+  // The first Windows PowerShell 5.1 launch on a runner pays a cold start (up to
+  // 5 s on windows-latest) that later launches do not; pay it here, outside the
+  // per-test timeout of the legacy cases below.
+  beforeAll(() => {
+    if ((PWSH || IS_WIN) && BASH) runPs1Legacy(stubCheckout(), ['--host', 'codex']);
+  }, 60_000);
+
   test('passes arguments NUL-separated through a private file to a constant bash script', () => {
     expect(SOURCE).toContain(`& $bash -c 'set -f; IFS=; mapfile -d '''' -t argv < $1; rm -f -- $1; exec ./setup \${argv[@]}' setup $argFile`);
     const script = SOURCE.match(/& \$bash -c '((?:[^']|'')*)' setup \$argFile/)![1]!;

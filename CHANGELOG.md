@@ -1,5 +1,13 @@
 # Changelog
 
+## [Unreleased]
+
+**Two load-sensitive free tests from the flaky ledger now measure what they test.** Daily flaky-fix pass, 2026-10-20, free and load-sensitive group.
+
+### Fixed
+- **`test/setup-ps1.test.ts` PowerShell 5.1 cases (windows-setup, 2026-10-17 and 2026-10-20).** The workflow runs the file with plain `bun test`, so each case has Bun's 5 s default. The first `powershell.exe` launch on a runner pays a cold start that later launches do not. Over 94 windows-setup jobs, the first legacy launch (the space-in-TMPDIR case) took p50 1.46 s, p95 3.42 s and max 5.04 s, while the second launch (the empty-argument case) had p95 1.41 s. Both reds were that first launch killed at 5 s with exit null. A `beforeAll` now launches the legacy interpreter once on the stub checkout, with a 60 s hook budget matching the spawns' own bound. No per-test timeout changed. On Linux, a pwsh wrapper that adds 6 s to the first launch reproduces the CI symptom on main and passes with the warm-up. One that adds 6 s to every launch still fails three cases (negative control).
+- **`browse/test/xvfb.test.ts` spawn → cleanup round trip (Ubicloud full run, 2026-10-18).** It picked a display from `:99-:110` and then spawned on it, inside the default range that headed daemons in parallel shards allocate from. Six default-range allocators reproduced "X display :N was reserved by another X server during startup" in 9 of 20 and 5 of 20 runs. The case now uses `:25000-:25100`, a range no other allocator uses, like the file's other private-range cases. It now fails instead of silently returning when no display is free. 30 of 30 runs pass under the same load.
+
 ## [1.91.164.0] - 2026-10-19
 
 **Merge trains are on for gstack: `.gstack/ship-policy.json` now carries the `train` block.** READY PRs merge in trains of up to 5 (or once the oldest READY is 3 hours old) behind one full gate on the train head, instead of one full gate per PR. Plan GSTA-49, go-live after lanes T1 and T1b. Garry approved going live once one dry-run train passed.
