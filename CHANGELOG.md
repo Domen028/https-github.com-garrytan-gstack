@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.91.160.0] - 2026-10-19
 
 **Dart and Flutter projects get the right reviewers and the right test command.** A Dart change matched no diff-scope category except its test file, so a Flutter widget PR ran only the testing pass and skipped design, performance and security. Contributed by @arlophoenix (#3284).
 
